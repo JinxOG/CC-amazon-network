@@ -555,8 +555,13 @@ base.fuel = fuel
 -- ─── Registration ────────────────────────────────────────────────────────────
 
 local function register()
-    for attempt = 1, CFG.REGISTER_RETRIES do
-        logInfo(string.format("Registering (%d/%d)...", attempt, CFG.REGISTER_RETRIES))
+    -- Small delay so ender modem has time to connect after boot
+    sleep(2)
+
+    local attempt = 0
+    while true do
+        attempt = attempt + 1
+        logInfo(string.format("Registering (attempt %d)...", attempt))
         comms.toServer(proto.MSG.REGISTER, proto.payloadRegister(
             _self.role, fuel.level(), fuel.max(), base.getPos()))
 
@@ -569,11 +574,14 @@ local function register()
                     _self.dock.bay, _self.dock.row,
                     _self.dock.x, _self.dock.y, _self.dock.z))
             end
-            logInfo("Registered.")
+            logInfo("Registered successfully.")
             return
         end
+
+        -- Not connected yet — wait and retry automatically (no reboot needed)
+        logWarn("No response from server. Retrying in 5s... (is the server running?)")
+        sleep(5)
     end
-    error("Failed to register after " .. CFG.REGISTER_RETRIES .. " attempts.")
 end
 
 -- ─── Heartbeat ───────────────────────────────────────────────────────────────
