@@ -247,8 +247,9 @@ function base.depart()
     local ok, err = move.followRoute(route)
     if not ok then return false, "departure route failed: " .. (err or "?") end
 
-    -- Signal support turtle to depart now and wait for it to arrive at hole
-    if _self.partnerId then
+    -- Only delivery turtles signal their support partner at the hole.
+    -- Support turtles must NOT send this signal back or they stall each other.
+    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
         logInfo("Signalling support turtle to depart...")
         local sig = proto.encode(proto.MSG.HOLE_READY, _self.id, _self.partnerId, {})
         proto.send(_self.modem, proto.CH_LOCAL, sig)
