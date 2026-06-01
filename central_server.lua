@@ -392,6 +392,8 @@ end
 handlers[proto.MSG.HEARTBEAT] = function(msg)
     local p = msg.payload
     registry.update(msg.from, p.status, p.fuel, p.position, p.jobId)
+    -- Acknowledge so turtle resets its missed-heartbeat counter and never re-registers spuriously
+    sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
 end
 
 handlers[proto.MSG.JOB_ACK] = function(msg)

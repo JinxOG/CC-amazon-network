@@ -397,13 +397,16 @@ local function findFreeSpace()
 end
 
 -- Quick scan of inventory slots 1-15 for any loose burnable items (used on boot).
+-- Skips if already at max fuel to avoid wasting coal from previous runs.
 function fuel.refuel()
+    if fuel.level() >= fuel.max() then return end
     local before = fuel.level()
     for slot = 1, 15 do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
             turtle.refuel()
         end
+        if fuel.level() >= fuel.max() then break end
     end
     turtle.select(1)
     local gained = fuel.level() - before
@@ -494,7 +497,13 @@ end
 -- Refuel from a chest placed below/above/front at the dock station.
 -- Called on boot and after returning to dock.
 -- Fills up as much as possible then stops.
+-- Skips entirely if fuel is already above 80% to avoid burning existing coal.
 function fuel.dockRefuel()
+    local pct = fuel.level() / math.max(fuel.max(), 1)
+    if pct >= 0.8 then
+        logInfo(string.format("Fuel already at %d%% — skipping dock refuel.", math.floor(pct*100)))
+        return true
+    end
     logInfo("Refuelling at dock station...")
     local gained = 0
 

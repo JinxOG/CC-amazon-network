@@ -39,6 +39,9 @@ proto.MSG = {
 
     -- Turtle ↔ turtle direct coordination (CH_LOCAL)
     HOLE_READY     = "HOLE_READY",      -- delivery → support: I'm at the hole, come now
+
+    -- Server → turtle heartbeat acknowledgement
+    HEARTBEAT_ACK  = "HEARTBEAT_ACK",   -- server → turtle: I'm alive, you're still registered
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────
