@@ -111,7 +111,8 @@ function registry.getIdle(role)
     local result = {}
     for _, t in pairs(state.registry) do
         if t.online and t.status == proto.STATUS.IDLE
-                    and (role == nil or t.role == role) then
+                    and (role == nil or t.role == role)
+                    and (t.fuel or 0) > 0 then
             table.insert(result, t)
         end
     end
@@ -384,6 +385,8 @@ handlers[proto.MSG.REGISTER] = function(msg)
         serverTs = os.epoch("utc"),
         dock     = dock,   -- nil if depot full, turtle will log a warning
     })
+    -- Immediately try to dispatch any pending jobs now that a new turtle is online
+    pcall(dispatcher.tick)
 end
 
 handlers[proto.MSG.HEARTBEAT] = function(msg)
