@@ -1,40 +1,54 @@
 -- install.lua
--- Usage:
---   install server     (command computer)
---   install delivery   (delivery turtle)
---   install support    (support/chunk-loader turtle)
+-- Usage (from any CC computer with internet access):
+--   pastebin run <install_id> server
+--   pastebin run <install_id> delivery
+--   pastebin run <install_id> support
+--
+-- Or copy install.lua to the computer and run:
+--   install server | install delivery | install support
 
--- !! Update these IDs after uploading each file to Pastebin !!
-local PASTES = {
-    protocol        = "yFvBSUxp",
-    central_server  = "UgmXje66",
-    turtle_base     = "m0CibGmG",
-    waypoints       = "q33mjLd7",
-    startup_server  = "ws9FYYGH",
-    delivery_turtle = "s6HZad6V",
-    support_turtle  = "8Giq1URK",
+local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
+
+local FILES = {
+    protocol        = "protocol.lua",
+    central_server  = "central_server.lua",
+    turtle_base     = "turtle_base.lua",
+    waypoints       = "waypoints.lua",
+    startup_server  = "startup_server.lua",
+    delivery_turtle = "delivery_turtle.lua",
+    support_turtle  = "support_turtle.lua",
 }
 
 local PROFILES = {
     server = {
-        { id = PASTES.protocol,       name = "protocol.lua"        },
-        { id = PASTES.waypoints,      name = "waypoints.lua"       },
-        { id = PASTES.central_server, name = "central_server.lua"  },
-        { id = PASTES.startup_server, name = "startup.lua"         },
+        { src = FILES.protocol,       name = "protocol.lua"       },
+        { src = FILES.waypoints,      name = "waypoints.lua"      },
+        { src = FILES.central_server, name = "central_server.lua" },
+        { src = FILES.startup_server, name = "startup.lua"        },
     },
     delivery = {
-        { id = PASTES.protocol,        name = "protocol.lua"        },
-        { id = PASTES.waypoints,       name = "waypoints.lua"       },
-        { id = PASTES.turtle_base,     name = "turtle_base.lua"     },
-        { id = PASTES.delivery_turtle, name = "startup.lua"         },
+        { src = FILES.protocol,        name = "protocol.lua"    },
+        { src = FILES.waypoints,       name = "waypoints.lua"   },
+        { src = FILES.turtle_base,     name = "turtle_base.lua" },
+        { src = FILES.delivery_turtle, name = "startup.lua"     },
     },
     support = {
-        { id = PASTES.protocol,       name = "protocol.lua"        },
-        { id = PASTES.waypoints,      name = "waypoints.lua"       },
-        { id = PASTES.turtle_base,    name = "turtle_base.lua"     },
-        { id = PASTES.support_turtle, name = "startup.lua"         },
+        { src = FILES.protocol,       name = "protocol.lua"    },
+        { src = FILES.waypoints,      name = "waypoints.lua"   },
+        { src = FILES.turtle_base,    name = "turtle_base.lua" },
+        { src = FILES.support_turtle, name = "startup.lua"     },
     },
 }
+
+-- ─── helpers ─────────────────────────────────────────────────────────────────
+
+local function download(url, dest)
+    if fs.exists(dest) then fs.delete(dest) end
+    local ok = shell.run("wget", url, dest)
+    return ok
+end
+
+-- ─── main ────────────────────────────────────────────────────────────────────
 
 local role = arg and arg[1]
 if not role then
@@ -50,26 +64,21 @@ if not files then
 end
 
 print("Installing: " .. role)
+print("Repo: " .. REPO)
 print("")
 
 local failed = false
 for _, f in ipairs(files) do
-    if f.id == "XXXXXXXX" then
-        print("  SKIP " .. f.name .. " (no Pastebin ID yet)")
-        failed = true
-    else
-        io.write("  " .. f.name .. "... ")
-        -- Delete existing file so pastebin get doesn't refuse
-        if fs.exists(f.name) then fs.delete(f.name) end
-        local ok = shell.run("pastebin", "get", f.id, f.name)
-        print(ok and "OK" or "FAILED")
-        if not ok then failed = true end
-    end
+    io.write("  " .. f.name .. "... ")
+    local url = REPO .. f.src
+    local ok  = download(url, f.name)
+    print(ok and "OK" or "FAILED")
+    if not ok then failed = true end
 end
 
 print("")
 if failed then
-    print("Some files failed. Check IDs and internet access.")
+    print("Some files failed. Check internet access or run again.")
 else
-    print("Done. Reboot to apply (Ctrl+R).")
+    print("Done! Reboot to apply (Ctrl+R).")
 end
