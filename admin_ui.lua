@@ -308,9 +308,6 @@ local function main()
                         evType = tostring(gpuEv[1] or gpuEv.type or "")
                         ex = gpuEv.x or gpuEv[2]
                         ey = gpuEv.y or gpuEv[3]
-                        -- Debug: print every event so user can identify types
-                        print("GPU ev: type=" .. evType
-                            .. " x=" .. tostring(ex) .. " y=" .. tostring(ey))
                     end
                     -- Skip hover/move/drag events — only act on press/click
                     local evLow = evType and evType:lower() or ""
