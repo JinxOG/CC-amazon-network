@@ -292,20 +292,15 @@ local function main()
             local ok, hasEv = pcall(function() return state.gpu.hasEvents(state.display) end)
             if ok and hasEv then
                 -- Drain ALL pending GPU events this tick
-                local clicked = false
+                local hadAny = false
                 while true do
                     local ok2, gpuEv = pcall(function() return state.gpu.pollEvent(state.display) end)
                     if not ok2 or not gpuEv then break end
-                    -- Only count actual press/click events, not hover/move
-                    local evType = type(gpuEv) == "table" and gpuEv[1] or gpuEv
-                    if tostring(evType):find("click") or tostring(evType):find("press")
-                    or tostring(evType):find("touch") or tostring(evType) == "1" then
-                        clicked = true
-                    end
+                    hadAny = true
                 end
-                -- Flip page at most once per 0.5s
+                -- Flip page at most once per 0.5s (debounce handles rapid events)
                 local now = os.clock()
-                if clicked and (now - lastPageFlip) > 0.5 then
+                if hadAny and (now - lastPageFlip) > 0.5 then
                     lastPageFlip = now
                     state.page = (state.page % #PAGES) + 1
                     render()
