@@ -56,6 +56,9 @@ proto.MSG = {
 
     -- Return journey (CH_LOCAL)
     RETURN_TO_DOCK  = "RETURN_TO_DOCK",  -- delivery → support: I'm inside, ascend and return independently
+
+    -- Job abort (CH_LOCAL)
+    JOB_ABORT       = "JOB_ABORT",       -- delivery → support: job failed, return to dock immediately
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

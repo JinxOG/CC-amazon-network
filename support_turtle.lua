@@ -39,14 +39,26 @@ base.run(function(job)
     print("Waiting for hole signal from " .. partnerId .. "...")
 
     local signalReceived = false
+    local aborted        = false
     local deadline = os.clock() + 180
     while os.clock() < deadline do
         local msg = proto.receive(base.getSelfId(), 5)
-        if msg and msg.type == proto.MSG.HOLE_READY and msg.from == partnerId then
-            print("HOLE_READY received — heading to dispatch hole!")
-            signalReceived = true
-            break
+        if msg and msg.from == partnerId then
+            if msg.type == proto.MSG.HOLE_READY then
+                print("HOLE_READY received — heading to dispatch hole!")
+                signalReceived = true
+                break
+            elseif msg.type == proto.MSG.JOB_ABORT then
+                print("JOB_ABORT received — delivery failed. Returning to dock.")
+                aborted = true
+                break
+            end
         end
+    end
+
+    if aborted then
+        base.returnToDock()
+        return base.sendComplete()
     end
 
     if not signalReceived then
@@ -113,6 +125,10 @@ base.run(function(job)
                 print("Delivery inside — waiting for it to clear arrivals hole...")
                 sleep(8)
                 print("Ascending and returning to dock independently")
+                break
+
+            elseif msg.type == proto.MSG.JOB_ABORT then
+                print("JOB_ABORT received mid-job — returning to dock immediately.")
                 break
 
             end

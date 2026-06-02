@@ -709,6 +709,10 @@ function base.sendComplete(result)
 end
 
 function base.sendFailed(reason, recoverable)
+    -- Tell support to abort immediately so it doesn't wait 180s for HOLE_READY
+    if _self.partnerId then
+        base.signalPartnerDirect(proto.MSG.JOB_ABORT, _self.partnerId, { reason = reason })
+    end
     comms.toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(_self.jobId, reason, recoverable))
     _self.status    = proto.STATUS.IDLE
     _self.jobId     = nil
