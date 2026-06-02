@@ -264,6 +264,21 @@ function base.depart()
         if _self.pos.y <= W.WORLD_EXIT.y then break end
     end
 
+    -- Wait underground for support to also descend before travelling
+    -- Hole entrance is now free so support can follow down
+    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
+        logInfo("Waiting underground for support to descend...")
+        local deadline = os.clock() + 40
+        while os.clock() < deadline do
+            local info = base.queryTurtle(_self.partnerId, 3)
+            if info and info.position and info.position.y <= 65 then
+                logInfo("Support is underground — travelling together.")
+                break
+            end
+            sleep(3)
+        end
+    end
+
     logInfo(string.format("Exited depot at %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
     return true
 end
