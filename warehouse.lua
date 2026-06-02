@@ -1,81 +1,68 @@
 -- warehouse.lua
 -- Manages the entangled-chest delivery queue.
--- One job is served at a time to prevent chest conflicts between turtles.
+-- Uses an RS (Refined Storage) bridge to pull items and regular chests
+-- directly from the RS network — no manual storage chests needed.
 --
 -- Physical setup:
---   - This computer sits next to (or connected via wired modem to):
---       * The entangled chest  (shared with delivery turtles)
---       * A supply chest       (stocked with empty regular chests)
---       * One or more storage chests (containing items to deliver)
---   - An ender/wireless modem for network comms
---
--- Configure the peripheral names below, then install as startup.lua.
+--   Computer adjacent to (or wired to):
+--     * rsBridge        — Advanced Peripherals RS Bridge block
+--     * entangled chest — shared with delivery turtles
+--   Plus an ender/wireless modem for network comms.
 
 local proto = require("protocol")
 
--- ─── Peripheral scanner (run standalone to find names) ───────────────────────
+-- ─── Peripheral scanner ───────────────────────────────────────────────────────
 -- Usage: lua warehouse.lua scan
 if arg and arg[1] == "scan" then
     print("=== Peripherals visible to this computer ===")
     local names = peripheral.getNames()
     if #names == 0 then
-        print("  (none found — check wired modem connections)")
+        print("  (none — check wired modem connections)")
     end
     for _, name in ipairs(names) do
-        local ptype = peripheral.getType(name)
-        local extra = ""
-        if ptype == "inventory" or name:find("chest") then
-            local p = peripheral.wrap(name)
-            local ok, items = pcall(function() return p.list() end)
-            if ok then
-                local count = 0
-                for _ in pairs(items) do count = count + 1 end
-                extra = "  [" .. count .. " stacks]"
-            end
-        end
-        print(string.format("  %-40s  %s%s", name, ptype or "?", extra))
+        local ptype = peripheral.getType(name) or "?"
+        print(string.format("  %-45s  %s", name, ptype))
     end
-    print("")
-    print("Paste the matching names into CFG at the top of warehouse.lua")
+    print("\nPaste the matching names into CFG at the top of warehouse.lua")
     return
 end
 
 -- ─── Config ──────────────────────────────────────────────────────────────────
--- Run peripheral.getNames() on this computer to find the right names.
 
 local CFG = {
-    entangledChest       = "entangled:chest_0",  -- entangled chest peripheral name
-    supplyChest          = "minecraft:chest_0",  -- chest holding empty regular chests
-    storageChests        = {                     -- chests holding items for delivery
-        "minecraft:chest_1",
-        "minecraft:chest_2",
-    },
-    regularChestItem     = "minecraft:chest",    -- item name for regular chest
-    maxChestsPerDelivery = 6,                    -- hard cap per delivery
-    batchSize            = 15,                   -- max stacks pushed per batch (turtle carry cap)
-    msgTimeout           = 120,                  -- seconds to wait for turtle response
+    entangledChest       = "entangled:chest_0",  -- peripheral name of entangled chest
+    regularChestItem     = "minecraft:chest",    -- item exported for delivery containers
+    maxChestsPerDelivery = 6,
+    batchSize            = 15,   -- max stacks per item batch (turtle carry cap)
+    msgTimeout           = 120,  -- seconds to wait for turtle response
 }
+
+-- ─── Peripherals ─────────────────────────────────────────────────────────────
+
+local modem    = peripheral.find("modem")
+local rsBridge = peripheral.find("rsBridge")
+
+if not modem    then error("Warehouse: no modem found")     end
+if not rsBridge then error("Warehouse: no rsBridge found — attach an Advanced Peripherals RS Bridge") end
+
+modem.open(proto.CH_SERVER)
+modem.open(proto.CH_WAREHOUSE)
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 
-local queue   = {}   -- { {jobId, turtleId, items, chestsNeeded}, ... }
-local current = nil  -- job currently being served
+local queue   = {}
+local current = nil
 
 -- ─── Helpers ─────────────────────────────────────────────────────────────────
 
 local function log(s) print("[WH] " .. tostring(s)) end
-
-local modem = peripheral.find("modem")
-if not modem then error("Warehouse: no modem found") end
-modem.open(proto.CH_SERVER)   -- receives from server (warehouse is on CH_WAREHOUSE from server's view)
-modem.open(proto.CH_WAREHOUSE)
 
 local function sendToServer(msgType, toId, payload)
     local msg = proto.encode(msgType, "warehouse", toId, payload)
     proto.send(modem, proto.CH_SERVER, msg)
 end
 
--- Count how many regular chests an item list needs
+-- How many regular chests does this item list need?
 local function chestsNeeded(items)
     local totalStacks = 0
     for _, count in pairs(items) do
@@ -84,106 +71,71 @@ local function chestsNeeded(items)
     return math.min(CFG.maxChestsPerDelivery, math.max(1, math.ceil(totalStacks / 27)))
 end
 
--- Push N empty regular chests from supply chest → entangled chest
+-- Export N regular chests from RS → entangled chest
 local function loadChests(n)
-    local supply = peripheral.wrap(CFG.supplyChest)
-    if not supply then log("ERROR: supply chest not found: " .. CFG.supplyChest); return 0 end
-    local loaded = 0
-    for slot, stack in pairs(supply.list()) do
-        if loaded >= n then break end
-        if stack.name == CFG.regularChestItem then
-            local amount = math.min(stack.count, n - loaded)
-            local moved  = supply.pushItems(CFG.entangledChest, slot, amount)
-            loaded = loaded + moved
-        end
-    end
-    log("Loaded " .. loaded .. "/" .. n .. " chests into entangled")
-    return loaded
+    local result = rsBridge.exportItem(
+        { name = CFG.regularChestItem, count = n },
+        CFG.entangledChest
+    )
+    local moved = (type(result) == "number") and result or (result and result.count or 0)
+    log("Loaded " .. moved .. "/" .. n .. " chests into entangled chest")
+    return moved
 end
 
--- Flatten items table into a list of {name, count} for batch iteration
-local function flattenItems(items)
-    local flat = {}
-    for name, count in pairs(items) do
-        -- Split into 64-per-stack entries
-        local remaining = count
-        while remaining > 0 do
-            local batch = math.min(remaining, 64)
-            table.insert(flat, { name = name, count = batch })
-            remaining = remaining - batch
-        end
-    end
-    return flat
+-- Export one item stack from RS → entangled chest
+-- Returns number actually moved
+local function exportItem(name, count)
+    local result = rsBridge.exportItem(
+        { name = name, count = count },
+        CFG.entangledChest
+    )
+    return (type(result) == "number") and result or (result and result.count or 0)
 end
 
--- Push up to batchSize stacks from storage chests → entangled chest
--- Returns number of stacks actually pushed, and whether more remain
-local function loadBatch(flatItems, startIdx)
-    local pushed   = 0
-    local idx      = startIdx
-    while idx <= #flatItems and pushed < CFG.batchSize do
-        local entry   = flatItems[idx]
-        local needed  = entry.count
-        local fulfilled = false
-        for _, storageName in ipairs(CFG.storageChests) do
-            if needed <= 0 then break end
-            local storage = peripheral.wrap(storageName)
-            if storage then
-                for slot, stack in pairs(storage.list()) do
-                    if needed <= 0 then break end
-                    if stack.name == entry.name then
-                        local amount = math.min(stack.count, needed)
-                        local moved  = storage.pushItems(CFG.entangledChest, slot, amount)
-                        needed = needed - moved
-                    end
-                end
-            end
-        end
-        if needed > 0 then
-            log("WARNING: short " .. needed .. "x " .. entry.name)
-        end
-        pushed = pushed + 1
-        idx    = idx + 1
+-- Check RS has enough of an item; warn if short
+local function checkStock(name, needed)
+    local info = rsBridge.getItem({ name = name })
+    local have = info and info.amount or 0
+    if have < needed then
+        log(string.format("WARNING: need %d x %s but RS only has %d", needed, name, have))
     end
-    log("Batch loaded: " .. pushed .. " stacks (items " .. startIdx .. "-" .. (idx-1) .. ")")
-    return pushed, idx
+    return have
 end
 
--- Wait for a specific message type from the current turtle (with timeout)
-local function waitFor(msgType, seconds)
+-- Wait for a specific message from the current turtle (or any while queueing)
+local function waitFor(wantType, seconds)
     local deadline = os.epoch("utc") + seconds * 1000
     while os.epoch("utc") < deadline do
-        local remaining = (deadline - os.epoch("utc")) / 1000
-        local ev, p1, p2, p3, p4 = os.pullEventRaw("modem_message")
+        local ev, _,_,_, p4 = os.pullEventRaw("modem_message")
         if ev == "modem_message" then
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
             if raw then
                 local ok, msg = proto.decode(raw)
-                if ok and msg.type == msgType
-                and (not current or msg.from == current.turtleId) then
-                    return msg
-                end
-                -- Still handle other queue messages while waiting
-                if ok and msg.type == proto.MSG.ITEM_REQUEST then
-                    local p = msg.payload
-                    local n = chestsNeeded(p.items or {})
-                    table.insert(queue, {
-                        jobId        = p.jobId,
-                        turtleId     = msg.from,
-                        items        = p.items or {},
-                        chestsNeeded = n,
-                    })
-                    sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
-                        jobId    = p.jobId,
-                        position = #queue,
-                        chests   = n,
-                    })
-                    log("Queued (while waiting): " .. msg.from .. " pos=" .. #queue)
+                if ok then
+                    if msg.type == wantType
+                    and (not current or msg.from == current.turtleId) then
+                        return msg
+                    end
+                    -- Handle new queue arrivals while waiting
+                    if msg.type == proto.MSG.ITEM_REQUEST then
+                        local p = msg.payload
+                        local n = chestsNeeded(p.items or {})
+                        table.insert(queue, {
+                            jobId        = p.jobId,
+                            turtleId     = msg.from,
+                            items        = p.items or {},
+                            chestsNeeded = n,
+                        })
+                        sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
+                            jobId = p.jobId, position = #queue, chests = n,
+                        })
+                        log("Queued (waiting): " .. msg.from .. " pos=" .. #queue)
+                    end
                 end
             end
         end
     end
-    return nil  -- timeout
+    return nil
 end
 
 -- ─── Queue ───────────────────────────────────────────────────────────────────
@@ -191,80 +143,95 @@ end
 local function serveNext()
     if current or #queue == 0 then return end
     current = table.remove(queue, 1)
-    log("Now serving: " .. current.turtleId .. " job=" .. current.jobId
-        .. " chests=" .. current.chestsNeeded)
-    -- Turtle may already be at destination waiting — send WAREHOUSE_QUEUED pos=0 as "you're next"
+    log("Serving: " .. current.turtleId .. "  job=" .. current.jobId
+        .. "  chests=" .. current.chestsNeeded)
     sendToServer(proto.MSG.WAREHOUSE_QUEUED, current.turtleId, {
-        jobId    = current.jobId,
-        position = 0,
-        chests   = current.chestsNeeded,
+        jobId = current.jobId, position = 0, chests = current.chestsNeeded,
     })
 end
 
--- ─── Main job handler (runs synchronously for one job) ───────────────────────
+-- ─── Job handler ─────────────────────────────────────────────────────────────
 
 local function handleCurrentJob()
     if not current then return end
-    log("Waiting for DELIVERY_ARRIVED from " .. current.turtleId)
 
     -- Wait for turtle to arrive at destination
+    log("Waiting for DELIVERY_ARRIVED from " .. current.turtleId .. "...")
     local msg = waitFor(proto.MSG.DELIVERY_ARRIVED, CFG.msgTimeout)
     if not msg then
-        log("Timeout waiting for arrival of " .. current.turtleId .. " — skipping job")
-        current = nil
-        serveNext()
-        return
+        log("Timeout — skipping " .. current.turtleId)
+        current = nil; serveNext(); return
     end
 
-    -- ── Phase 1: Load and send regular chests ────────────────────────────────
-    log("Turtle arrived. Loading " .. current.chestsNeeded .. " chests...")
+    -- ── Phase 1: export regular chests into entangled chest ──────────────────
+    log("Exporting " .. current.chestsNeeded .. " regular chests via RS...")
     local loaded = loadChests(current.chestsNeeded)
     if loaded == 0 then
-        log("ERROR: no regular chests in supply — aborting job")
+        log("ERROR: RS has no regular chests ('" .. CFG.regularChestItem .. "') — aborting")
         current = nil; serveNext(); return
     end
 
     sendToServer(proto.MSG.CHESTS_READY, current.turtleId, {
-        jobId = current.jobId,
-        count = loaded,
+        jobId = current.jobId, count = loaded,
     })
 
     -- Wait for turtle to place the chests
     log("Waiting for CHESTS_PLACED...")
     msg = waitFor(proto.MSG.CHESTS_PLACED, CFG.msgTimeout)
     if not msg then
-        log("Timeout waiting for CHESTS_PLACED — aborting")
+        log("Timeout on CHESTS_PLACED — aborting")
         current = nil; serveNext(); return
     end
 
-    -- ── Phase 2: Send items in batches ───────────────────────────────────────
-    local flatItems = flattenItems(current.items)
-    local idx       = 1
-    log("Sending " .. #flatItems .. " stacks in batches of " .. CFG.batchSize)
+    -- ── Phase 2: export items in batches ─────────────────────────────────────
+    -- Flatten items into a list of {name, count} respecting batchSize
+    local batches = {}
+    local batch   = {}
+    local bStacks = 0
+    for itemName, totalCount in pairs(current.items) do
+        checkStock(itemName, totalCount)
+        local remaining = totalCount
+        while remaining > 0 do
+            local stackCount = math.min(remaining, 64)
+            table.insert(batch, { name = itemName, count = stackCount })
+            bStacks   = bStacks + 1
+            remaining = remaining - stackCount
+            if bStacks >= CFG.batchSize then
+                table.insert(batches, batch)
+                batch   = {}
+                bStacks = 0
+            end
+        end
+    end
+    if #batch > 0 then table.insert(batches, batch) end
 
-    while idx <= #flatItems do
-        local pushed, nextIdx = loadBatch(flatItems, idx)
-        idx = nextIdx
+    log(string.format("Sending %d item batch(es) of up to %d stacks each",
+        #batches, CFG.batchSize))
 
-        local isLast = idx > #flatItems
+    for i, b in ipairs(batches) do
+        -- Export this batch into the entangled chest
+        for _, entry in ipairs(b) do
+            local moved = exportItem(entry.name, entry.count)
+            if moved < entry.count then
+                log(string.format("Short: %d/%d %s", moved, entry.count, entry.name))
+            end
+        end
+
+        local isLast = (i == #batches)
         if isLast then
             sendToServer(proto.MSG.ITEMS_DONE, current.turtleId, { jobId = current.jobId })
         else
             sendToServer(proto.MSG.ITEMS_READY, current.turtleId, { jobId = current.jobId })
-        end
-
-        if not isLast then
-            -- Wait for turtle to pull batch before loading the next one
             log("Waiting for BATCH_DONE...")
             msg = waitFor(proto.MSG.BATCH_DONE, CFG.msgTimeout)
             if not msg then
-                log("Timeout waiting for BATCH_DONE — aborting remaining batches")
+                log("Timeout on BATCH_DONE — stopping early")
                 break
             end
         end
     end
 
-    -- ── Phase 3: Wait for turtle to confirm entangled chest is clear ──────────
+    -- Wait for entangled chest to be cleared
     log("Waiting for ITEM_COLLECTED...")
     waitFor(proto.MSG.ITEM_COLLECTED, CFG.msgTimeout)
 
@@ -276,26 +243,19 @@ end
 -- ─── Main loop ───────────────────────────────────────────────────────────────
 
 local function main()
-    log("Warehouse online. Channels: " .. proto.CH_SERVER .. " / " .. proto.CH_WAREHOUSE)
+    log("Warehouse online (RS bridge mode)")
     log("Entangled chest : " .. CFG.entangledChest)
-    log("Supply chest    : " .. CFG.supplyChest)
-    log("Storage chests  : " .. #CFG.storageChests)
+    log("RS bridge       : " .. (peripheral.getName(rsBridge) or "found"))
 
-    -- Verify peripherals
     if not peripheral.isPresent(CFG.entangledChest) then
-        log("WARNING: entangled chest not found — check CFG.entangledChest")
-    end
-    if not peripheral.isPresent(CFG.supplyChest) then
-        log("WARNING: supply chest not found — check CFG.supplyChest")
+        log("WARNING: entangled chest '" .. CFG.entangledChest .. "' not found — run 'lua warehouse.lua scan'")
     end
 
     while true do
-        -- If we have a current job to serve, drive it to completion
         if current then
             handleCurrentJob()
         else
-            -- Wait for next ITEM_REQUEST
-            local ev, p1, p2, p3, p4 = os.pullEvent("modem_message")
+            local ev, _,_,_, p4 = os.pullEvent("modem_message")
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
             if raw then
                 local ok, msg = proto.decode(raw)
@@ -309,11 +269,9 @@ local function main()
                         chestsNeeded = n,
                     })
                     sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
-                        jobId    = p.jobId,
-                        position = #queue,
-                        chests   = n,
+                        jobId = p.jobId, position = #queue, chests = n,
                     })
-                    log("Queued " .. msg.from .. " pos=" .. #queue)
+                    log("Queued " .. msg.from .. " at position " .. #queue)
                     serveNext()
                 end
             end
