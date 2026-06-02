@@ -463,7 +463,10 @@ end
 local server = {}
 
 function server.submitJob(jobType, params, priority)
-    return jobQueue.add(jobType, params, priority)
+    local id = jobQueue.add(jobType, params, priority)
+    -- Dispatch immediately rather than waiting for the next 2s timer tick
+    pcall(dispatcher.tick)
+    return id
 end
 
 function server.cancelJob(jobId)
