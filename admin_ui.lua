@@ -154,51 +154,194 @@ local function pgTurtles()
     end
 end
 
+-- ─── Job ETA helpers ─────────────────────────────────────────────────────────
+
+-- Clean up a technical item name for display (also used by dispatch page below)
+local function cleanName(name)
+    return (name:gsub("^[^:]+:", ""):gsub("_", " "))
+end
+
+-- Empirical turtle speed underground (blocks/second, accounting for turns/dig)
+local SPEED_BPS = 2.0
+
+-- Extra seconds added per status phase
+local PHASE_EXTRA = {
+    LOADING    = 55,   -- warehouse queue + chest loading
+    WORKING    = 40,   -- placing chests + distributing items
+    TRAVELLING = 5,
+    RETURNING  = 0,
+    IDLE       = 0,
+}
+
+-- Returns estimated remaining seconds to delivery, or nil if not enough data
+local function etaSeconds(job)
+    if not job or not job.dest then return nil end
+    local turtle = state.turtles[job.assignedTo]
+    if not turtle or not turtle.pos then return nil end
+    local dx   = math.abs(turtle.pos.x - job.dest.x)
+    local dy   = math.abs(turtle.pos.y - job.dest.y)
+    local dz   = math.abs(turtle.pos.z - job.dest.z)
+    -- Horizontal distance gets a 1.35x detour factor for underground travel
+    local dist = (dx + dz) * 1.35 + dy
+    local extra = PHASE_EXTRA[turtle.status] or 15
+    return math.max(0, math.floor(dist / SPEED_BPS + extra))
+end
+
+-- Format seconds → "42s", "3m 12s", "1h 4m"
+local function fmtTime(secs)
+    if not secs then return "?" end
+    secs = math.floor(secs)
+    if secs < 60  then return secs .. "s" end
+    if secs < 3600 then
+        return math.floor(secs/60) .. "m " .. (secs%60) .. "s"
+    end
+    return math.floor(secs/3600) .. "h " .. math.floor((secs%3600)/60) .. "m"
+end
+
+-- Format items dict → "cobblestone x64, chest x3"
+local function fmtItems(items)
+    if not items then return "" end
+    local parts = {}
+    for name, count in pairs(items) do
+        table.insert(parts, cleanName(name) .. " x" .. count)
+    end
+    table.sort(parts)
+    return table.concat(parts, "  ·  ")
+end
+
 -- ─── Page: Jobs ──────────────────────────────────────────────────────────────
 
 local function pgJobs()
-    local y = TH + 8
-    fill(4,TH+2,W-8,20,C.PANEL)
-    ln(4,TH+2,W-4,TH+2,C.BORDER)
-    t("JOBS", 8, TH+4, C.WHITE, FT, true)
-    y = TH + 26
-
-    local list = {}
-    for _,j in pairs(state.jobs) do table.insert(list,j) end
-    table.sort(list,function(a,b)
-        local function r(s)
-            return s=="IN_PROGRESS" and 0 or s=="ASSIGNED" and 1
-                or s=="PENDING" and 2 or 3
+    -- Split jobs into buckets
+    local active, pending, recent = {}, {}, {}
+    for _, j in pairs(state.jobs) do
+        local s = j.status or ""
+        if s == "IN_PROGRESS" or s == "ASSIGNED" then
+            table.insert(active, j)
+        elseif s == "PENDING" then
+            table.insert(pending, j)
+        else
+            table.insert(recent, j)
         end
-        local ra,rb = r(a.status),r(b.status)
-        return ra~=rb and ra<rb or (a.id or"")>(b.id or"")
-    end)
+    end
+    -- Sort: newest first
+    local function byId(a,b) return (a.id or "") > (b.id or "") end
+    table.sort(active,  byId)
+    table.sort(pending, byId)
+    table.sort(recent,  byId)
 
-    if #list == 0 then t("Queue empty",8,y,C.DIM,FS); return end
+    local y = TH + 2
 
-    -- column headers
-    t("ID",      8,   y, C.DIM, 10, true)
-    t("TYPE",   110,  y, C.DIM, 10, true)
-    t("STATUS", 210,  y, C.DIM, 10, true)
-    t("TURTLE", 330,  y, C.DIM, 10, true)
-    y = y + 16
-    ln(4,y,W-4,y,C.BORDER)
-    y = y + 4
+    -- ── Summary bar ──────────────────────────────────────────────────────────
+    fill(0, y, W, 18, C.HDR)
+    t(string.format("JOBS   %d active  ·  %d pending  ·  %d recent",
+        #active, #pending, #recent), 8, y+3, C.WHITE, 10, true)
+    y = y + 20
 
-    for _,j in ipairs(list) do
-        if y + LH > H - 4 then break end
-        local sc  = j.status=="COMPLETE" and C.GREEN
-                 or j.status=="IN_PROGRESS" and C.CYAN
-                 or j.status=="ASSIGNED" and C.YELLOW
-                 or j.status=="PENDING" and C.ORANGE
-                 or j.status=="FAILED" and C.RED or C.DIM
-        local typ = j.type=="SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
-        t(j.id or "?",  8,   y, C.WHITE, FS, true)
-        t(typ,         110,  y, C.DIM,   FS)
-        t(j.status or"?", 210, y, sc,    FS)
-        if j.assignedTo then t(j.assignedTo, 330, y, C.DIM, FS) end
-        y = y + LH + 2
-        ln(4,y-1,W-4,y-1,C.BORDER)
+    -- ── Active job cards (max 2) ──────────────────────────────────────────────
+    local CARD_H = 63
+
+    if #active == 0 then
+        fill(4, y, W-8, 28, C.PANEL)
+        t("No active jobs", 12, y+8, C.DIM, FS)
+        y = y + 32
+    else
+        for i, j in ipairs(active) do
+            if i > 2 then break end
+
+            local turtle    = state.turtles[j.assignedTo]
+            local tStatus   = turtle and turtle.status or j.status or "?"
+            local eta       = etaSeconds(j)
+            local elapsed   = j.startedAt and
+                math.floor((os.epoch("utc") - j.startedAt) / 1000) or nil
+
+            -- Phase colour
+            local sc = tStatus == "WORKING"    and C.ORANGE
+                     or tStatus == "TRAVELLING" and C.CYAN
+                     or tStatus == "LOADING"    and C.YELLOW
+                     or tStatus == "RETURNING"  and C.BLUE
+                     or C.GREEN
+
+            -- Card bg + coloured top stripe
+            fill(4, y, W-8, CARD_H, {16,20,38})
+            fill(4, y, W-8, 2, sc)
+
+            -- Row 1: job id  type  →  turtle               ● STATUS
+            local jType = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
+            t(j.id or "?",  10, y+5,  C.WHITE, 10, true)
+            t(jType,         92, y+5,  C.DIM,   9)
+            if j.assignedTo then
+                t("→ " .. j.assignedTo, 155, y+5, sc, 9, true)
+            end
+            -- Status pill (right side)
+            fill(W-112, y+4, 108, 13, {22,28,52})
+            t("● " .. tStatus, W-109, y+5, sc, 9, true)
+
+            -- Row 2: destination   ETA
+            local y2 = y + 20
+            if j.dest then
+                t(string.format("Dest  X%d  Y%d  Z%d",
+                    j.dest.x, j.dest.y, j.dest.z), 10, y2, C.DIM, 9)
+            else
+                t("Dest  unknown", 10, y2, C.DIM, 9)
+            end
+            if eta then
+                local etaLabel = eta < 10 and "arriving!" or ("ETA ~" .. fmtTime(eta))
+                t(etaLabel, W-95, y2, eta < 30 and C.GREEN or C.CYAN, 9, true)
+            end
+
+            -- Row 3: items
+            local y3 = y + 33
+            local itemStr = fmtItems(j.items)
+            if itemStr == "" then itemStr = j.phase or "no items" end
+            if #itemStr > 62 then itemStr = itemStr:sub(1,59) .. "…" end
+            t(itemStr, 10, y3, {145,155,175}, 9)
+
+            -- Row 4: elapsed/ETA progress bar
+            local y4 = y + 48
+            if elapsed and eta then
+                local total = elapsed + eta
+                local pct   = total > 0 and math.min(1, elapsed / total) or 0
+                local bw    = W - 90
+                fill(10, y4, bw, 7, {22,28,52})
+                fill(10, y4, math.max(2, math.floor(bw * pct)), 7, sc)
+                t(fmtTime(elapsed) .. " elapsed", bw + 15, y4-1, C.DIM, 8)
+            elseif elapsed then
+                t(fmtTime(elapsed) .. " elapsed", 10, y4, C.DIM, 8)
+            end
+
+            y = y + CARD_H + 3
+        end
+    end
+
+    -- ── Pending ───────────────────────────────────────────────────────────────
+    if #pending > 0 and y + 14 < H - 24 then
+        t("PENDING", 8, y, C.ORANGE, 9, true)
+        y = y + 12
+        for _, j in ipairs(pending) do
+            if y + 10 > H - 24 then break end
+            local jType = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
+            t("· " .. (j.id or "?"), 10, y, C.ORANGE, 9)
+            t(jType, 95, y, C.DIM, 9)
+            if j.dest then
+                t(string.format("X%d Y%d Z%d", j.dest.x, j.dest.y, j.dest.z),
+                    175, y, {80,80,100}, 9)
+            end
+            y = y + 11
+        end
+    end
+
+    -- ── Recent footer (last 4 compressed into one line each) ─────────────────
+    if #recent > 0 and y < H - 4 then
+        ln(4, H-20, W-4, H-20, C.BORDER)
+        local rx2 = 6
+        for i = math.max(1, #recent-3), #recent do
+            local j  = recent[i]
+            local rc = j.status == "COMPLETE" and C.GREEN or C.RED
+            t((j.id or "?") .. "  " .. (j.status or "?"), rx2, H-16, rc, 8)
+            rx2 = rx2 + 122
+            if rx2 > W - 100 then break end
+        end
     end
 end
 
@@ -425,10 +568,7 @@ end
 
 -- ─── Page: Dispatch ──────────────────────────────────────────────────────────
 
--- Clean up a technical item name for display
-local function cleanName(name)
-    return (name:gsub("^[^:]+:", ""):gsub("_", " "))
-end
+-- (cleanName defined above near ETA helpers)
 
 -- Refresh RS inventory cache (sorted by display name)
 local function refreshRSItems()
@@ -624,7 +764,10 @@ local function onMsg(msg)
         v.status=p.status or v.status; v.jobId=p.jobId or v.jobId
         if p.position then v.pos=p.position; v.posAge=os.epoch("utc") end
         if p.jobId and state.jobs[p.jobId] then
-            state.jobs[p.jobId].status="IN_PROGRESS"
+            local j = state.jobs[p.jobId]
+            j.status = "IN_PROGRESS"
+            -- Capture current phase description for the jobs page
+            if p.detail then j.phase = p.detail end
         end
 
     elseif msg.type==proto.MSG.JOB_ASSIGN then
@@ -632,6 +775,12 @@ local function onMsg(msg)
         state.jobs[p.jobId]=state.jobs[p.jobId] or {id=p.jobId,type=p.jobType}
         local j=state.jobs[p.jobId]
         j.status="ASSIGNED"; j.assignedTo=msg.to; j.type=p.jobType or j.type
+        j.startedAt = j.startedAt or os.epoch("utc")
+        -- Capture destination and items for ETA and display
+        if p.params then
+            if p.params.destination then j.dest  = p.params.destination end
+            if p.params.items       then j.items = p.params.items       end
+        end
 
     elseif msg.type==proto.MSG.JOB_COMPLETE then
         local jid=msg.payload.jobId
