@@ -391,9 +391,15 @@ end
 
 handlers[proto.MSG.HEARTBEAT] = function(msg)
     local p = msg.payload
-    registry.update(msg.from, p.status, p.fuel, p.position, p.jobId)
-    -- Acknowledge so turtle resets its missed-heartbeat counter and never re-registers spuriously
-    sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
+    local known = state.registry[msg.from] ~= nil
+    if known then
+        registry.update(msg.from, p.status, p.fuel, p.position, p.jobId)
+        -- ACK only known turtles so their missed counter resets and they never re-register spuriously
+        sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
+    else
+        -- Unknown turtle (server restarted) — no ACK means missed counter runs up → auto re-registers
+        logWarn("Heartbeat from unknown turtle: " .. msg.from .. " (will re-register shortly)")
+    end
 end
 
 handlers[proto.MSG.JOB_ACK] = function(msg)
