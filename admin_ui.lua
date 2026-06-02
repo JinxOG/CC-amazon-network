@@ -343,9 +343,7 @@ local function pgMap()
         t("Status: "..st, rx+4, dy, sc, 9); dy=dy+11
 
         if sel.pos then
-            t(string.format("X: %d", sel.pos.x), rx+4, dy, C.DIM, 9); dy=dy+11
-            t(string.format("Y: %d", sel.pos.y), rx+4, dy, C.DIM, 9); dy=dy+11
-            t(string.format("Z: %d", sel.pos.z), rx+4, dy, C.DIM, 9); dy=dy+11
+            t(string.format("%d %d %d", sel.pos.x, sel.pos.y, sel.pos.z), rx+4, dy, C.DIM, 9); dy=dy+11
             local age = math.floor((os.epoch("utc")-(sel.posAge or 0))/1000)
             t(age.."s ago", rx+4, dy, {80,80,100}, 9); dy=dy+11
         else
