@@ -72,29 +72,14 @@ base.run(function(job)
     base.setStatus(proto.STATUS.LOADING, job.id)
     base.sendProgress("Queuing with warehouse")
 
-    -- Find the ender chest anywhere in inventory and move it to EC_SLOT
-    -- Matches any chest from Entangled, Ender Storage, or similar mods
-    local function isEnderChest(item)
-        if not item then return false end
-        local n = item.name:lower()
-        return n:find("ender") or n:find("entangled") or n:find("enderstorage")
+    -- Delivery ender chest must be in slot 16 (reserved).
+    -- The turtle may carry multiple ender chests (e.g. one for fuel) so we
+    -- use a fixed slot to avoid picking the wrong colour combination.
+    local ecItem = turtle.getItemDetail(EC_SLOT)
+    if not ecItem then
+        return base.sendFailed("no_ender_chest_in_slot_" .. EC_SLOT, false)
     end
-
-    if not isEnderChest(turtle.getItemDetail(EC_SLOT)) then
-        for s = 1, 16 do
-            if s ~= EC_SLOT and isEnderChest(turtle.getItemDetail(s)) then
-                turtle.select(s)
-                turtle.transferTo(EC_SLOT)
-                break
-            end
-        end
-    end
-
-    if not isEnderChest(turtle.getItemDetail(EC_SLOT)) then
-        return base.sendFailed("no_ender_chest_in_inventory", false)
-    end
-
-    print("Ender chest in slot " .. EC_SLOT .. ": " .. turtle.getItemDetail(EC_SLOT).name)
+    print("Delivery ender chest: slot " .. EC_SLOT .. " (" .. ecItem.name .. ")")
 
     -- Send queue request to warehouse via server
     base.sendToServer(proto.MSG.ITEM_REQUEST, {
