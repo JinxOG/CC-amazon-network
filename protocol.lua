@@ -53,6 +53,9 @@ proto.MSG = {
 
     -- Departure staging handshake (CH_LOCAL)
     SUPPORT_STAGED  = "SUPPORT_STAGED",  -- support → delivery: I'm 1 block behind you, descend now
+
+    -- Return journey (CH_LOCAL)
+    RETURN_TO_DOCK  = "RETURN_TO_DOCK",  -- delivery → support: I'm inside, ascend and return independently
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

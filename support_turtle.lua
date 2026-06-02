@@ -107,6 +107,12 @@ base.run(function(job)
                 ascending = false
                 print("Delivery descended — resuming follow")
 
+            elseif msg.type == proto.MSG.RETURN_TO_DOCK then
+                -- Delivery is inside building, arrivals hole is clear
+                -- Return to our own dock independently
+                print("Delivery inside — returning to dock independently")
+                break
+
             end
         end
     end

@@ -345,15 +345,29 @@ function base.returnToDock()
     end
 
     -- Navigate underground to arrivals hole X,Z
+    -- Support is following via position broadcasts so it arrives right behind us
     logInfo("Navigating underground to arrivals hole...")
     local ok, err = move.to(W.ARRIVALS_HOLE.x, UNDERGROUND_Y, W.ARRIVALS_HOLE.z)
     if not ok then return false, "could not reach arrivals hole: " .. (err or "?") end
+
+    -- Tell support to hold — we're ascending, don't follow yet
+    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
+        base.signalPartner(proto.MSG.ASCENDING, {})
+        sleep(0.5)
+    end
 
     -- Ascend through arrivals hole into building
     logInfo("Ascending arrivals hole...")
     for _ = 1, 10 do
         move.up()
         if _self.pos.y >= FLOOR_Y then break end
+    end
+
+    -- Now inside building — tell support to return independently (hole is clear)
+    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
+        logInfo("Inside building — signalling support to return independently.")
+        base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+        _self.partnerId = nil  -- stop position broadcasts
     end
 
     -- Follow red taxiway back to dock
