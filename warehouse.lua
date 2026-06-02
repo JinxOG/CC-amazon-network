@@ -284,7 +284,7 @@ end
 -- ─── Main loop ───────────────────────────────────────────────────────────────
 
 local function main()
-    log("Warehouse online (RS bridge mode)")
+    log(string.format("Warehouse online v%s (RS bridge mode)", proto.VERSION))
     log("Entangled chest : " .. CFG.entangledChest)
     log("RS bridge       : " .. (peripheral.getName(rsBridge) or "found"))
 

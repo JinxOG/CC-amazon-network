@@ -5,6 +5,8 @@
 
 local proto = {}
 
+proto.VERSION = "1.0.0"
+
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
 proto.CH_SERVER    = 1    -- turtles → server

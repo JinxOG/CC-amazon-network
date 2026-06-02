@@ -106,6 +106,9 @@ local function drawTitle()
 
     -- Row 1: app name + current page
     t(string.format("CC AMAZON  |  %s", PAGES[state.page]), 6, 3, C.WHITE, 12, true)
+    -- Version tag — right-aligned on row 1
+    local verStr = "v" .. proto.VERSION
+    t(verStr, W - #verStr * 7 - 4, 5, C.DIM, 9, false)
 
     -- Row 2: clickable NEXT button bar
     fill(BTN.x, BTN.y, BTN.w, BTN.h, {40, 160, 60})

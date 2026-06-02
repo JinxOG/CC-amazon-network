@@ -928,7 +928,7 @@ function base.init(role)
         CHEST_SLOT = 15
         logInfo("Fuel ender chest slot set to 15 (delivery role)")
     end
-    print("=== " .. _self.id .. " [" .. role .. "] booting ===")
+    print(string.format("=== %s [%s] v%s booting ===", _self.id, role, proto.VERSION))
     comms.init()
     initPosition()
     fuel.refuel()

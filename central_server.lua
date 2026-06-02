@@ -683,7 +683,7 @@ function server.run()
     proto.openChannels(state.modem, {
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
-    logInfo("Central server online. ID: " .. proto.selfId())
+    logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
     print("Console ready. Type 'help' for commands.")
 
     local dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
