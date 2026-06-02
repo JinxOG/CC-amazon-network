@@ -645,17 +645,28 @@ local function handleConsoleEnter()
         print("Recalled all turtles.")
 
     elseif cmd == "update" then
-        -- Broadcast UPDATE_ALL to every computer on the network, then update self
-        local msg = proto.encode(proto.MSG.UPDATE_ALL, "server", "all", {})
-        sendBroadcast(proto.MSG.UPDATE_ALL, {})
-        print("Broadcast UPDATE_ALL sent to all turtles, warehouse, and admin UI.")
-        print("Server will self-update now...")
-        sleep(1)
-        if fs.exists("updater.lua") then
-            shell.run("updater")
-        else
-            print("updater.lua not found on server — skipping self-update.")
+        local base = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
+        local files = {
+            "protocol.lua", "waypoints.lua",
+            "turtle_base.lua", "delivery_turtle.lua",
+            "support_turtle.lua", "warehouse.lua",
+            "central_server.lua", "admin_ui.lua",
+        }
+        print("Run this on each computer to update:")
+        print("")
+        for _, f in ipairs(files) do
+            print("wget " .. base .. f .. " " .. f)
         end
+        print("")
+        print("Then reboot each computer.")
+        print("(On turtles, delivery_turtle.lua / support_turtle.lua")
+        print(" should be saved as startup.lua)")
+        print("")
+        print("Updating server now...")
+        for _, f in ipairs({"protocol.lua","waypoints.lua","central_server.lua"}) do
+            shell.run("wget", base .. f, f)
+        end
+        print("Server files updated — reboot to apply.")
 
     elseif cmd == "jobs" then
         local pending, active, done = 0, 0, 0

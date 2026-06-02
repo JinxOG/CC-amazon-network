@@ -262,8 +262,8 @@ local function bypassForward()
 
         if advanced < 2 then
             -- Couldn't clear obstacle at this level — go back
-            if isUp then turtle.detectDown() and turtle.digDown() end
-            if not isUp then turtle.detectUp() and turtle.digUp() end
+            if isUp and turtle.detectDown() then turtle.digDown() end
+            if not isUp and turtle.detectUp() then turtle.digUp() end
             returnMov(); applyMove(returnDir)
             return false
         end
