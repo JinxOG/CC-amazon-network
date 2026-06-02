@@ -340,20 +340,31 @@ local function main()
     if ok  and type(dw) == "number" and dw > 0 then state.W = dw end
     if ok2 and type(dh) == "number" and dh > 0 then state.H = dh end
 
-    -- 2) Fallback: derive from CC monitor character dimensions.
-    --    Blitz gives 656x324 px per monitor block; default monitor is 8x6 chars/block.
-    --    So 1 char ≈ 82x54 px. getSize() returns total chars across all blocks.
+    -- 2) Fallback: find the monitor directly attached to THIS computer by checking
+    --    each side. peripheral.find("monitor") can grab a different computer's
+    --    monitor over a wired network, giving wrong dimensions.
     if state.W == 1968 and state.H == 648 then
-        local mon = peripheral.find("monitor")
+        local mon = nil
+        for _, side in ipairs({"top","bottom","left","right","front","back"}) do
+            if peripheral.getType(side) == "monitor" then
+                mon = peripheral.wrap(side)
+                print("Found monitor on side: " .. side)
+                break
+            end
+        end
         if mon then
             local cw, ch = mon.getSize()
-            -- pixels per char ≈ 82x54 at default scale
+            print(string.format("Monitor chars: %dx%d", cw, ch))
+            -- Blitz DirectGPU: 656x324 px per monitor block.
+            -- Default CC Advanced Monitor scale = 8 chars wide x 6 chars tall per block.
+            -- So 1 char ≈ 82x54 px.
             state.W = math.max(400, cw * 82)
             state.H = math.max(200, ch * 54)
         else
-            -- No monitor found via peripheral — safe single-block default
+            -- No directly-attached monitor found — single-block safe default
             state.W = 656
             state.H = 324
+            print("No adjacent monitor found — using default 656x324")
         end
     end
     print(string.format("Display: %dx%d px", state.W, state.H))
