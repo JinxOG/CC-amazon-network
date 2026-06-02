@@ -43,19 +43,38 @@ local function placeChestAt(x, y, z, chestSlot)
     placeDownClear()
 end
 
--- Fill chest below from turtle inventory (slots 1-15), tracking how full it is.
--- Returns true if chest is full (no more room), false if items remain.
-local function dropIntoChestBelow()
-    local full = false
-    for slot = 1, EC_SLOT - 1 do
-        if turtle.getItemCount(slot) > 0 then
-            turtle.select(slot)
-            if not turtle.dropDown() then
-                full = true  -- chest rejected — assume full
+-- Build a set of slots that must NEVER be dropped or placed.
+-- Called once at job start — catches all ender chests (fuel, delivery, etc.)
+-- and any other non-deliverable items already in the turtle.
+local function buildProtectedSlots()
+    local protected = {}
+    for s = 1, 16 do
+        local it = turtle.getItemDetail(s)
+        if it then
+            local n = it.name:lower()
+            -- Protect ender/entangled chests and tools (non-stackable items)
+            if n:find("ender") or n:find("entangled") or it.maxCount == 1 then
+                protected[s] = true
+                print(string.format("  Protected slot %d: %s", s, it.name))
             end
         end
     end
-    return full
+    return protected
+end
+
+-- Drop delivery items into chest below, skipping protected slots.
+-- Returns true if turtle still has undelivered items (chest full).
+local function dropIntoChestBelow(protected)
+    local stillHasItems = false
+    for slot = 1, 16 do
+        if not protected[slot] and turtle.getItemCount(slot) > 0 then
+            turtle.select(slot)
+            if not turtle.dropDown() then
+                stillHasItems = true  -- chest rejected — full
+            end
+        end
+    end
+    return stillHasItems
 end
 
 -- ─── Job handler ─────────────────────────────────────────────────────────────
@@ -80,6 +99,11 @@ base.run(function(job)
         return base.sendFailed("no_ender_chest_in_slot_" .. EC_SLOT, false)
     end
     print("Delivery ender chest: slot " .. EC_SLOT .. " (" .. ecItem.name .. ")")
+
+    -- Scan inventory now and lock down all ender chests + tools.
+    -- These slots are NEVER dropped or treated as delivery items.
+    print("Scanning protected slots...")
+    local protected = buildProtectedSlots()
 
     -- Send queue request to warehouse via server
     base.sendToServer(proto.MSG.ITEM_REQUEST, {
@@ -185,17 +209,20 @@ base.run(function(job)
     -- Place regular chests in a row along Z+1..Z+N from destination
     local chestPositions = {}
     for i = 1, pulled do
-        -- Find a regular chest in inventory (not entangled)
+        -- Find a regular chest in inventory — skip any protected slot
         local chestSlot = nil
-        for s = 1, EC_SLOT - 1 do
-            local it = turtle.getItemDetail(s)
-            if it and it.name:find("chest")
-            and not it.name:lower():find("ender")
-            and not it.name:lower():find("entangled") then
-                chestSlot = s; break
+        for s = 1, 16 do
+            if not protected[s] then
+                local it = turtle.getItemDetail(s)
+                if it and it.name:find("chest") then
+                    chestSlot = s; break
+                end
             end
         end
-        if not chestSlot then break end
+        if not chestSlot then
+            print("No regular chest found in inventory — stopping placement")
+            break
+        end
 
         local cx = d.x
         local cy = d.y
@@ -244,24 +271,8 @@ base.run(function(job)
             local cp = chestPositions[chestIdx]
             base.move.to(cp.x, cp.y, cp.z)
 
-            -- Drop as many items as the chest will take
-            local anyDropped = false
-            for slot = 1, EC_SLOT - 1 do
-                if turtle.getItemCount(slot) > 0 then
-                    turtle.select(slot)
-                    if turtle.dropDown() then
-                        anyDropped = true
-                    end
-                end
-            end
-
-            -- Check if turtle still has items (chest must be full)
-            local stillHasItems = false
-            for slot = 1, EC_SLOT - 1 do
-                if turtle.getItemCount(slot) > 0 then
-                    stillHasItems = true; break
-                end
-            end
+            -- Drop delivery items into this chest (protected slots skipped)
+            local stillHasItems = dropIntoChestBelow(protected)
 
             if stillHasItems then
                 -- Current chest full — move to next
