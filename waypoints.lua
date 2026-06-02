@@ -23,10 +23,11 @@ W.RED_Z   = -2801   -- inbound return lane
 
 -- ─── Holes ───────────────────────────────────────────────────────────────────
 
-W.DISPATCH_HOLE = { x = 143, y = CFG.FLOOR_Y,    z = -2813 }  -- go DOWN to leave
-W.ARRIVALS_HOLE = { x = 228, y = CFG.FLOOR_Y,    z = -2782 }  -- come UP to return
-W.WORLD_EXIT    = { x = 143, y = CFG.BELOW_HOLE_Y, z = -2813 } -- below dispatch hole
-W.WORLD_ENTRY   = { x = 228, y = CFG.BELOW_HOLE_Y, z = -2782 } -- below arrivals hole
+W.DISPATCH_HOLE    = { x = 143, y = CFG.FLOOR_Y,      z = -2813 }  -- go DOWN to leave
+W.DISPATCH_STAGING = { x = 143, y = CFG.FLOOR_Y,      z = -2812 }  -- 1 block before hole (support waits here)
+W.ARRIVALS_HOLE    = { x = 228, y = CFG.FLOOR_Y,      z = -2782 }  -- come UP to return
+W.WORLD_EXIT       = { x = 143, y = CFG.BELOW_HOLE_Y, z = -2813 }  -- below dispatch hole
+W.WORLD_ENTRY      = { x = 228, y = CFG.BELOW_HOLE_Y, z = -2782 }  -- below arrivals hole
 
 -- ─── Bay Slot Layout ─────────────────────────────────────────────────────────
 -- Each bay has 2 rows of 8 slots. Pillar sits at center X so slots
@@ -125,15 +126,21 @@ end
 -- Departure: dock → bay centre → white taxiway → dispatch hole → down
 function W.departureRoute(dock)
     return {
-        -- Step to bay centre X, stay in current row Z
-        { x = dock.junction.x, y = CFG.FLOOR_Y, z = dock.z },
-        -- Move to white taxiway
-        { x = dock.junction.x, y = CFG.FLOOR_Y, z = W.WHITE_Z },
-        -- Travel along white taxiway west to dispatch hole X
-        { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.WHITE_Z },
-        -- Move south to dispatch hole
-        { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.DISPATCH_HOLE.z },
-        -- Descend through hole (move.down() handled separately)
+        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = dock.z             },
+        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = W.WHITE_Z          },
+        { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.WHITE_Z          },
+        { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.DISPATCH_HOLE.z  },
+    }
+end
+
+-- Support departure: same as above but stops 1 block BEFORE the hole.
+-- Support sends SUPPORT_STAGED from here, then moves to the hole after delivery descends.
+function W.supportDepartureRoute(dock)
+    return {
+        { x = dock.junction.x,      y = CFG.FLOOR_Y, z = dock.z                },
+        { x = dock.junction.x,      y = CFG.FLOOR_Y, z = W.WHITE_Z             },
+        { x = W.DISPATCH_HOLE.x,    y = CFG.FLOOR_Y, z = W.WHITE_Z             },
+        { x = W.DISPATCH_STAGING.x, y = CFG.FLOOR_Y, z = W.DISPATCH_STAGING.z },
     }
 end
 

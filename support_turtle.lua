@@ -54,16 +54,12 @@ base.run(function(job)
     end
 
     -- ── Step 2: Depart depot via dispatch hole ────────────────────────────────
+    -- base.depart() handles: navigate to staging → send SUPPORT_STAGED → descend
 
     local ok, err = base.depart()
     if not ok then
         return base.sendFailed("departure_failed: " .. (err or "?"), true)
     end
-
-    -- Signal delivery that we are underground and ready to travel together
-    print("Sending SUPPORT_READY to " .. partnerId)
-    local sig = proto.encode(proto.MSG.SUPPORT_READY, base.getSelfId(), partnerId, {})
-    proto.send(base.getModem(), proto.CH_LOCAL, sig)
 
     -- ── Step 3+4: Follow delivery in real-time ───────────────────────────────
     -- Delivery broadcasts its previous position after every move on CH_LOCAL.

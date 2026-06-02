@@ -253,37 +253,63 @@ function base.depart()
     logInfo("Departing via dispatch lane...")
     base.setStatus(proto.STATUS.TRAVELLING)
 
-    -- Follow white taxiway route to the hole
-    local route = W.departureRoute(_self.dock)
-    local ok, err = move.followRoute(route)
-    if not ok then return false, "departure route failed: " .. (err or "?") end
+    if _self.role == proto.ROLE.DELIVERY then
+        -- ── Delivery departure ────────────────────────────────────────────────
+        -- Navigate to hole entrance, signal support, wait for support to stage
+        -- behind us, THEN descend so they go down together.
 
-    -- Only delivery turtles signal their support partner at the hole.
-    -- Signal and descend immediately — do NOT wait at the hole entrance
-    -- because support needs that exact block to complete its departure route.
-    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        logInfo("Signalling support turtle to depart — descending now...")
-        local sig = proto.encode(proto.MSG.HOLE_READY, _self.id, _self.partnerId, {})
-        proto.send(_self.modem, proto.CH_LOCAL, sig)
-        -- No wait — descend immediately so hole entrance is free for support
-    end
+        local route = W.departureRoute(_self.dock)
+        local ok, err = move.followRoute(route)
+        if not ok then return false, "departure route failed: " .. (err or "?") end
 
-    -- Descend through dispatch hole
-    logInfo("Descending dispatch hole...")
-    for _ = 1, 10 do
-        move.down()
-        if _self.pos.y <= W.WORLD_EXIT.y then break end
-    end
+        if _self.partnerId then
+            -- Signal support to start its departure route
+            logInfo("At hole — signalling support to stage...")
+            local sig = proto.encode(proto.MSG.HOLE_READY, _self.id, _self.partnerId, {})
+            proto.send(_self.modem, proto.CH_LOCAL, sig)
 
-    -- Wait underground for support's direct CH_LOCAL signal before travelling.
-    -- Using direct signal (not server query) because heartbeat position is stale.
-    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        logInfo("Waiting for support SUPPORT_READY signal...")
-        local msg = proto.receive(_self.id, 40)   -- 40s timeout
-        if msg and msg.type == proto.MSG.SUPPORT_READY and msg.from == _self.partnerId then
-            logInfo("Support is underground — travelling together.")
-        else
-            logInfo("No SUPPORT_READY in time — proceeding anyway.")
+            -- Wait for support to reach staging position (1 block behind us)
+            logInfo("Waiting for SUPPORT_STAGED...")
+            local msg = proto.receive(_self.id, 60)
+            if msg and msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
+                logInfo("Support staged — descending together.")
+            else
+                logInfo("No SUPPORT_STAGED in time — descending anyway.")
+            end
+        end
+
+        -- Descend through dispatch hole
+        logInfo("Descending dispatch hole...")
+        for _ = 1, 10 do
+            move.down()
+            if _self.pos.y <= W.WORLD_EXIT.y then break end
+        end
+
+    else
+        -- ── Support departure ─────────────────────────────────────────────────
+        -- Navigate to 1 block before the hole (staging), signal delivery,
+        -- then move to hole and descend.
+
+        local route = W.supportDepartureRoute(_self.dock)
+        local ok, err = move.followRoute(route)
+        if not ok then return false, "departure route failed: " .. (err or "?") end
+
+        -- At staging position — tell delivery it can descend
+        if _self.partnerId then
+            logInfo("Staged behind hole — signalling delivery to descend.")
+            local sig = proto.encode(proto.MSG.SUPPORT_STAGED, _self.id, _self.partnerId, {})
+            proto.send(_self.modem, proto.CH_LOCAL, sig)
+        end
+
+        -- Brief pause so delivery starts descending first (clears the hole entrance)
+        sleep(1)
+
+        -- Move to hole and descend
+        move.to(W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.y, W.DISPATCH_HOLE.z)
+        logInfo("Descending dispatch hole...")
+        for _ = 1, 10 do
+            move.down()
+            if _self.pos.y <= W.WORLD_EXIT.y then break end
         end
     end
 
