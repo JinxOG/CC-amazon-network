@@ -7,10 +7,12 @@ local server = require("central_server")
 -- Simple command shell running alongside the server
 local function shell()
     print("Server shell ready. Commands:")
-    print("  job <x> <y> <z>  -- submit a test delivery")
-    print("  list             -- show registered turtles")
-    print("  jobs             -- show job queue")
-    print("  recall           -- recall all turtles")
+    print("  job <x> <y> <z>     -- submit a test delivery")
+    print("  list                -- show registered turtles")
+    print("  jobs                -- show job queue")
+    print("  recall              -- recall all turtles")
+    print("  cancel <jobId>      -- cancel a specific job (and its paired support job)")
+    print("  cancelall           -- cancel every non-finished job and clear the queue")
     print("")
 
     while true do
@@ -90,6 +92,25 @@ local function shell()
             else
                 print("Unknown turtle: " .. targetId)
             end
+
+        elseif cmd == "cancel" and #args == 2 then
+            local ok, err = server.cancelJob(args[2])
+            if ok then
+                print("Cancelled " .. args[2] .. " (and linked support job if any).")
+            else
+                print("Cannot cancel: " .. (err or "?"))
+            end
+
+        elseif cmd == "cancelall" then
+            local st = server.getState()
+            local cancelled = 0
+            for jobId, job in pairs(st.jobs) do
+                if job.status ~= "COMPLETE" and job.status ~= "FAILED" and job.status ~= "CANCELLED" then
+                    server.cancelJob(jobId)
+                    cancelled = cancelled + 1
+                end
+            end
+            print(string.format("Cancelled %d jobs. Both turtles should return to dock.", cancelled))
 
         elseif cmd == "mock" and #args == 2 then
             -- Manually send ITEM_READY to unblock a turtle waiting for warehouse
