@@ -22,6 +22,16 @@ base.run(function(job)
     base.setPartnerId(partnerId)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
+    -- Debug: print all received params
+    print("Params received:")
+    print("  partnerId=" .. tostring(partnerId))
+    print("  masterJobId=" .. tostring(masterJobId))
+    if dest then
+        print(string.format("  dest=%d,%d,%d", dest.x, dest.y, dest.z))
+    else
+        print("  dest=NIL (server may need update)")
+    end
+
     -- ── Step 1: Wait for HOLE_READY from delivery turtle ─────────────────────
     -- Delivery sends this when it reaches the dispatch hole entrance
 
