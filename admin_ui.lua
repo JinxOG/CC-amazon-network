@@ -451,146 +451,126 @@ local function refreshRSItems()
 end
 
 local function pgDispatch()
-    local d  = state.dispatch
-    local lx = DL.lx
-    local rx = DL.rx
-    local top= DL.top
-
-    -- Reset click zones each frame
+    local d   = state.dispatch
+    local lx  = DL.lx
+    local rx  = DL.rx
+    local top = DL.top
     DZ = {}
 
-    -- ── Left panel background ─────────────────────────────────────────────────
+    -- ── Left panel ───────────────────────────────────────────────────────────
     fill(lx, top, DL.lw, H-top-2, {14,18,34})
     ln(lx+DL.lw, top, lx+DL.lw, H-2, C.BORDER)
 
-    -- ── Step 1: Service ───────────────────────────────────────────────────────
     local y = top + 4
-    t("SERVICE", lx+4, y, C.DIM, 9, true)
-    y = y + 12
 
+    -- Service
+    t("SERVICE", lx+4, y, C.DIM, 8, true); y = y + 10
     local selCol = d.service=="DELIVERY" and {40,160,60} or {30,40,70}
-    fill(lx+4, y, DL.lw-8, 16, selCol)
-    t("DELIVERY", lx+10, y+3, C.WHITE, 10, d.service=="DELIVERY")
-    DZ.delivery = { x=lx+4, y=y, w=DL.lw-8, h=16 }
-    y = y + 22
+    fill(lx+4, y, DL.lw-8, 14, selCol)
+    t("DELIVERY", lx+8, y+2, C.WHITE, 9, d.service=="DELIVERY")
+    DZ.delivery = { x=lx+4, y=y, w=DL.lw-8, h=14 }
+    y = y + 18
 
-    -- ── Step 2: Coordinates ───────────────────────────────────────────────────
-    t("DESTINATION", lx+4, y, C.DIM, 9, true)
-    y = y + 12
-
+    -- Destination
+    t("DESTINATION", lx+4, y, C.DIM, 8, true); y = y + 10
     if d.coords then
-        t(string.format("X %d  Y %d  Z %d", d.coords.x, d.coords.y, d.coords.z),
-            lx+4, y, C.WHITE, 9)
+        t(string.format("X%d Y%d Z%d", d.coords.x, d.coords.y, d.coords.z), lx+4, y, C.WHITE, 8)
     else
-        t("not set", lx+4, y, {60,60,80}, 9)
+        t("not set", lx+4, y, {60,60,80}, 8)
     end
-    fill(lx+4, y+11, DL.lw-8, 14, {25,35,65})
-    t("[ enter coords ]", lx+8, y+13, {140,170,255}, 9)
-    DZ.coords = { x=lx+4, y=y+11, w=DL.lw-8, h=14 }
-    y = y + 32
+    y = y + 10
+    fill(lx+4, y, DL.lw-8, 12, {25,35,65})
+    t("[enter coords]", lx+7, y+2, {140,170,255}, 8)
+    DZ.coords = { x=lx+4, y=y, w=DL.lw-8, h=12 }
+    y = y + 16
 
-    -- ── Order list ────────────────────────────────────────────────────────────
-    t("ORDER", lx+4, y, C.DIM, 9, true)
-    y = y + 11
-    ln(lx+4, y, lx+DL.lw-4, y, C.BORDER)
-    y = y + 3
-
+    -- Order list
+    t("ORDER", lx+4, y, C.DIM, 8, true); y = y + 9
+    ln(lx+4, y, lx+DL.lw-4, y, C.BORDER); y = y + 2
     if #d.order == 0 then
-        t("(no items added)", lx+6, y, {50,55,75}, 9)
-        y = y + 12
+        t("(none)", lx+6, y, {50,55,75}, 8); y = y + 10
     else
         for _, entry in ipairs(d.order) do
-            if y > H - 50 then break end
-            t(entry.display, lx+6, y, C.WHITE, 9)
-            t("x"..entry.count, lx+DL.lw-30, y, C.CYAN, 9)
-            y = y + 12
+            if y > H - 30 then break end
+            t(entry.display, lx+4, y, C.WHITE, 8)
+            t("x"..entry.count, lx+DL.lw-28, y, C.CYAN, 8)
+            y = y + 11
         end
     end
-
-    -- ── Bottom buttons ────────────────────────────────────────────────────────
-    local bby = H - 22
-    fill(lx+4, bby, 50, 14, {120,40,40})
-    t("CLEAR", lx+10, bby+2, C.WHITE, 9)
-    DZ.clear = { x=lx+4, y=bby, w=50, h=14 }
 
     -- Status
     if d.status ~= "" then
         local sc = d.statusOk and C.GREEN or C.RED
-        t(d.status, lx+4, bby-14, sc, 8)
+        t(d.status, lx+4, H-24, sc, 7)
     end
 
-    -- Waiting overlay on left panel
+    -- Clear button
+    fill(lx+4, H-16, 50, 12, {120,40,40})
+    t("CLEAR", lx+9, H-14, C.WHITE, 8)
+    DZ.clear = { x=lx+4, y=H-16, w=50, h=12 }
+
+    -- Waiting overlay
     if d.waiting then
-        fill(lx, top, DL.lw, H-top-2, {10,14,30})
-        t("Check", lx+20, top+80, C.YELLOW, 10, true)
-        t("terminal", lx+14, top+93, C.YELLOW, 10, true)
+        fill(lx, top, DL.lw, H-top-2, {8,12,26})
+        t("check", lx+18, top+70, C.YELLOW, 10, true)
+        t("terminal", lx+10, top+83, C.YELLOW, 10, true)
     end
 
     -- ── Right panel ───────────────────────────────────────────────────────────
     fill(rx, top, DL.rw, H-top-2, {10,13,26})
+    fill(rx, top, DL.rw, 12, {20,28,55})
+    t("RS INVENTORY", rx+4, top+1, C.WHITE, 8, true)
 
-    -- Header
-    fill(rx, top, DL.rw, 14, {20,28,55})
-    t("RS INVENTORY", rx+4, top+2, C.WHITE, 9, true)
     if not state.rsBridge then
-        t("(no rsBridge found)", rx+4, top+18, C.RED, 9)
+        t("no rsBridge attached", rx+4, top+16, C.RED, 8)
         return
     end
 
-    -- Scroll up button
-    local SCROLL_H = 14
-    local ITEM_H   = 16
-    local ITEMS_VIS= 10
-    local listTop  = top + 16
-    fill(rx, listTop, DL.rw, SCROLL_H, {25,35,65})
-    t("  ▲  UP", rx + DL.rw/2 - 20, listTop+2, C.DIM, 9)
-    DZ.scrollUp = { x=rx, y=listTop, w=DL.rw, h=SCROLL_H }
-    listTop = listTop + SCROLL_H
+    local SCROLL_H = 12
+    local ITEM_H   = 14
+    local ITEMS_VIS= 4
+    local rTop = top + 13
+
+    -- Scroll up
+    fill(rx, rTop, DL.rw, SCROLL_H, {22,32,60})
+    t("▲  UP", rx + DL.rw/2 - 14, rTop+2, C.DIM, 8)
+    DZ.scrollUp = { x=rx, y=rTop, w=DL.rw, h=SCROLL_H }
+    rTop = rTop + SCROLL_H
 
     -- Item rows
     local items = d.rsItems
     DZ.itemRows = {}
     for i = 1, ITEMS_VIS do
-        local idx = i + d.rsScroll
-        local iy  = listTop + (i-1)*ITEM_H
+        local idx  = i + d.rsScroll
+        local iy   = rTop + (i-1)*ITEM_H
         local item = items[idx]
+        local rowBg = (i%2==0) and {14,18,34} or {18,23,42}
+        fill(rx, iy, DL.rw, ITEM_H, rowBg)
         if item then
-            local rowBg = (i%2==0) and {14,18,34} or {18,23,42}
-            fill(rx, iy, DL.rw, ITEM_H, rowBg)
-            -- Name
-            t(item.display, rx+4, iy+3, C.WHITE, 9)
-            -- Stock
+            t(item.display, rx+4, iy+2, C.WHITE, 8)
             local stockStr = item.amount >= 1000
                 and string.format("%.1fk", item.amount/1000)
                 or  tostring(item.amount)
-            t(stockStr, rx+DL.rw-60, iy+3, C.DIM, 9)
-            -- [+] button
-            fill(rx+DL.rw-28, iy+2, 24, 12, {40,120,60})
-            t("[+]", rx+DL.rw-26, iy+3, C.WHITE, 9, true)
-            table.insert(DZ.itemRows, {
-                x=rx, y=iy, w=DL.rw, h=ITEM_H,
-                plusX=rx+DL.rw-28, plusW=24,
-                item=item,
-            })
-        else
-            fill(rx, iy, DL.rw, ITEM_H, {10,13,26})
+            t(stockStr, rx+DL.rw-52, iy+2, C.DIM, 8)
+            fill(rx+DL.rw-26, iy+1, 22, 11, {40,120,60})
+            t("[+]", rx+DL.rw-24, iy+2, C.WHITE, 8, true)
+            table.insert(DZ.itemRows, { x=rx, y=iy, w=DL.rw, h=ITEM_H, item=item })
         end
     end
-    listTop = listTop + ITEMS_VIS * ITEM_H
+    rTop = rTop + ITEMS_VIS * ITEM_H
 
-    -- Scroll down button
-    fill(rx, listTop, DL.rw, SCROLL_H, {25,35,65})
-    t("  ▼  DOWN", rx + DL.rw/2 - 22, listTop+2, C.DIM, 9)
-    DZ.scrollDown = { x=rx, y=listTop, w=DL.rw, h=SCROLL_H }
-    listTop = listTop + SCROLL_H
+    -- Scroll down
+    fill(rx, rTop, DL.rw, SCROLL_H, {22,32,60})
+    t("▼  DOWN", rx + DL.rw/2 - 16, rTop+2, C.DIM, 8)
+    DZ.scrollDown = { x=rx, y=rTop, w=DL.rw, h=SCROLL_H }
+    rTop = rTop + SCROLL_H
 
-    -- Send button
+    -- Send button (fills remaining space)
     local canSend = d.service and d.coords and #d.order > 0
-    local sendCol = canSend and {40,160,60} or {28,38,55}
-    fill(rx, listTop, DL.rw, H-listTop-2, sendCol)
-    t(canSend and ">>>  SEND JOB  >>>" or "select service, coords & items",
-        rx+8, listTop+4, canSend and C.WHITE or C.DIM, 10, canSend)
-    DZ.send = { x=rx, y=listTop, w=DL.rw, h=H-listTop-2 }
+    fill(rx, rTop, DL.rw, H-rTop-2, canSend and {40,160,60} or {28,38,55})
+    t(canSend and ">>>  SEND JOB  >>>" or "fill service, coords & items",
+        rx+6, rTop+6, canSend and C.WHITE or {60,70,90}, 9, canSend)
+    DZ.send = { x=rx, y=rTop, w=DL.rw, h=H-rTop-2 }
 end
 
 -- ─── Render ──────────────────────────────────────────────────────────────────
