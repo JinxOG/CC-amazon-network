@@ -358,11 +358,17 @@ local function main()
         if current then
             handleCurrentJob()
         else
-            -- Idle: drain any buffered messages then wait for new ones
-            local ev, _,_,_, p4 = os.pullEvent("modem_message")
-            local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
-            routeMsg(raw)
+            -- Try to serve from queue immediately (handles already-buffered ITEM_REQUESTs)
             serveNext()
+            if current then
+                -- serveNext() found something — loop back and handle it
+            else
+                -- Truly idle: block until next modem message, then route and try again
+                local ev, _,_,_, p4 = os.pullEvent("modem_message")
+                local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
+                routeMsg(raw)
+                serveNext()
+            end
         end
     end
 end
