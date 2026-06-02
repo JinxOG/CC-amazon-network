@@ -238,10 +238,8 @@ local function handleCurrentJob()
         log("Timeout — skipping " .. current.turtleId)
         current = nil; serveNext(); return
     end
-    -- Brief pause so the turtle finishes its debris dump and enters its
-    -- receive loop before we send CHESTS_READY. Without this, a fast
-    -- inbox response can cause the turtle to miss CHESTS_READY.
-    sleep(1)
+    -- No sleep needed: turtle dumps debris BEFORE sending DELIVERY_ARRIVED,
+    -- so the EC is already fully loaded with debris when we get here.
 
     -- ── Phase 0: clear ender chest — sweep turtle debris into RS ────────────
     log("Clearing turtle debris from ender chest into RS...")
@@ -278,7 +276,8 @@ local function handleCurrentJob()
         end
     end
     if not placed then
-        log("Timeout on CHESTS_PLACED — aborting")
+        log("Timeout on CHESTS_PLACED — sweeping EC and aborting")
+        clearEnderChest()   -- recover any stranded chests back to RS
         current = nil; serveNext(); return
     end
 
@@ -323,7 +322,8 @@ local function handleCurrentJob()
         log(string.format("Batch %d/%d sent — waiting for BATCH_DONE...", i, #batches))
         msg = waitFor(proto.MSG.BATCH_DONE, current.turtleId, CFG.msgTimeout)
         if not msg then
-            log("Timeout on BATCH_DONE — stopping early")
+            log("Timeout on BATCH_DONE — sweeping EC and stopping early")
+            clearEnderChest()
             break
         end
     end
@@ -333,7 +333,11 @@ local function handleCurrentJob()
 
     -- Wait for entangled chest to be cleared
     log("Waiting for ITEM_COLLECTED...")
-    waitFor(proto.MSG.ITEM_COLLECTED, current.turtleId, CFG.msgTimeout)
+    local collected = waitFor(proto.MSG.ITEM_COLLECTED, current.turtleId, CFG.msgTimeout)
+    if not collected then
+        log("Timeout on ITEM_COLLECTED — sweeping EC")
+        clearEnderChest()
+    end
 
     log("Job complete: " .. current.jobId)
     current = nil
@@ -346,6 +350,9 @@ local function main()
     log(string.format("Warehouse online v%s (RS bridge mode)", proto.VERSION))
     log("Entangled chest : " .. CFG.entangledChest)
     log("RS bridge       : " .. (peripheral.getName(rsBridge) or "found"))
+    -- Sweep any items left in the EC from a previous session (crashed job, etc.)
+    log("Startup EC sweep...")
+    clearEnderChest()
 
     local ecType = peripheral.getType(CFG.entangledChest)
     if not ecType then
