@@ -73,28 +73,32 @@ local function drawTitle()
     local W = state.W
     fill(0, 0, W, TITLE_H, C.HDR_BG)
 
-    -- Page name
-    local pageLabel = PAGES[state.page]
-    txt("CC AMAZON  |  " .. pageLabel, 8, 4, C.WHITE, 11, true)
+    -- Left: app name + page
+    txt("CC AMAZON  |  " .. PAGES[state.page], 8, 4, C.WHITE, 11, true)
 
-    -- "NEXT >" button on the right
-    local btnW, btnH = 70, TITLE_H - 2
-    local btnX = W - btnW - 2
-    fill(btnX, 1, btnW, btnH, C.BTN_BG)
-    txt("NEXT >", btnX + 8, 4, C.WHITE, 11, true)
-
-    -- Page dots  e.g.  * . .
-    local dotX = W - btnW - 55
+    -- Centre: page dots  * . .
+    local dotStr = ""
     for i = 1, #PAGES do
-        local dot = (i == state.page) and "*" or "."
-        local dc  = (i == state.page) and C.WHITE or C.DIM
-        txt(dot, dotX + (i-1)*14, 4, dc, 11, true)
+        dotStr = dotStr .. (i == state.page and "* " or ". ")
     end
+    txt(dotStr, 220, 4, C.DIM, 11, true)
 
-    -- Last-update age
+    -- Last-update age (after dots)
     local age = math.floor((os.epoch("utc") - state.lastPoll) / 1000)
     local ts  = (state.lastPoll == 0) and "waiting..." or (age .. "s ago")
-    txt(ts, W - btnW - 130, 4, C.DIM, 10)
+    txt(ts, 320, 4, C.DIM, 10)
+end
+
+-- Bottom NEXT button — drawn last so it's always on top
+local function drawNextBtn()
+    local W, H  = state.W, state.H
+    local btnW  = 120
+    local btnH  = 22
+    local btnX  = math.floor((W - btnW) / 2)   -- horizontally centred
+    local btnY  = H - btnH - 6
+    fill(btnX, btnY, btnW, btnH, C.BTN_BG)
+    -- centre text inside button
+    txt("[ TAP  NEXT ]", btnX + 8, btnY + 4, C.WHITE, 11, true)
 end
 
 -- ─── Content area ────────────────────────────────────────────────────────────
@@ -176,7 +180,7 @@ local function renderTurtles()
         local fmax = math.max(t.fuelMax or 100000, 1)
         local pct  = math.min(1, fuel / fmax)
         local bx   = p.x + 420
-        local bw   = math.max(60, p.w - 420 - 70 - 8)
+        local bw   = 200   -- fixed width so bar never runs off screen
         local bh   = 10
         local by   = cy + 2
         fill(bx, by, bw, bh, C.BORDER)
@@ -276,6 +280,7 @@ local function renderAll()
     elseif state.page == 2 then renderJobs()
     elseif state.page == 3 then renderLog()
     end
+    drawNextBtn()
     flush()
 end
 
