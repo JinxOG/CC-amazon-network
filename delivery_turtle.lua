@@ -64,77 +64,117 @@ end
 
 -- ─── Ender chest slot guardian ───────────────────────────────────────────────
 --
--- Four mandatory checkpoints enforce that the delivery ender chest is ALWAYS
--- in EC_SLOT (16) when it should be:
---   1. DISPATCH    — before departing (hard abort if missing)
---   2. PRE-PLACE   — right before turtle.placeDown() (hard abort if missing)
---   3. PRE-RETURN  — after recovery dig, before descending (hard abort if missing)
---   4. ARRIVAL     — back at dock, log final state (warn only)
+-- The turtle carries two ender chests: delivery (slot 16) and fuel (some other
+-- slot). Both have the same item name so we fingerprint each by NBT at DISPATCH
+-- and track them independently. Only the delivery chest may ever be in EC_SLOT.
 --
--- checkEC(label, hard)
---   Tries to find the ender chest and move it into EC_SLOT.
---   If hard=true and it cannot be found, returns false (caller must abort).
---   The ender chest is identified by name containing "ender" or "entangled".
---   Slots with the chest "not found" during active placement (PRE-PLACE) are
---   detected by hard=true so the job aborts instead of placing the wrong item.
+-- Four mandatory checkpoints:
+--   1. DISPATCH    — hard abort if delivery chest not in slot 16
+--   2. PRE-PLACE   — hard abort if delivery chest missing before placing
+--   3. PRE-RETURN  — hard abort if delivery chest not recovered after digging
+--   4. ARRIVAL     — warn-only log after returning to dock
+
+-- Slots that hold OTHER ender chests (e.g. fuel chest) — never moved to EC_SLOT.
+-- Populated at DISPATCH by scanning slots 1-15 for ender chests.
+local otherECSlots = {}
+
+-- NBT fingerprint of the delivery ender chest, captured at DISPATCH.
+-- Used to distinguish it from the fuel chest if they swap slots.
+local deliveryECNBT = nil
+
+local function isECItem(item)
+    if not item then return false end
+    local n = item.name:lower()
+    return n:find("ender") or n:find("entangled")
+end
+
+-- Returns true if slot s holds the DELIVERY ender chest specifically.
+-- Falls back to "any ender chest not in otherECSlots" when NBT unavailable.
+local function isDeliveryEC(s)
+    local item = turtle.getItemDetail(s)
+    if not isECItem(item) then return false end
+    if otherECSlots[s] then return false end   -- known fuel/other chest slot
+    if deliveryECNBT then
+        -- Compare NBT to fingerprint (detailed mode)
+        local detail = turtle.getItemDetail(s, true)
+        if detail and detail.nbt then
+            return textutils.serialise(detail.nbt) == deliveryECNBT
+        end
+        -- No NBT returned — trust the otherECSlots exclusion instead
+    end
+    return true
+end
+
+-- Scan slots 1-15 at DISPATCH: record any ender chests that are NOT in EC_SLOT
+-- as "other" (fuel) chests so checkEC never mistakes them for the delivery chest.
+local function captureECFingerprints()
+    otherECSlots = {}
+    -- Capture delivery chest NBT from EC_SLOT
+    local detail = turtle.getItemDetail(EC_SLOT, true)
+    if detail and detail.nbt then
+        deliveryECNBT = textutils.serialise(detail.nbt)
+        print(string.format("[EC] Delivery chest NBT fingerprint captured (slot %d)", EC_SLOT))
+    else
+        deliveryECNBT = nil
+        print(string.format("[EC] No NBT for delivery chest — using slot exclusion only"))
+    end
+    -- Record all other ender chests
+    for s = 1, 15 do
+        if isECItem(turtle.getItemDetail(s)) then
+            otherECSlots[s] = true
+            print(string.format("[EC] Other ender chest locked in slot %d (fuel/secondary)", s))
+        end
+    end
+end
 
 local function checkEC(label, hard)
-    local function isEC(item)
-        if not item then return false end
-        local n = item.name:lower()
-        return n:find("ender") or n:find("entangled")
-    end
-
-    -- Step 1: check if EC_SLOT already correct
-    local inSlot = turtle.getItemDetail(EC_SLOT)
-    if isEC(inSlot) then
-        print(string.format("[EC:%s] ✓ slot %d OK (%s)", label, EC_SLOT, inSlot.name))
+    -- Step 1: check EC_SLOT
+    if isDeliveryEC(EC_SLOT) then
+        local it = turtle.getItemDetail(EC_SLOT)
+        print(string.format("[EC:%s] ✓ slot %d OK (%s)", label, EC_SLOT, it and it.name or "?"))
         return true
     end
 
-    -- Step 2: search all other slots
+    -- Step 2: search for delivery chest in other slots (skip known other-EC slots)
     local foundSlot = nil
     for s = 1, 16 do
-        if s ~= EC_SLOT and isEC(turtle.getItemDetail(s)) then
+        if s ~= EC_SLOT and not otherECSlots[s] and isDeliveryEC(s) then
             foundSlot = s; break
         end
     end
 
     if not foundSlot then
-        -- Not in any slot — either placed on ground (OK mid-delivery) or lost
         if hard then
-            print(string.format("[EC:%s] ✗ ENDER CHEST NOT FOUND — aborting", label))
-            return false
+            print(string.format("[EC:%s] ✗ DELIVERY ENDER CHEST NOT FOUND — aborting", label))
         else
-            print(string.format("[EC:%s] ✗ not in inventory (placed on ground?)", label))
-            return false
+            print(string.format("[EC:%s] ✗ delivery chest not in inventory (on ground?)", label))
         end
+        return not hard
     end
 
-    -- Step 3: move it to EC_SLOT
-    -- If EC_SLOT is occupied, relocate whatever is there to a free slot first
+    -- Step 3: move delivery chest to EC_SLOT
     if turtle.getItemCount(EC_SLOT) > 0 then
-        local moved = false
+        -- Evict whatever is in EC_SLOT to a free slot
+        local evicted = false
         for free = 1, 15 do
-            if free ~= foundSlot and turtle.getItemCount(free) == 0 then
+            if free ~= foundSlot and not otherECSlots[free] and turtle.getItemCount(free) == 0 then
                 turtle.select(EC_SLOT)
                 turtle.transferTo(free)
-                print(string.format("[EC:%s] Evicted slot %d contents → slot %d", label, EC_SLOT, free))
-                moved = true; break
+                print(string.format("[EC:%s] Evicted slot %d → slot %d", label, EC_SLOT, free))
+                evicted = true; break
             end
         end
-        if not moved then
-            print(string.format("[EC:%s] ✗ EC_SLOT occupied and no free slot to evict to", label))
+        if not evicted then
+            print(string.format("[EC:%s] ✗ cannot evict slot %d — no free slot", label, EC_SLOT))
             if hard then return false end
         end
     end
 
     turtle.select(foundSlot)
     turtle.transferTo(EC_SLOT)
-    print(string.format("[EC:%s] Moved ender chest: slot %d → slot %d", label, foundSlot, EC_SLOT))
+    print(string.format("[EC:%s] Moved delivery chest: slot %d → slot %d", label, foundSlot, EC_SLOT))
 
-    -- Final verify
-    if isEC(turtle.getItemDetail(EC_SLOT)) then
+    if isDeliveryEC(EC_SLOT) then
         print(string.format("[EC:%s] ✓ slot %d confirmed", label, EC_SLOT))
         return true
     else
@@ -173,7 +213,9 @@ base.run(function(job)
     base.sendProgress("Queuing with warehouse")
 
     -- ── CHECKPOINT 1: DISPATCH ───────────────────────────────────────────────
-    -- Hard check — ender chest MUST be in slot 16 before we do anything.
+    -- Fingerprint all ender chests so we never confuse delivery vs fuel chest.
+    captureECFingerprints()
+    -- Hard check — delivery ender chest MUST be in slot 16 before we do anything.
     if not checkEC("DISPATCH", true) then
         return base.sendFailed("ec_not_in_slot_" .. EC_SLOT .. "_at_dispatch", false)
     end
