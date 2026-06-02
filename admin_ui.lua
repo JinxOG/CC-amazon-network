@@ -9,8 +9,8 @@ local proto = require("protocol")
 local W = 500
 local H = 260
 
--- NEXT button bounds (bottom-right, always visible)
-local BTN = { x=370, y=232, w=120, h=22 }
+-- NEXT button bounds (bottom-centre)
+local BTN = { x=175, y=232, w=150, h=24 }
 
 local PAGES    = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS = 80
@@ -214,7 +214,7 @@ local function drawNextBtn()
     state.gpu.drawLine(state.display, b.x,     b.y,     b.x,     b.y+b.h, 255,255,255)
     state.gpu.drawLine(state.display, b.x+b.w, b.y,     b.x+b.w, b.y+b.h, 255,255,255)
     -- Label centred in button
-    t("NEXT  >>", b.x+18, b.y+4, {255,255,255}, 13, true)
+    t("  >>  NEXT PAGE  >>  ", b.x+8, b.y+5, {255,255,255}, 13, true)
 end
 
 local function render()
@@ -316,6 +316,9 @@ local function main()
                     if type(gpuEv) == "table" then
                         ex = gpuEv.x or gpuEv[2]
                         ey = gpuEv.y or gpuEv[3]
+                        -- Debug: print raw event so we know the format
+                        print("GPU ev: type=" .. tostring(gpuEv[1] or gpuEv.type)
+                            .. " x=" .. tostring(ex) .. " y=" .. tostring(ey))
                     end
                     -- Hit-test against NEXT button
                     local now = os.clock()
