@@ -736,6 +736,15 @@ function base.signalPartner(msgType, payload)
     proto.send(_self.modem, proto.CH_LOCAL, sig)
 end
 
+-- Like signalPartner but uses an explicit target ID.
+-- Use this when partnerId has been temporarily cleared to stop broadcasts
+-- but you still need to send one final signal (e.g. ASCENDING, RETURN_TO_DOCK).
+function base.signalPartnerDirect(msgType, targetId, payload)
+    if not targetId or not _self.modem then return end
+    local sig = proto.encode(msgType, _self.id, targetId, payload or {})
+    proto.send(_self.modem, proto.CH_LOCAL, sig)
+end
+
 function base.queryTurtle(targetId, timeout)
     comms.toServer(proto.MSG.TURTLE_QUERY, proto.payloadTurtleQuery(targetId))
     local reply = proto.receive(_self.id, timeout or 5)

@@ -46,8 +46,18 @@ base.run(function(job)
 
     -- ── Step 4: Ascend to delivery Y at destination ───────────────────────────
 
-    -- Tell support to hold — we're ascending through its follow path
-    base.signalPartner(proto.MSG.ASCENDING, {})
+    -- Stop POSITION_UPDATE broadcasts before ascending so support can't accidentally
+    -- follow us upward (it might miss the ASCENDING signal if it's mid-move.to()).
+    -- Save partnerId so we can restore it after descending and send DESCENDED.
+    local savedPartnerId = base.getPartnerId()
+    base.setPartnerId(nil)   -- kills broadcast traffic immediately
+
+    -- Now signal support to hold (best-effort; harmless if missed since no more
+    -- POSITION_UPDATEs will arrive to lure it upward anyway)
+    if savedPartnerId then
+        base.signalPartnerDirect(proto.MSG.ASCENDING, savedPartnerId, {})
+    end
+
     base.sendProgress(string.format("Ascending to delivery point Y=%d", d.y))
     ok, err = base.move.to(d.x, d.y, d.z)
     if not ok then
@@ -75,10 +85,14 @@ base.run(function(job)
 
     base.sendProgress("Descending to underground level")
     ok, err = base.move.to(d.x, UNDERGROUND_Y, d.z)
-    -- Tell support we're back underground — resume following
-    base.signalPartner(proto.MSG.DESCENDED, {})
     if not ok then
         logWarn("Could not fully descend — attempting return anyway")
+    end
+
+    -- Restore partnerId and tell support we're back underground — resume following
+    if savedPartnerId then
+        base.setPartnerId(savedPartnerId)
+        base.signalPartner(proto.MSG.DESCENDED, {})
     end
 
     -- ── Step 7: Return via arrivals hole ─────────────────────────────────────
