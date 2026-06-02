@@ -6,8 +6,8 @@ local proto = require("protocol")
 -- ─── Fixed canvas size ────────────────────────────────────────────────────────
 -- Deliberately undersized so content always fits in the top-left of any monitor.
 -- Change these if you want a larger layout.
-local W = 360
-local H = 240
+local W = 440
+local H = 260
 
 local PAGES    = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS = 80
@@ -67,13 +67,17 @@ local LH = math.floor(FS * 1.5)
 
 -- ─── Title bar ───────────────────────────────────────────────────────────────
 
-local TH = 22   -- title height
+local TH = 38   -- title height (two rows)
 
 local function drawTitle()
-    fill(0,0,W,TH,C.HDR)
-    local label = string.format("CC AMAZON | %s (%d/%d) right-click=next",
-        PAGES[state.page], state.page, #PAGES)
-    t(label, 6, 5, C.WHITE, 11, true)
+    fill(0, 0, W, TH, C.HDR)
+
+    -- Row 1: app name + current page
+    t(string.format("CC AMAZON  |  %s", PAGES[state.page]), 6, 3, C.WHITE, 12, true)
+
+    -- Row 2: big bright nav hint
+    fill(0, 20, W, TH-20, {20, 35, 80})
+    t(">>> RIGHT-CLICK MONITOR TO CHANGE PAGE <<<", 6, 22, {255, 220, 60}, 11, true)
 end
 
 -- ─── Page: Turtles ───────────────────────────────────────────────────────────
@@ -106,11 +110,11 @@ local function pgTurtles()
         local st  = v.online and (v.status or "IDLE") or "OFFLINE"
         t(dot,  8,   y, sc, FS, true)
         t(v.id or "?", 22, y, C.WHITE, FS)
-        t("[".. (v.role or "?") .."]", 115, y, C.DIM, FS)
-        t(st, 205, y, sc, FS)
+        t("[".. (v.role or "?") .."]", 130, y, C.DIM, FS)
+        t(st, 230, y, sc, FS)
         -- compact fuel bar
         local pct = math.min(1,(v.fuel or 0)/math.max(v.fuelMax or 1,1))
-        local bx,bw,bh = 260,70,8
+        local bx,bw,bh = 310,100,8
         fill(bx, y+2, bw, bh, C.BORDER)
         local fc = pct>0.5 and C.GREEN or (pct>0.2 and C.YELLOW or C.RED)
         fill(bx, y+2, math.max(1,math.floor(bw*pct)), bh, fc)
