@@ -122,40 +122,65 @@ end
 -- ─── Route Builders (turtle-side) ────────────────────────────────────────────
 -- Each route is an ordered list of {x, y, z} waypoints.
 -- Turtles call move.to() on each in sequence.
+--
+-- AISLE SYSTEM — avoids crossing occupied dock positions:
+--   Every row has a dedicated aisle Z that is 2 blocks toward the taxiway.
+--   No dock slots exist in the aisle lanes; only the bay centre column
+--   (junction.x, offset 0 — always empty) is used to cross between rows.
+--
+--   Departure:  slot → aisle (perpendicular, no docks) → centre column →
+--               taxiway → hole
+--   Return:     taxiway → centre column → aisle → slot column →
+--               slot (perpendicular back in)
 
--- Departure: dock → bay centre → white taxiway → dispatch hole → down
+-- Returns the aisle Z for a dock: 2 blocks from the dock row toward WHITE_Z.
+local function aisleZ(dock)
+    local dir = W.WHITE_Z > dock.z and 1 or -1
+    return dock.z + dir * 2
+end
+
+-- Departure: worker turtle leaves slot without crossing any occupied row.
 function W.departureRoute(dock)
+    local az = aisleZ(dock)
     return {
-        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = dock.z             },
-        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = W.WHITE_Z          },
-        { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.WHITE_Z          },
+        -- 1. Exit slot perpendicular (toward taxiway) into clear aisle lane
+        { x = dock.x,            y = CFG.FLOOR_Y, z = az                  },
+        -- 2. Travel along aisle to bay centre column (always unoccupied)
+        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = az                  },
+        -- 3. Merge onto white taxiway at centre column
+        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = W.WHITE_Z           },
+        -- 4. Travel along taxiway to dispatch hole
+        { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.WHITE_Z           },
         { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.DISPATCH_HOLE.z  },
     }
 end
 
--- Support departure: same as above but stops 1 block BEFORE the hole.
--- Support sends SUPPORT_STAGED from here, then moves to the hole after delivery descends.
+-- Support departure: identical aisle logic, stops at staging block before hole.
 function W.supportDepartureRoute(dock)
+    local az = aisleZ(dock)
     return {
-        { x = dock.junction.x,      y = CFG.FLOOR_Y, z = dock.z                },
+        { x = dock.x,               y = CFG.FLOOR_Y, z = az                    },
+        { x = dock.junction.x,      y = CFG.FLOOR_Y, z = az                    },
         { x = dock.junction.x,      y = CFG.FLOOR_Y, z = W.WHITE_Z             },
         { x = W.DISPATCH_HOLE.x,    y = CFG.FLOOR_Y, z = W.WHITE_Z             },
         { x = W.DISPATCH_STAGING.x, y = CFG.FLOOR_Y, z = W.DISPATCH_STAGING.z },
     }
 end
 
--- Return: (turtle is at WORLD_ENTRY after coming up arrivals hole)
--- arrivals hole → red taxiway → bay centre → dock
+-- Return: arrivals hole → red taxiway → centre column → aisle → slot.
 function W.returnRoute(dock)
+    local az = aisleZ(dock)
     return {
-        -- Move to red taxiway Z
+        -- 1. Get onto red taxiway from arrivals hole
         { x = W.ARRIVALS_HOLE.x, y = CFG.FLOOR_Y, z = W.RED_Z },
-        -- Travel west along red taxiway to bay centre X
-        { x = dock.junction.x, y = CFG.FLOOR_Y, z = W.RED_Z },
-        -- Turn south/north into bay row
-        { x = dock.junction.x, y = CFG.FLOOR_Y, z = dock.z },
-        -- Move to dock slot
-        { x = dock.x, y = CFG.FLOOR_Y, z = dock.z },
+        -- 2. Travel along red taxiway to bay centre column X
+        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = W.RED_Z },
+        -- 3. Drop from taxiway to aisle via centre column (always clear)
+        { x = dock.junction.x,   y = CFG.FLOOR_Y, z = az       },
+        -- 4. Move along aisle to dock's column X
+        { x = dock.x,            y = CFG.FLOOR_Y, z = az       },
+        -- 5. Enter dock slot perpendicular (back into row)
+        { x = dock.x,            y = CFG.FLOOR_Y, z = dock.z   },
     }
 end
 
