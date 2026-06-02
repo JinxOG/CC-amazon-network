@@ -125,11 +125,12 @@ base.run(function(job)
                 print("Delivery descended — resuming follow")
 
             elseif msg.type == proto.MSG.RETURN_TO_DOCK then
-                -- Delivery is inside building but still near arrivals hole.
-                -- Wait for it to clear the area before ascending.
-                print("Delivery inside — waiting for it to clear arrivals hole...")
-                sleep(8)
-                print("Ascending and returning to dock independently")
+                -- Delivery signals us to head home independently.
+                -- This now comes from UNDERGROUND (not from inside the building).
+                -- Delivery is behind us in the tunnel — we are already pointing
+                -- toward arrivals hole so leave immediately. Delivery waits 5s
+                -- before following so we stay ahead and clear the path.
+                print("RETURN_TO_DOCK from delivery — heading home independently")
                 break
 
             elseif msg.type == proto.MSG.JOB_ABORT then
