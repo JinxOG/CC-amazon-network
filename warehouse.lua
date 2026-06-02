@@ -208,6 +208,9 @@ local function handleCurrentJob()
     log(string.format("Sending %d item batch(es) of up to %d stacks each",
         #batches, CFG.batchSize))
 
+    -- Always send ITEMS_READY for every batch (including the last) so the
+    -- turtle always pulls before we signal done. ITEMS_DONE is sent after
+    -- the final BATCH_DONE confirming the ender chest is empty.
     for i, b in ipairs(batches) do
         -- Export this batch into the entangled chest
         for _, entry in ipairs(b) do
@@ -217,19 +220,17 @@ local function handleCurrentJob()
             end
         end
 
-        local isLast = (i == #batches)
-        if isLast then
-            sendToServer(proto.MSG.ITEMS_DONE, current.turtleId, { jobId = current.jobId })
-        else
-            sendToServer(proto.MSG.ITEMS_READY, current.turtleId, { jobId = current.jobId })
-            log("Waiting for BATCH_DONE...")
-            msg = waitFor(proto.MSG.BATCH_DONE, CFG.msgTimeout)
-            if not msg then
-                log("Timeout on BATCH_DONE — stopping early")
-                break
-            end
+        sendToServer(proto.MSG.ITEMS_READY, current.turtleId, { jobId = current.jobId })
+        log(string.format("Batch %d/%d sent — waiting for BATCH_DONE...", i, #batches))
+        msg = waitFor(proto.MSG.BATCH_DONE, CFG.msgTimeout)
+        if not msg then
+            log("Timeout on BATCH_DONE — stopping early")
+            break
         end
     end
+
+    -- All batches pulled — tell turtle it's done filling
+    sendToServer(proto.MSG.ITEMS_DONE, current.turtleId, { jobId = current.jobId })
 
     -- Wait for entangled chest to be cleared
     log("Waiting for ITEM_COLLECTED...")

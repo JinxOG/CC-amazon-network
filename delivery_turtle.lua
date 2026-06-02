@@ -213,7 +213,7 @@ base.run(function(job)
     -- ── Phase 2: Receive items in batches, fill chests ────────────────────────
 
     base.sendProgress("Receiving items from warehouse")
-    local chestIdx = 1   -- which regular chest we are currently filling
+    local chestIdx = 1   -- tracks which chest we are currently filling
 
     while true do
         local msg = waitForAny({
@@ -231,24 +231,45 @@ base.run(function(job)
             break
         end
 
-        -- ITEMS_READY: go pull the batch from entangled chest
+        -- ITEMS_READY: pull batch from ender chest into turtle inventory
         base.move.to(d.x, d.y, d.z)
-        while turtle.suckDown() do end   -- pull all into turtle inventory
+        while turtle.suckDown() do end
 
-        -- Distribute into placed regular chests
-        for _, cp in ipairs(chestPositions) do
-            if chestIdx > #chestPositions then break end
+        -- Distribute items across placed regular chests
+        -- Keep filling the current chest; move to next when it's full
+        while chestIdx <= #chestPositions do
+            local cp = chestPositions[chestIdx]
             base.move.to(cp.x, cp.y, cp.z)
-            local isFull = dropIntoChestBelow()
-            if not isFull then
-                -- Chest has space — stay here for next batch too
-                break
-            else
+
+            -- Drop as many items as the chest will take
+            local anyDropped = false
+            for slot = 1, EC_SLOT - 1 do
+                if turtle.getItemCount(slot) > 0 then
+                    turtle.select(slot)
+                    if turtle.dropDown() then
+                        anyDropped = true
+                    end
+                end
+            end
+
+            -- Check if turtle still has items (chest must be full)
+            local stillHasItems = false
+            for slot = 1, EC_SLOT - 1 do
+                if turtle.getItemCount(slot) > 0 then
+                    stillHasItems = true; break
+                end
+            end
+
+            if stillHasItems then
+                -- Current chest full — move to next
                 chestIdx = chestIdx + 1
+            else
+                -- All items placed — done with this batch
+                break
             end
         end
 
-        -- Confirm batch received
+        -- Confirm batch pulled and distributed
         base.sendToServer(proto.MSG.BATCH_DONE, { jobId = job.id })
     end
 
