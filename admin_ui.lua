@@ -6,8 +6,8 @@ local proto = require("protocol")
 -- ─── Fixed canvas size ────────────────────────────────────────────────────────
 -- Deliberately undersized so content always fits in the top-left of any monitor.
 -- Change these if you want a larger layout.
-local W = 440
-local H = 260
+local W = 400
+local H = 250
 
 local PAGES    = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS = 80
@@ -280,10 +280,26 @@ local function main()
     addLog("INFO","Dashboard online")
     render()
 
-    local timer = os.startTimer(2)
+    local timer      = os.startTimer(2)
+    local pollTimer  = os.startTimer(0.05)   -- fast poll for GPU click events
     while true do
         local ev,p1,p2,p3,p4 = os.pullEvent()
-        if ev=="monitor_touch" then
+
+        -- DirectGPU captures mouse input — poll its event queue every 50ms
+        if ev=="timer" and p1==pollTimer then
+            local ok, hasEv = pcall(function() return state.gpu.hasEvents(state.display) end)
+            if ok and hasEv then
+                local ok2, gpuEv = pcall(function() return state.gpu.pollEvent(state.display) end)
+                if ok2 and gpuEv then
+                    -- Any click/touch on the display cycles the page
+                    state.page = (state.page % #PAGES) + 1
+                    render()
+                end
+            end
+            pollTimer = os.startTimer(0.05)
+
+        elseif ev=="monitor_touch" then
+            -- Fallback: standard CC touch (fires if GPU doesn't intercept)
             state.page = (state.page % #PAGES) + 1
             render()
         elseif ev=="modem_message" then
