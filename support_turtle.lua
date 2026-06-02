@@ -61,19 +61,34 @@ base.run(function(job)
     end
 
     -- ── Step 3: Travel underground to destination ─────────────────────────────
-    -- Mirror delivery turtle's route: stay at UNDERGROUND_Y the whole way
+    -- Stay UNDERGROUND_Y, but stop 5 blocks short of the destination so the
+    -- delivery turtle can descend and ascend at dest X,Z without hitting us.
 
     if dest then
         base.setStatus(proto.STATUS.TRAVELLING, job.id)
-        base.sendProgress(string.format("Underground travel to %d,%d", dest.x, dest.z))
 
-        ok, err = base.move.to(dest.x, UNDERGROUND_Y, dest.z)
+        -- Figure out which axis we travel along and offset 5 blocks back
+        local startPos = base.getPos()
+        local dx = dest.x - startPos.x
+        local dz = dest.z - startPos.z
+        local waitX, waitZ = dest.x, dest.z
+
+        if math.abs(dx) >= math.abs(dz) then
+            -- Mostly X travel — stay 5 blocks back in X
+            waitX = dest.x + (dx > 0 and -5 or 5)
+        else
+            -- Mostly Z travel — stay 5 blocks back in Z
+            waitZ = dest.z + (dz > 0 and -5 or 5)
+        end
+
+        base.sendProgress(string.format("Underground travel to %d,%d (holding at %d,%d)", dest.x, dest.z, waitX, waitZ))
+        ok, err = base.move.to(waitX, UNDERGROUND_Y, waitZ)
         if not ok then
             print("Nav error: " .. (err or "?"))
             base.sendProgress("nav_error: " .. (err or "?"))
         end
 
-        print(string.format("Holding position near %d,%d,%d", dest.x, UNDERGROUND_Y, dest.z))
+        print(string.format("Holding at %d,%d,%d (clear of delivery descent)", waitX, UNDERGROUND_Y, waitZ))
     else
         print("No destination — holding at current position.")
     end
