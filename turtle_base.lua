@@ -455,10 +455,12 @@ function base.returnToDockInternal()
 end
 
 -- ─── Fuel ────────────────────────────────────────────────────────────────────
--- Turtles carry an entangled chest in slot 16 (reserved).
--- When fuel is critical: place chest → suck out all coal → refuel → break chest → pocket it.
+-- Turtles carry an entangled chest in a reserved slot.
+-- Delivery turtles use slot 15 (slot 16 is reserved for the delivery ender chest).
+-- Support/chunk-loader turtles use slot 16.
+-- Set by base.init() based on role.
 
-local CHEST_SLOT = 16
+local CHEST_SLOT = 16  -- overridden to 15 for DELIVERY role in base.init()
 -- !! Set this to the exact item ID of your entangled chest mod !!
 -- Common: "entangled:entangled_tile"  "enderstorage:ender_chest"
 local CHEST_ITEM = "enderstorage:ender_chest"
@@ -811,6 +813,12 @@ end
 function base.init(role)
     _self.id   = proto.selfId()
     _self.role = role
+    -- Delivery turtles reserve slot 16 for the delivery ender chest,
+    -- so their fuel ender chest lives in slot 15 instead.
+    if role == proto.ROLE.DELIVERY then
+        CHEST_SLOT = 15
+        logInfo("Fuel ender chest slot set to 15 (delivery role)")
+    end
     print("=== " .. _self.id .. " [" .. role .. "] booting ===")
     comms.init()
     initPosition()
