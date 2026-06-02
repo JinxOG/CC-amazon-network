@@ -23,24 +23,38 @@ local FT       = 13   -- title font size
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 
--- Dispatch: only a single SEND button is needed — input is collected via terminal read()
-local DSEND = { x=40, y=80, w=220, h=26 }
+-- ─── Dispatch layout constants ───────────────────────────────────────────────
+local DL = {
+    -- Left panel (service + coords + order list)
+    lx = 4, lw = 170,
+    -- Right panel (RS inventory)
+    rx = 178, rw = 318,
+    -- Shared
+    top = 40,
+}
+-- Click zones (set after layout is known)
+local DZ = {}  -- populated in pgDispatch and checked in click handler
 
 local state = {
-    turtles       = {},
-    jobs          = {},
-    logs          = {},
-    selectedTurtle = nil,   -- ID of currently focused turtle on map page
-    modem    = nil,
-    gpu      = nil,
-    display  = nil,
-    lastPoll = 0,
-    page     = 1,
-    dispatch = {            -- DISPATCH page form state
-        last = "",          -- last submitted coords string
-        status = "",
+    turtles        = {},
+    jobs           = {},
+    logs           = {},
+    selectedTurtle = nil,
+    modem          = nil,
+    rsBridge       = nil,   -- RS bridge peripheral for dispatch page
+    gpu            = nil,
+    display        = nil,
+    lastPoll       = 0,
+    page           = 1,
+    dispatch = {
+        service  = nil,     -- "DELIVERY" or nil
+        coords   = nil,     -- {x,y,z} or nil
+        order    = {},      -- { {name, display, count}, ... }
+        rsItems  = {},      -- cached RS inventory list
+        rsScroll = 0,       -- scroll offset
+        status   = "",
         statusOk = true,
-        waiting = false,    -- true while terminal read() is in progress
+        waiting  = false,
     },
 }
 
@@ -411,40 +425,172 @@ end
 
 -- ─── Page: Dispatch ──────────────────────────────────────────────────────────
 
+-- Clean up a technical item name for display
+local function cleanName(name)
+    return (name:gsub("^[^:]+:", ""):gsub("_", " "))
+end
+
+-- Refresh RS inventory cache (sorted by display name)
+local function refreshRSItems()
+    if not state.rsBridge then return end
+    local ok, list = pcall(function() return state.rsBridge.listItems() end)
+    if not ok or not list then return end
+    local items = {}
+    for _, v in ipairs(list) do
+        if v.name and v.amount and v.amount > 0 then
+            table.insert(items, {
+                name    = v.name,
+                display = cleanName(v.name),
+                amount  = v.amount,
+            })
+        end
+    end
+    table.sort(items, function(a,b) return a.display < b.display end)
+    state.dispatch.rsItems  = items
+    state.dispatch.rsScroll = math.min(state.dispatch.rsScroll, math.max(0, #items - 10))
+end
+
 local function pgDispatch()
-    local d = state.dispatch
+    local d  = state.dispatch
+    local lx = DL.lx
+    local rx = DL.rx
+    local top= DL.top
 
-    -- Header
-    fill(4, TH+2, W-8, 20, C.PANEL)
-    ln(4, TH+2, W-4, TH+2, C.BORDER)
-    t("DISPATCH", 8, TH+4, C.WHITE, FT, true)
-    t("Submit a delivery job to the server", 110, TH+6, C.DIM, 10)
+    -- Reset click zones each frame
+    DZ = {}
 
-    if d.waiting then
-        -- Waiting for terminal input
-        fill(20, 60, W-40, 30, {20,30,60})
-        t(">>> Check computer terminal — type coords there <<<",
-            28, 70, C.YELLOW, 10, true)
+    -- ── Left panel background ─────────────────────────────────────────────────
+    fill(lx, top, DL.lw, H-top-2, {14,18,34})
+    ln(lx+DL.lw, top, lx+DL.lw, H-2, C.BORDER)
+
+    -- ── Step 1: Service ───────────────────────────────────────────────────────
+    local y = top + 4
+    t("SERVICE", lx+4, y, C.DIM, 9, true)
+    y = y + 12
+
+    local selCol = d.service=="DELIVERY" and {40,160,60} or {30,40,70}
+    fill(lx+4, y, DL.lw-8, 16, selCol)
+    t("DELIVERY", lx+10, y+3, C.WHITE, 10, d.service=="DELIVERY")
+    DZ.delivery = { x=lx+4, y=y, w=DL.lw-8, h=16 }
+    y = y + 22
+
+    -- ── Step 2: Coordinates ───────────────────────────────────────────────────
+    t("DESTINATION", lx+4, y, C.DIM, 9, true)
+    y = y + 12
+
+    if d.coords then
+        t(string.format("X %d  Y %d  Z %d", d.coords.x, d.coords.y, d.coords.z),
+            lx+4, y, C.WHITE, 9)
     else
-        -- SEND button
-        fill(DSEND.x, DSEND.y, DSEND.w, DSEND.h, {40,160,60})
-        t(">>>  SEND JOB  >>>", DSEND.x+10, DSEND.y+7, C.WHITE, 11, true)
+        t("not set", lx+4, y, {60,60,80}, 9)
+    end
+    fill(lx+4, y+11, DL.lw-8, 14, {25,35,65})
+    t("[ enter coords ]", lx+8, y+13, {140,170,255}, 9)
+    DZ.coords = { x=lx+4, y=y+11, w=DL.lw-8, h=14 }
+    y = y + 32
 
-        -- Last sent
-        if d.last ~= "" then
-            t("Last: " .. d.last, 14, 116, {70,80,100}, 9)
+    -- ── Order list ────────────────────────────────────────────────────────────
+    t("ORDER", lx+4, y, C.DIM, 9, true)
+    y = y + 11
+    ln(lx+4, y, lx+DL.lw-4, y, C.BORDER)
+    y = y + 3
+
+    if #d.order == 0 then
+        t("(no items added)", lx+6, y, {50,55,75}, 9)
+        y = y + 12
+    else
+        for _, entry in ipairs(d.order) do
+            if y > H - 50 then break end
+            t(entry.display, lx+6, y, C.WHITE, 9)
+            t("x"..entry.count, lx+DL.lw-30, y, C.CYAN, 9)
+            y = y + 12
         end
     end
 
-    -- Status message
+    -- ── Bottom buttons ────────────────────────────────────────────────────────
+    local bby = H - 22
+    fill(lx+4, bby, 50, 14, {120,40,40})
+    t("CLEAR", lx+10, bby+2, C.WHITE, 9)
+    DZ.clear = { x=lx+4, y=bby, w=50, h=14 }
+
+    -- Status
     if d.status ~= "" then
         local sc = d.statusOk and C.GREEN or C.RED
-        t(d.status, 14, 136, sc, 10)
+        t(d.status, lx+4, bby-14, sc, 8)
     end
 
-    -- Instructions
-    t("Click SEND JOB, then type X Y Z in the computer terminal.", 14, 200, {55,60,80}, 9)
-    t("Items default to cobblestone x1.", 14, 212, {55,60,80}, 9)
+    -- Waiting overlay on left panel
+    if d.waiting then
+        fill(lx, top, DL.lw, H-top-2, {10,14,30})
+        t("Check", lx+20, top+80, C.YELLOW, 10, true)
+        t("terminal", lx+14, top+93, C.YELLOW, 10, true)
+    end
+
+    -- ── Right panel ───────────────────────────────────────────────────────────
+    fill(rx, top, DL.rw, H-top-2, {10,13,26})
+
+    -- Header
+    fill(rx, top, DL.rw, 14, {20,28,55})
+    t("RS INVENTORY", rx+4, top+2, C.WHITE, 9, true)
+    if not state.rsBridge then
+        t("(no rsBridge found)", rx+4, top+18, C.RED, 9)
+        return
+    end
+
+    -- Scroll up button
+    local SCROLL_H = 14
+    local ITEM_H   = 16
+    local ITEMS_VIS= 10
+    local listTop  = top + 16
+    fill(rx, listTop, DL.rw, SCROLL_H, {25,35,65})
+    t("  ▲  UP", rx + DL.rw/2 - 20, listTop+2, C.DIM, 9)
+    DZ.scrollUp = { x=rx, y=listTop, w=DL.rw, h=SCROLL_H }
+    listTop = listTop + SCROLL_H
+
+    -- Item rows
+    local items = d.rsItems
+    DZ.itemRows = {}
+    for i = 1, ITEMS_VIS do
+        local idx = i + d.rsScroll
+        local iy  = listTop + (i-1)*ITEM_H
+        local item = items[idx]
+        if item then
+            local rowBg = (i%2==0) and {14,18,34} or {18,23,42}
+            fill(rx, iy, DL.rw, ITEM_H, rowBg)
+            -- Name
+            t(item.display, rx+4, iy+3, C.WHITE, 9)
+            -- Stock
+            local stockStr = item.amount >= 1000
+                and string.format("%.1fk", item.amount/1000)
+                or  tostring(item.amount)
+            t(stockStr, rx+DL.rw-60, iy+3, C.DIM, 9)
+            -- [+] button
+            fill(rx+DL.rw-28, iy+2, 24, 12, {40,120,60})
+            t("[+]", rx+DL.rw-26, iy+3, C.WHITE, 9, true)
+            table.insert(DZ.itemRows, {
+                x=rx, y=iy, w=DL.rw, h=ITEM_H,
+                plusX=rx+DL.rw-28, plusW=24,
+                item=item,
+            })
+        else
+            fill(rx, iy, DL.rw, ITEM_H, {10,13,26})
+        end
+    end
+    listTop = listTop + ITEMS_VIS * ITEM_H
+
+    -- Scroll down button
+    fill(rx, listTop, DL.rw, SCROLL_H, {25,35,65})
+    t("  ▼  DOWN", rx + DL.rw/2 - 22, listTop+2, C.DIM, 9)
+    DZ.scrollDown = { x=rx, y=listTop, w=DL.rw, h=SCROLL_H }
+    listTop = listTop + SCROLL_H
+
+    -- Send button
+    local canSend = d.service and d.coords and #d.order > 0
+    local sendCol = canSend and {40,160,60} or {28,38,55}
+    fill(rx, listTop, DL.rw, H-listTop-2, sendCol)
+    t(canSend and ">>>  SEND JOB  >>>" or "select service, coords & items",
+        rx+8, listTop+4, canSend and C.WHITE or C.DIM, 10, canSend)
+    DZ.send = { x=rx, y=listTop, w=DL.rw, h=H-listTop-2 }
 end
 
 -- ─── Render ──────────────────────────────────────────────────────────────────
@@ -523,39 +669,75 @@ end
 
 -- ─── Dispatch helpers ────────────────────────────────────────────────────────
 
-local function sendJob()
-    local d = state.dispatch
-    d.waiting = true
-    render()   -- show "check terminal" message on monitor
-
-    -- Collect coords from the computer terminal
-    local function readNum(prompt)
-        while true do
-            io.write(prompt)
-            local s = read()
-            local n = tonumber(s)
-            if n then return n end
-            print("  Not a number, try again.")
-        end
+local function readNum(prompt)
+    while true do
+        io.write(prompt)
+        local s = read()
+        local n = tonumber(s)
+        if n then return n end
+        print("  Not a number, try again.")
     end
+end
 
-    print("\n--- DISPATCH ---")
+local function dispatchEnterCoords()
+    local d = state.dispatch
+    d.waiting = true; render()
+    print("\n--- DESTINATION ---")
     local x = readNum("X: ")
     local y = readNum("Y: ")
     local z = readNum("Z: ")
+    d.coords  = { x=x, y=y, z=z }
+    d.waiting = false
+    print(string.format("Coords set: %d, %d, %d\n", x, y, z))
+end
 
-    -- Send to server
+local function dispatchAddItem(item)
+    local d = state.dispatch
+    d.waiting = true; render()
+    print(string.format("\n--- ADD ITEM: %s ---", item.display))
+    print(string.format("In stock: %d", item.amount))
+    local qty = readNum("Quantity: ")
+    if qty > 0 then
+        -- Update existing entry or add new
+        for _, e in ipairs(d.order) do
+            if e.name == item.name then
+                e.count = e.count + qty
+                d.waiting = false
+                print(string.format("Updated %s x%d\n", item.display, e.count))
+                return
+            end
+        end
+        table.insert(d.order, { name=item.name, display=item.display, count=qty })
+        print(string.format("Added %s x%d\n", item.display, qty))
+    else
+        print("Quantity must be > 0, skipped.")
+    end
+    d.waiting = false
+end
+
+local function dispatchSendJob()
+    local d = state.dispatch
+    if not d.service or not d.coords or #d.order == 0 then return end
+
+    -- Build items table
+    local items = {}
+    for _, e in ipairs(d.order) do
+        items[e.name] = e.count
+    end
+
     local msg = proto.encode(proto.MSG.JOB_REQUEST, "admin", "server", {
-        destination = { x=x, y=y, z=z },
-        items       = { ["minecraft:cobblestone"] = 1 },
+        destination = { x=d.coords.x, y=d.coords.y, z=d.coords.z },
+        items       = items,
     })
     proto.send(state.modem, proto.CH_SERVER, msg)
 
-    d.waiting  = false
-    d.last     = string.format("(%d, %d, %d)", x, y, z)
-    d.status   = string.format("Sent job to (%d, %d, %d)", x, y, z)
+    d.status   = string.format("Job sent → (%d,%d,%d) %d item type(s)",
+        d.coords.x, d.coords.y, d.coords.z, #d.order)
     d.statusOk = true
-    print(string.format("Job sent → (%d, %d, %d)\n", x, y, z))
+    -- Reset for next order
+    d.order  = {}
+    d.coords = nil
+    print(d.status .. "\n")
 end
 
 -- ─── Main ────────────────────────────────────────────────────────────────────
@@ -572,11 +754,20 @@ local function main()
     state.modem.open(proto.CH_BROADCAST)
     state.modem.open(proto.CH_PRIVATE)
 
+    state.rsBridge = peripheral.find("rsBridge")
+    if state.rsBridge then
+        addLog("INFO", "RS bridge found — dispatch ready")
+        refreshRSItems()
+    else
+        addLog("WARN", "No rsBridge — attach one for dispatch")
+    end
+
     addLog("INFO","Dashboard online")
     render()
 
     local timer         = os.startTimer(2)
     local pollTimer     = os.startTimer(0.1)
+    local rsTimer       = os.startTimer(10)   -- refresh RS list every 10s
     local lastPageFlip  = 0   -- debounce: ignore clicks within 0.5s of last flip
 
     while true do
@@ -620,12 +811,40 @@ local function main()
                             cycleTurtle()
                             render(); break
 
-                        -- DISPATCH: SEND button
-                        elseif state.page == 5
-                        and ex >= DSEND.x and ex <= DSEND.x+DSEND.w
-                        and ey >= DSEND.y and ey <= DSEND.y+DSEND.h then
-                            sendJob()
-                            render(); break
+                        -- DISPATCH page clicks
+                        elseif state.page == 5 then
+                            local function inZone(z)
+                                return z and ex>=z.x and ex<=z.x+z.w
+                                          and ey>=z.y and ey<=z.y+z.h
+                            end
+                            if inZone(DZ.delivery) then
+                                state.dispatch.service = "DELIVERY"
+                                render()
+                            elseif inZone(DZ.coords) then
+                                dispatchEnterCoords(); render()
+                            elseif inZone(DZ.scrollUp) then
+                                state.dispatch.rsScroll = math.max(0, state.dispatch.rsScroll-1)
+                                render()
+                            elseif inZone(DZ.scrollDown) then
+                                local max = math.max(0, #state.dispatch.rsItems-10)
+                                state.dispatch.rsScroll = math.min(max, state.dispatch.rsScroll+1)
+                                render()
+                            elseif inZone(DZ.clear) then
+                                state.dispatch.order  = {}
+                                state.dispatch.coords = nil
+                                state.dispatch.status = ""
+                                render()
+                            elseif inZone(DZ.send) then
+                                dispatchSendJob(); render()
+                            else
+                                -- Check item row [+] buttons
+                                for _, row in ipairs(DZ.itemRows or {}) do
+                                    if ey>=row.y and ey<=row.y+row.h then
+                                        dispatchAddItem(row.item); render(); break
+                                    end
+                                end
+                            end
+                            break
                         end
                     end
                 end
@@ -657,6 +876,9 @@ local function main()
         elseif ev=="timer" and p1==timer then
             render()
             timer = os.startTimer(2)
+        elseif ev=="timer" and p1==rsTimer then
+            if state.page == 5 then refreshRSItems() end
+            rsTimer = os.startTimer(10)
         end
     end
 end
