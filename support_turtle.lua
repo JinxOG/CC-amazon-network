@@ -60,6 +60,11 @@ base.run(function(job)
         return base.sendFailed("departure_failed: " .. (err or "?"), true)
     end
 
+    -- Signal delivery that we are underground and ready to travel together
+    print("Sending SUPPORT_READY to " .. partnerId)
+    local sig = proto.encode(proto.MSG.SUPPORT_READY, base.getSelfId(), partnerId, {})
+    proto.send(base.getModem(), proto.CH_LOCAL, sig)
+
     -- ── Step 3: Travel underground to destination ─────────────────────────────
     -- Stay UNDERGROUND_Y, but stop 5 blocks short of the destination so the
     -- delivery turtle can descend and ascend at dest X,Z without hitting us.

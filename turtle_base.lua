@@ -264,18 +264,15 @@ function base.depart()
         if _self.pos.y <= W.WORLD_EXIT.y then break end
     end
 
-    -- Wait underground for support to also descend before travelling
-    -- Hole entrance is now free so support can follow down
+    -- Wait underground for support's direct CH_LOCAL signal before travelling.
+    -- Using direct signal (not server query) because heartbeat position is stale.
     if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        logInfo("Waiting underground for support to descend...")
-        local deadline = os.clock() + 40
-        while os.clock() < deadline do
-            local info = base.queryTurtle(_self.partnerId, 3)
-            if info and info.position and info.position.y <= 65 then
-                logInfo("Support is underground — travelling together.")
-                break
-            end
-            sleep(3)
+        logInfo("Waiting for support SUPPORT_READY signal...")
+        local msg = proto.receive(_self.id, 40)   -- 40s timeout
+        if msg and msg.type == proto.MSG.SUPPORT_READY and msg.from == _self.partnerId then
+            logInfo("Support is underground — travelling together.")
+        else
+            logInfo("No SUPPORT_READY in time — proceeding anyway.")
         end
     end
 

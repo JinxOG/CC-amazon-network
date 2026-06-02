@@ -42,6 +42,9 @@ proto.MSG = {
 
     -- Server → turtle heartbeat acknowledgement
     HEARTBEAT_ACK  = "HEARTBEAT_ACK",   -- server → turtle: I'm alive, you're still registered
+
+    -- Turtle ↔ turtle underground sync (CH_LOCAL)
+    SUPPORT_READY  = "SUPPORT_READY",   -- support → delivery: I'm underground, proceed
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────
