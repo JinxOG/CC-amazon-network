@@ -128,48 +128,88 @@ local function checkStock(name, needed)
     return have
 end
 
--- Wait for a specific message from the current turtle (or any while queueing)
-local function waitFor(wantType, seconds)
+-- ─── Inbox buffer ────────────────────────────────────────────────────────────
+-- Every incoming modem message is decoded and placed here so nothing is ever
+-- dropped while we are busy serving a different turtle.
+-- Structure: inbox[msgType] = { msg, msg, ... }
+
+local inbox = {}
+
+local function inboxPut(msg)
+    if not inbox[msg.type] then inbox[msg.type] = {} end
+    table.insert(inbox[msg.type], msg)
+end
+
+-- Pull the first buffered message of wantType (optionally from a specific turtle)
+local function inboxGet(wantType, fromId)
+    local bucket = inbox[wantType]
+    if not bucket then return nil end
+    for i, msg in ipairs(bucket) do
+        if not fromId or msg.from == fromId then
+            table.remove(bucket, i)
+            return msg
+        end
+    end
+    return nil
+end
+
+-- Decode one raw modem payload and route it:
+--   ITEM_REQUEST → add to warehouse queue immediately
+--   UPDATE_ALL   → run updater
+--   anything else → put in inbox for later retrieval
+local function routeMsg(raw)
+    if not raw then return end
+    local ok, msg = proto.decode(raw)
+    if not ok then return end
+
+    if msg.type == proto.MSG.UPDATE_ALL then
+        log("UPDATE_ALL received — running updater then rebooting...")
+        sleep(1)
+        if fs.exists("updater.lua") then shell.run("updater")
+        else os.reboot() end
+        return
+    end
+
+    if msg.type == proto.MSG.ITEM_REQUEST then
+        local p = msg.payload
+        local n = chestsNeeded(p.items or {})
+        table.insert(queue, {
+            jobId        = p.jobId,
+            turtleId     = msg.from,
+            items        = p.items or {},
+            chestsNeeded = n,
+        })
+        sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
+            jobId = p.jobId, position = #queue, chests = n,
+        })
+        log("Queued " .. msg.from .. " at position " .. #queue)
+        return
+    end
+
+    -- Everything else goes into the inbox for waitFor() to find
+    inboxPut(msg)
+end
+
+-- Block until a message of wantType arrives from fromId (or anyone if nil).
+-- All other messages received while waiting are buffered — never dropped.
+local function waitFor(wantType, fromId, seconds)
+    -- Check inbox first (message may have already arrived)
+    local buffered = inboxGet(wantType, fromId)
+    if buffered then return buffered end
+
     local deadline = os.epoch("utc") + seconds * 1000
     while os.epoch("utc") < deadline do
-        local ev, _,_,_, p4 = os.pullEventRaw("modem_message")
+        -- Use a short timer so the deadline is checked even with no traffic
+        local timer = os.startTimer(5)
+        local ev, p1, _,_, p4 = os.pullEvent()
         if ev == "modem_message" then
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
-            if raw then
-                local ok, msg = proto.decode(raw)
-                if ok then
-                    if msg.type == proto.MSG.UPDATE_ALL then
-                        log("UPDATE_ALL received — running updater then rebooting...")
-                        sleep(1)
-                        if fs.exists("updater.lua") then
-                            shell.run("updater")
-                        else
-                            log("updater.lua not found — rebooting anyway")
-                            os.reboot()
-                        end
-                    end
-                    if msg.type == wantType
-                    and (not current or msg.from == current.turtleId) then
-                        return msg
-                    end
-                    -- Handle new queue arrivals while waiting
-                    if msg.type == proto.MSG.ITEM_REQUEST then
-                        local p = msg.payload
-                        local n = chestsNeeded(p.items or {})
-                        table.insert(queue, {
-                            jobId        = p.jobId,
-                            turtleId     = msg.from,
-                            items        = p.items or {},
-                            chestsNeeded = n,
-                        })
-                        sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
-                            jobId = p.jobId, position = #queue, chests = n,
-                        })
-                        log("Queued (waiting): " .. msg.from .. " pos=" .. #queue)
-                    end
-                end
-            end
+            routeMsg(raw)
+            local found = inboxGet(wantType, fromId)
+            if found then return found end
         end
+        -- timer event just lets the deadline re-check; continue looping
+        os.cancelTimer(timer)
     end
     return nil
 end
@@ -193,7 +233,7 @@ local function handleCurrentJob()
 
     -- Wait for turtle to arrive at destination
     log("Waiting for DELIVERY_ARRIVED from " .. current.turtleId .. "...")
-    local msg = waitFor(proto.MSG.DELIVERY_ARRIVED, CFG.msgTimeout)
+    local msg = waitFor(proto.MSG.DELIVERY_ARRIVED, current.turtleId, CFG.msgTimeout)
     if not msg then
         log("Timeout — skipping " .. current.turtleId)
         current = nil; serveNext(); return
@@ -217,7 +257,7 @@ local function handleCurrentJob()
 
     -- Wait for turtle to place the chests
     log("Waiting for CHESTS_PLACED...")
-    msg = waitFor(proto.MSG.CHESTS_PLACED, CFG.msgTimeout)
+    msg = waitFor(proto.MSG.CHESTS_PLACED, current.turtleId, CFG.msgTimeout)
     if not msg then
         log("Timeout on CHESTS_PLACED — aborting")
         current = nil; serveNext(); return
@@ -262,7 +302,7 @@ local function handleCurrentJob()
 
         sendToServer(proto.MSG.ITEMS_READY, current.turtleId, { jobId = current.jobId })
         log(string.format("Batch %d/%d sent — waiting for BATCH_DONE...", i, #batches))
-        msg = waitFor(proto.MSG.BATCH_DONE, CFG.msgTimeout)
+        msg = waitFor(proto.MSG.BATCH_DONE, current.turtleId, CFG.msgTimeout)
         if not msg then
             log("Timeout on BATCH_DONE — stopping early")
             break
@@ -274,7 +314,7 @@ local function handleCurrentJob()
 
     -- Wait for entangled chest to be cleared
     log("Waiting for ITEM_COLLECTED...")
-    waitFor(proto.MSG.ITEM_COLLECTED, CFG.msgTimeout)
+    waitFor(proto.MSG.ITEM_COLLECTED, current.turtleId, CFG.msgTimeout)
 
     log("Job complete: " .. current.jobId)
     current = nil
@@ -299,26 +339,11 @@ local function main()
         if current then
             handleCurrentJob()
         else
+            -- Idle: drain any buffered messages then wait for new ones
             local ev, _,_,_, p4 = os.pullEvent("modem_message")
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
-            if raw then
-                local ok, msg = proto.decode(raw)
-                if ok and msg.type == proto.MSG.ITEM_REQUEST then
-                    local p = msg.payload
-                    local n = chestsNeeded(p.items or {})
-                    table.insert(queue, {
-                        jobId        = p.jobId,
-                        turtleId     = msg.from,
-                        items        = p.items or {},
-                        chestsNeeded = n,
-                    })
-                    sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
-                        jobId = p.jobId, position = #queue, chests = n,
-                    })
-                    log("Queued " .. msg.from .. " at position " .. #queue)
-                    serveNext()
-                end
-            end
+            routeMsg(raw)
+            serveNext()
         end
     end
 end
