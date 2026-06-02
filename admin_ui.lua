@@ -9,6 +9,9 @@ local proto = require("protocol")
 local W = 500
 local H = 260
 
+-- NEXT button bounds (bottom-right, always visible)
+local BTN = { x=370, y=232, w=120, h=22 }
+
 local PAGES    = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS = 80
 local FONT     = "minecraft:font/default.ttf"
@@ -201,6 +204,19 @@ end
 
 -- ─── Render ──────────────────────────────────────────────────────────────────
 
+local function drawNextBtn()
+    local b = BTN
+    -- Bright green button, hard to miss
+    fill(b.x, b.y, b.w, b.h, {40, 160, 60})
+    -- White border
+    state.gpu.drawLine(state.display, b.x,     b.y,     b.x+b.w, b.y,     255,255,255)
+    state.gpu.drawLine(state.display, b.x,     b.y+b.h, b.x+b.w, b.y+b.h, 255,255,255)
+    state.gpu.drawLine(state.display, b.x,     b.y,     b.x,     b.y+b.h, 255,255,255)
+    state.gpu.drawLine(state.display, b.x+b.w, b.y,     b.x+b.w, b.y+b.h, 255,255,255)
+    -- Label centred in button
+    t("NEXT  >>", b.x+18, b.y+4, {255,255,255}, 13, true)
+end
+
 local function render()
     fill(0,0,W,H,C.BG)
     drawTitle()
@@ -208,6 +224,7 @@ local function render()
     elseif state.page==2 then pgJobs()
     elseif state.page==3 then pgLog()
     end
+    drawNextBtn()
     flush()
 end
 
@@ -287,31 +304,42 @@ local function main()
     while true do
         local ev,p1,p2,p3,p4 = os.pullEvent()
 
-        -- DirectGPU captures mouse input — drain its event queue each tick
+        -- DirectGPU input polling
         if ev=="timer" and p1==pollTimer then
             local ok, hasEv = pcall(function() return state.gpu.hasEvents(state.display) end)
             if ok and hasEv then
-                -- Drain ALL pending GPU events this tick
-                local hadAny = false
                 while true do
                     local ok2, gpuEv = pcall(function() return state.gpu.pollEvent(state.display) end)
                     if not ok2 or not gpuEv then break end
-                    hadAny = true
-                end
-                -- Flip page at most once per 0.5s (debounce handles rapid events)
-                local now = os.clock()
-                if hadAny and (now - lastPageFlip) > 0.5 then
-                    lastPageFlip = now
-                    state.page = (state.page % #PAGES) + 1
-                    render()
+                    -- Extract x,y from event (table with x/y keys, or positional)
+                    local ex, ey
+                    if type(gpuEv) == "table" then
+                        ex = gpuEv.x or gpuEv[2]
+                        ey = gpuEv.y or gpuEv[3]
+                    end
+                    -- Hit-test against NEXT button
+                    local now = os.clock()
+                    if ex and ey
+                    and ex >= BTN.x and ex <= BTN.x + BTN.w
+                    and ey >= BTN.y and ey <= BTN.y + BTN.h
+                    and (now - lastPageFlip) > 0.5 then
+                        lastPageFlip = now
+                        state.page = (state.page % #PAGES) + 1
+                        render()
+                        break
+                    end
                 end
             end
             pollTimer = os.startTimer(0.1)
 
         elseif ev=="monitor_touch" then
-            -- Fallback: standard CC touch (fires if GPU doesn't intercept)
+            -- CC fallback: p2,p3 are char-grid x,y — convert roughly to pixels
+            local cx = (p2 or 0) * 6
+            local cy = (p3 or 0) * 9
             local now = os.clock()
-            if (now - lastPageFlip) > 0.5 then
+            if cx >= BTN.x and cx <= BTN.x + BTN.w
+            and cy >= BTN.y and cy <= BTN.y + BTN.h
+            and (now - lastPageFlip) > 0.5 then
                 lastPageFlip = now
                 state.page = (state.page % #PAGES) + 1
                 render()
