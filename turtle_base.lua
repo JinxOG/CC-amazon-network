@@ -188,59 +188,104 @@ local function isTurtleBlock(dir)
            and data.name:find("turtle")
 end
 
--- Attempt a 1-block lateral bypass of a turtle blocking the forward path.
--- Tries left lane then right lane. All position tracking done internally.
+-- Attempt to route around a turtle blocking the forward path.
+-- Tries (in order): left strafe, right strafe, dig UP over it, dig DOWN under it.
+-- Vertical bypasses work even in 1-block-wide tunnels where lateral strafes fail.
+-- All position tracking is done internally; caller must NOT call applyMove again.
 -- Returns true if the turtle successfully moved past the obstacle.
 local function bypassForward()
+
+    -- ── Lateral bypass (left or right) ───────────────────────────────────────
     local function tryStrafe(isLeft)
-        -- turnOut: face sideways away from original lane
-        -- turnRtn: face back toward original lane (or original travel dir)
         local turnOut = isLeft and move.turnLeft  or move.turnRight
         local turnRtn = isLeft and move.turnRight or move.turnLeft
 
-        -- 1. Sidestep into bypass lane
         turnOut()
-        if not turtle.forward() then
-            turnRtn()   -- lane blocked — restore facing
-            return false
-        end
+        if not turtle.forward() then turnRtn(); return false end
         applyMove("forward")
-        turnRtn()   -- face original travel direction
+        turnRtn()
 
-        -- 2. Advance past the obstacle (up to 3 blocks)
         local advanced = 0
         for _ = 1, 3 do
             if turtle.forward() then
                 applyMove("forward")
                 advanced = advanced + 1
-                if not isTurtleBlock("forward") then break end  -- clear ahead
+                if not isTurtleBlock("forward") then break end
             else
                 break
             end
         end
 
         if advanced == 0 then
-            -- Bypass lane blocked ahead too — undo sidestep
-            turnRtn()               -- face back toward original lane
-            turtle.forward()        -- raw move (avoid tryMove recursion)
-            applyMove("forward")
-            turnOut()               -- restore original travel facing
+            turnRtn(); turtle.forward(); applyMove("forward"); turnOut()
             return false
         end
 
-        -- 3. Step back into original lane
-        turnRtn()                   -- face original lane
-        if turtle.forward() then
-            applyMove("forward")
-        end
-        turnOut()                   -- restore original travel facing
+        turnRtn()
+        if turtle.forward() then applyMove("forward") end
+        turnOut()
         return true
     end
 
-    logInfo("Turtle blocking forward — attempting bypass...")
-    if tryStrafe(true)  then logInfo("Bypass via left lane OK");  return true end
-    if tryStrafe(false) then logInfo("Bypass via right lane OK"); return true end
-    logInfo("Bypass failed — reverting to wait")
+    -- ── Vertical bypass (up over obstacle, then back down) ───────────────────
+    -- Needs canDig (delivery has a pickaxe, support does not).
+    -- Advances 2 blocks at the upper level so delivery is fully past support
+    -- before descending (support is 1 block wide so 2 steps = safely clear).
+    local function tryVertical(isUp)
+        if not _self.canDig then return false end
+
+        local digLayer  = isUp and turtle.digUp   or turtle.digDown
+        local moveLayer = isUp and turtle.up      or turtle.down
+        local applyDir  = isUp and "up"           or "down"
+        local returnDig = isUp and turtle.digDown or turtle.digUp
+        local returnMov = isUp and turtle.down    or turtle.up
+        local returnDir = isUp and "down"         or "up"
+        local detectLayer = isUp and turtle.detectUp or turtle.detectDown
+
+        -- 1. Dig and move to upper/lower level
+        if detectLayer() then digLayer() end
+        if not moveLayer() then return false end
+        applyMove(applyDir)
+
+        -- 2. Advance 2 blocks past the obstacle at this level (dig terrain if needed)
+        local advanced = 0
+        for _ = 1, 2 do
+            if not turtle.forward() then
+                if isTurtleBlock("forward") then break end  -- another turtle, stop
+                turtle.dig()                                -- terrain — dig it
+                sleep(0.2)
+                if not turtle.forward() then break end
+            end
+            applyMove("forward")
+            advanced = advanced + 1
+        end
+
+        if advanced < 2 then
+            -- Couldn't clear obstacle at this level — go back
+            if isUp then turtle.detectDown() and turtle.digDown() end
+            if not isUp then turtle.detectUp() and turtle.digUp() end
+            returnMov(); applyMove(returnDir)
+            return false
+        end
+
+        -- 3. Return to original Y level (dig if terrain moved in)
+        local returnDetect = isUp and turtle.detectDown or turtle.detectUp
+        if returnDetect() then returnDig() end
+        if not returnMov() then
+            -- Stuck at the new level — still report success (move.to will fix Y)
+            logWarn("Vertical bypass: could not return to original Y — move.to will correct")
+            return true
+        end
+        applyMove(returnDir)
+        return true
+    end
+
+    logInfo("Turtle blocking forward — attempting intelligent bypass...")
+    if tryStrafe(true)      then logInfo("Bypass: left lane");  return true end
+    if tryStrafe(false)     then logInfo("Bypass: right lane"); return true end
+    if tryVertical(true)    then logInfo("Bypass: dug UP over blocker");   return true end
+    if tryVertical(false)   then logInfo("Bypass: dug DOWN under blocker"); return true end
+    logInfo("All bypass routes failed — continuing to wait")
     return false
 end
 

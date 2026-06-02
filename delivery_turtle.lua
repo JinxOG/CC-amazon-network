@@ -464,21 +464,11 @@ base.run(function(job)
     end
 
     if savedPartnerId then
-        -- Do NOT resume following (DESCENDED). Support is sitting 1 block behind
-        -- us in the tunnel. If we signal DESCENDED it will follow while we turn
-        -- around — but the tunnel is 1 block wide so we'd be deadlocked.
-        -- Instead send RETURN_TO_DOCK now so support heads for arrivals hole
-        -- independently. Support is already pointed the right way (it was
-        -- following us here), so it moves AWAY from us immediately.
-        -- We wait 5 s to let support clear our path before we start following.
-        base.signalPartnerDirect(proto.MSG.RETURN_TO_DOCK, savedPartnerId, {})
-        print("Told support to return independently — waiting 5s for it to clear path...")
-        sleep(5)
-        -- partnerId stays nil so no POSITION_UPDATEs are broadcast during return
+        base.setPartnerId(savedPartnerId)
+        base.signalPartner(proto.MSG.DESCENDED, {})
     end
 
     -- ── Step 7: Return via arrivals hole ─────────────────────────────────────
-    -- Both turtles navigate home independently now; support is ~10 blocks ahead.
 
     ok, err = base.returnToDock()
     if not ok then
