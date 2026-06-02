@@ -39,12 +39,12 @@ end
 -- ─── Colour palette ──────────────────────────────────────────────────────────
 
 local C = {
-    BG       = { 10,  10,  18  },
-    PANEL_BG = { 18,  22,  35  },
-    BORDER   = { 40,  50,  80  },
-    HDR_BG   = { 25,  35,  65  },
-    WHITE    = { 235, 235, 235 },
-    DIM      = { 110, 110, 130 },
+    BG       = { 8,   10,  20  },
+    PANEL_BG = { 20,  25,  45  },
+    BORDER   = { 70,  90,  140 },   -- brighter so panels visible when empty
+    HDR_BG   = { 35,  50,  95  },   -- more contrast against BG
+    WHITE    = { 240, 240, 240 },
+    DIM      = { 130, 130, 150 },
     GREEN    = {  55, 195,  80 },
     YELLOW   = { 220, 185,  45 },
     RED      = { 215,  55,  55 },
