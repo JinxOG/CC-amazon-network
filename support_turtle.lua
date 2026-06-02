@@ -62,7 +62,12 @@ base.run(function(job)
     end
 
     if not signalReceived then
-        print("No HOLE_READY signal — departing anyway.")
+        -- Delivery partner never reached the hole (crashed, stuck, or wrong partner).
+        -- Do NOT descend — that causes pile-ups with other pairs at the hole.
+        -- Return to dock and fail the job so the server can re-queue it.
+        print("No HOLE_READY signal after 180s — delivery partner timed out. Returning to dock.")
+        base.returnToDock()
+        return base.sendFailed("no_hole_ready_from_delivery", true)
     end
 
     -- ── Step 2: Depart depot via dispatch hole ────────────────────────────────
