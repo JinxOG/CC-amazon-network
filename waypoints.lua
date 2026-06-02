@@ -135,10 +135,19 @@ end
 --               → taxiway to hole
 --   Return:     reverse of above
 
--- Returns the back-aisle Z for a dock: 2 blocks AWAY from the taxiway.
+-- Returns the DEPARTURE aisle Z for a dock: 2 blocks AWAY from the taxiway.
+-- Departing turtles use this lane.
 local function aisleZ(dock)
     local dir = W.WHITE_Z > dock.z and 1 or -1
     return dock.z - dir * 2   -- opposite direction to taxiway
+end
+
+-- Returns the RETURN aisle Z for a dock: 3 blocks AWAY from the taxiway.
+-- One block further back than the departure lane so returning and departing
+-- turtles never share the same corridor and cannot deadlock.
+local function returnAisleZ(dock)
+    local dir = W.WHITE_Z > dock.z and 1 or -1
+    return dock.z - dir * 3
 end
 
 -- Departure: worker turtle leaves slot without crossing any occupied row.
@@ -169,17 +178,19 @@ function W.supportDepartureRoute(dock)
     }
 end
 
--- Return: arrivals hole → red taxiway → centre column → aisle → slot.
+-- Return: arrivals hole → red taxiway → centre column → return aisle → slot.
+-- Uses returnAisleZ (3 blocks back) so returning turtles never share a lane
+-- with departing turtles (which use aisleZ, 2 blocks back).
 function W.returnRoute(dock)
-    local az = aisleZ(dock)
+    local az = returnAisleZ(dock)
     return {
         -- 1. Get onto red taxiway from arrivals hole
         { x = W.ARRIVALS_HOLE.x, y = CFG.FLOOR_Y, z = W.RED_Z },
         -- 2. Travel along red taxiway to bay centre column X
         { x = dock.junction.x,   y = CFG.FLOOR_Y, z = W.RED_Z },
-        -- 3. Drop from taxiway to aisle via centre column (always clear)
+        -- 3. Drop from taxiway to return aisle via centre column (always clear)
         { x = dock.junction.x,   y = CFG.FLOOR_Y, z = az       },
-        -- 4. Move along aisle to dock's column X
+        -- 4. Move along return aisle to dock's column X
         { x = dock.x,            y = CFG.FLOOR_Y, z = az       },
         -- 5. Enter dock slot perpendicular (back into row)
         { x = dock.x,            y = CFG.FLOOR_Y, z = dock.z   },
