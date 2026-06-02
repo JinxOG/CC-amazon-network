@@ -1041,9 +1041,15 @@ function base.run(jobHandler)
                             pendingJob  = nil
 
                         elseif msg.type == proto.MSG.FORCE_REFUEL then
-                            logInfo("FORCE_REFUEL received — running in-field refuel now...")
-                            local ok = fuel.refuelFromChest()
-                            logInfo("FORCE_REFUEL done — " .. (ok and "fuel gained" or "no coal / failed"))
+                            -- Temporarily raise FUEL_CRITICAL above current level so
+                            -- ensureFuel() treats the turtle as low — exercises the
+                            -- exact same code path as a real in-field fuel emergency.
+                            logInfo(string.format("FORCE_REFUEL received — simulating low fuel (current: %d)", fuel.level()))
+                            local savedCritical = CFG.FUEL_CRITICAL
+                            CFG.FUEL_CRITICAL   = fuel.level() + 1
+                            fuel.ensureFuel()
+                            CFG.FUEL_CRITICAL   = savedCritical
+                            logInfo("FORCE_REFUEL done")
 
                         elseif msg.type == proto.MSG.UPDATE_ALL then
                             logWarn("UPDATE_ALL received — running updater then rebooting...")
