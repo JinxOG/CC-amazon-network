@@ -171,20 +171,56 @@ end
 
 local move = {}
 
+-- Inspect function for each direction (nil for back — no inspectBack in CC)
+local INSPECT = {
+    forward = turtle.inspect,
+    up      = turtle.inspectUp,
+    down    = turtle.inspectDown,
+    back    = nil,
+}
+
+local function isTurtleBlock(dir)
+    local fn = INSPECT[dir]
+    if not fn then return false end
+    local ok, data = fn()
+    return ok and type(data) == "table"
+           and type(data.name) == "string"
+           and data.name:find("turtle")
+end
+
 local function tryMove(moveFn, digFn, dir)
-    -- Use more retries when we can dig (handles gravel/sand stacks falling)
-    local retries = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
-    for i = 1, retries do
+    local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
+    local digAttempts = 0
+
+    -- Separate deadline for turtle-blocked waiting (2 minutes max)
+    local turtleDeadline = os.clock() + 120
+    local turtleWaits    = 0
+
+    while true do
         if moveFn() then applyMove(dir); return true end
-        if digFn and _self.canDig then
-            digFn()
-            -- Short sleep so falling gravel/sand settles before next attempt
-            sleep(i <= 4 and 0.2 or 0.4)
+
+        if isTurtleBlock(dir) then
+            -- Another turtle is in the way — wait and retry, don't dig
+            if os.clock() > turtleDeadline then
+                return false, "blocked by turtle (" .. dir .. ")"
+            end
+            turtleWaits = turtleWaits + 1
+            -- Back off progressively: 0.5s → 1s → 1.5s → 2s (cap)
+            sleep(math.min(2.0, 0.5 * turtleWaits))
         else
-            sleep(0.3)
+            -- Static block (terrain, gravel, etc.) — dig it
+            digAttempts = digAttempts + 1
+            if digAttempts > maxDig then
+                return false, "blocked (" .. dir .. ")"
+            end
+            if digFn and _self.canDig then
+                digFn()
+                sleep(digAttempts <= 4 and 0.2 or 0.4)
+            else
+                sleep(0.3)
+            end
         end
     end
-    return false, "blocked (" .. dir .. ")"
 end
 
 function move.forward() return tryMove(turtle.forward, turtle.dig,     "forward") end
