@@ -18,6 +18,7 @@ local FILES = {
     delivery_turtle = "delivery_turtle.lua",
     support_turtle  = "support_turtle.lua",
     admin_ui        = "admin_ui.lua",
+    warehouse       = "warehouse.lua",
 }
 
 local PROFILES = {
@@ -30,6 +31,10 @@ local PROFILES = {
     admin = {
         { src = FILES.protocol, name = "protocol.lua" },
         { src = FILES.admin_ui, name = "startup.lua"  },
+    },
+    warehouse = {
+        { src = FILES.protocol,  name = "protocol.lua"   },
+        { src = FILES.warehouse, name = "startup.lua"     },
     },
     delivery = {
         { src = FILES.protocol,        name = "protocol.lua"    },

@@ -720,6 +720,11 @@ function base.sendFailed(reason, recoverable)
     _self.busy      = false
 end
 
+-- Generic send to server — used by delivery turtle for warehouse handshake messages
+function base.sendToServer(msgType, payload)
+    comms.toServer(msgType, payload)
+end
+
 function base.requestItems(items, pickupPoint, timeout)
     comms.toServer(proto.MSG.ITEM_REQUEST, proto.payloadItemRequest(
         _self.jobId, items, pickupPoint or base.getPos()))

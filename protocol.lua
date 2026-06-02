@@ -62,6 +62,16 @@ proto.MSG = {
 
     -- Remote dispatch (admin → server)
     JOB_REQUEST     = "JOB_REQUEST",     -- admin UI → server: submit a new delivery job
+
+    -- Warehouse ↔ server ↔ turtle delivery handshake
+    WAREHOUSE_QUEUED  = "WAREHOUSE_QUEUED",  -- warehouse → turtle: you're in queue at position N
+    DELIVERY_ARRIVED  = "DELIVERY_ARRIVED",  -- turtle → warehouse: at destination, send chests
+    CHESTS_READY      = "CHESTS_READY",      -- warehouse → turtle: N chests loaded, pull them
+    CHESTS_PLACED     = "CHESTS_PLACED",     -- turtle → warehouse: chests placed, send items
+    ITEMS_READY       = "ITEMS_READY",       -- warehouse → turtle: batch of items loaded, pull & fill
+    BATCH_DONE        = "BATCH_DONE",        -- turtle → warehouse: batch pulled & distributed, send next
+    ITEMS_DONE        = "ITEMS_DONE",        -- warehouse → turtle: all items sent, you're finished
+    ITEM_COLLECTED    = "ITEM_COLLECTED",    -- turtle → warehouse: entangled chest clear, job done
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

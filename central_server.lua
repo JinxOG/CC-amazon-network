@@ -475,6 +475,30 @@ handlers[proto.MSG.ITEM_READY] = function(msg)
     end
 end
 
+-- ── Warehouse delivery handshake forwarding ───────────────────────────────────
+-- Turtle → warehouse (forward to CH_WAREHOUSE)
+local function fwdToWarehouse(msg)
+    local fwd = proto.encode(msg.type, msg.from, "warehouse", msg.payload)
+    proto.send(state.modem, proto.CH_WAREHOUSE, fwd)
+end
+handlers[proto.MSG.DELIVERY_ARRIVED] = fwdToWarehouse
+handlers[proto.MSG.CHESTS_PLACED]    = fwdToWarehouse
+handlers[proto.MSG.BATCH_DONE]       = fwdToWarehouse
+handlers[proto.MSG.ITEM_COLLECTED]   = fwdToWarehouse
+
+-- Warehouse → turtle (forward to turtle by jobId → assignedTo)
+local function fwdToTurtle(msg)
+    local p   = msg.payload
+    local job = state.jobs[p.jobId]
+    if job and job.assignedTo then
+        sendTo(job.assignedTo, msg.type, p)
+    end
+end
+handlers[proto.MSG.WAREHOUSE_QUEUED] = fwdToTurtle
+handlers[proto.MSG.CHESTS_READY]     = fwdToTurtle
+handlers[proto.MSG.ITEMS_READY]      = fwdToTurtle
+handlers[proto.MSG.ITEMS_DONE]       = fwdToTurtle
+
 handlers[proto.MSG.TURTLE_QUERY] = function(msg)
     local targetId = msg.payload.targetId
     local t        = state.registry[targetId]
