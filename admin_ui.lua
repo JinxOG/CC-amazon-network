@@ -9,8 +9,8 @@ local proto = require("protocol")
 local W = 500
 local H = 260
 
--- NEXT button bounds (bottom-centre)
-local BTN = { x=175, y=232, w=150, h=24 }
+-- NEXT button = the second row of the title bar
+local BTN = { x=0, y=20, w=500, h=18 }
 
 local PAGES    = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS = 80
@@ -78,9 +78,9 @@ local function drawTitle()
     -- Row 1: app name + current page
     t(string.format("CC AMAZON  |  %s", PAGES[state.page]), 6, 3, C.WHITE, 12, true)
 
-    -- Row 2: big bright nav hint
-    fill(0, 20, W, TH-20, {20, 35, 80})
-    t(">>> RIGHT-CLICK MONITOR TO CHANGE PAGE <<<", 6, 22, {255, 220, 60}, 11, true)
+    -- Row 2: clickable NEXT button bar
+    fill(BTN.x, BTN.y, BTN.w, BTN.h, {40, 160, 60})
+    t(">>>  CLICK HERE TO CHANGE PAGE  >>>", 8, 22, {255, 255, 255}, 11, true)
 end
 
 -- ─── Page: Turtles ───────────────────────────────────────────────────────────
@@ -205,16 +205,7 @@ end
 -- ─── Render ──────────────────────────────────────────────────────────────────
 
 local function drawNextBtn()
-    local b = BTN
-    -- Bright green button, hard to miss
-    fill(b.x, b.y, b.w, b.h, {40, 160, 60})
-    -- White border
-    state.gpu.drawLine(state.display, b.x,     b.y,     b.x+b.w, b.y,     255,255,255)
-    state.gpu.drawLine(state.display, b.x,     b.y+b.h, b.x+b.w, b.y+b.h, 255,255,255)
-    state.gpu.drawLine(state.display, b.x,     b.y,     b.x,     b.y+b.h, 255,255,255)
-    state.gpu.drawLine(state.display, b.x+b.w, b.y,     b.x+b.w, b.y+b.h, 255,255,255)
-    -- Label centred in button
-    t("  >>  NEXT PAGE  >>  ", b.x+8, b.y+5, {255,255,255}, 13, true)
+    -- Button is drawn as part of the title bar in drawTitle()
 end
 
 local function render()
