@@ -248,13 +248,11 @@ function jobQueue.complete(jobId)
     local t = state.registry[job.assignedTo or ""]
     if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
 
-    -- If this is a worker job, also complete its linked support job
-    if job.linkedJob then
-        local supportJob = state.jobs[job.linkedJob]
-        if supportJob and supportJob.status == JOB_STATUS.IN_PROGRESS then
-            jobQueue.complete(job.linkedJob)
-        end
-    end
+    -- NOTE: do NOT auto-complete the linked support job here.
+    -- The support turtle is still physically returning to dock — marking it IDLE
+    -- early causes the dispatcher to assign it a new job before it's actually
+    -- free, which it then rejects, leaving delivery to run without support.
+    -- Let the support turtle send its own JOB_COMPLETE when it docks.
 end
 
 function jobQueue.fail(jobId, reason, recoverable)
@@ -439,11 +437,15 @@ end
 
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
     jobQueue.complete(msg.payload.jobId)
+    -- A turtle just became idle — immediately check if anything can be dispatched
+    pcall(dispatcher.tick)
 end
 
 handlers[proto.MSG.JOB_FAILED] = function(msg)
     local p = msg.payload
     jobQueue.fail(p.jobId, p.reason, p.recoverable)
+    -- Job may have re-queued for retry — try to dispatch right away
+    pcall(dispatcher.tick)
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
