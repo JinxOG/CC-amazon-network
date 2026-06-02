@@ -302,18 +302,24 @@ local function main()
                 while true do
                     local ok2, gpuEv = pcall(function() return state.gpu.pollEvent(state.display) end)
                     if not ok2 or not gpuEv then break end
-                    -- Extract x,y from event (table with x/y keys, or positional)
-                    local ex, ey
+                    -- Extract type and x,y from event
+                    local ex, ey, evType
                     if type(gpuEv) == "table" then
+                        evType = tostring(gpuEv[1] or gpuEv.type or "")
                         ex = gpuEv.x or gpuEv[2]
                         ey = gpuEv.y or gpuEv[3]
-                        -- Debug: print raw event so we know the format
-                        print("GPU ev: type=" .. tostring(gpuEv[1] or gpuEv.type)
+                        -- Debug: print every event so user can identify types
+                        print("GPU ev: type=" .. evType
                             .. " x=" .. tostring(ex) .. " y=" .. tostring(ey))
                     end
+                    -- Skip hover/move/drag events — only act on press/click
+                    local evLow = evType and evType:lower() or ""
+                    local isMove = evLow:find("mov") or evLow:find("hover")
+                                or evLow:find("drag") or evLow:find("enter")
+                                or evLow:find("exit") or evLow == "3"
                     -- Hit-test against NEXT button
                     local now = os.clock()
-                    if ex and ey
+                    if not isMove and ex and ey
                     and ex >= BTN.x and ex <= BTN.x + BTN.w
                     and ey >= BTN.y and ey <= BTN.y + BTN.h
                     and (now - lastPageFlip) > 0.5 then
