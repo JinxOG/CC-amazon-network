@@ -404,12 +404,15 @@ local function main()
     end
 end
 
--- Graceful error display
+-- Graceful error display — always print to terminal so we can read it
 local ok, err = pcall(main)
 if not ok then
+    print("ADMIN UI CRASH: " .. tostring(err))
     if state.gpu and state.display then
         state.gpu.clear(state.display, 10, 10, 18)
-        state.gpu.drawText(state.display, "CRASH: " .. tostring(err), 10, 10, 220, 60, 60, nil, 14, "bold")
+        state.gpu.drawText(state.display, "CRASH: " .. tostring(err),
+            10, 10, 220, 60, 60,
+            "minecraft:font/default.ttf", 14, "bold")
         state.gpu.updateDisplay(state.display)
     end
     error(err)
