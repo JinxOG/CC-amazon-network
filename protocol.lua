@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.1.1"
+proto.VERSION = "1.1.2"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -67,6 +67,9 @@ proto.MSG = {
 
     -- Over-the-air update
     UPDATE_ALL      = "UPDATE_ALL",      -- server → all: download latest files and reboot
+
+    -- Force-trigger in-field refuel regardless of actual fuel level (for testing)
+    FORCE_REFUEL    = "FORCE_REFUEL",    -- server → turtle: run refuelFromChest now
 
     -- Warehouse ↔ server ↔ turtle delivery handshake
     WAREHOUSE_QUEUED  = "WAREHOUSE_QUEUED",  -- warehouse → turtle: you're in queue at position N

@@ -1040,6 +1040,11 @@ function base.run(jobHandler)
                             _self.busy  = false
                             pendingJob  = nil
 
+                        elseif msg.type == proto.MSG.FORCE_REFUEL then
+                            logInfo("FORCE_REFUEL received — running in-field refuel now...")
+                            local ok = fuel.refuelFromChest()
+                            logInfo("FORCE_REFUEL done — " .. (ok and "fuel gained" or "no coal / failed"))
+
                         elseif msg.type == proto.MSG.UPDATE_ALL then
                             logWarn("UPDATE_ALL received — running updater then rebooting...")
                             if _self.busy and _self.jobId then

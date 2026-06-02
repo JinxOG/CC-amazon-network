@@ -613,6 +613,8 @@ local function handleConsoleEnter()
         print("Commands:")
         print("  job <x> <y> <z>  queue one delivery job")
         print("  stress           queue 8 test jobs (~90 blocks out)")
+        print("  fueltest         queue job ~80 blocks out to test refueling")
+        print("  refuel           force all turtles to run in-field refuel now")
         print("  recall           recall all turtles")
         print("  jobs             show job counts")
 
@@ -639,6 +641,23 @@ local function handleConsoleEnter()
                 i, id, dest.label, dest.x, dest.y, dest.z))
         end
         print("Done. Watch the admin monitor.")
+
+    elseif cmd == "fueltest" then
+        -- Queue one delivery job ~80 blocks out to test in-field refueling.
+        -- Once turtles arrive, type 'refuel' to force-trigger the refuel procedure.
+        local dest = { x = 143, y = 64, z = -2893 }  -- ~80 blocks north
+        local id = server.submitJob("DELIVER", {
+            items       = { ["minecraft:cobblestone"] = 1 },
+            destination = dest,
+        }, 5)
+        print(string.format("Fuel test job queued: %s -> (%d,%d,%d)", id, dest.x, dest.y, dest.z))
+        print("Wait for turtles to arrive at destination, then type 'refuel'.")
+
+    elseif cmd == "refuel" then
+        -- Broadcast FORCE_REFUEL to all online turtles.
+        sendBroadcast(proto.MSG.FORCE_REFUEL, {})
+        print("FORCE_REFUEL broadcast sent to all turtles.")
+        print("Watch each turtle's console for refuel output.")
 
     elseif cmd == "recall" then
         server.recallAll("console_recall")
