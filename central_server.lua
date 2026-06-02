@@ -450,7 +450,8 @@ end
 
 handlers[proto.MSG.ITEM_REQUEST] = function(msg)
     logInfo(string.format("Item request from %s (job %s)", msg.from, msg.payload.jobId))
-    local fwd = proto.encode(proto.MSG.ITEM_REQUEST, "server", "warehouse", msg.payload)
+    -- Forward with the real turtle ID so the warehouse knows who to talk to
+    local fwd = proto.encode(proto.MSG.ITEM_REQUEST, msg.from, "warehouse", msg.payload)
     proto.send(state.modem, proto.CH_WAREHOUSE, fwd)
 end
 
