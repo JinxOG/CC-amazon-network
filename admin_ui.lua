@@ -209,13 +209,20 @@ end
 -- ─── Page: Map ───────────────────────────────────────────────────────────────
 
 local MAP = {
-    x1=-100, x2=280, z1=-2860, z2=-2720,  -- world bounds
-    px=6, py=42, pw=308, ph=212,           -- canvas area (left portion)
+    -- Canvas area (left portion of the monitor)
+    px=6, py=42, pw=308, ph=212,
+    -- Viewport half-extents in world-blocks (zoom level — keep these fixed)
+    hwx = 190,   -- half-width  in world X
+    hwz = 70,    -- half-height in world Z
+    -- Default view center (depot midpoint)
+    defX = 164, defZ = -2797,
 }
 
-local function worldToMap(wx, wz)
-    local sx = MAP.px + (wx-MAP.x1)/(MAP.x2-MAP.x1) * MAP.pw
-    local sy = MAP.py + (wz-MAP.z1)/(MAP.z2-MAP.z1) * MAP.ph
+-- worldToMap: converts world coords to canvas pixels using the current viewport.
+-- Pass x1/x2/z1/z2 from the dynamic viewport computed each frame.
+local function worldToMap(wx, wz, x1, x2, z1, z2)
+    local sx = MAP.px + (wx-x1)/(x2-x1) * MAP.pw
+    local sy = MAP.py + (wz-z1)/(z2-z1) * MAP.ph
     return math.floor(sx), math.floor(sy)
 end
 
@@ -247,6 +254,22 @@ local TCOLS = {{55,195,80},{80,155,225},{220,185,45},{215,55,55},{195,55,195}}
 local function turtleCol(idx) return TCOLS[(idx-1) % #TCOLS + 1] end
 
 local function pgMap()
+    -- ── Compute dynamic viewport centered on selected turtle ─────────────────
+    local selTurtle = state.selectedTurtle and state.turtles[state.selectedTurtle]
+    local vcx = MAP.defX
+    local vcz = MAP.defZ
+    if selTurtle and selTurtle.pos then
+        vcx = selTurtle.pos.x
+        vcz = selTurtle.pos.z
+    end
+    local vx1 = vcx - MAP.hwx
+    local vx2 = vcx + MAP.hwx
+    local vz1 = vcz - MAP.hwz
+    local vz2 = vcz + MAP.hwz
+
+    -- Shorthand: convert using this frame's viewport
+    local function wm(wx, wz) return worldToMap(wx, wz, vx1, vx2, vz1, vz2) end
+
     -- Map background
     fill(MAP.px, MAP.py, MAP.pw, MAP.ph, {10,14,28})
     -- Border
@@ -255,30 +278,43 @@ local function pgMap()
     state.gpu.drawLine(state.display,MAP.px,MAP.py,MAP.px,MAP.py+MAP.ph,50,65,110)
     state.gpu.drawLine(state.display,MAP.px+MAP.pw,MAP.py,MAP.px+MAP.pw,MAP.py+MAP.ph,50,65,110)
 
-    -- Grid every 40 blocks
-    for wx = MAP.x1, MAP.x2, 40 do
-        local sx,_ = worldToMap(wx, MAP.z1)
-        state.gpu.drawLine(state.display,sx,MAP.py,sx,MAP.py+MAP.ph,20,25,50)
-        t(wx, sx+1, MAP.py+MAP.ph-10, {35,45,75}, 8)
+    -- Grid every 40 blocks (snap start to nearest multiple of 40)
+    local gxStart = math.ceil(vx1 / 40) * 40
+    for wx = gxStart, vx2, 40 do
+        local sx,_ = wm(wx, vz1)
+        if sx >= MAP.px and sx <= MAP.px+MAP.pw then
+            state.gpu.drawLine(state.display,sx,MAP.py,sx,MAP.py+MAP.ph,20,25,50)
+            t(wx, sx+1, MAP.py+MAP.ph-10, {35,45,75}, 8)
+        end
     end
-    for wz = MAP.z1, MAP.z2, 40 do
-        local _,sy = worldToMap(MAP.x1, wz)
-        state.gpu.drawLine(state.display,MAP.px,sy,MAP.px+MAP.pw,sy,20,25,50)
-        t(wz, MAP.px+2, sy-8, {35,45,75}, 8)
+    local gzStart = math.ceil(vz1 / 40) * 40
+    for wz = gzStart, vz2, 40 do
+        local _,sy = wm(vx1, wz)
+        if sy >= MAP.py and sy <= MAP.py+MAP.ph then
+            state.gpu.drawLine(state.display,MAP.px,sy,MAP.px+MAP.pw,sy,20,25,50)
+            t(wz, MAP.px+2, sy-8, {35,45,75}, 8)
+        end
     end
 
-    -- Depot outline
-    local dx1,dy1 = worldToMap(143,-2813)
-    local dx2,dy2 = worldToMap(228,-2782)
-    state.gpu.drawLine(state.display,dx1,dy1,dx2,dy1,60,80,140)
-    state.gpu.drawLine(state.display,dx2,dy1,dx2,dy2,60,80,140)
-    state.gpu.drawLine(state.display,dx2,dy2,dx1,dy2,60,80,140)
-    state.gpu.drawLine(state.display,dx1,dy2,dx1,dy1,60,80,140)
-    t("DEPOT",dx1+2,dy1+2,{60,80,140},8)
+    -- Crosshair at view center (shows where the camera is locked)
+    do
+        local csx,csy = wm(vcx, vcz)
+        state.gpu.drawLine(state.display,csx-6,csy,csx+6,csy,40,50,80)
+        state.gpu.drawLine(state.display,csx,csy-6,csx,csy+6,40,50,80)
+    end
+
+    -- Depot outline (only draw if any corner is near the viewport)
+    local dx1c,dy1c = wm(143,-2813)
+    local dx2c,dy2c = wm(228,-2782)
+    state.gpu.drawLine(state.display,dx1c,dy1c,dx2c,dy1c,60,80,140)
+    state.gpu.drawLine(state.display,dx2c,dy1c,dx2c,dy2c,60,80,140)
+    state.gpu.drawLine(state.display,dx2c,dy2c,dx1c,dy2c,60,80,140)
+    state.gpu.drawLine(state.display,dx1c,dy2c,dx1c,dy1c,60,80,140)
+    t("DEPOT",dx1c+2,dy1c+2,{60,80,140},8)
 
     -- Hole markers
-    local hx,hy = worldToMap(143,-2813); fill(hx-2,hy-2,5,5,{220,120,30})
-    local ax,ay = worldToMap(228,-2782); fill(ax-2,ay-2,5,5,{30,180,220})
+    local hx,hy = wm(143,-2813); fill(hx-2,hy-2,5,5,{220,120,30})
+    local ax,ay = wm(228,-2782); fill(ax-2,ay-2,5,5,{30,180,220})
 
     -- Draw all turtles
     local list = turtleList()
@@ -286,7 +322,7 @@ local function pgMap()
         local col = turtleCol(i)
         local isSel = v.id == state.selectedTurtle
         if v.pos then
-            local tx,tz = worldToMap(v.pos.x, v.pos.z)
+            local tx,tz = wm(v.pos.x, v.pos.z)
             -- Selected: bigger ring
             if isSel then
                 state.gpu.drawLine(state.display,tx-5,tz-5,tx+5,tz-5,col[1],col[2],col[3])
