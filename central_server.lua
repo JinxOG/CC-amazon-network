@@ -364,6 +364,7 @@ function dispatcher.tick()
                 supportJobId, proto.JOB.SUPPORT_FOLLOW, {
                     partnerId   = worker.id,
                     masterJobId = job.id,
+                    destination = job.params.destination,  -- so support can navigate directly
                 }
             ))
 

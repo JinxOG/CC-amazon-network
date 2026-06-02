@@ -726,12 +726,13 @@ function base.run(jobHandler)
 
                         elseif msg.type == proto.MSG.RECALL then
                             logWarn("RECALL: " .. (msg.payload.reason or "?"))
-                            if _self.busy and _self.jobId then
+                            -- Save state BEFORE sendFailed clears it
+                            local wasBusy   = _self.busy
+                            local wasStatus = _self.status
+                            if wasBusy and _self.jobId then
                                 base.sendFailed("recalled", true)
                             end
-                            if _self.busy or _self.status ~= proto.STATUS.IDLE then
-                                -- Inside building = use internal taxiway only
-                                -- Outside/underground = go underground then arrivals hole
+                            if wasBusy or wasStatus ~= proto.STATUS.IDLE then
                                 local insideBuilding = _self.pos.y >= 67
                                     and _self.pos.x >= 143 and _self.pos.x <= 228
                                     and _self.pos.z >= -2817 and _self.pos.z <= -2782
