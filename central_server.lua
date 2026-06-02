@@ -446,20 +446,7 @@ handlers[proto.MSG.JOB_FAILED] = function(msg)
     jobQueue.fail(p.jobId, p.reason, p.recoverable)
 end
 
-handlers[proto.MSG.JOB_REQUEST] = function(msg)
-    local p    = msg.payload
-    local dest = p.destination
-    if not dest or not dest.x or not dest.y or not dest.z then
-        logWarn("JOB_REQUEST from " .. msg.from .. " missing destination — ignored")
-        return
-    end
-    local id = server.submitJob("DELIVER", {
-        items       = p.items or { ["minecraft:cobblestone"] = 1 },
-        destination = { x = dest.x, y = dest.y, z = dest.z },
-    }, p.priority or 1)
-    logInfo(string.format("Remote job from %s → %s (%d,%d,%d)",
-        msg.from, id, dest.x, dest.y, dest.z))
-end
+-- JOB_REQUEST handler registered after 'server' is declared (see below)
 
 handlers[proto.MSG.ITEM_REQUEST] = function(msg)
     logInfo(string.format("Item request from %s (job %s)", msg.from, msg.payload.jobId))
@@ -514,6 +501,22 @@ end
 -- ─── Public API ──────────────────────────────────────────────────────────────
 
 local server = {}
+
+-- Registered here so server.submitJob is in scope
+handlers[proto.MSG.JOB_REQUEST] = function(msg)
+    local p    = msg.payload
+    local dest = p.destination
+    if not dest or not dest.x or not dest.y or not dest.z then
+        logWarn("JOB_REQUEST from " .. msg.from .. " missing destination — ignored")
+        return
+    end
+    local id = server.submitJob("DELIVER", {
+        items       = p.items or { ["minecraft:cobblestone"] = 1 },
+        destination = { x = dest.x, y = dest.y, z = dest.z },
+    }, p.priority or 1)
+    logInfo(string.format("Remote job from %s → %s (%d,%d,%d)",
+        msg.from, id, dest.x, dest.y, dest.z))
+end
 
 function server.submitJob(jobType, params, priority)
     local id = jobQueue.add(jobType, params, priority)
