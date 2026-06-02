@@ -573,6 +573,93 @@ end
 function server.getState() return state end
 function server.getLogs()  return state.log end
 
+-- ─── Console Command Handler ─────────────────────────────────────────────────
+-- Type commands directly into the server terminal while it runs.
+--
+--   job <x> <y> <z>   — queue a single delivery job
+--   stress             — queue 8 test jobs in a ring ~90 blocks out
+--   recall             — recall all turtles
+--   jobs               — print pending/active job count
+--   help               — list commands
+
+local STRESS_DESTINATIONS = {
+    { x = 143, y = 64, z = -2903, label = "N"  },
+    { x = 143, y = 64, z = -2723, label = "S"  },
+    { x = 233, y = 64, z = -2813, label = "E"  },
+    { x =  53, y = 64, z = -2813, label = "W"  },
+    { x = 207, y = 64, z = -2877, label = "NE" },
+    { x =  79, y = 64, z = -2877, label = "NW" },
+    { x = 207, y = 64, z = -2749, label = "SE" },
+    { x =  79, y = 64, z = -2749, label = "SW" },
+}
+
+local consoleBuffer = ""
+
+local function handleConsoleChar(ch)
+    if ch == "\n" or ch == "\r" then return end
+    consoleBuffer = consoleBuffer .. ch
+end
+
+local function handleConsoleEnter()
+    local line = consoleBuffer:match("^%s*(.-)%s*$")  -- trim
+    consoleBuffer = ""
+    if line == "" then return end
+
+    local parts = {}
+    for w in line:gmatch("%S+") do parts[#parts+1] = w end
+    local cmd = parts[1] and parts[1]:lower() or ""
+
+    if cmd == "help" then
+        print("Commands:")
+        print("  job <x> <y> <z>  queue one delivery job")
+        print("  stress           queue 8 test jobs (~90 blocks out)")
+        print("  recall           recall all turtles")
+        print("  jobs             show job counts")
+
+    elseif cmd == "job" then
+        local x, y, z = tonumber(parts[2]), tonumber(parts[3]), tonumber(parts[4])
+        if not (x and y and z) then
+            print("Usage: job <x> <y> <z>")
+        else
+            local id = server.submitJob("DELIVER", {
+                items       = { ["minecraft:cobblestone"] = 64 },
+                destination = { x = x, y = y, z = z },
+            }, 5)
+            print("Queued " .. id .. " -> " .. x .. "," .. y .. "," .. z)
+        end
+
+    elseif cmd == "stress" then
+        print("Queuing " .. #STRESS_DESTINATIONS .. " stress-test jobs...")
+        for i, dest in ipairs(STRESS_DESTINATIONS) do
+            local id = server.submitJob("DELIVER", {
+                items       = { ["minecraft:cobblestone"] = 64 },
+                destination = { x = dest.x, y = dest.y, z = dest.z },
+            }, 5)
+            print(string.format("  [%d] %s queued -> %s (%d,%d,%d)",
+                i, id, dest.label, dest.x, dest.y, dest.z))
+        end
+        print("Done. Watch the admin monitor.")
+
+    elseif cmd == "recall" then
+        server.recallAll("console_recall")
+        print("Recalled all turtles.")
+
+    elseif cmd == "jobs" then
+        local pending, active, done = 0, 0, 0
+        for _, job in pairs(state.jobs) do
+            if     job.status == JOB_STATUS.PENDING     then pending = pending + 1
+            elseif job.status == JOB_STATUS.ASSIGNED
+                or job.status == JOB_STATUS.IN_PROGRESS then active  = active  + 1
+            else                                              done    = done    + 1
+            end
+        end
+        print(string.format("Jobs — pending:%d  active:%d  done:%d", pending, active, done))
+
+    else
+        print("Unknown command: " .. line .. "  (type 'help')")
+    end
+end
+
 -- ─── Main Loop ───────────────────────────────────────────────────────────────
 
 function server.run()
@@ -584,6 +671,7 @@ function server.run()
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
     logInfo("Central server online. ID: " .. proto.selfId())
+    print("Console ready. Type 'help' for commands.")
 
     local dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
     local healthTimer   = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
@@ -626,6 +714,19 @@ function server.run()
                     { jobId = m.jobId, loaded = {} })
                 proto.send(state.modem, proto.CH_PRIVATE, msg)
                 logInfo("Auto-mock ITEM_READY sent to " .. m.turtleId)
+            end
+
+        elseif event == "char" then
+            handleConsoleChar(p1)
+
+        elseif event == "key" then
+            -- p1 = key code; 28 = Enter, 14 = Backspace
+            if p1 == keys.enter then
+                handleConsoleEnter()
+            elseif p1 == keys.backspace then
+                if #consoleBuffer > 0 then
+                    consoleBuffer = consoleBuffer:sub(1, -2)
+                end
             end
         end
     end
