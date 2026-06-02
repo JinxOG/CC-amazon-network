@@ -172,10 +172,17 @@ end
 local move = {}
 
 local function tryMove(moveFn, digFn, dir)
-    for _ = 1, CFG.MOVE_RETRIES do
+    -- Use more retries when we can dig (handles gravel/sand stacks falling)
+    local retries = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
+    for i = 1, retries do
         if moveFn() then applyMove(dir); return true end
-        if digFn then digFn() end
-        sleep(0.3)
+        if digFn and _self.canDig then
+            digFn()
+            -- Short sleep so falling gravel/sand settles before next attempt
+            sleep(i <= 4 and 0.2 or 0.4)
+        else
+            sleep(0.3)
+        end
     end
     return false, "blocked (" .. dir .. ")"
 end

@@ -62,6 +62,53 @@ local function buildProtectedSlots()
     return protected
 end
 
+-- Scan all slots and move the delivery ender chest back to EC_SLOT.
+-- Called after any suckDown or digDown that might displace it.
+-- Uses the protected table to identify which item WAS in EC_SLOT at start.
+local function maintainECSlot()
+    -- If EC_SLOT already has an ender chest, we're good
+    local current = turtle.getItemDetail(EC_SLOT)
+    if current then
+        local n = current.name:lower()
+        if n:find("ender") or n:find("entangled") then
+            return  -- already correct
+        end
+        -- EC_SLOT has something else — find the ender chest elsewhere and swap
+    end
+
+    -- Find the ender chest in another slot
+    local foundSlot = nil
+    for s = 1, 16 do
+        if s ~= EC_SLOT then
+            local it = turtle.getItemDetail(s)
+            if it then
+                local n = it.name:lower()
+                if n:find("ender") or n:find("entangled") then
+                    foundSlot = s; break
+                end
+            end
+        end
+    end
+
+    if not foundSlot then return end  -- not found (placed down — that's expected mid-delivery)
+
+    -- If EC_SLOT is occupied, move its contents to a free slot first
+    if turtle.getItemCount(EC_SLOT) > 0 then
+        for free = 1, 15 do
+            if free ~= foundSlot and turtle.getItemCount(free) == 0 then
+                turtle.select(EC_SLOT)
+                turtle.transferTo(free)
+                break
+            end
+        end
+    end
+
+    -- Move ender chest into EC_SLOT
+    turtle.select(foundSlot)
+    turtle.transferTo(EC_SLOT)
+    print(string.format("  [EC] Moved ender chest from slot %d → slot %d", foundSlot, EC_SLOT))
+end
+
 -- Drop delivery items into chest below, skipping protected slots.
 -- Returns true if turtle still has undelivered items (chest full).
 local function dropIntoChestBelow(protected)
@@ -206,6 +253,9 @@ base.run(function(job)
     end
     print("Pulled " .. pulled .. " regular chests into inventory")
 
+    -- Chests may have landed in any free slot including 16 — put EC back in place
+    maintainECSlot()
+
     -- Place regular chests in a row along Z+1..Z+N from destination
     local chestPositions = {}
     for i = 1, pulled do
@@ -264,6 +314,8 @@ base.run(function(job)
         base.move.to(d.x, d.y, d.z)
         turtle.select(1)
         while turtle.suckDown() do end
+        -- Ensure ender chest hasn't been displaced by suckDown overflow
+        maintainECSlot()
 
         -- Distribute items across placed regular chests
         -- Keep filling the current chest; move to next when it's full
@@ -290,7 +342,11 @@ base.run(function(job)
     -- ── Phase 3: Clean up — pick up entangled chest, signal done ─────────────
 
     base.move.to(d.x, d.y, d.z)
-    turtle.digDown()   -- picks up entangled chest back into inventory
+    -- Select EC_SLOT before digging so the ender chest drops directly back
+    -- into slot 16 (works because EC_SLOT is empty after placeDownClear)
+    turtle.select(EC_SLOT)
+    turtle.digDown()   -- picks up entangled chest back into slot 16
+    maintainECSlot()   -- verify and correct if something unexpected happened
 
     base.sendToServer(proto.MSG.ITEM_COLLECTED, { jobId = job.id })
     base.sendProgress("Delivery complete")
