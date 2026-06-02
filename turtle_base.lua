@@ -391,7 +391,7 @@ function base.returnToDock()
 
     -- Support turtles top up fuel at dock station
     if not _self.canDig then
-        fuel.dockRefuel()
+        base.fuel.dockRefuel()
     end
 
     return true
