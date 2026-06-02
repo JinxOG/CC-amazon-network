@@ -655,7 +655,7 @@ local function handleConsoleEnter()
         print("Run this on each computer to update:")
         print("")
         for _, f in ipairs(files) do
-            print("wget " .. base .. f .. " " .. f)
+            print("rm " .. f .. " && wget " .. base .. f .. " " .. f)
         end
         print("")
         print("Then reboot each computer.")
@@ -664,6 +664,7 @@ local function handleConsoleEnter()
         print("")
         print("Updating server now...")
         for _, f in ipairs({"protocol.lua","waypoints.lua","central_server.lua"}) do
+            if fs.exists(f) then fs.delete(f) end
             shell.run("wget", base .. f, f)
         end
         print("Server files updated — reboot to apply.")
