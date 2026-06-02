@@ -72,23 +72,29 @@ base.run(function(job)
     base.setStatus(proto.STATUS.LOADING, job.id)
     base.sendProgress("Queuing with warehouse")
 
-    -- Verify entangled chest is in slot 16
-    local ecItem = turtle.getItemDetail(EC_SLOT)
-    if not ecItem or not ecItem.name:find("entangled") then
-        -- Try to find it anywhere
+    -- Find the ender chest anywhere in inventory and move it to EC_SLOT
+    -- Matches any chest from Entangled, Ender Storage, or similar mods
+    local function isEnderChest(item)
+        if not item then return false end
+        local n = item.name:lower()
+        return n:find("ender") or n:find("entangled") or n:find("enderstorage")
+    end
+
+    if not isEnderChest(turtle.getItemDetail(EC_SLOT)) then
         for s = 1, 16 do
-            local it = turtle.getItemDetail(s)
-            if it and it.name:find("entangled") then
+            if s ~= EC_SLOT and isEnderChest(turtle.getItemDetail(s)) then
                 turtle.select(s)
                 turtle.transferTo(EC_SLOT)
                 break
             end
         end
-        ecItem = turtle.getItemDetail(EC_SLOT)
-        if not ecItem or not ecItem.name:find("entangled") then
-            return base.sendFailed("no_entangled_chest", false)
-        end
     end
+
+    if not isEnderChest(turtle.getItemDetail(EC_SLOT)) then
+        return base.sendFailed("no_ender_chest_in_inventory", false)
+    end
+
+    print("Ender chest in slot " .. EC_SLOT .. ": " .. turtle.getItemDetail(EC_SLOT).name)
 
     -- Send queue request to warehouse via server
     base.sendToServer(proto.MSG.ITEM_REQUEST, {
@@ -196,7 +202,9 @@ base.run(function(job)
         local chestSlot = nil
         for s = 1, EC_SLOT - 1 do
             local it = turtle.getItemDetail(s)
-            if it and it.name:find("chest") and not it.name:find("entangled") then
+            if it and it.name:find("chest")
+            and not it.name:lower():find("ender")
+            and not it.name:lower():find("entangled") then
                 chestSlot = s; break
             end
         end
