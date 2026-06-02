@@ -124,19 +124,21 @@ end
 -- Turtles call move.to() on each in sequence.
 --
 -- AISLE SYSTEM — avoids crossing occupied dock positions:
---   Every row has a dedicated aisle Z that is 2 blocks toward the taxiway.
---   No dock slots exist in the aisle lanes; only the bay centre column
---   (junction.x, offset 0 — always empty) is used to cross between rows.
+--   Every row exits AWAY from the taxiway into a back aisle (2 blocks
+--   behind the row). No dock slots exist there. The bay centre column
+--   (junction.x, offset 0 — always empty) is then used to travel all
+--   the way from the back aisle to the taxiway without crossing any row.
 --
---   Departure:  slot → aisle (perpendicular, no docks) → centre column →
---               taxiway → hole
---   Return:     taxiway → centre column → aisle → slot column →
---               slot (perpendicular back in)
+--   Departure:  slot → back aisle (perpendicular, away from taxiway)
+--               → back aisle to centre column
+--               → centre column all the way to taxiway
+--               → taxiway to hole
+--   Return:     reverse of above
 
--- Returns the aisle Z for a dock: 2 blocks from the dock row toward WHITE_Z.
+-- Returns the back-aisle Z for a dock: 2 blocks AWAY from the taxiway.
 local function aisleZ(dock)
     local dir = W.WHITE_Z > dock.z and 1 or -1
-    return dock.z + dir * 2
+    return dock.z - dir * 2   -- opposite direction to taxiway
 end
 
 -- Departure: worker turtle leaves slot without crossing any occupied row.
