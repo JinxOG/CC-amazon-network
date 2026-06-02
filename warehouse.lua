@@ -238,6 +238,10 @@ local function handleCurrentJob()
         log("Timeout — skipping " .. current.turtleId)
         current = nil; serveNext(); return
     end
+    -- Brief pause so the turtle finishes its debris dump and enters its
+    -- receive loop before we send CHESTS_READY. Without this, a fast
+    -- inbox response can cause the turtle to miss CHESTS_READY.
+    sleep(1)
 
     -- ── Phase 0: clear ender chest — sweep turtle debris into RS ────────────
     log("Clearing turtle debris from ender chest into RS...")
@@ -251,14 +255,29 @@ local function handleCurrentJob()
         current = nil; serveNext(); return
     end
 
-    sendToServer(proto.MSG.CHESTS_READY, current.turtleId, {
-        jobId = current.jobId, count = loaded,
-    })
+    local function sendChestsReady()
+        sendToServer(proto.MSG.CHESTS_READY, current.turtleId, {
+            jobId = current.jobId, count = loaded,
+        })
+    end
+    sendChestsReady()
 
-    -- Wait for turtle to place the chests
+    -- Wait for turtle to place the chests.
+    -- If the turtle re-sends DELIVERY_ARRIVED it missed CHESTS_READY — resend it.
     log("Waiting for CHESTS_PLACED...")
-    msg = waitFor(proto.MSG.CHESTS_PLACED, current.turtleId, CFG.msgTimeout)
-    if not msg then
+    local placed = false
+    local chestDeadline = os.clock() + CFG.msgTimeout
+    while os.clock() < chestDeadline do
+        msg = waitFor(proto.MSG.CHESTS_PLACED, current.turtleId, 25)
+        if msg then placed = true; break end
+        -- Turtle re-pinged — it missed CHESTS_READY, send it again
+        local reping = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId)
+        if reping then
+            log("Turtle re-pinged — re-sending CHESTS_READY")
+            sendChestsReady()
+        end
+    end
+    if not placed then
         log("Timeout on CHESTS_PLACED — aborting")
         current = nil; serveNext(); return
     end
