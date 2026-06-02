@@ -59,6 +59,9 @@ proto.MSG = {
 
     -- Job abort (CH_LOCAL)
     JOB_ABORT       = "JOB_ABORT",       -- delivery → support: job failed, return to dock immediately
+
+    -- Remote dispatch (admin → server)
+    JOB_REQUEST     = "JOB_REQUEST",     -- admin UI → server: submit a new delivery job
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

@@ -15,13 +15,21 @@ local BTN = { x=0, y=20, w=W, h=18 }
 -- Map page: right info panel click zone (cycles selected turtle)
 local MAP_BTN = { x=320, y=38, w=175, h=220 }
 
-local PAGES    = { "TURTLES", "JOBS", "LOG", "MAP" }
+local PAGES    = { "TURTLES", "JOBS", "LOG", "MAP", "DISPATCH" }
 local MAX_LOGS = 80
 local FONT     = "minecraft:font/default.ttf"
 local FS       = 12   -- body font size
 local FT       = 13   -- title font size
 
 -- ─── State ───────────────────────────────────────────────────────────────────
+
+-- Dispatch form field click zones (used both for rendering and hit-testing)
+local DFIELDS = {
+    x = { lx=80, ly=70,  fw=100, fh=16 },
+    y = { lx=80, ly=94,  fw=100, fh=16 },
+    z = { lx=80, ly=118, fw=100, fh=16 },
+}
+local DSEND = { x=80, y=148, w=180, h=20 }
 
 local state = {
     turtles       = {},
@@ -33,6 +41,12 @@ local state = {
     display  = nil,
     lastPoll = 0,
     page     = 1,
+    dispatch = {            -- DISPATCH page form state
+        x = "", y = "", z = "",
+        active = nil,       -- "x" | "y" | "z" | nil
+        status = "",
+        statusOk = true,
+    },
 }
 
 -- ─── Colours ─────────────────────────────────────────────────────────────────
@@ -400,6 +414,67 @@ local function pgMap()
     end
 end
 
+-- ─── Page: Dispatch ──────────────────────────────────────────────────────────
+
+local function pgDispatch()
+    local d = state.dispatch
+
+    -- Header
+    fill(4, TH+2, W-8, 20, C.PANEL)
+    ln(4, TH+2, W-4, TH+2, C.BORDER)
+    t("DISPATCH", 8, TH+4, C.WHITE, FT, true)
+    t("Submit a delivery job to the server", 110, TH+6, C.DIM, 10)
+
+    -- Section label
+    t("Destination coordinates:", 14, 58, C.DIM, 10, true)
+
+    -- Helper: draw one labelled input field
+    local function drawField(label, key, fy)
+        local f   = DFIELDS[key]
+        local isA = d.active == key
+        -- Label
+        t(label, 14, fy+2, isA and C.WHITE or C.DIM, 10, isA)
+        -- Box background
+        local bCol = isA and {30,50,90} or {18,22,40}
+        fill(f.lx, fy, f.fw, f.fh, bCol)
+        -- Box border (bright when active)
+        local bdCol = isA and C.BLUE or C.BORDER
+        ln(f.lx,           fy,          f.lx+f.fw, fy,          bdCol)
+        ln(f.lx,           fy+f.fh,     f.lx+f.fw, fy+f.fh,     bdCol)
+        ln(f.lx,           fy,          f.lx,       fy+f.fh,     bdCol)
+        ln(f.lx+f.fw,      fy,          f.lx+f.fw,  fy+f.fh,     bdCol)
+        -- Value + cursor
+        local val  = d[key] or ""
+        local disp = isA and (val .. "_") or val
+        t(disp, f.lx+4, fy+2, isA and C.WHITE or C.DIM, 10)
+    end
+
+    drawField("X", "x", DFIELDS.x.ly)
+    drawField("Y", "y", DFIELDS.y.ly)
+    drawField("Z", "z", DFIELDS.z.ly)
+
+    -- Items line (fixed for now)
+    t("Items: cobblestone x1 (default)", 14, 136, {70,80,100}, 9)
+
+    -- SEND button
+    local canSend = d.x ~= "" and d.y ~= "" and d.z ~= ""
+    local btnCol  = canSend and {40,160,60} or {30,45,50}
+    fill(DSEND.x, DSEND.y, DSEND.w, DSEND.h, btnCol)
+    t(canSend and ">>>  SEND JOB  >>>" or "fill all fields first",
+        DSEND.x+8, DSEND.y+4,
+        canSend and C.WHITE or C.DIM, 10, canSend)
+
+    -- Status message
+    if d.status ~= "" then
+        local sc = d.statusOk and C.GREEN or C.RED
+        t(d.status, 14, 178, sc, 10)
+    end
+
+    -- Help text
+    t("Click a field, type coords, press Enter to confirm each field.", 14, 200, {55,60,80}, 9)
+    t("Tab or Enter moves to the next field.", 14, 212, {55,60,80}, 9)
+end
+
 -- ─── Render ──────────────────────────────────────────────────────────────────
 
 local function drawNextBtn()
@@ -413,6 +488,7 @@ local function render()
     elseif state.page==2 then pgJobs()
     elseif state.page==3 then pgLog()
     elseif state.page==4 then pgMap()
+    elseif state.page==5 then pgDispatch()
     end
     drawNextBtn()
     flush()
@@ -471,6 +547,41 @@ local function onMsg(msg)
         local v=state.turtles[msg.from]; if v then v.status="IDLE"; v.jobId=nil end
         addLog("WARN","Fail: "..(jid or"?").." "..(p.reason or"?"))
     end
+end
+
+-- ─── Dispatch helpers ────────────────────────────────────────────────────────
+
+local FIELD_ORDER = { "x", "y", "z" }
+
+local function dispatchNextField()
+    local d = state.dispatch
+    if not d.active then d.active = "x"; return end
+    for i, k in ipairs(FIELD_ORDER) do
+        if k == d.active then
+            d.active = FIELD_ORDER[i+1] or nil
+            return
+        end
+    end
+    d.active = nil
+end
+
+local function sendJob()
+    local d   = state.dispatch
+    local x,y,z = tonumber(d.x), tonumber(d.y), tonumber(d.z)
+    if not x or not y or not z then
+        d.status  = "Error: X, Y, Z must be numbers"
+        d.statusOk = false
+        return
+    end
+    local msg = proto.encode(proto.MSG.JOB_REQUEST, "admin", "server", {
+        destination = { x=x, y=y, z=z },
+        items       = { ["minecraft:cobblestone"] = 1 },
+    })
+    proto.send(state.modem, proto.CH_SERVER, msg)
+    d.status   = string.format("Sent → (%d, %d, %d)", x, y, z)
+    d.statusOk = true
+    d.x = ""; d.y = ""; d.z = ""
+    d.active = nil
 end
 
 -- ─── Main ────────────────────────────────────────────────────────────────────
@@ -534,6 +645,31 @@ local function main()
                             lastPageFlip = now
                             cycleTurtle()
                             render(); break
+
+                        -- DISPATCH field clicks
+                        elseif state.page == 5 then
+                            -- Check each field box
+                            local clicked = false
+                            for _, key in ipairs(FIELD_ORDER) do
+                                local f = DFIELDS[key]
+                                if ex >= f.lx and ex <= f.lx+f.fw
+                                and ey >= f.ly and ey <= f.ly+f.fh then
+                                    state.dispatch.active = key
+                                    clicked = true
+                                    break
+                                end
+                            end
+                            -- Check SEND button
+                            if not clicked
+                            and ex >= DSEND.x and ex <= DSEND.x+DSEND.w
+                            and ey >= DSEND.y and ey <= DSEND.y+DSEND.h then
+                                sendJob()
+                                clicked = true
+                            end
+                            if not clicked then
+                                state.dispatch.active = nil
+                            end
+                            render(); break
                         end
                     end
                 end
@@ -552,6 +688,33 @@ local function main()
                 state.page = (state.page % #PAGES) + 1
                 render()
             end
+        -- ── Keyboard input for dispatch form ──────────────────────────────────
+        elseif ev=="char" and state.page==5 and state.dispatch.active then
+            local f = state.dispatch.active
+            -- Only allow digits, minus sign
+            if p1:match("^[0-9%-]$") then
+                -- Only allow minus at start
+                if p1 == "-" and state.dispatch[f] == "" then
+                    state.dispatch[f] = "-"
+                elseif p1 ~= "-" then
+                    state.dispatch[f] = state.dispatch[f] .. p1
+                end
+                render()
+            end
+
+        elseif ev=="key" and state.page==5 and state.dispatch.active then
+            if p1 == keys.backspace then
+                local f = state.dispatch.active
+                local s = state.dispatch[f]
+                if #s > 0 then
+                    state.dispatch[f] = s:sub(1,-2)
+                    render()
+                end
+            elseif p1 == keys.enter or p1 == keys.tab or p1 == keys.numPadEnter then
+                dispatchNextField()
+                render()
+            end
+
         elseif ev=="modem_message" then
             local raw = type(p4)=="table" and p4 or textutils.unserialise(p4)
             if raw then
