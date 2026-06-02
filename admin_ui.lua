@@ -34,6 +34,7 @@ local DL = {
 }
 -- Click zones (set after layout is known)
 local DZ = {}  -- populated in pgDispatch and checked in click handler
+local JZ = {}  -- populated in pgJobs for prev/next navigation
 
 local state = {
     turtles        = {},
@@ -46,6 +47,7 @@ local state = {
     display        = nil,
     lastPoll       = 0,
     page           = 1,
+    jobsPage       = 0,     -- which pair of active jobs to display (0-based)
     dispatch = {
         service  = nil,     -- "DELIVERY" or nil
         coords   = nil,     -- {x,y,z} or nil
@@ -212,6 +214,8 @@ end
 -- ─── Page: Jobs ──────────────────────────────────────────────────────────────
 
 local function pgJobs()
+    JZ = {}  -- reset click zones each frame
+
     -- Split jobs into buckets
     local active, pending, recent = {}, {}, {}
     for _, j in pairs(state.jobs) do
@@ -224,126 +228,153 @@ local function pgJobs()
             table.insert(recent, j)
         end
     end
-    -- Sort: newest first
     local function byId(a,b) return (a.id or "") > (b.id or "") end
     table.sort(active,  byId)
     table.sort(pending, byId)
     table.sort(recent,  byId)
 
+    -- Clamp page scroll
+    local PAIR    = 2
+    local maxPage = math.max(0, math.ceil(#active / PAIR) - 1)
+    state.jobsPage = math.min(state.jobsPage, maxPage)
+
     local y = TH + 2
 
-    -- ── Summary bar ──────────────────────────────────────────────────────────
-    fill(0, y, W, 18, C.HDR)
-    t(string.format("JOBS   %d active  ·  %d pending  ·  %d recent",
+    -- Summary bar
+    fill(0, y, W, 17, C.HDR)
+    t(string.format("JOBS   %d active   %d pending   %d recent",
         #active, #pending, #recent), 8, y+3, C.WHITE, 10, true)
-    y = y + 20
+    y = y + 19
 
-    -- ── Active job cards (max 2) ──────────────────────────────────────────────
-    local CARD_H = 63
+    -- Prev / Next nav (only when more than 2 active)
+    if #active > PAIR then
+        local NAV_H = 15
+        local pStart = state.jobsPage * PAIR + 1
+        local pEnd   = math.min(pStart + PAIR - 1, #active)
+        local hasPrev = state.jobsPage > 0
+        local hasNext = state.jobsPage < maxPage
+
+        fill(4,     y, 62, NAV_H, hasPrev and {40,90,160} or {28,33,55})
+        t("< PREV", 10, y+3, hasPrev and C.WHITE or C.DIM, 9, true)
+        JZ.prev = { x=4, y=y, w=62, h=NAV_H }
+
+        t(string.format("%d-%d / %d", pStart, pEnd, #active), W/2-22, y+3, C.DIM, 9)
+
+        fill(W-66, y, 62, NAV_H, hasNext and {40,90,160} or {28,33,55})
+        t("NEXT >", W-60, y+3, hasNext and C.WHITE or C.DIM, 9, true)
+        JZ.next = { x=W-66, y=y, w=62, h=NAV_H }
+
+        y = y + NAV_H + 2
+    end
+
+    -- Active job cards: auto-size height to fill available space
+    local footerH  = 20
+    local available = H - y - footerH - 6
+    local CARD_H = math.min(56, math.floor((available - (PAIR-1)*3) / PAIR))
 
     if #active == 0 then
         fill(4, y, W-8, 28, C.PANEL)
         t("No active jobs", 12, y+8, C.DIM, FS)
         y = y + 32
     else
-        for i, j in ipairs(active) do
-            if i > 2 then break end
+        local startIdx = state.jobsPage * PAIR + 1
+        for slot = 0, PAIR - 1 do
+            local j = active[startIdx + slot]
+            if not j then break end
 
-            local turtle    = state.turtles[j.assignedTo]
-            local tStatus   = turtle and turtle.status or j.status or "?"
-            local eta       = etaSeconds(j)
-            local elapsed   = j.startedAt and
+            local turtle  = state.turtles[j.assignedTo]
+            local tStatus = turtle and turtle.status or j.status or "?"
+            local eta     = etaSeconds(j)
+            local elapsed = j.startedAt and
                 math.floor((os.epoch("utc") - j.startedAt) / 1000) or nil
 
-            -- Phase colour
             local sc = tStatus == "WORKING"    and C.ORANGE
                      or tStatus == "TRAVELLING" and C.CYAN
                      or tStatus == "LOADING"    and C.YELLOW
                      or tStatus == "RETURNING"  and C.BLUE
                      or C.GREEN
 
-            -- Card bg + coloured top stripe
+            -- Card bg + left colour bar
             fill(4, y, W-8, CARD_H, {16,20,38})
-            fill(4, y, W-8, 2, sc)
+            fill(4, y, 3,   CARD_H, sc)
+            fill(4, y, W-8, 1,      {30,36,60})
 
-            -- Row 1: job id  type  →  turtle               ● STATUS
+            -- Row 1: job id, type, turtle, status
             local jType = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
-            t(j.id or "?",  10, y+5,  C.WHITE, 10, true)
-            t(jType,         92, y+5,  C.DIM,   9)
+            local r1y = y + 4
+            t(j.id or "?",  10,  r1y, C.WHITE, 10, true)
+            t(jType,         90,  r1y, C.DIM,   9)
             if j.assignedTo then
-                t("→ " .. j.assignedTo, 155, y+5, sc, 9, true)
+                t("-> " .. j.assignedTo, 150, r1y, sc, 9, true)
             end
-            -- Status pill (right side)
-            fill(W-112, y+4, 108, 13, {22,28,52})
-            t("● " .. tStatus, W-109, y+5, sc, 9, true)
+            fill(W-108, r1y-1, 104, 12, {22,28,52})
+            t(tStatus, W-105, r1y, sc, 9, true)
 
-            -- Row 2: destination   ETA
-            local y2 = y + 20
+            -- Row 2: destination + ETA
+            local r2y = y + 18
             if j.dest then
                 t(string.format("Dest  X%d  Y%d  Z%d",
-                    j.dest.x, j.dest.y, j.dest.z), 10, y2, C.DIM, 9)
-            else
-                t("Dest  unknown", 10, y2, C.DIM, 9)
+                    j.dest.x, j.dest.y, j.dest.z), 10, r2y, C.DIM, 9)
             end
             if eta then
-                local etaLabel = eta < 10 and "arriving!" or ("ETA ~" .. fmtTime(eta))
-                t(etaLabel, W-95, y2, eta < 30 and C.GREEN or C.CYAN, 9, true)
+                local lbl = eta < 10 and "arriving!" or ("ETA ~" .. fmtTime(eta))
+                t(lbl, W-92, r2y, eta < 30 and C.GREEN or C.CYAN, 9, true)
             end
 
-            -- Row 3: items
-            local y3 = y + 33
-            local itemStr = fmtItems(j.items)
-            if itemStr == "" then itemStr = j.phase or "no items" end
-            if #itemStr > 62 then itemStr = itemStr:sub(1,59) .. "…" end
-            t(itemStr, 10, y3, {145,155,175}, 9)
+            -- Row 3: items (only if card tall enough)
+            if CARD_H >= 46 then
+                local r3y = y + 31
+                local itemStr = fmtItems(j.items)
+                if itemStr == "" then itemStr = j.phase or "" end
+                if #itemStr > 60 then itemStr = itemStr:sub(1,57) .. "..." end
+                if itemStr ~= "" then
+                    t(itemStr, 10, r3y, {130,140,165}, 9)
+                end
+            end
 
-            -- Row 4: elapsed/ETA progress bar
-            local y4 = y + 48
+            -- Progress bar anchored to card bottom
+            local barY = y + CARD_H - 10
             if elapsed and eta then
                 local total = elapsed + eta
                 local pct   = total > 0 and math.min(1, elapsed / total) or 0
-                local bw    = W - 90
-                fill(10, y4, bw, 7, {22,28,52})
-                fill(10, y4, math.max(2, math.floor(bw * pct)), 7, sc)
-                t(fmtTime(elapsed) .. " elapsed", bw + 15, y4-1, C.DIM, 8)
+                local bw    = W - 88
+                fill(10, barY, bw, 6, {22,28,52})
+                fill(10, barY, math.max(2, math.floor(bw * pct)), 6, sc)
+                t(fmtTime(elapsed), bw + 14, barY - 1, C.DIM, 8)
             elseif elapsed then
-                t(fmtTime(elapsed) .. " elapsed", 10, y4, C.DIM, 8)
+                t(fmtTime(elapsed) .. " elapsed", 10, barY, C.DIM, 8)
             end
 
             y = y + CARD_H + 3
         end
     end
 
-    -- ── Pending ───────────────────────────────────────────────────────────────
-    if #pending > 0 and y + 14 < H - 24 then
-        t("PENDING", 8, y, C.ORANGE, 9, true)
-        y = y + 12
+    -- Pending inline
+    if #pending > 0 and y + 12 < H - footerH then
+        t("PENDING:", 8, y, C.ORANGE, 9, true)
+        local px = 70
         for _, j in ipairs(pending) do
-            if y + 10 > H - 24 then break end
-            local jType = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
-            t("· " .. (j.id or "?"), 10, y, C.ORANGE, 9)
-            t(jType, 95, y, C.DIM, 9)
-            if j.dest then
-                t(string.format("X%d Y%d Z%d", j.dest.x, j.dest.y, j.dest.z),
-                    175, y, {80,80,100}, 9)
-            end
-            y = y + 11
+            if px > W - 80 then break end
+            t(j.id or "?", px, y, C.ORANGE, 9)
+            px = px + 72
         end
+        y = y + 13
     end
 
-    -- ── Recent footer (last 4 compressed into one line each) ─────────────────
-    if #recent > 0 and y < H - 4 then
-        ln(4, H-20, W-4, H-20, C.BORDER)
+    -- Recent footer strip
+    if #recent > 0 then
+        ln(4, H - footerH, W-4, H - footerH, C.BORDER)
         local rx2 = 6
-        for i = math.max(1, #recent-3), #recent do
+        for i = math.max(1, #recent - 3), #recent do
+            if rx2 > W - 90 then break end
             local j  = recent[i]
             local rc = j.status == "COMPLETE" and C.GREEN or C.RED
-            t((j.id or "?") .. "  " .. (j.status or "?"), rx2, H-16, rc, 8)
-            rx2 = rx2 + 122
-            if rx2 > W - 100 then break end
+            t((j.id or "?") .. " " .. (j.status or "?"), rx2, H - footerH + 3, rc, 8)
+            rx2 = rx2 + 120
         end
     end
 end
+
 
 -- ─── Page: Log ───────────────────────────────────────────────────────────────
 
@@ -941,6 +972,20 @@ local function main()
                             lastPageFlip = now
                             cycleTurtle()
                             render(); break
+
+                        -- JOBS page: prev/next navigation
+                        elseif state.page == 2 then
+                            local function inJ(z)
+                                return z and ex>=z.x and ex<=z.x+z.w
+                                          and ey>=z.y and ey<=z.y+z.h
+                            end
+                            if inJ(JZ.prev) then
+                                state.jobsPage = math.max(0, state.jobsPage - 1)
+                                render(); break
+                            elseif inJ(JZ.next) then
+                                state.jobsPage = state.jobsPage + 1
+                                render(); break
+                            end
 
                         -- DISPATCH page clicks
                         elseif state.page == 5 then
