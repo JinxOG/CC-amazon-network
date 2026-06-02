@@ -6,8 +6,8 @@ local proto = require("protocol")
 -- ─── Fixed canvas size ────────────────────────────────────────────────────────
 -- Deliberately undersized so content always fits in the top-left of any monitor.
 -- Change these if you want a larger layout.
-local W = 400
-local H = 250
+local W = 500
+local H = 260
 
 local PAGES    = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS = 80
@@ -111,10 +111,10 @@ local function pgTurtles()
         t(dot,  8,   y, sc, FS, true)
         t(v.id or "?", 22, y, C.WHITE, FS)
         t("[".. (v.role or "?") .."]", 130, y, C.DIM, FS)
-        t(st, 230, y, sc, FS)
+        t(st, 240, y, sc, FS)
         -- compact fuel bar
         local pct = math.min(1,(v.fuel or 0)/math.max(v.fuelMax or 1,1))
-        local bx,bw,bh = 310,100,8
+        local bx,bw,bh = 330,140,8
         fill(bx, y+2, bw, bh, C.BORDER)
         local fc = pct>0.5 and C.GREEN or (pct>0.2 and C.YELLOW or C.RED)
         fill(bx, y+2, math.max(1,math.floor(bw*pct)), bh, fc)
