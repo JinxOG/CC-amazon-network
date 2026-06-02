@@ -1,198 +1,180 @@
 -- admin_ui.lua
 -- Live dashboard for the CC autonomous network.
--- Runs on a dedicated computer connected to a 3x2 DirectGPU monitor.
--- Polls the central server via ender modem for state updates.
---
--- Setup: place this computer next to (or wired to) the server computer,
--- attach an ender modem, run this file.
+-- Runs on a dedicated computer connected to a DirectGPU monitor + ender modem.
 
 local proto = require("protocol")
-
--- ─── Display config ──────────────────────────────────────────────────────────
-
-local W, H = 1968, 648          -- 3×2 monitor in pixels (656×324 per block)
-local PAD  = 12                  -- outer padding
-
--- Colour palette
-local C = {
-    BG          = { 10,  10,  18  },  -- near-black background
-    PANEL_BG    = { 18,  22,  35  },  -- panel fill
-    BORDER      = { 40,  50,  80  },  -- panel border
-    HEADER_BG   = { 25,  35,  65  },  -- panel header bar
-    WHITE       = { 235, 235, 235 },
-    DIM         = { 120, 120, 140 },
-    GREEN       = {  60, 200,  90 },  -- IDLE / COMPLETE
-    YELLOW      = { 220, 190,  50 },  -- TRAVELLING / LOADING / WORKING
-    RED         = { 220,  60,  60 },  -- ERROR / FAILED / OFFLINE
-    BLUE        = {  80, 160, 230 },  -- RETURNING
-    CYAN        = {  60, 200, 200 },  -- IN_PROGRESS
-    ORANGE      = { 220, 130,  50 },  -- PENDING / retry
-    INFO_COL    = {  80, 160, 230 },
-    WARN_COL    = { 220, 190,  50 },
-    ERROR_COL   = { 220,  60,  60 },
-}
-
--- Layout (calculated once)
-local TURTLE_PANEL = { x=PAD,           y=PAD,          w=900,          h=380 }
-local JOB_PANEL    = { x=PAD+900+PAD,   y=PAD,          w=W-PAD*3-900,  h=380 }
-local LOG_PANEL    = { x=PAD,           y=PAD+380+PAD,  w=W-PAD*2,      h=H-PAD*3-380 }
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 
 local state = {
-    turtles  = {},   -- mirrored registry
-    jobs     = {},   -- mirrored job queue
-    logs     = {},   -- recent log lines
+    turtles  = {},
+    jobs     = {},
+    logs     = {},
     modem    = nil,
     gpu      = nil,
     display  = nil,
     lastPoll = 0,
+    W        = 1968,   -- updated after display creation
+    H        = 648,
 }
 
 local MAX_LOGS = 60
+local PAD      = 10
+local FONT     = "minecraft:font/default.ttf"
+
+-- Layout panels — recalculated after we know W, H
+local TURTLE_PANEL, JOB_PANEL, LOG_PANEL
+
+local function recalcLayout()
+    local W, H = state.W, state.H
+    local topH  = math.floor(H * 0.55)
+    local halfW = math.floor(W * 0.5)
+    TURTLE_PANEL = { x=PAD,          y=PAD,            w=halfW-PAD,          h=topH-PAD      }
+    JOB_PANEL    = { x=halfW+PAD,    y=PAD,            w=W-halfW-PAD*2,      h=topH-PAD      }
+    LOG_PANEL    = { x=PAD,          y=topH+PAD,       w=W-PAD*2,            h=H-topH-PAD*2  }
+end
+
+-- ─── Colour palette ──────────────────────────────────────────────────────────
+
+local C = {
+    BG       = { 10,  10,  18  },
+    PANEL_BG = { 18,  22,  35  },
+    BORDER   = { 40,  50,  80  },
+    HDR_BG   = { 25,  35,  65  },
+    WHITE    = { 235, 235, 235 },
+    DIM      = { 110, 110, 130 },
+    GREEN    = {  55, 195,  80 },
+    YELLOW   = { 220, 185,  45 },
+    RED      = { 215,  55,  55 },
+    BLUE     = {  75, 155, 225 },
+    CYAN     = {  55, 195, 195 },
+    ORANGE   = { 215, 125,  45 },
+    INFO     = {  75, 155, 225 },
+    WARN     = { 220, 185,  45 },
+    ERR      = { 215,  55,  55 },
+}
 
 -- ─── GPU helpers ─────────────────────────────────────────────────────────────
 
 local function fill(x, y, w, h, col)
+    if w <= 0 or h <= 0 then return end
     state.gpu.fillRect(state.display, x, y, w, h, col[1], col[2], col[3])
 end
 
-local function text(str, x, y, col, font, size, style)
+local function txt(str, x, y, col, size, bold)
     state.gpu.drawText(state.display, str, x, y,
         col[1], col[2], col[3],
-        font  or "minecraft:font/default.ttf",
-        size  or 14,
-        style or "regular")
+        FONT, size or 13, bold and "bold" or "regular")
 end
 
-local function line(x1, y1, x2, y2, col)
-    state.gpu.drawLine(state.display, x1, y1, x2, y2, col[1], col[2], col[3])
+local function hline(x1, x2, y, col)
+    state.gpu.drawLine(state.display, x1, y, x2, y, col[1], col[2], col[3])
 end
 
 local function flush()
     state.gpu.updateDisplay(state.display)
 end
 
--- Measure text height for the given font size (approximation: size * 1.25)
-local function lineH(size) return math.floor((size or 14) * 1.4) end
+local function lh(size) return math.floor((size or 13) * 1.45) end
 
--- ─── Panel drawing ───────────────────────────────────────────────────────────
+-- ─── Panel chrome ────────────────────────────────────────────────────────────
 
-local function drawPanel(p, title)
-    -- Background
+local function panel(p, title)
     fill(p.x, p.y, p.w, p.h, C.PANEL_BG)
-    -- Border
-    line(p.x,       p.y,       p.x+p.w-1, p.y,       C.BORDER)
-    line(p.x,       p.y+p.h-1, p.x+p.w-1, p.y+p.h-1, C.BORDER)
-    line(p.x,       p.y,       p.x,       p.y+p.h-1, C.BORDER)
-    line(p.x+p.w-1, p.y,       p.x+p.w-1, p.y+p.h-1, C.BORDER)
-    -- Header bar
-    local hh = 28
-    fill(p.x+1, p.y+1, p.w-2, hh, C.HEADER_BG)
-    text(title, p.x+10, p.y+7, C.WHITE, nil, 14, "bold")
-    return p.y + hh + 8   -- y for first content row
+    -- border lines
+    hline(p.x, p.x+p.w, p.y,       C.BORDER)
+    hline(p.x, p.x+p.w, p.y+p.h-1, C.BORDER)
+    state.gpu.drawLine(state.display, p.x,       p.y, p.x,       p.y+p.h, C.BORDER[1], C.BORDER[2], C.BORDER[3])
+    state.gpu.drawLine(state.display, p.x+p.w-1, p.y, p.x+p.w-1, p.y+p.h, C.BORDER[1], C.BORDER[2], C.BORDER[3])
+    -- header
+    local hh = 26
+    fill(p.x+1, p.y+1, p.w-2, hh, C.HDR_BG)
+    txt(title, p.x+8, p.y+6, C.WHITE, 13, true)
+    return p.y + hh + 8
 end
 
 -- ─── Status colours ──────────────────────────────────────────────────────────
 
-local function turtleStatusCol(status, online)
-    if not online                         then return C.RED    end
-    if status == "IDLE"                   then return C.GREEN  end
-    if status == "TRAVELLING"
-    or status == "LOADING"
-    or status == "WORKING"                then return C.YELLOW end
-    if status == "RETURNING"              then return C.BLUE   end
-    if status == "ERROR"                  then return C.RED    end
+local function tCol(status, online)
+    if not online                                         then return C.RED    end
+    if status == "IDLE"                                   then return C.GREEN  end
+    if status == "TRAVELLING" or status == "LOADING"
+       or status == "WORKING"                             then return C.YELLOW end
+    if status == "RETURNING"                              then return C.BLUE   end
+    if status == "ERROR"                                  then return C.RED    end
     return C.DIM
 end
 
-local function jobStatusCol(status)
-    if status == "COMPLETE"               then return C.GREEN  end
-    if status == "IN_PROGRESS"            then return C.CYAN   end
-    if status == "ASSIGNED"               then return C.YELLOW end
-    if status == "PENDING"                then return C.ORANGE end
-    if status == "FAILED"                 then return C.RED    end
-    if status == "CANCELLED"              then return C.DIM    end
+local function jCol(status)
+    if status == "COMPLETE"    then return C.GREEN  end
+    if status == "IN_PROGRESS" then return C.CYAN   end
+    if status == "ASSIGNED"    then return C.YELLOW end
+    if status == "PENDING"     then return C.ORANGE end
+    if status == "FAILED"      then return C.RED    end
     return C.DIM
-end
-
-local function logLevelCol(level)
-    if level == "WARN"  then return C.WARN_COL  end
-    if level == "ERROR" then return C.ERROR_COL end
-    return C.INFO_COL
 end
 
 -- ─── Render sections ─────────────────────────────────────────────────────────
 
-local function renderTurtles()
-    local p   = TURTLE_PANEL
-    local cy  = drawPanel(p, "TURTLES")
-    local fs  = 13
-    local lh  = lineH(fs)
-    local col = p.x + 10
+local FS = 12   -- content font size
 
-    -- Sort by role then id
+local function renderTurtles()
+    local p  = TURTLE_PANEL
+    local cy = panel(p, "TURTLES")
+    local lh_ = lh(FS)
+
     local list = {}
-    for id, t in pairs(state.turtles) do table.insert(list, t) end
-    table.sort(list, function(a, b)
-        if a.role ~= b.role then return (a.role or "") < (b.role or "") end
+    for _, t in pairs(state.turtles) do table.insert(list, t) end
+    table.sort(list, function(a,b)
+        if (a.role or "") ~= (b.role or "") then return (a.role or "") < (b.role or "") end
         return (a.id or "") < (b.id or "")
     end)
 
-    for _, t in ipairs(list) do
-        if cy + lh > p.y + p.h - 8 then break end
-
-        local scol   = turtleStatusCol(t.status, t.online)
-        local online = t.online and "●" or "○"
-
-        -- Dot indicator
-        text(online, col, cy, scol, nil, fs)
-        -- ID + role
-        local label = string.format("%-14s [%s]", t.id or "?", t.role or "?")
-        text(label, col + 18, cy, C.WHITE, nil, fs, "bold")
-        -- Status
-        local statusStr = t.online and (t.status or "?") or "OFFLINE"
-        text(statusStr, col + 220, cy, scol, nil, fs)
-        -- Fuel bar
-        local fuel    = t.fuel    or 0
-        local fuelMax = t.fuelMax or 1
-        local pct     = math.min(1, fuel / math.max(fuelMax, 1))
-        local barW    = 160
-        local barH    = 10
-        local barX    = col + 340
-        local barY    = cy + 2
-        fill(barX, barY, barW, barH, C.BORDER)
-        local fuelCol = pct > 0.5 and C.GREEN or (pct > 0.2 and C.YELLOW or C.RED)
-        fill(barX, barY, math.floor(barW * pct), barH, fuelCol)
-        text(string.format("%dk", math.floor(fuel/1000)), barX + barW + 6, cy, C.DIM, nil, fs)
-
-        -- Job if active
-        if t.jobId then
-            text("→ " .. t.jobId, col + 530, cy, C.CYAN, nil, fs)
-        end
-
-        cy = cy + lh + 4
-
-        -- Separator
-        if cy < p.y + p.h - 8 then
-            line(p.x+6, cy-2, p.x+p.w-6, cy-2, C.BORDER)
-        end
+    if #list == 0 then
+        txt("No turtles registered yet", p.x+8, cy, C.DIM, FS)
+        return
     end
 
-    if #list == 0 then
-        text("No turtles registered", col, cy, C.DIM, nil, fs)
+    for _, t in ipairs(list) do
+        if cy + lh_ > p.y + p.h - 6 then break end
+
+        local sc     = tCol(t.status, t.online)
+        local dot    = t.online and ">" or "x"   -- ASCII status indicator
+        local status = t.online and (t.status or "?") or "OFFLINE"
+        local role   = t.role or "?"
+
+        -- dot
+        txt(dot, p.x+8, cy, sc, FS, true)
+        -- id [role]
+        txt(string.format("%-12s [%-8s]", t.id or "?", role), p.x+24, cy, C.WHITE, FS)
+        -- status
+        txt(status, p.x+230, cy, sc, FS)
+
+        -- fuel bar
+        local fuel = t.fuel or 0
+        local fmax = math.max(t.fuelMax or 100000, 1)
+        local pct  = math.min(1, fuel / fmax)
+        local bx   = p.x + 330
+        local bw   = math.max(60, p.w - 330 - 55 - 8)
+        local bh   = 9
+        local by   = cy + 3
+        fill(bx, by, bw, bh, C.BORDER)
+        local fc = pct > 0.5 and C.GREEN or (pct > 0.2 and C.YELLOW or C.RED)
+        fill(bx, by, math.max(1, math.floor(bw * pct)), bh, fc)
+        txt(string.format("%dk", math.floor(fuel/1000)), bx+bw+4, cy, C.DIM, FS)
+
+        cy = cy + lh_ + 2
+        hline(p.x+4, p.x+p.w-4, cy-2, C.BORDER)
     end
 end
 
 local function renderJobs()
     local p  = JOB_PANEL
-    local cy = drawPanel(p, "JOBS")
-    local fs = 12
-    local lh = lineH(fs)
+    local cy = panel(p, "JOBS")
+    local lh_ = lh(FS)
 
-    -- Sort: active first, then by id descending (most recent at top)
     local list = {}
-    for id, j in pairs(state.jobs) do table.insert(list, j) end
+    for _, j in pairs(state.jobs) do table.insert(list, j) end
     table.sort(list, function(a, b)
         local function rank(s)
             if s == "IN_PROGRESS" then return 0
@@ -206,63 +188,56 @@ local function renderJobs()
         return (a.id or "") > (b.id or "")
     end)
 
-    local col = p.x + 10
-    for _, j in ipairs(list) do
-        if cy + lh > p.y + p.h - 8 then break end
-
-        local scol = jobStatusCol(j.status)
-        -- Job ID
-        text(j.id or "?", col, cy, C.WHITE, nil, fs, "bold")
-        -- Type (short)
-        local typ = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
-        text(typ, col + 120, cy, C.DIM, nil, fs)
-        -- Status
-        text(j.status or "?", col + 230, cy, scol, nil, fs)
-        -- Assigned to
-        if j.assignedTo then
-            text("→ " .. j.assignedTo, col + 370, cy, C.DIM, nil, fs)
-        end
-
-        cy = cy + lh + 3
+    if #list == 0 then
+        txt("Queue empty", p.x+8, cy, C.DIM, FS)
+        return
     end
 
-    if #list == 0 then
-        text("Queue empty", col, cy, C.DIM, nil, fs)
+    for _, j in ipairs(list) do
+        if cy + lh_ > p.y + p.h - 6 then break end
+
+        local sc  = jCol(j.status)
+        local typ = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
+
+        txt(j.id or "?",   p.x+8,  cy, C.WHITE, FS, true)
+        txt(typ,           p.x+100, cy, C.DIM,   FS)
+        txt(j.status or "?", p.x+200, cy, sc,    FS)
+        if j.assignedTo then
+            txt(j.assignedTo, p.x+310, cy, C.DIM, FS)
+        end
+
+        cy = cy + lh_ + 2
     end
 end
 
 local function renderLog()
-    local p  = LOG_PANEL
-    local cy = drawPanel(p, "LOG")
-    local fs = 11
-    local lh = lineH(fs)
-    local col = p.x + 10
-    local maxRows = math.floor((p.y + p.h - cy - 6) / lh)
+    local p   = LOG_PANEL
+    local cy  = panel(p, "LOG")
+    local lh_ = lh(11)
+    local max = math.floor((p.y + p.h - cy - 4) / lh_)
+    local col = p.x + 8
 
-    -- Show most recent lines that fit
-    local start = math.max(1, #state.logs - maxRows + 1)
+    local start = math.max(1, #state.logs - max + 1)
     for i = start, #state.logs do
-        local entry = state.logs[i]
-        if cy + lh > p.y + p.h - 4 then break end
-
-        -- Level tag
-        local lcol = logLevelCol(entry.level)
-        text(string.format("[%s]", entry.level), col, cy, lcol, nil, fs, "bold")
-        -- Message
-        text(entry.msg or "", col + 60, cy, C.DIM, nil, fs)
-        cy = cy + lh
+        local e = state.logs[i]
+        if cy + lh_ > p.y + p.h - 4 then break end
+        local lc = e.level == "WARN" and C.WARN or (e.level == "ERROR" and C.ERR or C.INFO)
+        txt(string.format("[%5s]", e.level), col,    cy, lc,    11, true)
+        txt(e.msg or "",                     col+60, cy, C.DIM, 11)
+        cy = cy + lh_
     end
 end
 
 local function renderAll()
-    -- Background
+    local W, H = state.W, state.H
     fill(0, 0, W, H, C.BG)
-    -- Title bar
-    fill(0, 0, W, PAD - 2, C.HEADER_BG)
-    text("CC AMAZON NETWORK  —  ADMIN DASHBOARD", 12, 0, C.WHITE, nil, 11, "bold")
-    local ts = string.format("last update: %ds ago",
-        math.floor((os.epoch("utc") - state.lastPoll) / 1000))
-    text(ts, W - 200, 0, C.DIM, nil, 10)
+
+    -- title strip
+    fill(0, 0, W, PAD-1, C.HDR_BG)
+    txt("CC AMAZON NETWORK  -  ADMIN DASHBOARD", 8, 0, C.WHITE, 10, true)
+    local age = math.floor((os.epoch("utc") - state.lastPoll) / 1000)
+    local ts  = age == 0 and "live" or (age .. "s ago")
+    txt("last update: " .. ts, W - 120, 0, C.DIM, 10)
 
     renderTurtles()
     renderJobs()
@@ -270,106 +245,112 @@ local function renderAll()
     flush()
 end
 
--- ─── Polling (server query via modem) ────────────────────────────────────────
--- The UI computer sends a STATE_REQUEST and the server responds.
--- For now we use a simpler approach: the UI subscribes to the broadcast
--- channel and mirrors STATUS_UPDATE / JOB_COMPLETE / REGISTER messages.
--- This gives near-real-time updates without adding a query round-trip.
+-- ─── Message handling ────────────────────────────────────────────────────────
 
-local function handleMessage(msg)
-    if msg.type == proto.MSG.REGISTER or msg.type == proto.MSG.HEARTBEAT then
-        -- Update turtle entry
+local function addLog(level, msg)
+    table.insert(state.logs, { level=level, msg=msg })
+    if #state.logs > MAX_LOGS then table.remove(state.logs, 1) end
+end
+
+local function handleMsg(msg)
+    if msg.type == proto.MSG.REGISTER then
         local id = msg.from
+        local p  = msg.payload
+        state.turtles[id] = {
+            id      = id,
+            role    = p.role,
+            status  = "IDLE",
+            fuel    = p.fuel,
+            fuelMax = p.fuelMax,
+            online  = true,
+            jobId   = nil,
+        }
+        addLog("INFO", "Registered: " .. id .. " [" .. (p.role or "?") .. "]")
+
+    elseif msg.type == proto.MSG.HEARTBEAT then
+        local id = msg.from
+        local p  = msg.payload
         if not state.turtles[id] then
-            state.turtles[id] = { id = id }
+            state.turtles[id] = { id=id, online=true }
         end
-        local t   = state.turtles[id]
-        local p   = msg.payload
+        local t = state.turtles[id]
         t.online  = true
-        t.role    = p.role    or t.role
-        t.status  = p.status  or t.status  or "IDLE"
+        t.status  = p.status  or t.status
         t.fuel    = p.fuel    or t.fuel
-        t.fuelMax = p.fuelMax or t.fuelMax
         t.jobId   = p.jobId
-        if msg.type == proto.MSG.REGISTER then
-            t.status = "IDLE"
-            t.jobId  = nil
-        end
 
     elseif msg.type == proto.MSG.STATUS_UPDATE then
         local id = msg.from
-        if not state.turtles[id] then state.turtles[id] = { id = id } end
-        local t  = state.turtles[id]
         local p  = msg.payload
+        if not state.turtles[id] then state.turtles[id] = { id=id, online=true } end
+        local t = state.turtles[id]
         t.status = p.status or t.status
         t.jobId  = p.jobId  or t.jobId
-        -- Mirror job status
         if p.jobId and state.jobs[p.jobId] then
             state.jobs[p.jobId].status = "IN_PROGRESS"
         end
 
     elseif msg.type == proto.MSG.JOB_ASSIGN then
         local p = msg.payload
-        state.jobs[p.jobId] = state.jobs[p.jobId] or {
-            id   = p.jobId,
-            type = p.jobType,
-        }
-        local j       = state.jobs[p.jobId]
-        j.status      = "ASSIGNED"
-        j.assignedTo  = msg.to
-        j.type        = p.jobType or j.type
+        if not state.jobs[p.jobId] then
+            state.jobs[p.jobId] = { id=p.jobId, type=p.jobType }
+        end
+        local j      = state.jobs[p.jobId]
+        j.status     = "ASSIGNED"
+        j.assignedTo = msg.to
+        j.type       = p.jobType or j.type
 
     elseif msg.type == proto.MSG.JOB_COMPLETE then
         local jid = msg.payload.jobId
         if state.jobs[jid] then
-            state.jobs[jid].status = "COMPLETE"
+            state.jobs[jid].status     = "COMPLETE"
             state.jobs[jid].assignedTo = nil
         end
         local t = state.turtles[msg.from]
         if t then t.status = "IDLE"; t.jobId = nil end
+        addLog("INFO", "Complete: " .. jid .. " (" .. msg.from .. ")")
 
     elseif msg.type == proto.MSG.JOB_FAILED then
-        local jid = msg.payload.jobId
+        local p   = msg.payload
+        local jid = p.jobId
         if state.jobs[jid] then
-            local recoverable = msg.payload.recoverable
-            state.jobs[jid].status = recoverable and "PENDING" or "FAILED"
+            state.jobs[jid].status = p.recoverable and "PENDING" or "FAILED"
         end
         local t = state.turtles[msg.from]
         if t then t.status = "IDLE"; t.jobId = nil end
+        addLog("WARN", "Failed: " .. (jid or "?") .. " - " .. (p.reason or "?"))
     end
-end
-
-local function handleLog(raw)
-    -- Sniff log-style STATUS_UPDATE detail as log entry
-    -- Real log lines come from server print() — we can't intercept those,
-    -- but we synthesise useful events from the messages we do see.
-end
-
-local function addLog(level, msg)
-    table.insert(state.logs, { level = level, msg = msg, ts = os.epoch("utc") })
-    if #state.logs > MAX_LOGS then table.remove(state.logs, 1) end
 end
 
 -- ─── Main ────────────────────────────────────────────────────────────────────
 
 local function main()
-    -- GPU setup
+    -- GPU
     state.gpu = peripheral.find("directgpu")
     if not state.gpu then error("No DirectGPU peripheral found.") end
     state.display = state.gpu.autoDetectAndCreateDisplay()
-    if not state.display then error("Could not create display.") end
+    if not state.display then error("Could not create display — is a monitor attached?") end
 
-    -- Modem setup — listen on all channels to sniff traffic
+    -- Try to read actual display dimensions
+    local ok, dw = pcall(function() return state.gpu.getDisplayWidth(state.display)  end)
+    local ok2,dh = pcall(function() return state.gpu.getDisplayHeight(state.display) end)
+    if ok  and type(dw) == "number" and dw > 0 then state.W = dw end
+    if ok2 and type(dh) == "number" and dh > 0 then state.H = dh end
+    print(string.format("Display: %dx%d px", state.W, state.H))
+
+    recalcLayout()
+
+    -- Modem
     state.modem = peripheral.find("modem")
-    if not state.modem then error("No modem found.") end
+    if not state.modem then error("No modem found. Attach an ender modem.") end
     state.modem.open(proto.CH_SERVER)
     state.modem.open(proto.CH_BROADCAST)
     state.modem.open(proto.CH_PRIVATE)
 
-    addLog("INFO", "Admin UI started — listening for network traffic")
+    addLog("INFO", string.format("Dashboard online (%dx%d)", state.W, state.H))
     renderAll()
 
-    local redrawTimer = os.startTimer(2)   -- redraw every 2s minimum
+    local redrawTimer = os.startTimer(2)
 
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
@@ -380,39 +361,29 @@ local function main()
                 local valid, msg = proto.decode(parsed)
                 if valid then
                     state.lastPoll = os.epoch("utc")
-                    local ok, err = pcall(handleMessage, msg)
-                    if not ok then addLog("ERROR", "UI handler: " .. tostring(err)) end
-
-                    -- Synthesise log entries for notable events
-                    if msg.type == proto.MSG.JOB_COMPLETE then
-                        addLog("INFO", string.format("Job complete: %s (%s)", msg.payload.jobId, msg.from))
-                    elseif msg.type == proto.MSG.JOB_FAILED then
-                        addLog("WARN", string.format("Job failed: %s — %s", msg.payload.jobId, msg.payload.reason or "?"))
-                    elseif msg.type == proto.MSG.REGISTER then
-                        addLog("INFO", string.format("Turtle registered: %s [%s]", msg.from, msg.payload.role or "?"))
-                    end
-
+                    pcall(handleMsg, msg)
                     renderAll()
                 end
             end
 
         elseif event == "timer" and p1 == redrawTimer then
-            -- Periodic redraw to update timestamps even when no messages arrive
             renderAll()
             redrawTimer = os.startTimer(2)
         end
     end
 end
 
--- Graceful error display — always print to terminal so we can read it
+-- ─── Run ─────────────────────────────────────────────────────────────────────
+
 local ok, err = pcall(main)
 if not ok then
     print("ADMIN UI CRASH: " .. tostring(err))
     if state.gpu and state.display then
         state.gpu.clear(state.display, 10, 10, 18)
-        state.gpu.drawText(state.display, "CRASH: " .. tostring(err),
+        state.gpu.drawText(state.display,
+            "CRASH: " .. tostring(err),
             10, 10, 220, 60, 60,
-            "minecraft:font/default.ttf", 14, "bold")
+            FONT, 14, "bold")
         state.gpu.updateDisplay(state.display)
     end
     error(err)
