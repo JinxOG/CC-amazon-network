@@ -269,12 +269,19 @@ function base.depart()
             proto.send(_self.modem, proto.CH_LOCAL, sig)
 
             -- Wait for support to reach staging position (1 block behind us)
+            -- Loop so we don't consume unrelated messages (heartbeat ACKs etc.)
             logInfo("Waiting for SUPPORT_STAGED...")
-            local msg = proto.receive(_self.id, 60)
-            if msg and msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
-                logInfo("Support staged — descending together.")
-            else
-                logInfo("No SUPPORT_STAGED in time — descending anyway.")
+            local deadline = os.clock() + 60
+            while os.clock() < deadline do
+                local msg = proto.receive(_self.id, 5)
+                if not msg then
+                    -- timeout tick — keep waiting
+                elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
+                    logInfo("Support staged — descending together.")
+                    break
+                end
+                -- Any other message (HEARTBEAT_ACK etc.) is silently ignored here;
+                -- controlLoop also receives it via parallel and handles it there.
             end
         end
 
