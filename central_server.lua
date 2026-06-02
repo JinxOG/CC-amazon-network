@@ -93,6 +93,19 @@ function registry.register(id, role, fuel, fuelMax, position)
     logInfo(string.format("%s %s [%s] fuel=%d/%d dock=%s",
         isNew and "Registered" or "Re-registered", id, role, fuel, fuelMax,
         dock and ("bay"..dock.bay..dock.row) or "none"))
+
+    -- Re-queue any jobs that were assigned to this turtle before it rebooted
+    -- so they get dispatched immediately instead of waiting for ACK timeout
+    for _, job in pairs(state.jobs) do
+        if job.assignedTo == id and
+           (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
+            logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
+            job.status     = "PENDING"
+            job.assignedTo = nil
+            job.linkedJob  = nil
+        end
+    end
+
     return dock
 end
 
