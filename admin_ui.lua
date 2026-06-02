@@ -23,7 +23,7 @@ local state = {
 local PAGES     = { "TURTLES", "JOBS", "LOG" }
 local MAX_LOGS  = 100
 local PAD       = 10
-local TITLE_H   = 20
+local TITLE_H   = 32
 local FONT      = "minecraft:font/default.ttf"
 
 -- ─── Colour palette ──────────────────────────────────────────────────────────
@@ -71,34 +71,22 @@ local function lh(s)   return math.floor((s or 13) * 1.45)    end
 
 local function drawTitle()
     local W = state.W
+    -- Taller title bar so it's clearly visible
     fill(0, 0, W, TITLE_H, C.HDR_BG)
 
-    -- Left: app name + page
-    txt("CC AMAZON  |  " .. PAGES[state.page], 8, 4, C.WHITE, 11, true)
+    -- Page indicator + right-click hint all in one visible strip
+    local pageStr = string.format("CC AMAZON  |  %s  ( %d / %d )  RIGHT-CLICK = NEXT",
+        PAGES[state.page], state.page, #PAGES)
+    txt(pageStr, 8, 4, C.WHITE, 11, true)
 
-    -- Centre: page dots  * . .
-    local dotStr = ""
-    for i = 1, #PAGES do
-        dotStr = dotStr .. (i == state.page and "* " or ". ")
-    end
-    txt(dotStr, 220, 4, C.DIM, 11, true)
-
-    -- Last-update age (after dots)
+    -- Last-update age far enough left to always be on screen
     local age = math.floor((os.epoch("utc") - state.lastPoll) / 1000)
     local ts  = (state.lastPoll == 0) and "waiting..." or (age .. "s ago")
-    txt(ts, 320, 4, C.DIM, 10)
+    txt(ts, 8, TITLE_H + 2, C.DIM, 10)
 end
 
--- Bottom NEXT button — drawn last so it's always on top
 local function drawNextBtn()
-    local W, H  = state.W, state.H
-    local btnW  = 120
-    local btnH  = 22
-    local btnX  = math.floor((W - btnW) / 2)   -- horizontally centred
-    local btnY  = H - btnH - 6
-    fill(btnX, btnY, btnW, btnH, C.BTN_BG)
-    -- centre text inside button
-    txt("[ TAP  NEXT ]", btnX + 8, btnY + 4, C.WHITE, 11, true)
+    -- No-op: navigation hint is in the title bar
 end
 
 -- ─── Content area ────────────────────────────────────────────────────────────
