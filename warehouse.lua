@@ -13,6 +13,33 @@
 
 local proto = require("protocol")
 
+-- ─── Peripheral scanner (run standalone to find names) ───────────────────────
+-- Usage: lua warehouse.lua scan
+if arg and arg[1] == "scan" then
+    print("=== Peripherals visible to this computer ===")
+    local names = peripheral.getNames()
+    if #names == 0 then
+        print("  (none found — check wired modem connections)")
+    end
+    for _, name in ipairs(names) do
+        local ptype = peripheral.getType(name)
+        local extra = ""
+        if ptype == "inventory" or name:find("chest") then
+            local p = peripheral.wrap(name)
+            local ok, items = pcall(function() return p.list() end)
+            if ok then
+                local count = 0
+                for _ in pairs(items) do count = count + 1 end
+                extra = "  [" .. count .. " stacks]"
+            end
+        end
+        print(string.format("  %-40s  %s%s", name, ptype or "?", extra))
+    end
+    print("")
+    print("Paste the matching names into CFG at the top of warehouse.lua")
+    return
+end
+
 -- ─── Config ──────────────────────────────────────────────────────────────────
 -- Run peripheral.getNames() on this computer to find the right names.
 
