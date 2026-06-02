@@ -363,9 +363,12 @@ function base.returnToDock()
         if _self.pos.y >= FLOOR_Y then break end
     end
 
-    -- Now inside building — tell support to return independently (hole is clear)
+    -- Move a few steps away from the hole before signalling support to ascend
+    -- so they don't collide right at the arrivals hole exit
     if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        logInfo("Inside building — signalling support to return independently.")
+        -- Navigate to red taxiway first (clears the hole exit completely)
+        move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.RED_Z)
+        logInfo("Clear of arrivals hole — signalling support to return.")
         base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
         _self.partnerId = nil  -- stop position broadcasts
     end
