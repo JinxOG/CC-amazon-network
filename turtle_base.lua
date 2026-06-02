@@ -651,8 +651,8 @@ end
 function base.requestItems(items, pickupPoint, timeout)
     comms.toServer(proto.MSG.ITEM_REQUEST, proto.payloadItemRequest(
         _self.jobId, items, pickupPoint or base.getPos()))
-    logInfo("Waiting for warehouse...")
-    local reply = proto.receive(_self.id, timeout or 60)
+    logInfo("Waiting for warehouse... (use 'mock " .. (_self.jobId or "?") .. "' on server to bypass)")
+    local reply = proto.receive(_self.id, timeout or 300)  -- 5 min default
     if reply and reply.type == proto.MSG.ITEM_READY then
         logInfo("Items loaded.")
         return reply.payload.loaded

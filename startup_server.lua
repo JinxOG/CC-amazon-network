@@ -93,11 +93,15 @@ local function shell()
 
         elseif cmd == "mock" and #args == 2 then
             -- Manually send ITEM_READY to unblock a turtle waiting for warehouse
+            -- Works on both ASSIGNED (in-progress) and PENDING (retrying) jobs
             -- Usage: mock job_0001
-            local jobId  = args[2]
-            local state  = server.getState()
-            local job    = state.jobs[jobId]
-            if job and job.assignedTo then
+            local jobId = args[2]
+            local st    = server.getState()
+            local job   = st.jobs[jobId]
+            if not job then
+                print("Job not found: " .. jobId)
+            elseif job.assignedTo then
+                -- Job is currently assigned — send ITEM_READY directly
                 local modem = peripheral.find("modem")
                 local msg = {
                     type    = "ITEM_READY",
@@ -109,8 +113,12 @@ local function shell()
                 }
                 modem.transmit(3, 1, textutils.serialise(msg))
                 print("Sent mock ITEM_READY to " .. job.assignedTo)
+            elseif job.status == "PENDING" then
+                -- Job timed out and went back to queue — tag it for auto-mock on next dispatch
+                job.mockOnReady = true
+                print("Job is PENDING — will auto-mock when re-dispatched. (dispatcher runs every 2s)")
             else
-                print("Job not found or not assigned: " .. jobId)
+                print("Job not in a mockable state: " .. job.status)
             end
 
         else

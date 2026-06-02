@@ -369,6 +369,16 @@ function dispatcher.tick()
 
             logInfo(string.format("Dispatched %s→%s with support %s→%s",
                 job.id, worker.id, supportJobId, support.id))
+
+            -- Auto-mock: if this job was flagged while PENDING, send ITEM_READY once assigned
+            if job.mockOnReady then
+                job.mockOnReady = nil
+                -- Small delay so turtle has time to send ITEM_REQUEST first
+                os.startTimer(3)
+                -- Store pending mock so the timer handler can fire it
+                state.pendingMock = { jobId = job.id, turtleId = worker.id }
+                logInfo("Auto-mock queued for " .. job.id)
+            end
         end
     end
 end
@@ -527,6 +537,15 @@ function server.run()
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
+
+            elseif state.pendingMock then
+                -- Fire auto-mock ITEM_READY after the small delay
+                local m = state.pendingMock
+                state.pendingMock = nil
+                local msg = proto.encode(proto.MSG.ITEM_READY, "server", m.turtleId,
+                    { jobId = m.jobId, loaded = {} })
+                proto.send(state.modem, proto.CH_PRIVATE, msg)
+                logInfo("Auto-mock ITEM_READY sent to " .. m.turtleId)
             end
         end
     end
