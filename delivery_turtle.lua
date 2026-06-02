@@ -244,7 +244,23 @@ base.run(function(job)
     turtle.select(EC_SLOT)
     placeDownClear()
 
-    -- Tell warehouse we're here
+    -- ── Inventory dump — clear road debris into ender chest ──────────────────
+    -- The turtle digs through terrain during travel and accumulates blocks.
+    -- Dump everything that isn't a protected item (ender chests, tools) into
+    -- the placed ender chest so the warehouse can sweep it into RS storage.
+    print("Dumping road debris into ender chest...")
+    local dumped = 0
+    for slot = 1, 16 do
+        if not protected[slot] and turtle.getItemCount(slot) > 0 then
+            turtle.select(slot)
+            if turtle.dropDown() then
+                dumped = dumped + 1
+            end
+        end
+    end
+    print("Dumped " .. dumped .. " slot(s) of debris into ender chest")
+
+    -- Tell warehouse we're here — it will clear the ender chest into RS first
     base.sendToServer(proto.MSG.DELIVERY_ARRIVED, { jobId = job.id })
 
     -- Wait for our turn (warehouse may be serving another turtle)

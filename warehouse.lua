@@ -71,6 +71,32 @@ local function chestsNeeded(items)
     return math.min(CFG.maxChestsPerDelivery, math.max(1, math.ceil(totalStacks / 27)))
 end
 
+-- Import ALL items currently in the ender chest back into RS storage.
+-- Used to sweep up road debris the turtle dumped before signalling arrival.
+local function clearEnderChest()
+    local chest = peripheral.wrap(CFG.entangledChest)
+    if not chest then
+        log("WARNING: cannot wrap ender chest on side '" .. CFG.entangledChest .. "' — skipping clear")
+        return 0
+    end
+    local slots = chest.list()
+    if not slots or next(slots) == nil then
+        log("Ender chest already empty — no clear needed")
+        return 0
+    end
+    local totalCleared = 0
+    for _, item in pairs(slots) do
+        local moved = rsBridge.importItem(
+            { name = item.name, count = item.count },
+            CFG.entangledChest
+        )
+        local n = (type(moved) == "number") and moved or (moved and moved.count or 0)
+        totalCleared = totalCleared + n
+    end
+    log(string.format("Cleared %d item(s) from ender chest into RS", totalCleared))
+    return totalCleared
+end
+
 -- Export N regular chests from RS → entangled chest
 local function loadChests(n)
     local result = rsBridge.exportItem(
@@ -162,6 +188,10 @@ local function handleCurrentJob()
         log("Timeout — skipping " .. current.turtleId)
         current = nil; serveNext(); return
     end
+
+    -- ── Phase 0: clear ender chest — sweep turtle debris into RS ────────────
+    log("Clearing turtle debris from ender chest into RS...")
+    clearEnderChest()
 
     -- ── Phase 1: export regular chests into entangled chest ──────────────────
     log("Exporting " .. current.chestsNeeded .. " regular chests via RS...")
