@@ -133,6 +133,9 @@ local function initPosition()
 end
 
 local function applyMove(dir)
+    -- Save previous position before updating
+    local prevX, prevY, prevZ = _self.pos.x, _self.pos.y, _self.pos.z
+
     if dir == "forward" then
         if     _self.facing == 0 then _self.pos.z = _self.pos.z - 1
         elseif _self.facing == 1 then _self.pos.x = _self.pos.x + 1
@@ -153,6 +156,14 @@ local function applyMove(dir)
     _self.moveCount = _self.moveCount + 1
     if _self.moveCount % CFG.GPS_RESYNC_INTERVAL == 0 then
         gpsSync()
+    end
+
+    -- Delivery turtles broadcast their previous position so support can follow 1 block behind
+    if _self.partnerId and _self.role == proto.ROLE.DELIVERY and _self.modem then
+        local sig = proto.encode(proto.MSG.POSITION_UPDATE, _self.id, _self.partnerId, {
+            prev = { x=prevX, y=prevY, z=prevZ },
+        })
+        proto.send(_self.modem, proto.CH_LOCAL, sig)
     end
 end
 
@@ -657,6 +668,13 @@ function base.requestItems(items, pickupPoint, timeout)
     end
     logWarn("Item request timed out.")
     return nil
+end
+
+-- Send a direct CH_LOCAL signal to the paired partner turtle
+function base.signalPartner(msgType, payload)
+    if not _self.partnerId or not _self.modem then return end
+    local sig = proto.encode(msgType, _self.id, _self.partnerId, payload or {})
+    proto.send(_self.modem, proto.CH_LOCAL, sig)
 end
 
 function base.queryTurtle(targetId, timeout)

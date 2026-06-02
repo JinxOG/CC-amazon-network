@@ -65,56 +65,53 @@ base.run(function(job)
     local sig = proto.encode(proto.MSG.SUPPORT_READY, base.getSelfId(), partnerId, {})
     proto.send(base.getModem(), proto.CH_LOCAL, sig)
 
-    -- ── Step 3: Travel underground to destination ─────────────────────────────
-    -- Stay UNDERGROUND_Y, but stop 5 blocks short of the destination so the
-    -- delivery turtle can descend and ascend at dest X,Z without hitting us.
+    -- ── Step 3+4: Follow delivery in real-time ───────────────────────────────
+    -- Delivery broadcasts its previous position after every move on CH_LOCAL.
+    -- Support moves to that position = always 1 block behind delivery.
+    -- When delivery sends ASCENDING, support holds still (clear of descent path).
+    -- When delivery sends DESCENDED, support resumes following.
 
-    if dest then
-        base.setStatus(proto.STATUS.TRAVELLING, job.id)
+    base.setStatus(proto.STATUS.TRAVELLING, job.id)
+    base.sendProgress("Following " .. partnerId)
+    print("Following " .. partnerId .. " (1 block behind)")
 
-        -- Figure out which axis we travel along and offset 5 blocks back
-        local startPos = base.getPos()
-        local dx = dest.x - startPos.x
-        local dz = dest.z - startPos.z
-        local waitX, waitZ = dest.x, dest.z
-
-        if math.abs(dx) >= math.abs(dz) then
-            -- Mostly X travel — stay 5 blocks back in X
-            waitX = dest.x + (dx > 0 and -5 or 5)
-        else
-            -- Mostly Z travel — stay 5 blocks back in Z
-            waitZ = dest.z + (dz > 0 and -5 or 5)
-        end
-
-        base.sendProgress(string.format("Underground travel to %d,%d (holding at %d,%d)", dest.x, dest.z, waitX, waitZ))
-        ok, err = base.move.to(waitX, UNDERGROUND_Y, waitZ)
-        if not ok then
-            print("Nav error: " .. (err or "?"))
-            base.sendProgress("nav_error: " .. (err or "?"))
-        end
-
-        print(string.format("Holding at %d,%d,%d (clear of delivery descent)", waitX, UNDERGROUND_Y, waitZ))
-    else
-        print("No destination — holding at current position.")
-    end
-
-    -- ── Step 4: Wait for delivery turtle to finish ────────────────────────────
-    -- Poll server until partner goes idle (job complete) or offline
-
-    base.setStatus(proto.STATUS.WORKING, job.id)
-    base.sendProgress("Holding for " .. partnerId)
+    local ascending = false
 
     while true do
-        sleep(POLL_INTERVAL)
-        local info = base.queryTurtle(partnerId, 5)
-        if not info then
-            print("No server response, retrying...")
-        elseif not info.online then
-            print("Partner offline. Returning to dock.")
-            break
-        elseif info.jobId == nil then
-            print("Partner job complete. Returning to dock.")
-            break
+        local msg = proto.receive(base.getSelfId(), 15)
+
+        if not msg then
+            -- Timeout — check if partner finished or went offline
+            local info = base.queryTurtle(partnerId, 5)
+            if not info or not info.online then
+                print("Partner offline. Returning to dock.")
+                break
+            elseif not info.jobId then
+                print("Partner job complete. Returning to dock.")
+                break
+            end
+
+        elseif msg.from == partnerId then
+
+            if msg.type == proto.MSG.POSITION_UPDATE and not ascending then
+                -- Move to where delivery just was (1 block behind)
+                local prev = msg.payload.prev
+                if prev then
+                    base.move.to(prev.x, prev.y, prev.z)
+                end
+
+            elseif msg.type == proto.MSG.ASCENDING then
+                -- Delivery going up to deliver — hold current position
+                ascending = true
+                print("Delivery ascending — holding position")
+                base.sendProgress("Holding while delivery delivers")
+
+            elseif msg.type == proto.MSG.DESCENDED then
+                -- Delivery back underground — resume following
+                ascending = false
+                print("Delivery descended — resuming follow")
+
+            end
         end
     end
 

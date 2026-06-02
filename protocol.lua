@@ -45,6 +45,11 @@ proto.MSG = {
 
     -- Turtle ↔ turtle underground sync (CH_LOCAL)
     SUPPORT_READY  = "SUPPORT_READY",   -- support → delivery: I'm underground, proceed
+
+    -- Real-time follow signals (CH_LOCAL)
+    POSITION_UPDATE = "POSITION_UPDATE", -- delivery → support: here is where I just was
+    ASCENDING       = "ASCENDING",       -- delivery → support: I'm going up, hold position
+    DESCENDED       = "DESCENDED",       -- delivery → support: I'm back underground, resume
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────
