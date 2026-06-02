@@ -62,51 +62,85 @@ local function buildProtectedSlots()
     return protected
 end
 
--- Scan all slots and move the delivery ender chest back to EC_SLOT.
--- Called after any suckDown or digDown that might displace it.
--- Uses the protected table to identify which item WAS in EC_SLOT at start.
-local function maintainECSlot()
-    -- If EC_SLOT already has an ender chest, we're good
-    local current = turtle.getItemDetail(EC_SLOT)
-    if current then
-        local n = current.name:lower()
-        if n:find("ender") or n:find("entangled") then
-            return  -- already correct
-        end
-        -- EC_SLOT has something else — find the ender chest elsewhere and swap
+-- ─── Ender chest slot guardian ───────────────────────────────────────────────
+--
+-- Four mandatory checkpoints enforce that the delivery ender chest is ALWAYS
+-- in EC_SLOT (16) when it should be:
+--   1. DISPATCH    — before departing (hard abort if missing)
+--   2. PRE-PLACE   — right before turtle.placeDown() (hard abort if missing)
+--   3. PRE-RETURN  — after recovery dig, before descending (hard abort if missing)
+--   4. ARRIVAL     — back at dock, log final state (warn only)
+--
+-- checkEC(label, hard)
+--   Tries to find the ender chest and move it into EC_SLOT.
+--   If hard=true and it cannot be found, returns false (caller must abort).
+--   The ender chest is identified by name containing "ender" or "entangled".
+--   Slots with the chest "not found" during active placement (PRE-PLACE) are
+--   detected by hard=true so the job aborts instead of placing the wrong item.
+
+local function checkEC(label, hard)
+    local function isEC(item)
+        if not item then return false end
+        local n = item.name:lower()
+        return n:find("ender") or n:find("entangled")
     end
 
-    -- Find the ender chest in another slot
+    -- Step 1: check if EC_SLOT already correct
+    local inSlot = turtle.getItemDetail(EC_SLOT)
+    if isEC(inSlot) then
+        print(string.format("[EC:%s] ✓ slot %d OK (%s)", label, EC_SLOT, inSlot.name))
+        return true
+    end
+
+    -- Step 2: search all other slots
     local foundSlot = nil
     for s = 1, 16 do
-        if s ~= EC_SLOT then
-            local it = turtle.getItemDetail(s)
-            if it then
-                local n = it.name:lower()
-                if n:find("ender") or n:find("entangled") then
-                    foundSlot = s; break
-                end
-            end
+        if s ~= EC_SLOT and isEC(turtle.getItemDetail(s)) then
+            foundSlot = s; break
         end
     end
 
-    if not foundSlot then return end  -- not found (placed down — that's expected mid-delivery)
+    if not foundSlot then
+        -- Not in any slot — either placed on ground (OK mid-delivery) or lost
+        if hard then
+            print(string.format("[EC:%s] ✗ ENDER CHEST NOT FOUND — aborting", label))
+            return false
+        else
+            print(string.format("[EC:%s] ✗ not in inventory (placed on ground?)", label))
+            return false
+        end
+    end
 
-    -- If EC_SLOT is occupied, move its contents to a free slot first
+    -- Step 3: move it to EC_SLOT
+    -- If EC_SLOT is occupied, relocate whatever is there to a free slot first
     if turtle.getItemCount(EC_SLOT) > 0 then
+        local moved = false
         for free = 1, 15 do
             if free ~= foundSlot and turtle.getItemCount(free) == 0 then
                 turtle.select(EC_SLOT)
                 turtle.transferTo(free)
-                break
+                print(string.format("[EC:%s] Evicted slot %d contents → slot %d", label, EC_SLOT, free))
+                moved = true; break
             end
+        end
+        if not moved then
+            print(string.format("[EC:%s] ✗ EC_SLOT occupied and no free slot to evict to", label))
+            if hard then return false end
         end
     end
 
-    -- Move ender chest into EC_SLOT
     turtle.select(foundSlot)
     turtle.transferTo(EC_SLOT)
-    print(string.format("  [EC] Moved ender chest from slot %d → slot %d", foundSlot, EC_SLOT))
+    print(string.format("[EC:%s] Moved ender chest: slot %d → slot %d", label, foundSlot, EC_SLOT))
+
+    -- Final verify
+    if isEC(turtle.getItemDetail(EC_SLOT)) then
+        print(string.format("[EC:%s] ✓ slot %d confirmed", label, EC_SLOT))
+        return true
+    else
+        print(string.format("[EC:%s] ✗ transfer failed!", label))
+        return not hard
+    end
 end
 
 -- Drop delivery items into chest below, skipping protected slots.
@@ -138,14 +172,11 @@ base.run(function(job)
     base.setStatus(proto.STATUS.LOADING, job.id)
     base.sendProgress("Queuing with warehouse")
 
-    -- Delivery ender chest must be in slot 16 (reserved).
-    -- The turtle may carry multiple ender chests (e.g. one for fuel) so we
-    -- use a fixed slot to avoid picking the wrong colour combination.
-    local ecItem = turtle.getItemDetail(EC_SLOT)
-    if not ecItem then
-        return base.sendFailed("no_ender_chest_in_slot_" .. EC_SLOT, false)
+    -- ── CHECKPOINT 1: DISPATCH ───────────────────────────────────────────────
+    -- Hard check — ender chest MUST be in slot 16 before we do anything.
+    if not checkEC("DISPATCH", true) then
+        return base.sendFailed("ec_not_in_slot_" .. EC_SLOT .. "_at_dispatch", false)
     end
-    print("Delivery ender chest: slot " .. EC_SLOT .. " (" .. ecItem.name .. ")")
 
     -- Scan inventory now and lock down all ender chests + tools.
     -- These slots are NEVER dropped or treated as delivery items.
@@ -203,6 +234,12 @@ base.run(function(job)
     base.setStatus(proto.STATUS.WORKING, job.id)
     base.sendProgress("Arrived at destination — setting up delivery")
 
+    -- ── CHECKPOINT 2: PRE-PLACE ──────────────────────────────────────────────
+    -- Hard check — must have ender chest in slot 16 before placing it.
+    if not checkEC("PRE-PLACE", true) then
+        return base.sendFailed("ec_missing_before_place", true)
+    end
+
     -- Place entangled chest below
     turtle.select(EC_SLOT)
     placeDownClear()
@@ -252,9 +289,8 @@ base.run(function(job)
         if turtle.suckDown(1) then pulled = pulled + 1 end
     end
     print("Pulled " .. pulled .. " regular chests into inventory")
-
-    -- Chests may have landed in any free slot including 16 — put EC back in place
-    maintainECSlot()
+    -- Regular chests from suckDown may have landed in slot 16 — fix quietly
+    checkEC("POST-SUCK-CHESTS", false)
 
     -- Place regular chests in a row along Z+1..Z+N from destination
     local chestPositions = {}
@@ -314,8 +350,8 @@ base.run(function(job)
         base.move.to(d.x, d.y, d.z)
         turtle.select(1)
         while turtle.suckDown() do end
-        -- Ensure ender chest hasn't been displaced by suckDown overflow
-        maintainECSlot()
+        -- Items from suckDown may overflow into slot 16 — fix quietly
+        checkEC("POST-SUCK-ITEMS", false)
 
         -- Distribute items across placed regular chests
         -- Keep filling the current chest; move to next when it's full
@@ -343,10 +379,21 @@ base.run(function(job)
 
     base.move.to(d.x, d.y, d.z)
     -- Select EC_SLOT before digging so the ender chest drops directly back
-    -- into slot 16 (works because EC_SLOT is empty after placeDownClear)
+    -- into slot 16 (works because EC_SLOT was emptied by placeDownClear)
     turtle.select(EC_SLOT)
-    turtle.digDown()   -- picks up entangled chest back into slot 16
-    maintainECSlot()   -- verify and correct if something unexpected happened
+    turtle.digDown()   -- ender chest should land in slot 16
+
+    -- ── CHECKPOINT 3: PRE-RETURN ─────────────────────────────────────────────
+    -- Hard check — ender chest MUST be recovered and in slot 16 before we leave.
+    if not checkEC("PRE-RETURN", true) then
+        -- Try once more — digDown may have missed (turtle not centred)
+        sleep(0.5)
+        turtle.select(EC_SLOT)
+        turtle.digDown()
+        if not checkEC("PRE-RETURN-RETRY", true) then
+            return base.sendFailed("ec_not_recovered_after_delivery", true)
+        end
+    end
 
     base.sendToServer(proto.MSG.ITEM_COLLECTED, { jobId = job.id })
     base.sendProgress("Delivery complete")
@@ -369,6 +416,10 @@ base.run(function(job)
     if not ok then
         print("Warning: return route issue: " .. (err or "?"))
     end
+
+    -- ── CHECKPOINT 4: ARRIVAL ────────────────────────────────────────────────
+    -- Soft check — log final state, warn if something is wrong but don't abort.
+    checkEC("ARRIVAL", false)
 
     base.sendComplete({ destination = d })
 end)
