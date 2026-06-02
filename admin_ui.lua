@@ -12,6 +12,9 @@ local H = 260
 -- NEXT button = the second row of the title bar
 local BTN = { x=0, y=20, w=W, h=18 }
 
+-- Map page: right info panel click zone (cycles selected turtle)
+local MAP_BTN = { x=320, y=38, w=175, h=220 }
+
 local PAGES    = { "TURTLES", "JOBS", "LOG", "MAP" }
 local MAX_LOGS = 80
 local FONT     = "minecraft:font/default.ttf"
@@ -21,9 +24,10 @@ local FT       = 13   -- title font size
 -- ─── State ───────────────────────────────────────────────────────────────────
 
 local state = {
-    turtles  = {},
-    jobs     = {},
-    logs     = {},
+    turtles       = {},
+    jobs          = {},
+    logs          = {},
+    selectedTurtle = nil,   -- ID of currently focused turtle on map page
     modem    = nil,
     gpu      = nil,
     display  = nil,
@@ -203,91 +207,159 @@ local function pgLog()
 end
 
 -- ─── Page: Map ───────────────────────────────────────────────────────────────
--- Top-down view. World X → screen X, World Z → screen Y.
--- Viewport centred on the depot area with enough margin for delivery routes.
 
 local MAP = {
-    -- World bounds shown on map
-    x1 = 100,    x2 = 280,   -- world X range (180 blocks)
-    z1 = -2850,  z2 = -2720, -- world Z range (130 blocks)
-    -- Canvas area for the map (inside the page)
-    px = 8, py = 46, pw = 440, ph = 195,
+    x1=-100, x2=280, z1=-2860, z2=-2720,  -- world bounds
+    px=6, py=42, pw=308, ph=212,           -- canvas area (left portion)
 }
 
--- Convert world coords to canvas pixels
 local function worldToMap(wx, wz)
-    local sx = MAP.px + (wx - MAP.x1) / (MAP.x2 - MAP.x1) * MAP.pw
-    local sy = MAP.py + (wz - MAP.z1) / (MAP.z2 - MAP.z1) * MAP.ph
+    local sx = MAP.px + (wx-MAP.x1)/(MAP.x2-MAP.x1) * MAP.pw
+    local sy = MAP.py + (wz-MAP.z1)/(MAP.z2-MAP.z1) * MAP.ph
     return math.floor(sx), math.floor(sy)
 end
 
+-- Sorted turtle list (stable order for cycling)
+local function turtleList()
+    local list = {}
+    for _,v in pairs(state.turtles) do table.insert(list,v) end
+    table.sort(list, function(a,b) return (a.id or"") < (b.id or"") end)
+    return list
+end
+
+local function cycleTurtle()
+    local list = turtleList()
+    if #list == 0 then state.selectedTurtle = nil; return end
+    if not state.selectedTurtle then
+        state.selectedTurtle = list[1].id; return
+    end
+    for i,v in ipairs(list) do
+        if v.id == state.selectedTurtle then
+            state.selectedTurtle = list[(i % #list)+1].id
+            return
+        end
+    end
+    state.selectedTurtle = list[1].id
+end
+
+local TCOLS = {{55,195,80},{80,155,225},{220,185,45},{215,55,55},{195,55,195}}
+
+local function turtleCol(idx) return TCOLS[(idx-1) % #TCOLS + 1] end
+
 local function pgMap()
-    -- Header
-    fill(4, TH+2, W-8, 20, C.PANEL)
-    t("MAP  (last known positions)", 8, TH+4, C.WHITE, FT, true)
-
     -- Map background
-    fill(MAP.px, MAP.py, MAP.pw, MAP.ph, {12, 16, 30})
+    fill(MAP.px, MAP.py, MAP.pw, MAP.ph, {10,14,28})
+    -- Border
+    state.gpu.drawLine(state.display,MAP.px,MAP.py,MAP.px+MAP.pw,MAP.py,50,65,110)
+    state.gpu.drawLine(state.display,MAP.px,MAP.py+MAP.ph,MAP.px+MAP.pw,MAP.py+MAP.ph,50,65,110)
+    state.gpu.drawLine(state.display,MAP.px,MAP.py,MAP.px,MAP.py+MAP.ph,50,65,110)
+    state.gpu.drawLine(state.display,MAP.px+MAP.pw,MAP.py,MAP.px+MAP.pw,MAP.py+MAP.ph,50,65,110)
 
-    -- Grid lines every 20 blocks
-    for wx = MAP.x1, MAP.x2, 20 do
-        local sx, _ = worldToMap(wx, MAP.z1)
-        local _,  ey = worldToMap(wx, MAP.z2)
-        state.gpu.drawLine(state.display, sx, MAP.py, sx, MAP.py+MAP.ph, 25,30,55)
-        t(tostring(wx), sx+1, MAP.py+MAP.ph-10, {40,50,80}, 9)
+    -- Grid every 40 blocks
+    for wx = MAP.x1, MAP.x2, 40 do
+        local sx,_ = worldToMap(wx, MAP.z1)
+        state.gpu.drawLine(state.display,sx,MAP.py,sx,MAP.py+MAP.ph,20,25,50)
+        t(wx, sx+1, MAP.py+MAP.ph-10, {35,45,75}, 8)
     end
-    for wz = MAP.z1, MAP.z2, 20 do
-        local _, sy = worldToMap(MAP.x1, wz)
-        state.gpu.drawLine(state.display, MAP.px, sy, MAP.px+MAP.pw, sy, 25,30,55)
-        t(tostring(wz), MAP.px+2, sy-9, {40,50,80}, 9)
+    for wz = MAP.z1, MAP.z2, 40 do
+        local _,sy = worldToMap(MAP.x1, wz)
+        state.gpu.drawLine(state.display,MAP.px,sy,MAP.px+MAP.pw,sy,20,25,50)
+        t(wz, MAP.px+2, sy-8, {35,45,75}, 8)
     end
 
-    -- Depot outline (x=143→228, z=-2813→-2782)
-    local dx1,dz1 = worldToMap(143, -2813)
-    local dx2,dz2 = worldToMap(228, -2782)
-    state.gpu.drawLine(state.display, dx1,dz1, dx2,dz1, 60,80,130)
-    state.gpu.drawLine(state.display, dx2,dz1, dx2,dz2, 60,80,130)
-    state.gpu.drawLine(state.display, dx2,dz2, dx1,dz2, 60,80,130)
-    state.gpu.drawLine(state.display, dx1,dz2, dx1,dz1, 60,80,130)
-    t("DEPOT", dx1+2, dz1+2, {60,80,130}, 9)
+    -- Depot outline
+    local dx1,dy1 = worldToMap(143,-2813)
+    local dx2,dy2 = worldToMap(228,-2782)
+    state.gpu.drawLine(state.display,dx1,dy1,dx2,dy1,60,80,140)
+    state.gpu.drawLine(state.display,dx2,dy1,dx2,dy2,60,80,140)
+    state.gpu.drawLine(state.display,dx2,dy2,dx1,dy2,60,80,140)
+    state.gpu.drawLine(state.display,dx1,dy2,dx1,dy1,60,80,140)
+    t("DEPOT",dx1+2,dy1+2,{60,80,140},8)
 
-    -- Dispatch hole marker
-    local hx,hz = worldToMap(143, -2813)
-    fill(hx-2, hz-2, 5, 5, {220,120,30})
+    -- Hole markers
+    local hx,hy = worldToMap(143,-2813); fill(hx-2,hy-2,5,5,{220,120,30})
+    local ax,ay = worldToMap(228,-2782); fill(ax-2,ay-2,5,5,{30,180,220})
 
-    -- Arrivals hole marker
-    local ax,az = worldToMap(228, -2782)
-    fill(ax-2, az-2, 5, 5, {30,180,220})
-
-    -- Turtle dots
-    local tColors = { {55,195,80}, {80,155,225}, {220,185,45}, {215,55,55}, {195,55,195} }
-    local ti = 0
-    for _, v in pairs(state.turtles) do
-        ti = ti + 1
-        local col = tColors[(ti-1) % #tColors + 1]
+    -- Draw all turtles
+    local list = turtleList()
+    for i,v in ipairs(list) do
+        local col = turtleCol(i)
+        local isSel = v.id == state.selectedTurtle
         if v.pos then
-            local tx, tz = worldToMap(v.pos.x, v.pos.z)
-            -- Dot (5x5)
-            fill(tx-3, tz-3, 7, 7, col)
-            -- Label above dot
-            local label = (v.id or "?") .. " Y" .. tostring(v.pos.y)
-            t(label, tx+5, tz-8, col, 9, true)
-            -- Age indicator
-            local age = math.floor((os.epoch("utc") - (v.posAge or 0)) / 1000)
-            t(age.."s", tx+5, tz+1, C.DIM, 9)
-        else
-            -- No position known yet
-            t((v.id or "?") .. " (no pos)", MAP.px+4, MAP.py+14*(ti), C.DIM, 9)
+            local tx,tz = worldToMap(v.pos.x, v.pos.z)
+            -- Selected: bigger ring
+            if isSel then
+                state.gpu.drawLine(state.display,tx-5,tz-5,tx+5,tz-5,col[1],col[2],col[3])
+                state.gpu.drawLine(state.display,tx+5,tz-5,tx+5,tz+5,col[1],col[2],col[3])
+                state.gpu.drawLine(state.display,tx+5,tz+5,tx-5,tz+5,col[1],col[2],col[3])
+                state.gpu.drawLine(state.display,tx-5,tz+5,tx-5,tz-5,col[1],col[2],col[3])
+            end
+            fill(tx-2, tz-2, 5, 5, col)
+            t(v.id or"?", tx+5, tz-4, col, 8, isSel)
         end
     end
 
-    -- Legend
-    local lx = MAP.px + MAP.pw + 4
-    t("LEGEND", lx, MAP.py, C.DIM, 9, true)
-    fill(lx, MAP.py+12, 5, 5, {220,120,30})
-    t("Dispatch", lx+7, MAP.py+11, C.DIM, 9)
-    fill(lx, MAP.py+22, 5, 5, {30,180,220})
-    t("Arrivals", lx+7, MAP.py+21, C.DIM, 9)
+    -- ── Right info panel ─────────────────────────────────────────────────────
+    local rx = MAP.px + MAP.pw + 6
+    local ry = MAP.py
+
+    -- Panel bg + border
+    fill(rx, ry, W-rx-4, MAP.ph, {16,20,38})
+    state.gpu.drawLine(state.display,rx,ry,W-4,ry,50,65,110)
+
+    -- Title + click hint
+    t("TURTLES", rx+4, ry+2, C.WHITE, 10, true)
+    fill(rx, ry+14, W-rx-4, 14, {30,50,100})
+    t("click to focus", rx+4, ry+16, {180,200,255}, 9)
+
+    -- Turtle list
+    local ly = ry + 32
+    for i,v in ipairs(list) do
+        local col  = turtleCol(i)
+        local isSel = v.id == state.selectedTurtle
+        if isSel then fill(rx, ly-1, W-rx-4, 12, {25,40,70}) end
+        local marker = isSel and ">" or " "
+        t(marker .. (v.id or"?"), rx+4, ly, col, 9, isSel)
+        ly = ly + 13
+    end
+
+    -- Selected turtle detail box
+    local sel = state.selectedTurtle and state.turtles[state.selectedTurtle]
+    if sel then
+        local dy = ry + 32 + #list*13 + 6
+        -- Divider
+        state.gpu.drawLine(state.display,rx,dy,W-4,dy,50,65,110)
+        dy = dy + 4
+
+        t(sel.id or"?", rx+4, dy, C.WHITE, 10, true)
+        dy = dy + 13
+
+        local st = sel.online and (sel.status or"IDLE") or "OFFLINE"
+        local sc = tCol(sel.status, sel.online)
+        t("Status: "..st, rx+4, dy, sc, 9); dy=dy+11
+
+        if sel.pos then
+            t(string.format("X: %d", sel.pos.x), rx+4, dy, C.DIM, 9); dy=dy+11
+            t(string.format("Y: %d", sel.pos.y), rx+4, dy, C.DIM, 9); dy=dy+11
+            t(string.format("Z: %d", sel.pos.z), rx+4, dy, C.DIM, 9); dy=dy+11
+            local age = math.floor((os.epoch("utc")-(sel.posAge or 0))/1000)
+            t(age.."s ago", rx+4, dy, {80,80,100}, 9); dy=dy+11
+        else
+            t("No position yet", rx+4, dy, C.DIM, 9); dy=dy+11
+        end
+
+        local fuel = sel.fuel or 0
+        local pct  = math.floor(math.min(100, fuel/math.max(sel.fuelMax or 1,1)*100))
+        t(string.format("Fuel: %d%%", pct), rx+4, dy, pct>50 and C.GREEN or (pct>20 and C.YELLOW or C.RED), 9)
+        dy=dy+11
+
+        if sel.jobId then
+            t("Job: "..sel.jobId, rx+4, dy, C.CYAN, 9)
+        end
+    else
+        t("No turtle", rx+4, ry+80, C.DIM, 9)
+        t("selected", rx+4, ry+91, C.DIM, 9)
+    end
 end
 
 -- ─── Render ──────────────────────────────────────────────────────────────────
@@ -406,16 +478,25 @@ local function main()
                     local isMove = evLow:find("mov") or evLow:find("hover")
                                 or evLow:find("drag") or evLow:find("enter")
                                 or evLow:find("exit") or evLow == "3"
-                    -- Hit-test against NEXT button
                     local now = os.clock()
-                    if not isMove and ex and ey
-                    and ex >= BTN.x and ex <= BTN.x + BTN.w
-                    and ey >= BTN.y and ey <= BTN.y + BTN.h
-                    and (now - lastPageFlip) > 0.5 then
-                        lastPageFlip = now
-                        state.page = (state.page % #PAGES) + 1
-                        render()
-                        break
+                    if not isMove and ex and ey then
+                        -- NEXT bar: cycle pages
+                        if ex >= BTN.x and ex <= BTN.x+BTN.w
+                        and ey >= BTN.y and ey <= BTN.y+BTN.h
+                        and (now - lastPageFlip) > 0.5 then
+                            lastPageFlip = now
+                            state.page = (state.page % #PAGES) + 1
+                            render(); break
+
+                        -- MAP right panel: cycle selected turtle
+                        elseif state.page == 4
+                        and ex >= MAP_BTN.x and ex <= MAP_BTN.x+MAP_BTN.w
+                        and ey >= MAP_BTN.y and ey <= MAP_BTN.y+MAP_BTN.h
+                        and (now - lastPageFlip) > 0.3 then
+                            lastPageFlip = now
+                            cycleTurtle()
+                            render(); break
+                        end
                     end
                 end
             end
