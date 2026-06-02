@@ -20,7 +20,7 @@ base.run(function(job)
     base.setStatus(proto.STATUS.LOADING, job.id)
     base.sendProgress("Requesting items from warehouse")
 
-    local loaded = base.requestItems(params.items, nil, 90)
+    local loaded = base.requestItems(params.items, nil, 300)
     if not loaded then
         return base.sendFailed("warehouse_timeout", true)
     end
