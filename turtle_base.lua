@@ -618,12 +618,18 @@ local function findFreeSpace()
     return nil
 end
 
--- Quick scan of inventory slots 1-15 for any loose burnable items (used on boot).
+-- Slots we never burn fuel from or suck coal into.
+-- Delivery: slot 15 = fuel EC, slot 16 = delivery EC.
+-- Support:  slot 16 = fuel EC, slot 15 kept free as safety margin.
+-- Both roles: only use slots 1-BURN_MAX for fuel operations.
+local BURN_MAX = 14   -- updated to CHEST_SLOT-1 (min 14) in base.init()
+
+-- Quick scan of inventory slots 1-BURN_MAX for any loose burnable items (used on boot).
 -- Skips if already at max fuel to avoid wasting coal from previous runs.
 function fuel.refuel()
     if fuel.level() >= fuel.max() then return end
     local before = fuel.level()
-    for slot = 1, 15 do
+    for slot = 1, BURN_MAX do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
             turtle.refuel()
@@ -637,12 +643,42 @@ function fuel.refuel()
     end
 end
 
--- Deploy the entangled chest, drain all coal, break it, pocket it.
+-- Deploy the entangled chest, drain coal into slots 1-BURN_MAX, burn it, recover chest.
+-- Before deploying, clears non-fuel debris from slots 1-BURN_MAX to ensure there is
+-- room for coal (support turtles accumulate road debris while following delivery).
 function fuel.refuelFromChest()
     local chestData = turtle.getItemDetail(CHEST_SLOT)
     if not chestData then
         logWarn("Slot " .. CHEST_SLOT .. " has no entangled chest!")
         return false
+    end
+
+    -- ── Clear debris to make room ────────────────────────────────────────────
+    local function freeCount()
+        local n = 0
+        for s = 1, BURN_MAX do
+            if turtle.getItemCount(s) == 0 then n = n + 1 end
+        end
+        return n
+    end
+
+    if freeCount() < 4 then
+        logInfo("Clearing debris from inventory to make room for coal...")
+        for s = 1, BURN_MAX do
+            if freeCount() >= 4 then break end
+            local item = turtle.getItemDetail(s)
+            if item then
+                local n = item.name
+                local isFuel = (n == "minecraft:coal" or n == "minecraft:charcoal"
+                                or n == "minecraft:coal_block" or n == CHEST_ITEM)
+                if not isFuel then
+                    turtle.select(s)
+                    -- Prefer dropping down; fall back to forward
+                    if not turtle.dropDown() then turtle.drop() end
+                end
+            end
+        end
+        logInfo(string.format("Debris cleared — %d free slot(s) now available", freeCount()))
     end
 
     local placeFn, digFn, suckFn = findFreeSpace()
@@ -659,23 +695,25 @@ function fuel.refuelFromChest()
     end
     sleep(0.5)  -- wait for peripheral/block to register
 
-    -- Suck all coal into inventory (slots 1-15, skip reserved slot 16)
+    -- Suck coal into slots 1-BURN_MAX only.
+    -- Explicitly select each target slot before sucking so CC never auto-fills
+    -- into slots 15 or 16 (reserved for ender chests).
     local pulled = 0
-    for _ = 1, 16 do
-        if suckFn(64) then
-            pulled = pulled + 1
-        else
-            break
+    for s = 1, BURN_MAX do
+        if turtle.getItemCount(s) == 0 then
+            turtle.select(s)
+            if suckFn(64) then pulled = pulled + 1 end
         end
     end
+    turtle.select(1)
 
     if pulled == 0 then
         logWarn("Entangled chest is empty — no coal available!")
     end
 
-    -- Refuel from slots 1-15 only
+    -- Burn slots 1-BURN_MAX only (never touch slots 15 or 16)
     local before = fuel.level()
-    for slot = 1, 15 do
+    for slot = 1, BURN_MAX do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
             turtle.refuel()
@@ -688,19 +726,14 @@ function fuel.refuelFromChest()
     digFn()
     sleep(0.3)
 
-    -- Coal may have landed in slot 16 while chest was placed — move it out first
-    local s16 = turtle.getItemDetail(CHEST_SLOT)
-    if s16 and s16.name ~= CHEST_ITEM then
+    -- If coal accidentally landed in CHEST_SLOT, burn it before recovering the chest
+    local cs = turtle.getItemDetail(CHEST_SLOT)
+    if cs and cs.name ~= CHEST_ITEM then
         turtle.select(CHEST_SLOT)
-        for s = 1, 15 do
-            if turtle.getItemCount(s) == 0 then
-                turtle.transferTo(s)
-                break
-            end
-        end
+        turtle.refuel()   -- burns coal; EC is not burnable so this is safe
     end
 
-    -- Find chest in ANY slot (1-16) and move to reserved slot 16
+    -- Find chest in any slot (1-16) and move to CHEST_SLOT
     for slot = 1, 16 do
         local item = turtle.getItemDetail(slot)
         if item and item.name == CHEST_ITEM then
@@ -727,26 +760,29 @@ function fuel.dockRefuel()
         return true
     end
     logInfo("Refuelling at dock station...")
-    local gained = 0
 
-    -- Suck coal from dock chest (below by default, then try other sides)
+    -- Suck coal from dock chest into slots 1-BURN_MAX only
     local suckFns = { turtle.suckDown, turtle.suckUp, turtle.suck }
     for _, suckFn in ipairs(suckFns) do
-        for _ = 1, 16 do
-            if not suckFn(64) then break end
+        for s = 1, BURN_MAX do
+            if turtle.getItemCount(s) == 0 then
+                turtle.select(s)
+                if not suckFn(64) then break end
+            end
         end
     end
+    turtle.select(1)
 
-    -- Burn everything in slots 1-15
+    -- Burn slots 1-BURN_MAX only
     local before = fuel.level()
-    for slot = 1, 15 do
+    for slot = 1, BURN_MAX do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
             turtle.refuel()
         end
     end
     turtle.select(1)
-    gained = fuel.level() - before
+    local gained = fuel.level() - before
 
     if gained > 0 then
         logInfo(string.format("Dock refuel +%d (now %d/%d)", gained, fuel.level(), fuel.max()))
@@ -928,6 +964,10 @@ function base.init(role)
         CHEST_SLOT = 15
         logInfo("Fuel ender chest slot set to 15 (delivery role)")
     end
+    -- BURN_MAX = highest slot we'll ever suck coal into or burn from.
+    -- Always cap at 14 so slots 15 and 16 are never touched by fuel ops.
+    BURN_MAX = math.min(CHEST_SLOT - 1, 14)
+    logInfo("Fuel burn range: slots 1-" .. BURN_MAX)
     print(string.format("=== %s [%s] v%s booting ===", _self.id, role, proto.VERSION))
     comms.init()
     initPosition()
