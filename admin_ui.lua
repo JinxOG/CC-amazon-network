@@ -461,53 +461,53 @@ local function pgDispatch()
     fill(lx, top, DL.lw, H-top-2, {14,18,34})
     ln(lx+DL.lw, top, lx+DL.lw, H-2, C.BORDER)
 
-    local y = top + 4
+    local y = top + 5
 
     -- Service
-    t("SERVICE", lx+4, y, C.DIM, 8, true); y = y + 10
+    t("SERVICE", lx+4, y, C.DIM, 9, true); y = y + 12
     local selCol = d.service=="DELIVERY" and {40,160,60} or {30,40,70}
-    fill(lx+4, y, DL.lw-8, 14, selCol)
-    t("DELIVERY", lx+8, y+2, C.WHITE, 9, d.service=="DELIVERY")
-    DZ.delivery = { x=lx+4, y=y, w=DL.lw-8, h=14 }
-    y = y + 18
+    fill(lx+4, y, DL.lw-8, 16, selCol)
+    t("DELIVERY", lx+8, y+3, C.WHITE, 10, d.service=="DELIVERY")
+    DZ.delivery = { x=lx+4, y=y, w=DL.lw-8, h=16 }
+    y = y + 20
 
     -- Destination
-    t("DESTINATION", lx+4, y, C.DIM, 8, true); y = y + 10
+    t("DESTINATION", lx+4, y, C.DIM, 9, true); y = y + 12
     if d.coords then
-        t(string.format("X%d Y%d Z%d", d.coords.x, d.coords.y, d.coords.z), lx+4, y, C.WHITE, 8)
+        t(string.format("X%d Y%d Z%d", d.coords.x, d.coords.y, d.coords.z), lx+4, y, C.WHITE, 9)
     else
-        t("not set", lx+4, y, {60,60,80}, 8)
+        t("not set", lx+4, y, {80,80,100}, 9)
     end
-    y = y + 10
-    fill(lx+4, y, DL.lw-8, 12, {25,35,65})
-    t("[enter coords]", lx+7, y+2, {140,170,255}, 8)
-    DZ.coords = { x=lx+4, y=y, w=DL.lw-8, h=12 }
-    y = y + 16
+    y = y + 12
+    fill(lx+4, y, DL.lw-8, 14, {25,35,65})
+    t("[enter coords]", lx+7, y+3, {140,170,255}, 9)
+    DZ.coords = { x=lx+4, y=y, w=DL.lw-8, h=14 }
+    y = y + 18
 
     -- Order list
-    t("ORDER", lx+4, y, C.DIM, 8, true); y = y + 9
-    ln(lx+4, y, lx+DL.lw-4, y, C.BORDER); y = y + 2
+    t("ORDER", lx+4, y, C.DIM, 9, true); y = y + 11
+    ln(lx+4, y, lx+DL.lw-4, y, C.BORDER); y = y + 3
     if #d.order == 0 then
-        t("(none)", lx+6, y, {50,55,75}, 8); y = y + 10
+        t("(none)", lx+6, y, {60,65,85}, 9); y = y + 12
     else
         for _, entry in ipairs(d.order) do
-            if y > H - 30 then break end
-            t(entry.display, lx+4, y, C.WHITE, 8)
-            t("x"..entry.count, lx+DL.lw-28, y, C.CYAN, 8)
-            y = y + 11
+            if y > H - 34 then break end
+            t(entry.display, lx+4, y, C.WHITE, 9)
+            t("x"..entry.count, lx+DL.lw-30, y, C.CYAN, 9)
+            y = y + 12
         end
     end
 
     -- Status
     if d.status ~= "" then
         local sc = d.statusOk and C.GREEN or C.RED
-        t(d.status, lx+4, H-24, sc, 7)
+        t(d.status, lx+4, H-26, sc, 8)
     end
 
     -- Clear button
-    fill(lx+4, H-16, 50, 12, {120,40,40})
-    t("CLEAR", lx+9, H-14, C.WHITE, 8)
-    DZ.clear = { x=lx+4, y=H-16, w=50, h=12 }
+    fill(lx+4, H-16, 55, 13, {120,40,40})
+    t("CLEAR", lx+10, H-14, C.WHITE, 9, true)
+    DZ.clear = { x=lx+4, y=H-16, w=55, h=13 }
 
     -- Waiting overlay
     if d.waiting then
@@ -518,22 +518,22 @@ local function pgDispatch()
 
     -- ── Right panel ───────────────────────────────────────────────────────────
     fill(rx, top, DL.rw, H-top-2, {10,13,26})
-    fill(rx, top, DL.rw, 12, {20,28,55})
-    t("RS INVENTORY", rx+4, top+1, C.WHITE, 8, true)
+    fill(rx, top, DL.rw, 13, {20,28,55})
+    t("RS INVENTORY", rx+4, top+2, C.WHITE, 9, true)
 
     if not state.rsBridge then
         t("no rsBridge attached", rx+4, top+16, C.RED, 8)
         return
     end
 
-    local SCROLL_H = 12
-    local ITEM_H   = 14
+    local SCROLL_H = 13
+    local ITEM_H   = 16
     local ITEMS_VIS= 4
-    local rTop = top + 13
+    local rTop = top + 14
 
     -- Scroll up
     fill(rx, rTop, DL.rw, SCROLL_H, {22,32,60})
-    t("▲  UP", rx + DL.rw/2 - 14, rTop+2, C.DIM, 8)
+    t("▲  UP", rx + DL.rw/2 - 16, rTop+2, C.WHITE, 9)
     DZ.scrollUp = { x=rx, y=rTop, w=DL.rw, h=SCROLL_H }
     rTop = rTop + SCROLL_H
 
@@ -544,16 +544,16 @@ local function pgDispatch()
         local idx  = i + d.rsScroll
         local iy   = rTop + (i-1)*ITEM_H
         local item = items[idx]
-        local rowBg = (i%2==0) and {14,18,34} or {18,23,42}
+        local rowBg = (i%2==0) and {14,18,34} or {20,26,46}
         fill(rx, iy, DL.rw, ITEM_H, rowBg)
         if item then
-            t(item.display, rx+4, iy+2, C.WHITE, 8)
+            t(item.display, rx+4, iy+3, C.WHITE, 9)
             local stockStr = item.amount >= 1000
                 and string.format("%.1fk", item.amount/1000)
                 or  tostring(item.amount)
-            t(stockStr, rx+DL.rw-52, iy+2, C.DIM, 8)
-            fill(rx+DL.rw-26, iy+1, 22, 11, {40,120,60})
-            t("[+]", rx+DL.rw-24, iy+2, C.WHITE, 8, true)
+            t(stockStr, rx+DL.rw-54, iy+3, C.DIM, 9)
+            fill(rx+DL.rw-28, iy+2, 24, 12, {40,130,60})
+            t("[+]", rx+DL.rw-25, iy+3, C.WHITE, 9, true)
             table.insert(DZ.itemRows, { x=rx, y=iy, w=DL.rw, h=ITEM_H, item=item })
         end
     end
@@ -561,16 +561,18 @@ local function pgDispatch()
 
     -- Scroll down
     fill(rx, rTop, DL.rw, SCROLL_H, {22,32,60})
-    t("▼  DOWN", rx + DL.rw/2 - 16, rTop+2, C.DIM, 8)
+    t("▼  DOWN", rx + DL.rw/2 - 18, rTop+2, C.WHITE, 9)
     DZ.scrollDown = { x=rx, y=rTop, w=DL.rw, h=SCROLL_H }
     rTop = rTop + SCROLL_H
 
-    -- Send button (fills remaining space)
+    -- Send button — fixed height, right under DOWN
+    local SEND_H  = 22
     local canSend = d.service and d.coords and #d.order > 0
-    fill(rx, rTop, DL.rw, H-rTop-2, canSend and {40,160,60} or {28,38,55})
-    t(canSend and ">>>  SEND JOB  >>>" or "fill service, coords & items",
-        rx+6, rTop+6, canSend and C.WHITE or {60,70,90}, 9, canSend)
-    DZ.send = { x=rx, y=rTop, w=DL.rw, h=H-rTop-2 }
+    fill(rx, rTop, DL.rw, SEND_H, canSend and {40,160,60} or {35,45,65})
+    t(canSend and ">>>  SEND JOB  >>>" or "SEND JOB",
+        rx + DL.rw/2 - 48, rTop+6,
+        canSend and C.WHITE or {70,80,100}, 10, canSend)
+    DZ.send = { x=rx, y=rTop, w=DL.rw, h=SEND_H }
 end
 
 -- ─── Render ──────────────────────────────────────────────────────────────────
