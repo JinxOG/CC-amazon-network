@@ -138,6 +138,16 @@ local function waitFor(wantType, seconds)
             if raw then
                 local ok, msg = proto.decode(raw)
                 if ok then
+                    if msg.type == proto.MSG.UPDATE_ALL then
+                        log("UPDATE_ALL received — running updater then rebooting...")
+                        sleep(1)
+                        if fs.exists("updater.lua") then
+                            shell.run("updater")
+                        else
+                            log("updater.lua not found — rebooting anyway")
+                            os.reboot()
+                        end
+                    end
                     if msg.type == wantType
                     and (not current or msg.from == current.turtleId) then
                         return msg

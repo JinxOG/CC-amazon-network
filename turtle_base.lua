@@ -188,23 +188,87 @@ local function isTurtleBlock(dir)
            and data.name:find("turtle")
 end
 
+-- Attempt a 1-block lateral bypass of a turtle blocking the forward path.
+-- Tries left lane then right lane. All position tracking done internally.
+-- Returns true if the turtle successfully moved past the obstacle.
+local function bypassForward()
+    local function tryStrafe(isLeft)
+        -- turnOut: face sideways away from original lane
+        -- turnRtn: face back toward original lane (or original travel dir)
+        local turnOut = isLeft and move.turnLeft  or move.turnRight
+        local turnRtn = isLeft and move.turnRight or move.turnLeft
+
+        -- 1. Sidestep into bypass lane
+        turnOut()
+        if not turtle.forward() then
+            turnRtn()   -- lane blocked — restore facing
+            return false
+        end
+        applyMove("forward")
+        turnRtn()   -- face original travel direction
+
+        -- 2. Advance past the obstacle (up to 3 blocks)
+        local advanced = 0
+        for _ = 1, 3 do
+            if turtle.forward() then
+                applyMove("forward")
+                advanced = advanced + 1
+                if not isTurtleBlock("forward") then break end  -- clear ahead
+            else
+                break
+            end
+        end
+
+        if advanced == 0 then
+            -- Bypass lane blocked ahead too — undo sidestep
+            turnRtn()               -- face back toward original lane
+            turtle.forward()        -- raw move (avoid tryMove recursion)
+            applyMove("forward")
+            turnOut()               -- restore original travel facing
+            return false
+        end
+
+        -- 3. Step back into original lane
+        turnRtn()                   -- face original lane
+        if turtle.forward() then
+            applyMove("forward")
+        end
+        turnOut()                   -- restore original travel facing
+        return true
+    end
+
+    logInfo("Turtle blocking forward — attempting bypass...")
+    if tryStrafe(true)  then logInfo("Bypass via left lane OK");  return true end
+    if tryStrafe(false) then logInfo("Bypass via right lane OK"); return true end
+    logInfo("Bypass failed — reverting to wait")
+    return false
+end
+
 local function tryMove(moveFn, digFn, dir)
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
     local digAttempts = 0
 
     -- Separate deadline for turtle-blocked waiting (2 minutes max)
-    local turtleDeadline = os.clock() + 120
-    local turtleWaits    = 0
+    local turtleDeadline  = os.clock() + 120
+    local turtleWaits     = 0
+    local bypassAttempted = false
 
     while true do
         if moveFn() then applyMove(dir); return true end
 
         if isTurtleBlock(dir) then
-            -- Another turtle is in the way — wait and retry, don't dig
+            -- Another turtle is in the way — wait, then try to route around it
             if os.clock() > turtleDeadline then
                 return false, "blocked by turtle (" .. dir .. ")"
             end
             turtleWaits = turtleWaits + 1
+            -- After ~3 s of waiting, attempt a one-block lateral bypass (forward only)
+            if dir == "forward" and turtleWaits >= 6 and not bypassAttempted then
+                bypassAttempted = true
+                if bypassForward() then
+                    return true   -- position already updated inside bypassForward
+                end
+            end
             -- Back off progressively: 0.5s → 1s → 1.5s → 2s (cap)
             sleep(math.min(2.0, 0.5 * turtleWaits))
         else
@@ -890,6 +954,19 @@ function base.run(jobHandler)
                             end
                             _self.busy  = false
                             pendingJob  = nil
+
+                        elseif msg.type == proto.MSG.UPDATE_ALL then
+                            logWarn("UPDATE_ALL received — running updater then rebooting...")
+                            if _self.busy and _self.jobId then
+                                base.sendFailed("update_all", false)
+                            end
+                            sleep(1)
+                            if fs.exists("updater.lua") then
+                                shell.run("updater")
+                            else
+                                logWarn("updater.lua not found — rebooting anyway")
+                                os.reboot()
+                            end
                         end
                     end
                 end

@@ -644,6 +644,19 @@ local function handleConsoleEnter()
         server.recallAll("console_recall")
         print("Recalled all turtles.")
 
+    elseif cmd == "update" then
+        -- Broadcast UPDATE_ALL to every computer on the network, then update self
+        local msg = proto.encode(proto.MSG.UPDATE_ALL, "server", "all", {})
+        sendBroadcast(proto.MSG.UPDATE_ALL, {})
+        print("Broadcast UPDATE_ALL sent to all turtles, warehouse, and admin UI.")
+        print("Server will self-update now...")
+        sleep(1)
+        if fs.exists("updater.lua") then
+            shell.run("updater")
+        else
+            print("updater.lua not found on server — skipping self-update.")
+        end
+
     elseif cmd == "jobs" then
         local pending, active, done = 0, 0, 0
         for _, job in pairs(state.jobs) do

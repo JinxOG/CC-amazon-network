@@ -63,6 +63,9 @@ proto.MSG = {
     -- Remote dispatch (admin → server)
     JOB_REQUEST     = "JOB_REQUEST",     -- admin UI → server: submit a new delivery job
 
+    -- Over-the-air update
+    UPDATE_ALL      = "UPDATE_ALL",      -- server → all: download latest files and reboot
+
     -- Warehouse ↔ server ↔ turtle delivery handshake
     WAREHOUSE_QUEUED  = "WAREHOUSE_QUEUED",  -- warehouse → turtle: you're in queue at position N
     DELIVERY_ARRIVED  = "DELIVERY_ARRIVED",  -- turtle → warehouse: at destination, send chests
