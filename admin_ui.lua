@@ -335,7 +335,11 @@ local function pgMap()
         dy = dy + 13
 
         local st = sel.online and (sel.status or"IDLE") or "OFFLINE"
-        local sc = tCol(sel.status, sel.online)
+        local sc = (not sel.online) and C.RED
+                or (sel.status=="IDLE" and C.GREEN)
+                or (sel.status=="RETURNING" and C.BLUE)
+                or (sel.status=="ERROR" and C.RED)
+                or C.YELLOW
         t("Status: "..st, rx+4, dy, sc, 9); dy=dy+11
 
         if sel.pos then
