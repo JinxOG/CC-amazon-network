@@ -174,11 +174,13 @@ base.run(function(job)
 
     print(string.format("Pulling %d regular chests from entangled chest", chestCount))
 
-    -- Pull regular chests out of entangled chest (they go into slots 1-15)
+    -- Pull regular chests out of entangled chest into slots 1+
+    turtle.select(1)   -- ensure suckDown fills from slot 1, not slot 16
     local pulled = 0
     for _ = 1, chestCount do
         if turtle.suckDown(1) then pulled = pulled + 1 end
     end
+    print("Pulled " .. pulled .. " regular chests into inventory")
 
     -- Place regular chests in a row along Z+1..Z+N from destination
     local chestPositions = {}
@@ -233,6 +235,7 @@ base.run(function(job)
 
         -- ITEMS_READY: pull batch from ender chest into turtle inventory
         base.move.to(d.x, d.y, d.z)
+        turtle.select(1)
         while turtle.suckDown() do end
 
         -- Distribute items across placed regular chests
