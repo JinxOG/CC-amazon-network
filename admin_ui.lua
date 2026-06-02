@@ -10,9 +10,9 @@ local W = 500
 local H = 260
 
 -- NEXT button = the second row of the title bar
-local BTN = { x=0, y=20, w=500, h=18 }
+local BTN = { x=0, y=20, w=W, h=18 }
 
-local PAGES    = { "TURTLES", "JOBS", "LOG" }
+local PAGES    = { "TURTLES", "JOBS", "LOG", "MAP" }
 local MAX_LOGS = 80
 local FONT     = "minecraft:font/default.ttf"
 local FS       = 12   -- body font size
@@ -202,6 +202,94 @@ local function pgLog()
     end
 end
 
+-- ─── Page: Map ───────────────────────────────────────────────────────────────
+-- Top-down view. World X → screen X, World Z → screen Y.
+-- Viewport centred on the depot area with enough margin for delivery routes.
+
+local MAP = {
+    -- World bounds shown on map
+    x1 = 100,    x2 = 280,   -- world X range (180 blocks)
+    z1 = -2850,  z2 = -2720, -- world Z range (130 blocks)
+    -- Canvas area for the map (inside the page)
+    px = 8, py = 46, pw = 440, ph = 195,
+}
+
+-- Convert world coords to canvas pixels
+local function worldToMap(wx, wz)
+    local sx = MAP.px + (wx - MAP.x1) / (MAP.x2 - MAP.x1) * MAP.pw
+    local sy = MAP.py + (wz - MAP.z1) / (MAP.z2 - MAP.z1) * MAP.ph
+    return math.floor(sx), math.floor(sy)
+end
+
+local function pgMap()
+    -- Header
+    fill(4, TH+2, W-8, 20, C.PANEL)
+    t("MAP  (last known positions)", 8, TH+4, C.WHITE, FT, true)
+
+    -- Map background
+    fill(MAP.px, MAP.py, MAP.pw, MAP.ph, {12, 16, 30})
+
+    -- Grid lines every 20 blocks
+    for wx = MAP.x1, MAP.x2, 20 do
+        local sx, _ = worldToMap(wx, MAP.z1)
+        local _,  ey = worldToMap(wx, MAP.z2)
+        state.gpu.drawLine(state.display, sx, MAP.py, sx, MAP.py+MAP.ph, 25,30,55)
+        t(tostring(wx), sx+1, MAP.py+MAP.ph-10, {40,50,80}, 9)
+    end
+    for wz = MAP.z1, MAP.z2, 20 do
+        local _, sy = worldToMap(MAP.x1, wz)
+        state.gpu.drawLine(state.display, MAP.px, sy, MAP.px+MAP.pw, sy, 25,30,55)
+        t(tostring(wz), MAP.px+2, sy-9, {40,50,80}, 9)
+    end
+
+    -- Depot outline (x=143→228, z=-2813→-2782)
+    local dx1,dz1 = worldToMap(143, -2813)
+    local dx2,dz2 = worldToMap(228, -2782)
+    state.gpu.drawLine(state.display, dx1,dz1, dx2,dz1, 60,80,130)
+    state.gpu.drawLine(state.display, dx2,dz1, dx2,dz2, 60,80,130)
+    state.gpu.drawLine(state.display, dx2,dz2, dx1,dz2, 60,80,130)
+    state.gpu.drawLine(state.display, dx1,dz2, dx1,dz1, 60,80,130)
+    t("DEPOT", dx1+2, dz1+2, {60,80,130}, 9)
+
+    -- Dispatch hole marker
+    local hx,hz = worldToMap(143, -2813)
+    fill(hx-2, hz-2, 5, 5, {220,120,30})
+
+    -- Arrivals hole marker
+    local ax,az = worldToMap(228, -2782)
+    fill(ax-2, az-2, 5, 5, {30,180,220})
+
+    -- Turtle dots
+    local tColors = { {55,195,80}, {80,155,225}, {220,185,45}, {215,55,55}, {195,55,195} }
+    local ti = 0
+    for _, v in pairs(state.turtles) do
+        ti = ti + 1
+        local col = tColors[(ti-1) % #tColors + 1]
+        if v.pos then
+            local tx, tz = worldToMap(v.pos.x, v.pos.z)
+            -- Dot (5x5)
+            fill(tx-3, tz-3, 7, 7, col)
+            -- Label above dot
+            local label = (v.id or "?") .. " Y" .. tostring(v.pos.y)
+            t(label, tx+5, tz-8, col, 9, true)
+            -- Age indicator
+            local age = math.floor((os.epoch("utc") - (v.posAge or 0)) / 1000)
+            t(age.."s", tx+5, tz+1, C.DIM, 9)
+        else
+            -- No position known yet
+            t((v.id or "?") .. " (no pos)", MAP.px+4, MAP.py+14*(ti), C.DIM, 9)
+        end
+    end
+
+    -- Legend
+    local lx = MAP.px + MAP.pw + 4
+    t("LEGEND", lx, MAP.py, C.DIM, 9, true)
+    fill(lx, MAP.py+12, 5, 5, {220,120,30})
+    t("Dispatch", lx+7, MAP.py+11, C.DIM, 9)
+    fill(lx, MAP.py+22, 5, 5, {30,180,220})
+    t("Arrivals", lx+7, MAP.py+21, C.DIM, 9)
+end
+
 -- ─── Render ──────────────────────────────────────────────────────────────────
 
 local function drawNextBtn()
@@ -214,6 +302,7 @@ local function render()
     if     state.page==1 then pgTurtles()
     elseif state.page==2 then pgJobs()
     elseif state.page==3 then pgLog()
+    elseif state.page==4 then pgMap()
     end
     drawNextBtn()
     flush()
@@ -230,7 +319,8 @@ local function onMsg(msg)
     if msg.type==proto.MSG.REGISTER then
         local p=msg.payload; local id=msg.from
         state.turtles[id]={id=id,role=p.role,status="IDLE",
-            fuel=p.fuel,fuelMax=p.fuelMax,online=true}
+            fuel=p.fuel,fuelMax=p.fuelMax,online=true,
+            pos=p.position,posAge=os.epoch("utc")}
         addLog("INFO","Reg: "..id.." [".. (p.role or"?") .."]")
 
     elseif msg.type==proto.MSG.HEARTBEAT then
@@ -239,12 +329,14 @@ local function onMsg(msg)
         local v=state.turtles[id]
         v.online=true; v.status=p.status or v.status
         v.fuel=p.fuel or v.fuel; v.jobId=p.jobId
+        if p.position then v.pos=p.position; v.posAge=os.epoch("utc") end
 
     elseif msg.type==proto.MSG.STATUS_UPDATE then
         local p=msg.payload; local id=msg.from
         if not state.turtles[id] then state.turtles[id]={id=id,online=true} end
         local v=state.turtles[id]
         v.status=p.status or v.status; v.jobId=p.jobId or v.jobId
+        if p.position then v.pos=p.position; v.posAge=os.epoch("utc") end
         if p.jobId and state.jobs[p.jobId] then
             state.jobs[p.jobId].status="IN_PROGRESS"
         end
