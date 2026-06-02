@@ -1,9 +1,19 @@
 -- admin_ui.lua
--- Live dashboard for the CC autonomous network.
--- Runs on a dedicated computer connected to a DirectGPU monitor + ender modem.
--- Tap the monitor to cycle between pages: Turtles → Jobs → Log
+-- Admin dashboard. Right-click monitor to cycle pages.
 
 local proto = require("protocol")
+
+-- ─── Fixed canvas size ────────────────────────────────────────────────────────
+-- Deliberately undersized so content always fits in the top-left of any monitor.
+-- Change these if you want a larger layout.
+local W = 500
+local H = 260
+
+local PAGES    = { "TURTLES", "JOBS", "LOG" }
+local MAX_LOGS = 80
+local FONT     = "minecraft:font/default.ttf"
+local FS       = 12   -- body font size
+local FT       = 13   -- title font size
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 
@@ -15,414 +25,287 @@ local state = {
     gpu      = nil,
     display  = nil,
     lastPoll = 0,
-    W        = 656,
-    H        = 324,
-    page     = 1,    -- 1=Turtles  2=Jobs  3=Log
+    page     = 1,
 }
 
-local PAGES     = { "TURTLES", "JOBS", "LOG" }
-local MAX_LOGS  = 100
-local PAD       = 10
-local TITLE_H   = 32
-local FONT      = "minecraft:font/default.ttf"
-
--- ─── Colour palette ──────────────────────────────────────────────────────────
+-- ─── Colours ─────────────────────────────────────────────────────────────────
 
 local C = {
-    BG       = { 8,   10,  20  },
-    PANEL_BG = { 20,  25,  45  },
-    BORDER   = { 70,  90,  140 },
-    HDR_BG   = { 35,  50,  95  },
-    BTN_BG   = { 55,  75,  130 },
-    WHITE    = { 240, 240, 240 },
-    DIM      = { 130, 130, 150 },
-    GREEN    = {  55, 195,  80 },
-    YELLOW   = { 220, 185,  45 },
-    RED      = { 215,  55,  55 },
-    BLUE     = {  75, 155, 225 },
-    CYAN     = {  55, 195, 195 },
-    ORANGE   = { 215, 125,  45 },
-    INFO     = {  75, 155, 225 },
-    WARN     = { 220, 185,  45 },
-    ERR      = { 215,  55,  55 },
+    BG     = { 8,  10,  20 },
+    HDR    = { 30, 45,  90 },
+    PANEL  = { 18, 22,  40 },
+    BORDER = { 60, 80, 130 },
+    WHITE  = {240,240, 240 },
+    DIM    = {120,120, 140 },
+    GREEN  = { 50,190,  70 },
+    YELLOW = {220,185,  45 },
+    RED    = {210, 50,  50 },
+    BLUE   = { 70,150, 220 },
+    CYAN   = { 50,190, 190 },
+    ORANGE = {210,120,  40 },
+    INFO   = { 70,150, 220 },
+    WARN   = {220,185,  45 },
+    ERR    = {210, 50,  50 },
 }
 
 -- ─── GPU helpers ─────────────────────────────────────────────────────────────
 
-local function fill(x, y, w, h, col)
-    if w <= 0 or h <= 0 then return end
-    state.gpu.fillRect(state.display, x, y, w, h, col[1], col[2], col[3])
+local function fill(x,y,w,h,c)
+    if w>0 and h>0 then
+        state.gpu.fillRect(state.display,x,y,w,h,c[1],c[2],c[3])
+    end
 end
-
-local function txt(str, x, y, col, size, bold)
-    state.gpu.drawText(state.display, tostring(str), x, y,
-        col[1], col[2], col[3],
-        FONT, size or 13, bold and "bold" or "regular")
+local function t(s,x,y,c,sz,bold)
+    state.gpu.drawText(state.display,tostring(s),x,y,
+        c[1],c[2],c[3],FONT,sz or FS,bold and "bold" or "regular")
 end
-
-local function hline(x1, x2, y, col)
-    state.gpu.drawLine(state.display, x1, y, x2, y, col[1], col[2], col[3])
+local function ln(x1,y1,x2,y2,c)
+    state.gpu.drawLine(state.display,x1,y1,x2,y2,c[1],c[2],c[3])
 end
-
 local function flush() state.gpu.updateDisplay(state.display) end
-local function lh(s)   return math.floor((s or 13) * 1.45)    end
+local LH = math.floor(FS * 1.5)
 
--- ─── Title bar (shared across all pages) ─────────────────────────────────────
+-- ─── Title bar ───────────────────────────────────────────────────────────────
+
+local TH = 22   -- title height
 
 local function drawTitle()
-    local W = state.W
-    -- Taller title bar so it's clearly visible
-    fill(0, 0, W, TITLE_H, C.HDR_BG)
-
-    -- Page indicator + right-click hint all in one visible strip
-    local pageStr = string.format("CC AMAZON  |  %s  ( %d / %d )  RIGHT-CLICK = NEXT",
+    fill(0,0,W,TH,C.HDR)
+    local label = string.format("CC AMAZON | %s (%d/%d) right-click=next",
         PAGES[state.page], state.page, #PAGES)
-    txt(pageStr, 8, 4, C.WHITE, 11, true)
-
-    -- Last-update age far enough left to always be on screen
-    local age = math.floor((os.epoch("utc") - state.lastPoll) / 1000)
-    local ts  = (state.lastPoll == 0) and "waiting..." or (age .. "s ago")
-    txt(ts, 8, TITLE_H + 2, C.DIM, 10)
+    t(label, 6, 5, C.WHITE, 11, true)
 end
 
-local function drawNextBtn()
-    -- No-op: navigation hint is in the title bar
-end
+-- ─── Page: Turtles ───────────────────────────────────────────────────────────
 
--- ─── Content area ────────────────────────────────────────────────────────────
-
-local function contentArea()
-    -- Full-width panel below title bar
-    local W, H = state.W, state.H
-    local y    = TITLE_H + PAD
-    local h    = H - TITLE_H - PAD * 2
-    return { x=PAD, y=y, w=W-PAD*2, h=h }
-end
-
-local function panelHeader(p, title)
-    fill(p.x, p.y, p.w, p.h, C.PANEL_BG)
-    hline(p.x, p.x+p.w, p.y,       C.BORDER)
-    hline(p.x, p.x+p.w, p.y+p.h-1, C.BORDER)
-    state.gpu.drawLine(state.display, p.x,       p.y, p.x,       p.y+p.h, C.BORDER[1], C.BORDER[2], C.BORDER[3])
-    state.gpu.drawLine(state.display, p.x+p.w-1, p.y, p.x+p.w-1, p.y+p.h, C.BORDER[1], C.BORDER[2], C.BORDER[3])
-    local hh = 24
-    fill(p.x+1, p.y+1, p.w-2, hh, C.HDR_BG)
-    txt(title, p.x+8, p.y+5, C.WHITE, 13, true)
-    return p.y + hh + 8
-end
-
--- ─── Status colours ──────────────────────────────────────────────────────────
-
-local function tCol(status, online)
-    if not online                                      then return C.RED    end
-    if status == "IDLE"                                then return C.GREEN  end
-    if status == "TRAVELLING" or status == "LOADING"
-       or status == "WORKING"                          then return C.YELLOW end
-    if status == "RETURNING"                           then return C.BLUE   end
-    if status == "ERROR"                               then return C.RED    end
-    return C.DIM
-end
-
-local function jCol(s)
-    if s == "COMPLETE"    then return C.GREEN  end
-    if s == "IN_PROGRESS" then return C.CYAN   end
-    if s == "ASSIGNED"    then return C.YELLOW end
-    if s == "PENDING"     then return C.ORANGE end
-    if s == "FAILED"      then return C.RED    end
-    return C.DIM
-end
-
--- ─── Page renderers ──────────────────────────────────────────────────────────
-
-local FS = 13
-
-local function renderTurtles()
-    local p  = contentArea()
-    local cy = panelHeader(p, "TURTLES")
-    local lh_ = lh(FS)
+local function pgTurtles()
+    local y = TH + 8
+    -- Header
+    fill(4, TH+2, W-8, 20, C.PANEL)
+    ln(4,TH+2,W-4,TH+2,C.BORDER)
+    t("TURTLES", 8, TH+4, C.WHITE, FT, true)
+    y = TH + 26
 
     local list = {}
-    for _, t in pairs(state.turtles) do table.insert(list, t) end
-    table.sort(list, function(a,b) return (a.id or "") < (b.id or "") end)
+    for _,v in pairs(state.turtles) do table.insert(list,v) end
+    table.sort(list,function(a,b) return (a.id or"") < (b.id or"") end)
 
     if #list == 0 then
-        txt("No turtles registered yet", p.x+8, cy, C.DIM, FS)
+        t("No turtles registered", 8, y, C.DIM, FS)
         return
     end
 
-    for _, t in ipairs(list) do
-        if cy + lh_ > p.y + p.h - 6 then break end
-
-        local sc     = tCol(t.status, t.online)
-        local dot    = t.online and ">" or "x"
-        local status = t.online and (t.status or "IDLE") or "OFFLINE"
-        local role   = t.role or "?"
-
-        txt(dot, p.x+8, cy, sc, FS, true)
-        txt(string.format("%-14s", t.id or "?"), p.x+26, cy, C.WHITE, FS, true)
-        txt(string.format("[%-8s]", role), p.x+170, cy, C.DIM, FS)
-        txt(status, p.x+290, cy, sc, FS)
-
-        -- Fuel bar
-        local fuel = t.fuel or 0
-        local fmax = math.max(t.fuelMax or 100000, 1)
-        local pct  = math.min(1, fuel / fmax)
-        local bx   = p.x + 420
-        local bw   = 200   -- fixed width so bar never runs off screen
-        local bh   = 10
-        local by   = cy + 2
-        fill(bx, by, bw, bh, C.BORDER)
-        local fc = pct > 0.5 and C.GREEN or (pct > 0.2 and C.YELLOW or C.RED)
-        fill(bx, by, math.max(1, math.floor(bw * pct)), bh, fc)
-        txt(string.format("%dk", math.floor(fuel/1000)), bx+bw+5, cy, C.DIM, FS)
-
-        -- Active job
-        if t.jobId then
-            txt("job: " .. t.jobId, p.x+8, cy+lh_-2, C.CYAN, 10)
-        end
-
-        local rowH = t.jobId and lh_+14 or lh_+4
-        cy = cy + rowH
-        hline(p.x+4, p.x+p.w-4, cy-4, C.BORDER)
+    for _,v in ipairs(list) do
+        if y + LH > H - 4 then break end
+        local sc  = (not v.online) and C.RED
+                 or (v.status=="IDLE" and C.GREEN)
+                 or (v.status=="RETURNING" and C.BLUE)
+                 or (v.status=="ERROR" and C.RED)
+                 or C.YELLOW
+        local dot = v.online and ">" or "x"
+        local st  = v.online and (v.status or "IDLE") or "OFFLINE"
+        t(dot,  8,   y, sc, FS, true)
+        t(v.id or "?", 22, y, C.WHITE, FS)
+        t("[".. (v.role or "?") .."]", 130, y, C.DIM, FS)
+        t(st, 230, y, sc, FS)
+        -- compact fuel bar
+        local pct = math.min(1,(v.fuel or 0)/math.max(v.fuelMax or 1,1))
+        local bx,bw,bh = 330,140,8
+        fill(bx, y+2, bw, bh, C.BORDER)
+        local fc = pct>0.5 and C.GREEN or (pct>0.2 and C.YELLOW or C.RED)
+        fill(bx, y+2, math.max(1,math.floor(bw*pct)), bh, fc)
+        t(math.floor((v.fuel or 0)/1000).."k", bx+bw+4, y, C.DIM, 10)
+        y = y + LH + 2
+        ln(4,y-1,W-4,y-1,C.BORDER)
     end
 end
 
-local function renderJobs()
-    local p   = contentArea()
-    local cy  = panelHeader(p, "JOBS")
-    local lh_ = lh(FS)
+-- ─── Page: Jobs ──────────────────────────────────────────────────────────────
+
+local function pgJobs()
+    local y = TH + 8
+    fill(4,TH+2,W-8,20,C.PANEL)
+    ln(4,TH+2,W-4,TH+2,C.BORDER)
+    t("JOBS", 8, TH+4, C.WHITE, FT, true)
+    y = TH + 26
 
     local list = {}
-    for _, j in pairs(state.jobs) do table.insert(list, j) end
-    table.sort(list, function(a, b)
-        local function rank(s)
-            if s == "IN_PROGRESS" then return 0
-            elseif s == "ASSIGNED" then return 1
-            elseif s == "PENDING"  then return 2
-            else                        return 3 end
+    for _,j in pairs(state.jobs) do table.insert(list,j) end
+    table.sort(list,function(a,b)
+        local function r(s)
+            return s=="IN_PROGRESS" and 0 or s=="ASSIGNED" and 1
+                or s=="PENDING" and 2 or 3
         end
-        local ra, rb = rank(a.status), rank(b.status)
-        if ra ~= rb then return ra < rb end
-        return (a.id or "") > (b.id or "")
+        local ra,rb = r(a.status),r(b.status)
+        return ra~=rb and ra<rb or (a.id or"")>(b.id or"")
     end)
 
-    if #list == 0 then
-        txt("Queue empty", p.x+8, cy, C.DIM, FS)
-        return
-    end
+    if #list == 0 then t("Queue empty",8,y,C.DIM,FS); return end
 
-    -- Column headers
-    txt("ID",         p.x+8,   cy, C.DIM, 10, true)
-    txt("TYPE",       p.x+130, cy, C.DIM, 10, true)
-    txt("STATUS",     p.x+280, cy, C.DIM, 10, true)
-    txt("ASSIGNED TO",p.x+430, cy, C.DIM, 10, true)
-    cy = cy + lh(10) + 4
-    hline(p.x+4, p.x+p.w-4, cy-2, C.BORDER)
+    -- column headers
+    t("ID",      8,   y, C.DIM, 10, true)
+    t("TYPE",   110,  y, C.DIM, 10, true)
+    t("STATUS", 210,  y, C.DIM, 10, true)
+    t("TURTLE", 330,  y, C.DIM, 10, true)
+    y = y + 16
+    ln(4,y,W-4,y,C.BORDER)
+    y = y + 4
 
-    for _, j in ipairs(list) do
-        if cy + lh_ > p.y + p.h - 6 then break end
-
-        local sc  = jCol(j.status)
-        local typ = j.type == "SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
-
-        txt(j.id or "?",      p.x+8,   cy, C.WHITE,  FS, true)
-        txt(typ,              p.x+130,  cy, C.DIM,    FS)
-        txt(j.status or "?",  p.x+280,  cy, sc,       FS)
-        if j.assignedTo then
-            txt(j.assignedTo, p.x+430,  cy, C.DIM,    FS)
-        end
-
-        cy = cy + lh_ + 3
-        hline(p.x+4, p.x+p.w-4, cy-1, C.BORDER)
+    for _,j in ipairs(list) do
+        if y + LH > H - 4 then break end
+        local sc  = j.status=="COMPLETE" and C.GREEN
+                 or j.status=="IN_PROGRESS" and C.CYAN
+                 or j.status=="ASSIGNED" and C.YELLOW
+                 or j.status=="PENDING" and C.ORANGE
+                 or j.status=="FAILED" and C.RED or C.DIM
+        local typ = j.type=="SUPPORT_FOLLOW" and "SUPPORT" or (j.type or "?")
+        t(j.id or "?",  8,   y, C.WHITE, FS, true)
+        t(typ,         110,  y, C.DIM,   FS)
+        t(j.status or"?", 210, y, sc,    FS)
+        if j.assignedTo then t(j.assignedTo, 330, y, C.DIM, FS) end
+        y = y + LH + 2
+        ln(4,y-1,W-4,y-1,C.BORDER)
     end
 end
 
-local function renderLog()
-    local p   = contentArea()
-    local cy  = panelHeader(p, "LOG")
-    local lh_ = lh(11)
-    local max = math.floor((p.y + p.h - cy - 4) / lh_)
+-- ─── Page: Log ───────────────────────────────────────────────────────────────
+
+local function pgLog()
+    local y = TH + 8
+    fill(4,TH+2,W-8,20,C.PANEL)
+    ln(4,TH+2,W-4,TH+2,C.BORDER)
+    t("LOG", 8, TH+4, C.WHITE, FT, true)
+    y = TH + 26
 
     if #state.logs == 0 then
-        txt("No events yet — waiting for network traffic", p.x+8, cy, C.DIM, 11)
+        t("No events yet", 8, y, C.DIM, FS)
         return
     end
 
-    local start = math.max(1, #state.logs - max + 1)
-    for i = start, #state.logs do
-        local e = state.logs[i]
-        if cy + lh_ > p.y + p.h - 4 then break end
-        local lc = e.level == "WARN" and C.WARN or (e.level == "ERROR" and C.ERR or C.INFO)
-        txt(string.format("[%5s]", e.level), p.x+8,    cy, lc,    11, true)
-        txt(e.msg or "",                     p.x+68,   cy, C.DIM, 11)
-        cy = cy + lh_
+    local lh2  = math.floor(FS * 1.35)
+    local rows = math.floor((H - y - 4) / lh2)
+    local from = math.max(1, #state.logs - rows + 1)
+    for i = from, #state.logs do
+        if y + lh2 > H - 4 then break end
+        local e  = state.logs[i]
+        local lc = e.level=="WARN" and C.WARN or e.level=="ERROR" and C.ERR or C.INFO
+        t("["..e.level.."]", 8,  y, lc,    10, true)
+        t(e.msg or "",       70, y, C.DIM, 10)
+        y = y + lh2
     end
 end
 
--- ─── Main render ─────────────────────────────────────────────────────────────
+-- ─── Render ──────────────────────────────────────────────────────────────────
 
-local function renderAll()
-    fill(0, 0, state.W, state.H, C.BG)
+local function render()
+    fill(0,0,W,H,C.BG)
     drawTitle()
-    if     state.page == 1 then renderTurtles()
-    elseif state.page == 2 then renderJobs()
-    elseif state.page == 3 then renderLog()
+    if     state.page==1 then pgTurtles()
+    elseif state.page==2 then pgJobs()
+    elseif state.page==3 then pgLog()
     end
-    drawNextBtn()
     flush()
 end
 
--- ─── Message handling ────────────────────────────────────────────────────────
+-- ─── Messages ────────────────────────────────────────────────────────────────
 
-local function addLog(level, msg)
-    table.insert(state.logs, { level=level, msg=msg })
-    if #state.logs > MAX_LOGS then table.remove(state.logs, 1) end
+local function addLog(lv,msg)
+    table.insert(state.logs,{level=lv,msg=msg})
+    if #state.logs>MAX_LOGS then table.remove(state.logs,1) end
 end
 
-local function handleMsg(msg)
-    if msg.type == proto.MSG.REGISTER then
-        local p = msg.payload
-        local id = msg.from
-        if not state.turtles[id] then state.turtles[id] = { id=id } end
-        local t = state.turtles[id]
-        t.role    = p.role
-        t.status  = "IDLE"
-        t.fuel    = p.fuel
-        t.fuelMax = p.fuelMax
-        t.online  = true
-        t.jobId   = nil
-        addLog("INFO", "Registered: " .. id .. " [" .. (p.role or "?") .. "]")
+local function onMsg(msg)
+    if msg.type==proto.MSG.REGISTER then
+        local p=msg.payload; local id=msg.from
+        state.turtles[id]={id=id,role=p.role,status="IDLE",
+            fuel=p.fuel,fuelMax=p.fuelMax,online=true}
+        addLog("INFO","Reg: "..id.." [".. (p.role or"?") .."]")
 
-    elseif msg.type == proto.MSG.HEARTBEAT then
-        local p  = msg.payload
-        local id = msg.from
-        if not state.turtles[id] then state.turtles[id] = { id=id, online=true } end
-        local t = state.turtles[id]
-        t.online  = true
-        t.status  = p.status or t.status
-        t.fuel    = p.fuel   or t.fuel
-        t.jobId   = p.jobId
+    elseif msg.type==proto.MSG.HEARTBEAT then
+        local p=msg.payload; local id=msg.from
+        if not state.turtles[id] then state.turtles[id]={id=id,online=true} end
+        local v=state.turtles[id]
+        v.online=true; v.status=p.status or v.status
+        v.fuel=p.fuel or v.fuel; v.jobId=p.jobId
 
-    elseif msg.type == proto.MSG.STATUS_UPDATE then
-        local p  = msg.payload
-        local id = msg.from
-        if not state.turtles[id] then state.turtles[id] = { id=id, online=true } end
-        local t = state.turtles[id]
-        t.status = p.status or t.status
-        t.jobId  = p.jobId  or t.jobId
+    elseif msg.type==proto.MSG.STATUS_UPDATE then
+        local p=msg.payload; local id=msg.from
+        if not state.turtles[id] then state.turtles[id]={id=id,online=true} end
+        local v=state.turtles[id]
+        v.status=p.status or v.status; v.jobId=p.jobId or v.jobId
         if p.jobId and state.jobs[p.jobId] then
-            state.jobs[p.jobId].status = "IN_PROGRESS"
+            state.jobs[p.jobId].status="IN_PROGRESS"
         end
 
-    elseif msg.type == proto.MSG.JOB_ASSIGN then
-        local p = msg.payload
-        if not state.jobs[p.jobId] then
-            state.jobs[p.jobId] = { id=p.jobId, type=p.jobType }
-        end
-        local j      = state.jobs[p.jobId]
-        j.status     = "ASSIGNED"
-        j.assignedTo = msg.to
-        j.type       = p.jobType or j.type
+    elseif msg.type==proto.MSG.JOB_ASSIGN then
+        local p=msg.payload
+        state.jobs[p.jobId]=state.jobs[p.jobId] or {id=p.jobId,type=p.jobType}
+        local j=state.jobs[p.jobId]
+        j.status="ASSIGNED"; j.assignedTo=msg.to; j.type=p.jobType or j.type
 
-    elseif msg.type == proto.MSG.JOB_COMPLETE then
-        local jid = msg.payload.jobId
+    elseif msg.type==proto.MSG.JOB_COMPLETE then
+        local jid=msg.payload.jobId
+        if state.jobs[jid] then state.jobs[jid].status="COMPLETE"; state.jobs[jid].assignedTo=nil end
+        local v=state.turtles[msg.from]; if v then v.status="IDLE"; v.jobId=nil end
+        addLog("INFO","Done: "..(jid or"?").." ("..msg.from..")")
+
+    elseif msg.type==proto.MSG.JOB_FAILED then
+        local p=msg.payload; local jid=p.jobId
         if state.jobs[jid] then
-            state.jobs[jid].status     = "COMPLETE"
-            state.jobs[jid].assignedTo = nil
+            state.jobs[jid].status=p.recoverable and "PENDING" or "FAILED"
         end
-        local t = state.turtles[msg.from]
-        if t then t.status = "IDLE"; t.jobId = nil end
-        addLog("INFO", "Complete: " .. (jid or "?") .. " (" .. msg.from .. ")")
-
-    elseif msg.type == proto.MSG.JOB_FAILED then
-        local p   = msg.payload
-        local jid = p.jobId
-        if state.jobs[jid] then
-            state.jobs[jid].status = p.recoverable and "PENDING" or "FAILED"
-        end
-        local t = state.turtles[msg.from]
-        if t then t.status = "IDLE"; t.jobId = nil end
-        addLog("WARN", "Failed: " .. (jid or "?") .. " - " .. (p.reason or "?"))
+        local v=state.turtles[msg.from]; if v then v.status="IDLE"; v.jobId=nil end
+        addLog("WARN","Fail: "..(jid or"?").." "..(p.reason or"?"))
     end
 end
 
 -- ─── Main ────────────────────────────────────────────────────────────────────
 
 local function main()
-    -- GPU
     state.gpu = peripheral.find("directgpu")
-    if not state.gpu then error("No DirectGPU peripheral found.") end
+    if not state.gpu then error("No DirectGPU found") end
     state.display = state.gpu.autoDetectAndCreateDisplay()
-    if not state.display then error("Could not create display — is a monitor attached?") end
+    if not state.display then error("No display created") end
 
-    -- Try DirectGPU dimension API first
-    local ok,  dw = pcall(function() return state.gpu.getDisplayWidth(state.display)  end)
-    local ok2, dh = pcall(function() return state.gpu.getDisplayHeight(state.display) end)
-    if ok  and type(dw) == "number" and dw > 0 then state.W = dw end
-    if ok2 and type(dh) == "number" and dh > 0 then state.H = dh end
-
-    -- Fallback: scan sides for a directly-attached monitor
-    if state.W == 656 and state.H == 324 then
-        for _, side in ipairs({"top","bottom","left","right","front","back"}) do
-            if peripheral.getType(side) == "monitor" then
-                local mon    = peripheral.wrap(side)
-                local cw, ch = mon.getSize()
-                state.W = math.max(300, cw * 82)
-                state.H = math.max(150, ch * 54)
-                print(string.format("Monitor on %s: %dx%d chars → %dx%d px", side, cw, ch, state.W, state.H))
-                break
-            end
-        end
-    end
-    print(string.format("Display: %dx%d px  (page UI, tap to cycle)", state.W, state.H))
-
-    -- Modem
     state.modem = peripheral.find("modem")
-    if not state.modem then error("No modem found. Attach an ender modem.") end
+    if not state.modem then error("No modem found") end
     state.modem.open(proto.CH_SERVER)
     state.modem.open(proto.CH_BROADCAST)
     state.modem.open(proto.CH_PRIVATE)
 
-    addLog("INFO", string.format("Dashboard online — %dx%d px", state.W, state.H))
-    renderAll()
+    addLog("INFO","Dashboard online")
+    render()
 
-    local redrawTimer = os.startTimer(2)
-
+    local timer = os.startTimer(2)
     while true do
-        local event, p1, p2, p3, p4 = os.pullEvent()
-
-        if event == "monitor_touch" then
-            -- Any tap cycles to next page
+        local ev,p1,p2,p3,p4 = os.pullEvent()
+        if ev=="monitor_touch" then
             state.page = (state.page % #PAGES) + 1
-            renderAll()
-
-        elseif event == "modem_message" then
-            local parsed = type(p4) == "table" and p4 or textutils.unserialise(p4)
-            if parsed then
-                local valid, msg = proto.decode(parsed)
-                if valid then
+            render()
+        elseif ev=="modem_message" then
+            local raw = type(p4)=="table" and p4 or textutils.unserialise(p4)
+            if raw then
+                local ok,msg = proto.decode(raw)
+                if ok then
                     state.lastPoll = os.epoch("utc")
-                    pcall(handleMsg, msg)
-                    renderAll()
+                    pcall(onMsg,msg)
+                    render()
                 end
             end
-
-        elseif event == "timer" and p1 == redrawTimer then
-            renderAll()
-            redrawTimer = os.startTimer(2)
+        elseif ev=="timer" and p1==timer then
+            render()
+            timer = os.startTimer(2)
         end
     end
 end
 
--- ─── Run ─────────────────────────────────────────────────────────────────────
-
-local ok, err = pcall(main)
+local ok,err = pcall(main)
 if not ok then
-    print("ADMIN UI CRASH: " .. tostring(err))
+    print("CRASH: "..tostring(err))
     if state.gpu and state.display then
-        state.gpu.clear(state.display, 10, 10, 18)
-        state.gpu.drawText(state.display, "CRASH: " .. tostring(err),
-            10, 10, 220, 60, 60, FONT, 13, "bold")
+        state.gpu.clear(state.display,10,10,18)
+        state.gpu.drawText(state.display,"CRASH: "..tostring(err),
+            6,6,210,50,50,FONT,12,"bold")
         state.gpu.updateDisplay(state.display)
     end
     error(err)
