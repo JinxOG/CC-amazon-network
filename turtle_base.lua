@@ -248,27 +248,13 @@ function base.depart()
     if not ok then return false, "departure route failed: " .. (err or "?") end
 
     -- Only delivery turtles signal their support partner at the hole.
-    -- Support turtles must NOT send this signal back or they stall each other.
+    -- Signal and descend immediately — do NOT wait at the hole entrance
+    -- because support needs that exact block to complete its departure route.
     if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        logInfo("Signalling support turtle to depart...")
+        logInfo("Signalling support turtle to depart — descending now...")
         local sig = proto.encode(proto.MSG.HOLE_READY, _self.id, _self.partnerId, {})
         proto.send(_self.modem, proto.CH_LOCAL, sig)
-
-        -- Wait up to 20s for support to arrive near the hole
-        logInfo("Waiting for support turtle at hole...")
-        local deadline = os.clock() + 20
-        while os.clock() < deadline do
-            local info = base.queryTurtle(_self.partnerId, 3)
-            if info and info.position then
-                local dx = math.abs(info.position.x - _self.pos.x)
-                local dz = math.abs(info.position.z - _self.pos.z)
-                if dx + dz <= 6 then
-                    logInfo("Support turtle nearby — descending.")
-                    break
-                end
-            end
-            sleep(2)
-        end
+        -- No wait — descend immediately so hole entrance is free for support
     end
 
     -- Descend through dispatch hole
