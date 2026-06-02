@@ -267,10 +267,13 @@ local function pgJobs()
         y = y + NAV_H + 2
     end
 
-    -- Active job cards: auto-size height to fill available space
-    local footerH  = 20
-    local available = H - y - footerH - 6
-    local CARD_H = math.min(56, math.floor((available - (PAIR-1)*3) / PAIR))
+    -- Active job cards: auto-size to fill available space.
+    -- Use a conservative safety margin (18px) so the progress bar on
+    -- the last card is never clipped by the physical monitor edge.
+    local footerH   = 16
+    local safetyPad = 18   -- extra buffer for monitor edge clipping
+    local available = H - y - footerH - safetyPad
+    local CARD_H = math.min(50, math.floor((available - (PAIR-1)*3) / PAIR))
 
     if #active == 0 then
         fill(4, y, W-8, 28, C.PANEL)
