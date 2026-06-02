@@ -13,16 +13,21 @@ local CFG = {
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
     LOG_MAX_LINES     = 500,
+    -- Multi-turtle: minimum seconds between dispatching consecutive pairs.
+    -- Gives the previous pair time to clear the dispatch hole and taxiway
+    -- before the next pair starts their departure route.
+    DISPATCH_STAGGER  = 60,
 }
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 
 local state = {
-    registry   = {},    -- [id] = turtle entry
-    jobs       = {},    -- [jobId] = job entry
-    log        = {},
-    jobCounter = 0,
-    modem      = nil,
+    registry        = {},    -- [id] = turtle entry
+    jobs            = {},    -- [jobId] = job entry
+    log             = {},
+    jobCounter      = 0,
+    modem           = nil,
+    lastDispatchTime = 0,   -- epoch ms of last successful pair dispatch
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -338,6 +343,16 @@ function dispatcher.tick()
         end
     end
 
+    -- Multi-turtle stagger: only dispatch one new pair per DISPATCH_STAGGER window.
+    -- This prevents two pairs from colliding at the single-block dispatch hole.
+    local now = os.epoch("utc")
+    local msSinceLast = now - state.lastDispatchTime
+    if msSinceLast < CFG.DISPATCH_STAGGER * 1000 then
+        local waitSec = math.ceil((CFG.DISPATCH_STAGGER * 1000 - msSinceLast) / 1000)
+        logInfo(string.format("Dispatch stagger: next pair in %ds", waitSec))
+        return
+    end
+
     for _, job in ipairs(workerJobs) do
         local role     = JOB_ROLE[job.type]
         local workers  = registry.getIdle(role)
@@ -353,14 +368,13 @@ function dispatcher.tick()
                 masterJobId = job.id,
             }, job.priority)
 
-            -- Link the two jobs so completing the worker job finishes the support job
+            -- Link the two jobs
             job.linkedJob = supportJobId
 
             -- Assign worker
             jobQueue.assign(job.id, worker.id)
             sendTo(worker.id, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(
                 job.id, job.type,
-                -- Merge partnerId into the existing params
                 (function()
                     local p = {}
                     for k, v in pairs(job.params) do p[k] = v end
@@ -375,22 +389,26 @@ function dispatcher.tick()
                 supportJobId, proto.JOB.SUPPORT_FOLLOW, {
                     partnerId   = worker.id,
                     masterJobId = job.id,
-                    destination = job.params.destination,  -- so support can navigate directly
+                    destination = job.params.destination,
                 }
             ))
 
-            logInfo(string.format("Dispatched %s→%s with support %s→%s",
+            logInfo(string.format("Dispatched %s->%s with support %s->%s",
                 job.id, worker.id, supportJobId, support.id))
 
-            -- Auto-mock: if this job was flagged while PENDING, send ITEM_READY once assigned
+            -- Record dispatch time — stagger next pair
+            state.lastDispatchTime = os.epoch("utc")
+
+            -- Auto-mock
             if job.mockOnReady then
                 job.mockOnReady = nil
-                -- Small delay so turtle has time to send ITEM_REQUEST first
                 os.startTimer(3)
-                -- Store pending mock so the timer handler can fire it
                 state.pendingMock = { jobId = job.id, turtleId = worker.id }
                 logInfo("Auto-mock queued for " .. job.id)
             end
+
+            -- Only dispatch ONE pair per tick (stagger enforced above for subsequent ticks)
+            return
         end
     end
 end
