@@ -280,28 +280,47 @@ local function main()
     addLog("INFO","Dashboard online")
     render()
 
-    local timer      = os.startTimer(2)
-    local pollTimer  = os.startTimer(0.05)   -- fast poll for GPU click events
+    local timer         = os.startTimer(2)
+    local pollTimer     = os.startTimer(0.1)
+    local lastPageFlip  = 0   -- debounce: ignore clicks within 0.5s of last flip
+
     while true do
         local ev,p1,p2,p3,p4 = os.pullEvent()
 
-        -- DirectGPU captures mouse input — poll its event queue every 50ms
+        -- DirectGPU captures mouse input — drain its event queue each tick
         if ev=="timer" and p1==pollTimer then
             local ok, hasEv = pcall(function() return state.gpu.hasEvents(state.display) end)
             if ok and hasEv then
-                local ok2, gpuEv = pcall(function() return state.gpu.pollEvent(state.display) end)
-                if ok2 and gpuEv then
-                    -- Any click/touch on the display cycles the page
+                -- Drain ALL pending GPU events this tick
+                local clicked = false
+                while true do
+                    local ok2, gpuEv = pcall(function() return state.gpu.pollEvent(state.display) end)
+                    if not ok2 or not gpuEv then break end
+                    -- Only count actual press/click events, not hover/move
+                    local evType = type(gpuEv) == "table" and gpuEv[1] or gpuEv
+                    if tostring(evType):find("click") or tostring(evType):find("press")
+                    or tostring(evType):find("touch") or tostring(evType) == "1" then
+                        clicked = true
+                    end
+                end
+                -- Flip page at most once per 0.5s
+                local now = os.clock()
+                if clicked and (now - lastPageFlip) > 0.5 then
+                    lastPageFlip = now
                     state.page = (state.page % #PAGES) + 1
                     render()
                 end
             end
-            pollTimer = os.startTimer(0.05)
+            pollTimer = os.startTimer(0.1)
 
         elseif ev=="monitor_touch" then
             -- Fallback: standard CC touch (fires if GPU doesn't intercept)
-            state.page = (state.page % #PAGES) + 1
-            render()
+            local now = os.clock()
+            if (now - lastPageFlip) > 0.5 then
+                lastPageFlip = now
+                state.page = (state.page % #PAGES) + 1
+                render()
+            end
         elseif ev=="modem_message" then
             local raw = type(p4)=="table" and p4 or textutils.unserialise(p4)
             if raw then
