@@ -350,27 +350,36 @@ function base.returnToDock()
     local ok, err = move.to(W.ARRIVALS_HOLE.x, UNDERGROUND_Y, W.ARRIVALS_HOLE.z)
     if not ok then return false, "could not reach arrivals hole: " .. (err or "?") end
 
-    -- Tell support to hold — we're ascending, don't follow yet
+    -- Stop position broadcasts and tell support to hold BEFORE ascending.
+    -- Clearing partnerId immediately is critical: if support misses the ASCENDING
+    -- signal (it can happen if support is mid-move.to()), it would otherwise keep
+    -- following POSITION_UPDATEs all the way to the surface and block delivery.
+    local savedPartnerId = nil
     if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        base.signalPartner(proto.MSG.ASCENDING, {})
+        savedPartnerId  = _self.partnerId
+        _self.partnerId = nil   -- kills all further POSITION_UPDATE broadcasts NOW
+        -- Send ASCENDING so support knows to hold (best-effort; if missed it's OK
+        -- because broadcasts have already stopped so support gets no more updates)
+        local sig = proto.encode(proto.MSG.ASCENDING, _self.id, savedPartnerId, {})
+        proto.send(_self.modem, proto.CH_LOCAL, sig)
         sleep(0.5)
     end
 
-    -- Ascend through arrivals hole into building
+    -- Ascend through arrivals hole into building (no POSITION_UPDATEs, partnerId is nil)
     logInfo("Ascending arrivals hole...")
     for _ = 1, 10 do
         move.up()
         if _self.pos.y >= FLOOR_Y then break end
     end
 
-    -- Move a few steps away from the hole before signalling support to ascend
-    -- so they don't collide right at the arrivals hole exit
-    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        -- Navigate to red taxiway first (clears the hole exit completely)
+    -- Navigate to red taxiway to fully clear the arrivals hole exit, THEN signal
+    -- support so it has room to ascend without colliding with us.
+    if savedPartnerId then
         move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.RED_Z)
         logInfo("Clear of arrivals hole — signalling support to return.")
-        base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-        _self.partnerId = nil  -- stop position broadcasts
+        local sig = proto.encode(proto.MSG.RETURN_TO_DOCK, _self.id, savedPartnerId, {})
+        proto.send(_self.modem, proto.CH_LOCAL, sig)
+        -- partnerId already nil, nothing more to clear
     end
 
     -- Follow red taxiway back to dock
