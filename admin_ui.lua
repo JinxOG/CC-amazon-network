@@ -18,20 +18,22 @@ local state = {
     H        = 648,
 }
 
-local MAX_LOGS = 60
-local PAD      = 10
-local FONT     = "minecraft:font/default.ttf"
+local MAX_LOGS  = 60
+local PAD       = 10
+local TITLE_H   = 18    -- height of the top title strip
+local FONT      = "minecraft:font/default.ttf"
 
 -- Layout panels — recalculated after we know W, H
 local TURTLE_PANEL, JOB_PANEL, LOG_PANEL
 
 local function recalcLayout()
-    local W, H = state.W, state.H
-    local topH  = math.floor(H * 0.55)
+    local W, H  = state.W, state.H
+    local top   = TITLE_H + PAD          -- content starts below title strip
+    local topH  = math.floor(H * 0.55)  -- top panels end here
     local halfW = math.floor(W * 0.5)
-    TURTLE_PANEL = { x=PAD,          y=PAD,            w=halfW-PAD,          h=topH-PAD      }
-    JOB_PANEL    = { x=halfW+PAD,    y=PAD,            w=W-halfW-PAD*2,      h=topH-PAD      }
-    LOG_PANEL    = { x=PAD,          y=topH+PAD,       w=W-PAD*2,            h=H-topH-PAD*2  }
+    TURTLE_PANEL = { x=PAD,       y=top,       w=halfW-PAD*2,       h=topH-top-PAD   }
+    JOB_PANEL    = { x=halfW+PAD, y=top,       w=W-halfW-PAD*2,     h=topH-top-PAD   }
+    LOG_PANEL    = { x=PAD,       y=topH+PAD,  w=W-PAD*2,           h=H-topH-PAD*2   }
 end
 
 -- ─── Colour palette ──────────────────────────────────────────────────────────
@@ -233,11 +235,11 @@ local function renderAll()
     fill(0, 0, W, H, C.BG)
 
     -- title strip
-    fill(0, 0, W, PAD-1, C.HDR_BG)
-    txt("CC AMAZON NETWORK  -  ADMIN DASHBOARD", 8, 0, C.WHITE, 10, true)
+    fill(0, 0, W, TITLE_H, C.HDR_BG)
+    txt("CC AMAZON NETWORK  -  ADMIN DASHBOARD", 8, 3, C.WHITE, 10, true)
     local age = math.floor((os.epoch("utc") - state.lastPoll) / 1000)
     local ts  = age == 0 and "live" or (age .. "s ago")
-    txt("last update: " .. ts, W - 120, 0, C.DIM, 10)
+    txt("last update: " .. ts, W - 130, 3, C.DIM, 10)
 
     renderTurtles()
     renderJobs()
@@ -331,11 +333,29 @@ local function main()
     state.display = state.gpu.autoDetectAndCreateDisplay()
     if not state.display then error("Could not create display — is a monitor attached?") end
 
-    -- Try to read actual display dimensions
+    -- Detect actual pixel dimensions.
+    -- 1) Try DirectGPU API methods (Blitz may or may not expose these)
     local ok, dw = pcall(function() return state.gpu.getDisplayWidth(state.display)  end)
     local ok2,dh = pcall(function() return state.gpu.getDisplayHeight(state.display) end)
     if ok  and type(dw) == "number" and dw > 0 then state.W = dw end
     if ok2 and type(dh) == "number" and dh > 0 then state.H = dh end
+
+    -- 2) Fallback: derive from CC monitor character dimensions.
+    --    Blitz gives 656x324 px per monitor block; default monitor is 8x6 chars/block.
+    --    So 1 char ≈ 82x54 px. getSize() returns total chars across all blocks.
+    if state.W == 1968 and state.H == 648 then
+        local mon = peripheral.find("monitor")
+        if mon then
+            local cw, ch = mon.getSize()
+            -- pixels per char ≈ 82x54 at default scale
+            state.W = math.max(400, cw * 82)
+            state.H = math.max(200, ch * 54)
+        else
+            -- No monitor found via peripheral — safe single-block default
+            state.W = 656
+            state.H = 324
+        end
+    end
     print(string.format("Display: %dx%d px", state.W, state.H))
 
     recalcLayout()
