@@ -30,8 +30,8 @@ end
 -- ─── Config ──────────────────────────────────────────────────────────────────
 
 local CFG = {
-    entangledChest       = "entangled:chest_0",  -- peripheral name of entangled chest
-    regularChestItem     = "minecraft:chest",    -- item exported for delivery containers
+    entangledChest       = "top",             -- ender chest side (enderstorage:ender_chest)
+    regularChestItem     = "minecraft:chest", -- item exported for delivery containers
     maxChestsPerDelivery = 6,
     batchSize            = 15,   -- max stacks per item batch (turtle carry cap)
     msgTimeout           = 120,  -- seconds to wait for turtle response
@@ -247,8 +247,11 @@ local function main()
     log("Entangled chest : " .. CFG.entangledChest)
     log("RS bridge       : " .. (peripheral.getName(rsBridge) or "found"))
 
-    if not peripheral.isPresent(CFG.entangledChest) then
-        log("WARNING: entangled chest '" .. CFG.entangledChest .. "' not found — run 'lua warehouse.lua scan'")
+    local ecType = peripheral.getType(CFG.entangledChest)
+    if not ecType then
+        log("WARNING: no chest found on side '" .. CFG.entangledChest .. "' — check placement")
+    else
+        log("Ender chest      : " .. ecType .. " (" .. CFG.entangledChest .. ")")
     end
 
     while true do
