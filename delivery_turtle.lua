@@ -405,12 +405,16 @@ base.run(function(job)
         local msg = waitForAny({
             proto.MSG.ITEMS_READY,
             proto.MSG.ITEMS_DONE,
+            proto.MSG.JOB_ABORT,
         }, 10)
 
         if not msg then
             -- Re-ping warehouse in case CHESTS_PLACED was missed
             sendChestsPlaced()
             print("Still waiting for warehouse items...")
+        elseif msg.type == proto.MSG.JOB_ABORT then
+            print("Warehouse aborted job — cleaning up and returning")
+            break
         elseif msg.type == proto.MSG.ITEMS_DONE then
             print("All items received from warehouse")
             break

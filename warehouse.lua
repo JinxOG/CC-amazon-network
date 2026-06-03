@@ -227,6 +227,31 @@ local function routeMsg(raw)
         return
     end
 
+    -- ── Mid-job messages from unknown jobs ───────────────────────────────────
+    -- If the warehouse rebooted, it has no record of in-progress jobs.
+    -- Turtles stuck in Phase 2 will keep re-sending CHESTS_PLACED.
+    -- Send JOB_ABORT so they clean up and return to dock instead of looping forever.
+    local midJobTypes = {
+        [proto.MSG.CHESTS_PLACED] = true,
+        [proto.MSG.BATCH_DONE]    = true,
+        [proto.MSG.ITEM_COLLECTED]= true,
+    }
+    if midJobTypes[msg.type] then
+        local jobId = msg.payload and msg.payload.jobId
+        local knownJob = (current and current.jobId == jobId)
+        if not knownJob then
+            for _, e in ipairs(queue) do
+                if e.jobId == jobId then knownJob = true; break end
+            end
+        end
+        if not knownJob then
+            log(string.format("Unknown job %s in %s — sending JOB_ABORT to %s",
+                tostring(jobId), msg.type, msg.from))
+            sendToServer(proto.MSG.JOB_ABORT, msg.from, { jobId = jobId })
+            return
+        end
+    end
+
     -- ── Everything else → inbox ──────────────────────────────────────────────
     inboxPut(msg)
 end
