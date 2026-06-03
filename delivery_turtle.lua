@@ -315,9 +315,9 @@ base.run(function(job)
             proto.MSG.CHESTS_READY,
             proto.MSG.WAREHOUSE_QUEUED,
             proto.MSG.JOB_ABORT,
-        }, 20)
+        }, 5)
         if not msg then
-            -- Ping warehouse again
+            -- Ping warehouse again (every 5s so a missed CHESTS_READY is recovered quickly)
             base.sendToServer(proto.MSG.DELIVERY_ARRIVED, { jobId = job.id })
         elseif msg.type == proto.MSG.JOB_ABORT then
             -- Pick up entangled chest and abort

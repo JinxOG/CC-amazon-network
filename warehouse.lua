@@ -266,7 +266,7 @@ local function handleCurrentJob()
     local placed = false
     local chestDeadline = os.clock() + CFG.msgTimeout
     while os.clock() < chestDeadline do
-        msg = waitFor(proto.MSG.CHESTS_PLACED, current.turtleId, 25)
+        msg = waitFor(proto.MSG.CHESTS_PLACED, current.turtleId, 8)
         if msg then placed = true; break end
         -- Turtle re-pinged — it missed CHESTS_READY, send it again
         local reping = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId)
