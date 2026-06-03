@@ -358,8 +358,6 @@ base.run(function(job)
         if turtle.suckDown(1) then pulled = pulled + 1 end
     end
     print("Pulled " .. pulled .. " regular chests into inventory")
-    -- Regular chests from suckDown may have landed in slot 16 — fix quietly
-    checkEC("POST-SUCK-CHESTS", false)
 
     -- Place regular chests in a row along Z+1..Z+N from destination
     local chestPositions = {}
@@ -419,8 +417,6 @@ base.run(function(job)
         base.move.to(d.x, d.y, d.z)
         turtle.select(1)
         while turtle.suckDown() do end
-        -- Items from suckDown may overflow into slot 16 — fix quietly
-        checkEC("POST-SUCK-ITEMS", false)
 
         -- Distribute items across placed regular chests
         -- Keep filling the current chest; move to next when it's full
