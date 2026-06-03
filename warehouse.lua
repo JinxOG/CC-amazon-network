@@ -34,7 +34,8 @@ local CFG = {
     regularChestItem     = "minecraft:chest", -- item exported for delivery containers
     maxChestsPerDelivery = 6,
     batchSize            = 15,   -- max stacks per item batch (turtle carry cap)
-    msgTimeout           = 120,  -- seconds to wait for turtle response
+    msgTimeout           = 120,  -- seconds to wait for mid-job steps (CHESTS_PLACED, BATCH_DONE, etc.)
+    arrivalTimeout       = 1800, -- seconds to wait for DELIVERY_ARRIVED (covers server outages / long travel)
 }
 
 -- ─── Peripherals ─────────────────────────────────────────────────────────────
@@ -233,7 +234,7 @@ local function handleCurrentJob()
 
     -- Wait for turtle to arrive at destination
     log("Waiting for DELIVERY_ARRIVED from " .. current.turtleId .. "...")
-    local msg = waitFor(proto.MSG.DELIVERY_ARRIVED, current.turtleId, CFG.msgTimeout)
+    local msg = waitFor(proto.MSG.DELIVERY_ARRIVED, current.turtleId, CFG.arrivalTimeout)
     if not msg then
         log("Timeout — skipping " .. current.turtleId)
         current = nil; serveNext(); return
