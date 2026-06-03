@@ -424,6 +424,8 @@ function base.depart()
     -- GPS resync from dock position before precision bay navigation.
     -- Corrects any position drift from previous trips so the aisle routes are exact.
     gpsSync()
+    -- Face toward taxiway before departing — consistent starting orientation.
+    move.face(W.dockFacing(_self.dock))
 
     if _self.role == proto.ROLE.DELIVERY then
         -- ── Delivery departure ────────────────────────────────────────────────
@@ -1028,6 +1030,8 @@ function base.init(role)
     initPosition()
     fuel.refuel()
     register()
+    -- Face toward taxiway so the turtle is oriented consistently at its dock on boot.
+    if _self.dock then move.face(W.dockFacing(_self.dock)) end
     logInfo(string.format("Ready. Fuel:%d/%d  Pos:%d,%d,%d  Dock:%s",
         fuel.level(), fuel.max(),
         _self.pos.x, _self.pos.y, _self.pos.z,
