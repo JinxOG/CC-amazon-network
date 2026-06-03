@@ -221,7 +221,7 @@ local function loadJobs()
             job.status = "IN_PROGRESS"
             state.jobs[id] = job
             nRestored = nRestored + 1
-            logInfo(string.format("Restored job %s [%s] — waiting for %s to reconnect",
+            logInfo(string.format("Restored job %s [%s] assignedTo=%s — waiting for turtle to reconnect",
                 id, job.type, job.assignedTo))
         elseif job.type ~= proto.JOB.SUPPORT_FOLLOW
             and job.type ~= proto.JOB.PATROL then
@@ -575,7 +575,13 @@ local function fwdToTurtle(msg)
     local p   = msg.payload
     local job = state.jobs[p.jobId]
     if job and job.assignedTo then
+        logInfo(string.format("[ROUTE] %s job=%s → %s", msg.type, tostring(p.jobId), job.assignedTo))
         sendTo(job.assignedTo, msg.type, p)
+    else
+        logWarn(string.format("[ROUTE] %s job=%s — job=%s assignedTo=%s",
+            msg.type, tostring(p.jobId),
+            job and "found" or "NOT FOUND",
+            job and tostring(job.assignedTo) or "n/a"))
     end
 end
 handlers[proto.MSG.WAREHOUSE_QUEUED] = fwdToTurtle
