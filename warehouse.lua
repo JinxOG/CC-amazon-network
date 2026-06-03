@@ -328,6 +328,11 @@ local function tick()
 
     -- ── WAIT_BATCH: turtle pulling batch items from EC ────────────────────────
     elseif state == S.WAIT_BATCH then
+        -- CHESTS_PLACED re-ping means turtle missed ITEMS_READY — resend.
+        if inboxGet(proto.MSG.CHESTS_PLACED, current.turtleId) then
+            log("Re-ping — re-sending ITEMS_READY (batch " .. batchIdx .. ")")
+            sendToServer(proto.MSG.ITEMS_READY, current.turtleId, { jobId = current.jobId })
+        end
         if inboxGet(proto.MSG.BATCH_DONE, current.turtleId) then
             enterState(S.SEND_BATCH)
         elseif now - stateTs > CFG.msgTimeout * 1000 then

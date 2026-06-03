@@ -387,10 +387,14 @@ base.run(function(job)
     end
 
     -- Tell warehouse chests are placed
-    base.sendToServer(proto.MSG.CHESTS_PLACED, {
-        jobId = job.id,
-        count = #chestPositions,
-    })
+    local function sendChestsPlaced()
+        base.sendToServer(proto.MSG.CHESTS_PLACED, {
+            jobId = job.id,
+            count = #chestPositions,
+        })
+    end
+    sendChestsPlaced()
+    print("Chests placed — waiting for warehouse to send items...")
 
     -- ── Phase 2: Receive items in batches, fill chests ────────────────────────
 
@@ -401,43 +405,36 @@ base.run(function(job)
         local msg = waitForAny({
             proto.MSG.ITEMS_READY,
             proto.MSG.ITEMS_DONE,
-        }, 120)
+        }, 10)
 
         if not msg then
-            print("Timeout waiting for items — aborting fill")
-            break
-        end
-
-        if msg.type == proto.MSG.ITEMS_DONE then
+            -- Re-ping warehouse in case CHESTS_PLACED was missed
+            sendChestsPlaced()
+            print("Still waiting for warehouse items...")
+        elseif msg.type == proto.MSG.ITEMS_DONE then
             print("All items received from warehouse")
             break
-        end
+        else
+            -- ITEMS_READY: pull batch from ender chest into turtle inventory
+            base.move.to(d.x, d.y, d.z)
+            turtle.select(1)
+            while turtle.suckDown() do end
 
-        -- ITEMS_READY: pull batch from ender chest into turtle inventory
-        base.move.to(d.x, d.y, d.z)
-        turtle.select(1)
-        while turtle.suckDown() do end
+            -- Distribute items across placed regular chests
+            while chestIdx <= #chestPositions do
+                local cp = chestPositions[chestIdx]
+                base.move.to(cp.x, cp.y, cp.z)
 
-        -- Distribute items across placed regular chests
-        -- Keep filling the current chest; move to next when it's full
-        while chestIdx <= #chestPositions do
-            local cp = chestPositions[chestIdx]
-            base.move.to(cp.x, cp.y, cp.z)
-
-            -- Drop delivery items into this chest (protected slots skipped)
-            local stillHasItems = dropIntoChestBelow(protected)
-
-            if stillHasItems then
-                -- Current chest full — move to next
-                chestIdx = chestIdx + 1
-            else
-                -- All items placed — done with this batch
-                break
+                local stillHasItems = dropIntoChestBelow(protected)
+                if stillHasItems then
+                    chestIdx = chestIdx + 1
+                else
+                    break
+                end
             end
-        end
 
-        -- Confirm batch pulled and distributed
-        base.sendToServer(proto.MSG.BATCH_DONE, { jobId = job.id })
+            base.sendToServer(proto.MSG.BATCH_DONE, { jobId = job.id })
+        end
     end
 
     -- ── Phase 3: Clean up — pick up entangled chest, signal done ─────────────
