@@ -17,6 +17,9 @@ local CFG = {
     -- Gives the previous pair time to clear the dispatch hole and taxiway
     -- before the next pair starts their departure route.
     DISPATCH_STAGGER  = 60,
+    -- Web dashboard bridge
+    BRIDGE_URL        = "http://192.168.86.35:3000/update",
+    BRIDGE_INTERVAL   = 2,      -- seconds between state pushes
 }
 
 -- ─── State ───────────────────────────────────────────────────────────────────
@@ -787,6 +790,38 @@ function server.run()
     proto.openChannels(state.modem, {
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
+    -- ── Bridge push ───────────────────────────────────────────────────────────
+    local function pushToBridge()
+        local turtles = {}
+        for id, t in pairs(state.registry) do
+            turtles[id] = {
+                role   = t.role,
+                status = t.status,
+                fuel   = t.fuel,
+                jobId  = t.jobId,
+                online = t.online,
+                dock   = t.dock and string.format("bay%d%s", t.dock.bay, t.dock.row) or nil,
+                x      = t.position and t.position.x or nil,
+                y      = t.position and t.position.y or nil,
+                z      = t.position and t.position.z or nil,
+            }
+        end
+        local jobs = {}
+        for id, j in pairs(state.jobs) do
+            table.insert(jobs, {
+                id     = id,
+                status = j.status,
+                assignedTo = j.assignedTo,
+                type   = j.type,
+            })
+        end
+        local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs })
+        local ok, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
+        if not ok then
+            logWarn("Bridge push failed: " .. tostring(err))
+        end
+    end
+
     logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
     W.loadDockAssignments()
     loadJobs()
@@ -794,6 +829,7 @@ function server.run()
 
     local dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
     local healthTimer   = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
+    local bridgeTimer   = os.startTimer(CFG.BRIDGE_INTERVAL)
 
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
@@ -824,6 +860,10 @@ function server.run()
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
+
+            elseif p1 == bridgeTimer then
+                pcall(pushToBridge)
+                bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
             elseif state.pendingMock then
                 -- Fire auto-mock ITEM_READY after the small delay
