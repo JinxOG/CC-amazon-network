@@ -578,10 +578,12 @@ local function fwdToTurtle(msg)
         logInfo(string.format("[ROUTE] %s job=%s → %s", msg.type, tostring(p.jobId), job.assignedTo))
         sendTo(job.assignedTo, msg.type, p)
     else
-        logWarn(string.format("[ROUTE] %s job=%s — job=%s assignedTo=%s",
-            msg.type, tostring(p.jobId),
-            job and "found" or "NOT FOUND",
-            job and tostring(job.assignedTo) or "n/a"))
+        logWarn(string.format("[ROUTE] %s job=%s — NOT FOUND, sending JOB_ABORT to warehouse",
+            msg.type, tostring(p.jobId)))
+        -- Warehouse has a stale job the server no longer knows about (e.g. after reboot).
+        -- Tell it to abort immediately so it can move on to the next queue entry.
+        local abort = proto.encode(proto.MSG.JOB_ABORT, "server", "warehouse", { jobId = p.jobId })
+        proto.send(state.modem, proto.CH_WAREHOUSE, abort)
     end
 end
 handlers[proto.MSG.WAREHOUSE_QUEUED] = fwdToTurtle

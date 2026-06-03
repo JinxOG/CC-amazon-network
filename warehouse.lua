@@ -51,8 +51,9 @@ modem.open(proto.CH_WAREHOUSE)
 
 -- ─── State ───────────────────────────────────────────────────────────────────
 
-local queue   = {}
-local current = nil
+local queue       = {}
+local current     = nil
+local serverAbort = false   -- set true when server tells us to abort current job
 
 -- ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -171,6 +172,16 @@ local function routeMsg(raw)
         return
     end
 
+    if msg.type == proto.MSG.JOB_ABORT then
+        -- Server couldn't route a warehouse message for this job (job not found after reboot).
+        -- Set the abort flag so the current waitFor exits quickly.
+        if current and msg.payload.jobId == current.jobId then
+            log("Server aborted job " .. current.jobId .. " (not found on server) — clearing EC")
+            serverAbort = true
+        end
+        return
+    end
+
     if msg.type == proto.MSG.ITEM_REQUEST then
         local p = msg.payload
         local n = chestsNeeded(p.items or {})
@@ -200,12 +211,14 @@ local function waitFor(wantType, fromId, seconds)
 
     local deadline = os.epoch("utc") + seconds * 1000
     while os.epoch("utc") < deadline do
+        if serverAbort then return nil end
         -- Use a short timer so the deadline is checked even with no traffic
         local timer = os.startTimer(5)
         local ev, p1, _,_, p4 = os.pullEvent()
         if ev == "modem_message" then
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
             routeMsg(raw)
+            if serverAbort then return nil end
             local found = inboxGet(wantType, fromId)
             if found then return found end
         end
@@ -236,7 +249,10 @@ local function handleCurrentJob()
     log("Waiting for DELIVERY_ARRIVED from " .. current.turtleId .. "...")
     local msg = waitFor(proto.MSG.DELIVERY_ARRIVED, current.turtleId, CFG.arrivalTimeout)
     if not msg then
-        log("Timeout — skipping " .. current.turtleId)
+        local reason = serverAbort and "server abort" or "timeout"
+        serverAbort = false
+        log("Skipping " .. current.turtleId .. " (" .. reason .. ")")
+        clearEnderChest()
         current = nil; serveNext(); return
     end
     -- No sleep needed: turtle dumps debris BEFORE sending DELIVERY_ARRIVED,
@@ -267,8 +283,10 @@ local function handleCurrentJob()
     local placed = false
     local chestDeadline = os.clock() + CFG.msgTimeout
     while os.clock() < chestDeadline do
+        if serverAbort then break end
         msg = waitFor(proto.MSG.CHESTS_PLACED, current.turtleId, 8)
         if msg then placed = true; break end
+        if serverAbort then break end
         -- Turtle re-pinged — it missed CHESTS_READY, send it again
         local reping = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId)
         if reping then
@@ -277,8 +295,10 @@ local function handleCurrentJob()
         end
     end
     if not placed then
-        log("Timeout on CHESTS_PLACED — sweeping EC and aborting")
-        clearEnderChest()   -- recover any stranded chests back to RS
+        local reason = serverAbort and "server abort" or "timeout"
+        serverAbort = false
+        log("Aborting CHESTS_PLACED wait (" .. reason .. ") — sweeping EC")
+        clearEnderChest()
         current = nil; serveNext(); return
     end
 
