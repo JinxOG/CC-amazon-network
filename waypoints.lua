@@ -224,6 +224,15 @@ function W.returnRoute(dock)
     }
 end
 
+-- Returns the facing direction a turtle should hold while at its dock.
+-- "Toward the taxiway" — the direction of the first departure move is then
+-- consistently the OPPOSITE (into the back aisle), which move.face() handles.
+-- Facing values: 0=north(-Z) 1=east(+X) 2=south(+Z) 3=west(-X)
+function W.dockFacing(dock)
+    -- WHITE_Z is the outbound taxiway. Face toward it from the dock.
+    return W.WHITE_Z > dock.z and 2 or 0   -- south if taxiway is in +Z, north otherwise
+end
+
 -- ─── Utility ─────────────────────────────────────────────────────────────────
 
 function W.totalDocks(role)

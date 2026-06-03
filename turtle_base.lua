@@ -86,6 +86,17 @@ local function gpsSync()
     return false
 end
 
+-- Public GPS resync — corrects position drift before precision bay navigation.
+function base.gpsSync()
+    local ok = gpsSync()
+    if ok then
+        logInfo(string.format("GPS resync: %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
+    else
+        logWarn("GPS resync failed — continuing with dead-reckoned position")
+    end
+    return ok
+end
+
 -- Detect actual facing by moving forward one block and comparing GPS positions.
 -- Without this, position tracking is wrong from the very first move.
 local function detectFacing()
@@ -410,6 +421,10 @@ function base.depart()
     logInfo("Departing via dispatch lane...")
     base.setStatus(proto.STATUS.TRAVELLING)
 
+    -- GPS resync from dock position before precision bay navigation.
+    -- Corrects any position drift from previous trips so the aisle routes are exact.
+    gpsSync()
+
     if _self.role == proto.ROLE.DELIVERY then
         -- ── Delivery departure ────────────────────────────────────────────────
         -- Navigate to hole entrance, signal support, wait for support to stage
@@ -529,6 +544,10 @@ function base.returnToDock()
         if _self.pos.y >= FLOOR_Y then break end
     end
 
+    -- GPS resync now that we're on the surface — corrects any drift from underground
+    -- travel before precision bay navigation (tight corridors, 1-block clearance).
+    gpsSync()
+
     -- Navigate to red taxiway to fully clear the arrivals hole exit, THEN signal
     -- support so it has room to ascend without colliding with us.
     if savedPartnerId then
@@ -543,6 +562,18 @@ function base.returnToDock()
     local route = W.returnRoute(_self.dock)
     ok, err = move.followRoute(route)
     if not ok then return false, "return route failed: " .. (err or "?") end
+
+    -- GPS verify final dock position; correct if off by 1 from route rounding.
+    gpsSync()
+    if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
+        logWarn(string.format("Post-dock GPS mismatch: at %d,%d want %d,%d — correcting",
+            _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
+        move.to(_self.dock.x, FLOOR_Y, _self.dock.z)
+    end
+
+    -- Face toward the taxiway so departure always starts from the same orientation.
+    -- This makes the first move (toward the back aisle) consistent and predictable.
+    move.face(W.dockFacing(_self.dock))
 
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
 

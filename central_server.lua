@@ -156,11 +156,9 @@ function registry.markOffline(id)
     if t and t.online then
         t.online = false
         logWarn("Turtle offline: " .. id)
-        -- Release dock so another turtle can use it
-        if t.dock then
-            local dockRole = (t.role == proto.ROLE.SUPPORT) and "SUPPORT" or "DELIVERY"
-            W.releaseDock(dockRole, id)
-        end
+        -- Do NOT release the dock here. Turtles temporarily offline (chunk unload,
+        -- server reboot) should return to the same dock. Docks are released only
+        -- when a turtle is permanently decommissioned (explicit recall + remove).
     end
 end
 
