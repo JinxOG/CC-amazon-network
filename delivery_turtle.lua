@@ -24,8 +24,15 @@ local function waitForAny(types, seconds)
     for _, t in ipairs(types) do set[t] = true end
     local deadline = os.clock() + seconds
     while os.clock() < deadline do
-        local msg = proto.receive(base.getSelfId(), math.max(1, deadline - os.clock()))
-        if msg and set[msg.type] then return msg end
+        -- Freeze the deadline while server is unreachable so we don't time out
+        -- and give up on a job just because the server went down temporarily.
+        if base.isServerDown() then
+            deadline = os.clock() + seconds
+            sleep(2)
+        else
+            local msg = proto.receive(base.getSelfId(), math.max(1, deadline - os.clock()))
+            if msg and set[msg.type] then return msg end
+        end
     end
     return nil
 end
@@ -309,8 +316,12 @@ base.run(function(job)
     base.sendProgress("Waiting for warehouse queue...")
     local chestsReady = false
     local chestCount  = 0
-    local deadline    = os.clock() + 600   -- 10 min max queue wait
+    local deadline    = os.clock() + 600   -- 10 min max queue wait (frozen while server down)
     while os.clock() < deadline do
+        if base.isServerDown() then
+            deadline = os.clock() + 600   -- freeze deadline during outage
+            sleep(2)
+        end
         local msg = waitForAny({
             proto.MSG.CHESTS_READY,
             proto.MSG.WAREHOUSE_QUEUED,

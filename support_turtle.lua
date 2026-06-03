@@ -42,6 +42,10 @@ base.run(function(job)
     local aborted        = false
     local deadline = os.clock() + 180
     while os.clock() < deadline do
+        if base.isServerDown() then
+            deadline = os.clock() + 180   -- freeze while server unreachable
+            sleep(2)
+        end
         local msg = proto.receive(base.getSelfId(), 5)
         if msg and msg.from == partnerId then
             if msg.type == proto.MSG.HOLE_READY then
@@ -94,14 +98,18 @@ base.run(function(job)
         local msg = proto.receive(base.getSelfId(), 15)
 
         if not msg then
-            -- Timeout — check if partner finished or went offline
-            local info = base.queryTurtle(partnerId, 5)
-            if not info or not info.online then
-                print("Partner offline. Returning to dock.")
-                break
-            elseif not info.jobId then
-                print("Partner job complete. Returning to dock.")
-                break
+            -- Timeout — if server is down just wait, don't abandon partner
+            if base.isServerDown() then
+                sleep(2)
+            else
+                local info = base.queryTurtle(partnerId, 5)
+                if not info or not info.online then
+                    print("Partner offline. Returning to dock.")
+                    break
+                elseif not info.jobId then
+                    print("Partner job complete. Returning to dock.")
+                    break
+                end
             end
 
         elseif msg.from == partnerId then

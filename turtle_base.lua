@@ -22,18 +22,19 @@ local CFG = {
 -- ─── Internal State ──────────────────────────────────────────────────────────
 
 local _self = {
-    id        = nil,
-    role      = nil,
-    dock      = nil,    -- assigned dock from waypoints
-    partnerId = nil,
-    status    = proto.STATUS.IDLE,
-    jobId     = nil,
-    modem     = nil,
-    pos       = { x = 0, y = 0, z = 0 },
-    facing    = 0,      -- 0=north(-z) 1=east(+x) 2=south(+z) 3=west(-x)
-    moveCount = 0,
-    busy      = false,
-    canDig    = true,   -- false for turtles without a pickaxe (e.g. support)
+    id         = nil,
+    role       = nil,
+    dock       = nil,    -- assigned dock from waypoints
+    partnerId  = nil,
+    status     = proto.STATUS.IDLE,
+    jobId      = nil,
+    modem      = nil,
+    pos        = { x = 0, y = 0, z = 0 },
+    facing     = 0,      -- 0=north(-z) 1=east(+x) 2=south(+z) 3=west(-x)
+    moveCount  = 0,
+    busy       = false,
+    canDig     = true,   -- false for turtles without a pickaxe (e.g. support)
+    serverDown = false,  -- true while server is unreachable; pauses movement + freezes deadlines
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -47,13 +48,14 @@ local function logError(m) log("ERROR", m) end
 
 -- ─── Public Accessors ────────────────────────────────────────────────────────
 
-function base.getSelfId()      return _self.id        end
-function base.getModem()       return _self.modem     end
-function base.getPos()         return { x=_self.pos.x, y=_self.pos.y, z=_self.pos.z } end
-function base.getDock()        return _self.dock      end
-function base.getPartnerId()   return _self.partnerId end
-function base.setPartnerId(id) _self.partnerId = id   end
-function base.setCanDig(val)   _self.canDig = val     end
+function base.getSelfId()        return _self.id         end
+function base.getModem()         return _self.modem      end
+function base.getPos()           return { x=_self.pos.x, y=_self.pos.y, z=_self.pos.z } end
+function base.getDock()          return _self.dock       end
+function base.getPartnerId()     return _self.partnerId  end
+function base.setPartnerId(id)   _self.partnerId = id    end
+function base.setCanDig(val)     _self.canDig = val      end
+function base.isServerDown()     return _self.serverDown end
 
 -- ─── Comms ───────────────────────────────────────────────────────────────────
 
@@ -290,6 +292,9 @@ local function bypassForward()
 end
 
 local function tryMove(moveFn, digFn, dir)
+    -- Hold position while server is unreachable; resume when reconnected.
+    while _self.serverDown do sleep(2) end
+
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
     local digAttempts = 0
 
@@ -829,8 +834,16 @@ local function register()
     while true do
         attempt = attempt + 1
         logInfo(string.format("Registering (attempt %d)...", attempt))
-        comms.toServer(proto.MSG.REGISTER, proto.payloadRegister(
-            _self.role, fuel.level(), fuel.max(), base.getPos()))
+        -- midJob=true tells server this is a reconnect, not a fresh boot:
+        -- the turtle's job coroutine is still alive and will resume automatically.
+        -- Server re-links the job instead of re-queuing it for a new pair.
+        comms.toServer(proto.MSG.REGISTER, {
+            role     = _self.role,
+            fuel     = fuel.level(),
+            fuelMax  = fuel.max(),
+            position = base.getPos(),
+            midJob   = _self.busy,
+        })
 
         local reply = proto.receive(_self.id, CFG.REGISTER_TIMEOUT)
         if reply and reply.type == proto.MSG.REGISTER_ACK and reply.payload.ok then
@@ -840,6 +853,12 @@ local function register()
                 logInfo(string.format("Assigned dock: bay %d row %s (%d,%d,%d)",
                     _self.dock.bay, _self.dock.row,
                     _self.dock.x, _self.dock.y, _self.dock.z))
+            end
+            if _self.serverDown then
+                local p = _self.pos
+                logInfo(string.format(
+                    "Server reconnected — resuming from %d,%d,%d", p.x, p.y, p.z))
+                _self.serverDown = false
             end
             logInfo("Registered successfully.")
             return
@@ -861,10 +880,15 @@ local function sendHeartbeat()
         _self.status, fuel.level(), base.getPos(), _self.jobId))
     _missedHeartbeats = _missedHeartbeats + 1
 
-    -- If too many heartbeats go unacknowledged, server may have restarted
-    -- Re-register to get back on the active list
+    -- If too many heartbeats go unacknowledged, server is unreachable.
+    -- Pause movement and wait — re-register until server responds.
     if _missedHeartbeats >= MAX_MISSED then
-        logWarn("Server may be down or restarted — re-registering...")
+        if not _self.serverDown then
+            logWarn(string.format(
+                "Server unreachable — pausing at %d,%d,%d and waiting for reconnect...",
+                _self.pos.x, _self.pos.y, _self.pos.z))
+            _self.serverDown = true
+        end
         _missedHeartbeats = 0
         local ok = pcall(register)
         if not ok then
