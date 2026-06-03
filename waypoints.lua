@@ -100,9 +100,17 @@ function W.loadDockAssignments()
     if not f then return end
     local data = textutils.unserialise(f.readAll())
     f.close()
-    if type(data) == "table" then
-        _assigned = data
+    if type(data) ~= "table" then return end
+    -- textutils.serialise converts number table keys to strings.
+    -- Convert them back so dock index lookups (which use ipairs numbers) work.
+    local fixed = {}
+    for role, slots in pairs(data) do
+        fixed[role] = {}
+        for k, v in pairs(slots) do
+            fixed[role][tonumber(k) or k] = v
+        end
     end
+    _assigned = fixed
 end
 
 function W.assignDock(role, turtleId)

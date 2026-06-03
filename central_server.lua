@@ -99,26 +99,15 @@ function registry.register(id, role, fuel, fuelMax, position)
         isNew and "Registered" or "Re-registered", id, role, fuel, fuelMax,
         dock and ("bay"..dock.bay..dock.row) or "none"))
 
-    -- Handle jobs that were assigned to this turtle:
-    --   restored=true  → server rebooted, turtle is continuing mid-job → re-link it
-    --   restored=false → turtle itself rebooted → re-queue for fresh dispatch
+    -- Re-queue any jobs that were assigned to this turtle before it rebooted
+    -- so they get dispatched to a fresh pair instead of waiting for ACK timeout.
     for _, job in pairs(state.jobs) do
         if job.assignedTo == id and
            (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
-            if job.restored then
-                -- Server reboot: original turtle is still mid-job, just re-link it.
-                -- Clear the flag so a subsequent turtle reboot re-queues normally.
-                job.restored = false
-                state.registry[id].status = proto.STATUS.TRAVELLING
-                state.registry[id].jobId  = job.id
-                logInfo("Re-linked " .. id .. " to restored job " .. job.id)
-            else
-                -- Turtle reboot: start fresh — re-queue so a new pair is dispatched
-                logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
-                job.status     = "PENDING"
-                job.assignedTo = nil
-                job.linkedJob  = nil
-            end
+            logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
+            job.status     = "PENDING"
+            job.assignedTo = nil
+            job.linkedJob  = nil
         end
     end
 
@@ -213,23 +202,26 @@ local function loadJobs()
     state.jobCounter = data.jobCounter or 0
     local nRestored  = 0
     for id, job in pairs(data.jobs or {}) do
-        if job.assignedTo then
-            -- Job had a turtle — keep assignedTo so registry.register can re-link it.
-            -- Mark restored=true so register knows this is a server reboot (not turtle reboot).
-            -- If the turtle never comes back, heartbeat timeout will re-queue it.
-            job.status   = "IN_PROGRESS"
-            job.restored = true
-        else
-            -- Job was queued but not yet assigned — dispatch fresh
-            job.status = "PENDING"
+        -- Re-queue everything as PENDING. We don't try to re-link turtles to
+        -- their exact mid-job state because the warehouse may have timed out
+        -- during downtime, leaving the warehouse/turtle out of sync.
+        -- A 60s startup dispatch delay (set below) gives mid-job turtles time
+        -- to finish naturally before a fresh pair is sent.
+        if job.type ~= proto.JOB.SUPPORT_FOLLOW and job.type ~= proto.JOB.PATROL then
+            job.status     = "PENDING"
+            job.assignedTo = nil
+            job.linkedJob  = nil
+            job.restored   = nil
+            state.jobs[id] = job
+            nRestored = nRestored + 1
+            logInfo(string.format("Restored job %s [%s] as PENDING", id, job.type))
         end
-        state.jobs[id] = job
-        nRestored = nRestored + 1
-        logInfo(string.format("Restored job %s [%s] assignedTo=%s",
-            id, job.type, tostring(job.assignedTo)))
     end
     if nRestored > 0 then
-        logInfo(string.format("Loaded %d job(s) from disk", nRestored))
+        logInfo(string.format("Loaded %d job(s) from disk — dispatch delayed 60s", nRestored))
+        -- Prevent immediate re-dispatch: give mid-job turtles time to complete
+        -- naturally before a new pair is sent to the same destination.
+        state.lastDispatchTime = os.epoch("utc")
     end
 end
 
@@ -526,8 +518,20 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
 end
 
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
-    jobQueue.complete(msg.payload.jobId)
-    -- A turtle just became idle — immediately check if anything can be dispatched
+    local jobId = msg.payload.jobId
+    local job   = state.jobs[jobId]
+    if job and job.status == "PENDING" and job.assignedTo == nil then
+        -- Job was re-queued after server reboot but the original turtle finished
+        -- it naturally — mark complete and remove from queue so it won't be
+        -- re-dispatched to a second pair.
+        logInfo("Original turtle completed re-queued job " .. jobId .. " — marking done")
+        job.status = JOB_STATUS.COMPLETE
+        local t = state.registry[msg.from]
+        if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
+        saveJobs()
+    else
+        jobQueue.complete(jobId)
+    end
     pcall(dispatcher.tick)
 end
 
