@@ -291,6 +291,7 @@ function jobQueue.assign(jobId, turtleId)
     turtle.status  = proto.STATUS.TRAVELLING
     turtle.jobId   = jobId
     jobQueue._hist(jobId, "assigned", "to=" .. turtleId)
+    saveJobs()   -- persist assignedTo so server reboot can re-link, not re-queue
     return true
 end
 
