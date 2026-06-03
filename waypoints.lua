@@ -87,6 +87,23 @@ generateBays("SUPPORT",  CFG.NUM_SUPPORT_BAYS, SUPPORT_ROW_A_Z, SUPPORT_ROW_B_Z)
 -- ─── Dock Assignment (server-side) ───────────────────────────────────────────
 
 local _assigned = {}  -- [role][dockIndex] = turtleId
+local DOCK_SAVE_FILE = "dock_assignments.dat"
+
+local function saveDockAssignments()
+    local f = fs.open(DOCK_SAVE_FILE, "w")
+    if f then f.write(textutils.serialise(_assigned)); f.close() end
+end
+
+function W.loadDockAssignments()
+    if not fs.exists(DOCK_SAVE_FILE) then return end
+    local f = fs.open(DOCK_SAVE_FILE, "r")
+    if not f then return end
+    local data = textutils.unserialise(f.readAll())
+    f.close()
+    if type(data) == "table" then
+        _assigned = data
+    end
+end
 
 function W.assignDock(role, turtleId)
     if not _assigned[role] then _assigned[role] = {} end
@@ -94,6 +111,7 @@ function W.assignDock(role, turtleId)
     for i, dock in ipairs(docks) do
         if not _assigned[role][i] then
             _assigned[role][i] = turtleId
+            saveDockAssignments()
             return dock
         end
     end
@@ -105,6 +123,7 @@ function W.releaseDock(role, turtleId)
     for i, id in pairs(_assigned[role]) do
         if id == turtleId then
             _assigned[role][i] = nil
+            saveDockAssignments()
             return
         end
     end

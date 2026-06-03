@@ -165,6 +165,59 @@ function registry.checkTimeouts()
     end
 end
 
+-- ─── Persistence ─────────────────────────────────────────────────────────────
+
+local JOB_SAVE_FILE = "jobs.dat"
+
+local function saveJobs()
+    -- Only persist jobs that are worth restoring: PENDING or active worker jobs.
+    -- Support jobs (SUPPORT_FOLLOW) are recreated by the dispatcher on reboot.
+    -- Terminal states (COMPLETE, FAILED, CANCELLED) are not needed after reboot.
+    local toSave = {}
+    for id, job in pairs(state.jobs) do
+        local active = job.status == "PENDING"
+                    or job.status == "ASSIGNED"
+                    or job.status == "IN_PROGRESS"
+        local isWorker = job.type ~= proto.JOB.SUPPORT_FOLLOW
+                      and job.type ~= proto.JOB.PATROL
+        if active and isWorker then
+            toSave[id] = job
+        end
+    end
+    local f = fs.open(JOB_SAVE_FILE, "w")
+    if f then
+        f.write(textutils.serialise({
+            jobs       = toSave,
+            jobCounter = state.jobCounter,
+        }))
+        f.close()
+    end
+end
+
+local function loadJobs()
+    if not fs.exists(JOB_SAVE_FILE) then return end
+    local f = fs.open(JOB_SAVE_FILE, "r")
+    if not f then return end
+    local raw  = f.readAll(); f.close()
+    local data = textutils.unserialise(raw)
+    if type(data) ~= "table" then return end
+
+    state.jobCounter = data.jobCounter or 0
+    local restored = 0
+    for id, job in pairs(data.jobs or {}) do
+        -- Always re-queue as PENDING — turtles will re-register and get fresh assignments
+        job.status     = "PENDING"
+        job.assignedTo = nil
+        job.linkedJob  = nil
+        state.jobs[id] = job
+        restored = restored + 1
+        logInfo(string.format("Restored job %s [%s] as PENDING", id, job.type))
+    end
+    if restored > 0 then
+        logInfo(string.format("Loaded %d job(s) from disk", restored))
+    end
+end
+
 -- ─── Job Queue ───────────────────────────────────────────────────────────────
 
 local JOB_STATUS = {
@@ -197,6 +250,7 @@ function jobQueue.add(jobType, params, priority)
     }
     jobQueue._hist(id, "created", "priority=" .. (priority or 5))
     logInfo(string.format("Job queued: %s [%s] p=%d", id, jobType, priority or 5))
+    saveJobs()
     return id
 end
 
@@ -252,6 +306,7 @@ function jobQueue.complete(jobId)
 
     local t = state.registry[job.assignedTo or ""]
     if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
+    saveJobs()
 
     -- NOTE: do NOT auto-complete the linked support job here.
     -- The support turtle is still physically returning to dock — marking it IDLE
@@ -278,6 +333,7 @@ function jobQueue.fail(jobId, reason, recoverable)
         job.status = JOB_STATUS.FAILED
         logError("Job permanently failed: " .. jobId .. " (" .. (reason or "?") .. ")")
     end
+    saveJobs()
 end
 
 function jobQueue.reassign(jobId, fromId, reason)
@@ -288,6 +344,7 @@ function jobQueue.reassign(jobId, fromId, reason)
     job.updatedAt  = os.epoch("utc")
     jobQueue._hist(jobId, "reassign", string.format("from=%s reason=%s", fromId, reason or "?"))
     logWarn(string.format("Job %s back to queue (from %s: %s)", jobId, fromId, reason or "?"))
+    saveJobs()
 end
 
 function jobQueue.getPending()
@@ -706,6 +763,8 @@ function server.run()
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
     logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
+    W.loadDockAssignments()
+    loadJobs()
     print("Console ready. Type 'help' for commands.")
 
     local dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
