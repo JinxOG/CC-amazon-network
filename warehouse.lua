@@ -341,6 +341,11 @@ local function tick()
 
     -- ── WAIT_DONE: turtle picking up EC, job finishing ────────────────────────
     elseif state == S.WAIT_DONE then
+        -- CHESTS_PLACED re-ping means turtle missed ITEMS_DONE — resend.
+        if inboxGet(proto.MSG.CHESTS_PLACED, current.turtleId) then
+            log("Re-ping — re-sending ITEMS_DONE")
+            sendToServer(proto.MSG.ITEMS_DONE, current.turtleId, { jobId = current.jobId })
+        end
         if inboxGet(proto.MSG.ITEM_COLLECTED, current.turtleId) then
             log("Job complete: " .. current.jobId)
             current = nil; batches = {}; batchIdx = 0
