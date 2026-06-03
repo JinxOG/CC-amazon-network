@@ -492,16 +492,7 @@ end
 handlers[proto.MSG.DELIVERY_ARRIVED] = fwdToWarehouse
 handlers[proto.MSG.CHESTS_PLACED]    = fwdToWarehouse
 handlers[proto.MSG.BATCH_DONE]       = fwdToWarehouse
-handlers[proto.MSG.ITEM_COLLECTED]   = function(msg)
-    fwdToWarehouse(msg)
-    -- If this is the fueltest job, schedule an auto-refuel broadcast 5s from now
-    -- so both turtles are still at the destination when it fires.
-    if state.fuelTestJobId and msg.payload.jobId == state.fuelTestJobId then
-        logInfo("Fueltest delivery done — auto-refuel in 5s...")
-        state.fuelTestTimer  = os.startTimer(5)
-        state.fuelTestJobId  = nil
-    end
-end
+handlers[proto.MSG.ITEM_COLLECTED]   = fwdToWarehouse
 
 -- Warehouse → turtle (forward to turtle by jobId → assignedTo)
 local function fwdToTurtle(msg)
@@ -623,7 +614,6 @@ local function handleConsoleEnter()
         print("  job <x> <y> <z>  queue one delivery job")
         print("  stress           queue 8 test jobs (~90 blocks out)")
         print("  fueltest         queue job ~80 blocks out to test refueling")
-        print("  refuel           force all turtles to run in-field refuel now")
         print("  recall           recall all turtles")
         print("  jobs             show job counts")
 
@@ -652,22 +642,13 @@ local function handleConsoleEnter()
         print("Done. Watch the admin monitor.")
 
     elseif cmd == "fueltest" then
-        -- Queue one delivery job ~80 blocks out. FORCE_REFUEL is automatically
-        -- broadcast 5s after ITEM_COLLECTED so both turtles refuel at the destination.
+        -- Queue one delivery job ~80 blocks out to test in-field refueling.
         local dest = { x = 143, y = 64, z = -2893 }  -- ~80 blocks north
         local id = server.submitJob("DELIVER", {
             items       = { ["minecraft:cobblestone"] = 1 },
             destination = dest,
         }, 5)
-        state.fuelTestJobId = id
         print(string.format("Fuel test job queued: %s -> (%d,%d,%d)", id, dest.x, dest.y, dest.z))
-        print("Turtles will auto-refuel 5s after completing the delivery.")
-
-    elseif cmd == "refuel" then
-        -- Broadcast FORCE_REFUEL to all online turtles.
-        sendBroadcast(proto.MSG.FORCE_REFUEL, {})
-        print("FORCE_REFUEL broadcast sent to all turtles.")
-        print("Watch each turtle's console for refuel output.")
 
     elseif cmd == "recall" then
         server.recallAll("console_recall")
@@ -759,11 +740,6 @@ function server.run()
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
-
-            elseif state.fuelTestTimer and p1 == state.fuelTestTimer then
-                state.fuelTestTimer = nil
-                logInfo("Auto-refuel: broadcasting FORCE_REFUEL to all turtles...")
-                sendBroadcast(proto.MSG.FORCE_REFUEL, {})
 
             elseif state.pendingMock then
                 -- Fire auto-mock ITEM_READY after the small delay
