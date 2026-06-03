@@ -99,15 +99,26 @@ function registry.register(id, role, fuel, fuelMax, position)
         isNew and "Registered" or "Re-registered", id, role, fuel, fuelMax,
         dock and ("bay"..dock.bay..dock.row) or "none"))
 
-    -- Re-queue any jobs that were assigned to this turtle before it rebooted
-    -- so they get dispatched immediately instead of waiting for ACK timeout
+    -- Handle jobs that were assigned to this turtle:
+    --   restored=true  → server rebooted, turtle is continuing mid-job → re-link it
+    --   restored=false → turtle itself rebooted → re-queue for fresh dispatch
     for _, job in pairs(state.jobs) do
         if job.assignedTo == id and
            (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
-            logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
-            job.status     = "PENDING"
-            job.assignedTo = nil
-            job.linkedJob  = nil
+            if job.restored then
+                -- Server reboot: original turtle is still mid-job, just re-link it.
+                -- Clear the flag so a subsequent turtle reboot re-queues normally.
+                job.restored = false
+                state.registry[id].status = proto.STATUS.TRAVELLING
+                state.registry[id].jobId  = job.id
+                logInfo("Re-linked " .. id .. " to restored job " .. job.id)
+            else
+                -- Turtle reboot: start fresh — re-queue so a new pair is dispatched
+                logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
+                job.status     = "PENDING"
+                job.assignedTo = nil
+                job.linkedJob  = nil
+            end
         end
     end
 
@@ -170,17 +181,14 @@ end
 local JOB_SAVE_FILE = "jobs.dat"
 
 local function saveJobs()
-    -- Only persist jobs that are worth restoring: PENDING or active worker jobs.
-    -- Support jobs (SUPPORT_FOLLOW) are recreated by the dispatcher on reboot.
-    -- Terminal states (COMPLETE, FAILED, CANCELLED) are not needed after reboot.
+    -- Persist all active jobs (including SUPPORT_FOLLOW) so original turtles
+    -- can be re-linked on server reboot. Terminal states are not worth keeping.
     local toSave = {}
     for id, job in pairs(state.jobs) do
         local active = job.status == "PENDING"
                     or job.status == "ASSIGNED"
                     or job.status == "IN_PROGRESS"
-        local isWorker = job.type ~= proto.JOB.SUPPORT_FOLLOW
-                      and job.type ~= proto.JOB.PATROL
-        if active and isWorker then
+        if active then
             toSave[id] = job
         end
     end
@@ -203,18 +211,25 @@ local function loadJobs()
     if type(data) ~= "table" then return end
 
     state.jobCounter = data.jobCounter or 0
-    local restored = 0
+    local nRestored  = 0
     for id, job in pairs(data.jobs or {}) do
-        -- Always re-queue as PENDING — turtles will re-register and get fresh assignments
-        job.status     = "PENDING"
-        job.assignedTo = nil
-        job.linkedJob  = nil
+        if job.assignedTo then
+            -- Job had a turtle — keep assignedTo so registry.register can re-link it.
+            -- Mark restored=true so register knows this is a server reboot (not turtle reboot).
+            -- If the turtle never comes back, heartbeat timeout will re-queue it.
+            job.status   = "IN_PROGRESS"
+            job.restored = true
+        else
+            -- Job was queued but not yet assigned — dispatch fresh
+            job.status = "PENDING"
+        end
         state.jobs[id] = job
-        restored = restored + 1
-        logInfo(string.format("Restored job %s [%s] as PENDING", id, job.type))
+        nRestored = nRestored + 1
+        logInfo(string.format("Restored job %s [%s] assignedTo=%s",
+            id, job.type, tostring(job.assignedTo)))
     end
-    if restored > 0 then
-        logInfo(string.format("Loaded %d job(s) from disk", restored))
+    if nRestored > 0 then
+        logInfo(string.format("Loaded %d job(s) from disk", nRestored))
     end
 end
 
