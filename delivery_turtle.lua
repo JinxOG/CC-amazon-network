@@ -24,8 +24,7 @@ local function waitForAny(types, seconds)
     for _, t in ipairs(types) do set[t] = true end
     local deadline = os.clock() + seconds
     while os.clock() < deadline do
-        -- Freeze the deadline while server is unreachable so we don't time out
-        -- and give up on a job just because the server went down temporarily.
+        if base.isRecalled() then return nil end
         if base.isServerDown() then
             deadline = os.clock() + seconds
             sleep(2)
@@ -408,7 +407,10 @@ base.run(function(job)
             proto.MSG.JOB_ABORT,
         }, 10)
 
-        if not msg then
+        if base.isRecalled() then
+            print("Recalled — picking up EC and returning to dock")
+            break
+        elseif not msg then
             -- Re-ping warehouse in case CHESTS_PLACED was missed
             sendChestsPlaced()
             print("Still waiting for warehouse items...")
@@ -461,8 +463,10 @@ base.run(function(job)
         end
     end
 
-    base.sendToServer(proto.MSG.ITEM_COLLECTED, { jobId = job.id })
-    base.sendProgress("Delivery complete")
+    if not base.isRecalled() then
+        base.sendToServer(proto.MSG.ITEM_COLLECTED, { jobId = job.id })
+        base.sendProgress("Delivery complete")
+    end
 
     -- ── Step 6: Descend back to underground travel level ─────────────────────
 
@@ -471,7 +475,7 @@ base.run(function(job)
         print("Warning: could not fully descend — attempting return anyway")
     end
 
-    if savedPartnerId then
+    if savedPartnerId and not base.isRecalled() then
         base.setPartnerId(savedPartnerId)
         base.signalPartner(proto.MSG.DESCENDED, {})
     end
@@ -484,8 +488,9 @@ base.run(function(job)
     end
 
     -- ── CHECKPOINT 4: ARRIVAL ────────────────────────────────────────────────
-    -- Soft check — log final state, warn if something is wrong but don't abort.
     checkEC("ARRIVAL", false)
 
-    base.sendComplete({ destination = d })
+    if not base.isRecalled() then
+        base.sendComplete({ destination = d })
+    end
 end)

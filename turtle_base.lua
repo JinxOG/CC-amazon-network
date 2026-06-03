@@ -35,6 +35,7 @@ local _self = {
     busy       = false,
     canDig     = true,   -- false for turtles without a pickaxe (e.g. support)
     serverDown = false,  -- true while server is unreachable; pauses movement + freezes deadlines
+    recalled   = false,  -- set by RECALL handler; causes waitForAny to exit the job runner
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -56,6 +57,7 @@ function base.getPartnerId()     return _self.partnerId  end
 function base.setPartnerId(id)   _self.partnerId = id    end
 function base.setCanDig(val)     _self.canDig = val      end
 function base.isServerDown()     return _self.serverDown end
+function base.isRecalled()       return _self.recalled   end
 
 -- ─── Comms ───────────────────────────────────────────────────────────────────
 
@@ -1078,13 +1080,16 @@ function base.run(jobHandler)
 
                         elseif msg.type == proto.MSG.RECALL then
                             logWarn("RECALL: " .. (msg.payload.reason or "?"))
-                            -- Save state BEFORE sendFailed clears it
-                            local wasBusy   = _self.busy
-                            local wasStatus = _self.status
-                            if wasBusy and _self.jobId then
+                            if _self.busy then
+                                -- Signal the job runner to exit its current wait loop.
+                                -- The job runner will clean up (pick up EC etc.) then
+                                -- call returnToDock itself. Control loop must NOT also
+                                -- navigate or the two coroutines fight over movement.
+                                _self.recalled = true
                                 base.sendFailed("recalled", true)
-                            end
-                            if wasBusy or wasStatus ~= proto.STATUS.IDLE then
+                                pendingJob = nil
+                            else
+                                -- Idle turtle: navigate directly.
                                 local insideBuilding = _self.pos.y >= 67
                                     and _self.pos.x >= 143 and _self.pos.x <= 228
                                     and _self.pos.z >= -2817 and _self.pos.z <= -2782
@@ -1093,11 +1098,8 @@ function base.run(jobHandler)
                                 else
                                     base.returnToDock()
                                 end
-                            else
-                                logInfo("Already idle at dock, ignoring recall movement.")
+                                _self.busy = false
                             end
-                            _self.busy  = false
-                            pendingJob  = nil
 
                         elseif msg.type == proto.MSG.UPDATE_ALL then
                             logWarn("UPDATE_ALL received — running updater then rebooting...")
@@ -1134,6 +1136,7 @@ function base.run(jobHandler)
             pendingJob = nil
 
             local ok, err = pcall(jobHandler, job)
+            _self.recalled = false   -- clear after job exits regardless of reason
             if not ok then
                 logError("Job handler crashed: " .. tostring(err))
                 base.sendFailed(tostring(err), true)
