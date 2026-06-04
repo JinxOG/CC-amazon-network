@@ -296,11 +296,15 @@ local function bypassForward()
     end
 
     logInfo("Turtle blocking forward — attempting intelligent bypass...")
-    if tryStrafe(true)      then logInfo("Bypass: left lane");  return true end
-    if tryStrafe(false)     then logInfo("Bypass: right lane"); return true end
-    if tryVertical(true)    then logInfo("Bypass: dug UP over blocker");   return true end
-    if tryVertical(false)   then logInfo("Bypass: dug DOWN under blocker"); return true end
-    logInfo("All bypass routes failed — continuing to wait")
+    if tryStrafe(true)  then logInfo("Bypass: left lane");  return true end
+    if tryStrafe(false) then logInfo("Bypass: right lane"); return true end
+    -- Vertical bypass (dig up/down) is only safe underground in tight tunnels.
+    -- Inside the surface depot (y >= 66) never dig — just wait or strafe.
+    if _self.pos.y < 66 then
+        if tryVertical(true)  then logInfo("Bypass: dug UP over blocker");    return true end
+        if tryVertical(false) then logInfo("Bypass: dug DOWN under blocker"); return true end
+    end
+    logInfo("All bypass routes failed — waiting for path to clear")
     return false
 end
 
@@ -385,17 +389,17 @@ function move.to(tx, ty, tz)
         local ok, err = move.down()
         if not ok then return false, "stuck down: " .. (err or "?") end
     end
-    -- X axis
-    if _self.pos.x < tx then move.face(1) end
-    if _self.pos.x > tx then move.face(3) end
+    -- X axis: recalculate facing each step so a bypass overshoot auto-corrects
+    -- (without this, a 2-block bypass past the target leaves facing wrong and
+    --  the turtle drives away from the target forever)
     while _self.pos.x ~= tx do
+        if _self.pos.x < tx then move.face(1) else move.face(3) end
         local ok, err = move.forward()
         if not ok then return false, "stuck X: " .. (err or "?") end
     end
-    -- Z axis
-    if _self.pos.z < tz then move.face(2) end
-    if _self.pos.z > tz then move.face(0) end
+    -- Z axis: same per-step facing recalc
     while _self.pos.z ~= tz do
+        if _self.pos.z < tz then move.face(2) else move.face(0) end
         local ok, err = move.forward()
         if not ok then return false, "stuck Z: " .. (err or "?") end
     end
@@ -589,14 +593,25 @@ function base.returnToDock()
     return true
 end
 
--- Navigate from dock back to dock after a RECALL while inside building.
--- Uses the internal route (junction column → return aisle) instead of going
--- all the way to the arrivals hole first.
+-- Navigate from anywhere inside the building back to dock.
+-- Uses an aisle route that moves Z first so the turtle never cuts
+-- through occupied dock rows.  Safe to call from any floor position.
 function base.returnToDockInternal()
     if not _self.dock then return true end
+    -- GPS sync first so current position is accurate
+    gpsSync()
+    -- Already at dock? Just orient and done.
+    if _self.pos.x == _self.dock.x and _self.pos.z == _self.dock.z then
+        move.face(W.dockFacing(_self.dock))
+        logInfo("Already at dock bay " .. _self.dock.bay .. " row " .. _self.dock.row)
+        return true
+    end
     base.setStatus(proto.STATUS.RETURNING)
-    logInfo("Returning to dock via internal taxiway...")
-    local route = W.internalReturnRoute(_self.dock)
+    logInfo(string.format("Homing to dock from %d,%d,%d...",
+        _self.pos.x, _self.pos.y, _self.pos.z))
+    -- Position-aware route: moves Z to the red taxiway FIRST at the current X
+    -- column so the turtle never traverses another dock row sideways.
+    local route = W.internalReturnRouteFrom(_self.dock, _self.pos.x, _self.pos.z)
     local ok, err = move.followRoute(route)
     if not ok then return false, "internal return failed: " .. (err or "?") end
     -- GPS verify — correct any sub-block drift before accepting future jobs.

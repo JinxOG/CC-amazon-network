@@ -224,22 +224,39 @@ function W.returnRoute(dock)
     }
 end
 
--- Internal return: already inside the building → skip arrivals hole, go straight
--- to the dock's junction column on the red taxiway then follow the return aisle.
--- Use this for startup homing and post-RECALL when the turtle is already on the
--- depot floor.  Never call this from underground.
-function W.internalReturnRoute(dock)
+-- Internal return from a KNOWN inside position (fromX, fromZ).
+-- Every waypoint changes only one axis so move.to never crosses a dock row
+-- sideways (move.to does X before Z, which would cut through occupied slots
+-- if both axes change in the same call).
+--
+-- Route: current col → red taxiway (Z only)
+--      → junction col  (X only, along clear taxiway)
+--      → return aisle  (Z only)
+--      → dock col      (X only, along clear aisle)
+--      → dock slot     (Z only)
+--
+-- Use this for RECALL homing and boot-time position correction.
+-- Never call from underground.
+function W.internalReturnRouteFrom(dock, fromX, fromZ)
     local az = returnAisleZ(dock)
     return {
-        -- 1. Move to red taxiway at dock's junction column (centre column, always clear)
-        { x = dock.junction.x, y = CFG.FLOOR_Y, z = W.RED_Z },
-        -- 2. Drop down from taxiway to return aisle via centre column
-        { x = dock.junction.x, y = CFG.FLOOR_Y, z = az      },
-        -- 3. Move along return aisle to dock's column X
-        { x = dock.x,          y = CFG.FLOOR_Y, z = az      },
-        -- 4. Enter dock slot
-        { x = dock.x,          y = CFG.FLOOR_Y, z = dock.z  },
+        -- 1. Move to red taxiway at CURRENT column (Z-only — never crosses rows)
+        { x = fromX,           y = CFG.FLOOR_Y, z = W.RED_Z  },
+        -- 2. Travel along red taxiway to dock's junction column (X-only, clear lane)
+        { x = dock.junction.x, y = CFG.FLOOR_Y, z = W.RED_Z  },
+        -- 3. Drop from taxiway into return aisle (Z-only via clear centre column)
+        { x = dock.junction.x, y = CFG.FLOOR_Y, z = az       },
+        -- 4. Move along return aisle to dock's X column (X-only, clear aisle)
+        { x = dock.x,          y = CFG.FLOOR_Y, z = az       },
+        -- 5. Enter dock slot (Z-only)
+        { x = dock.x,          y = CFG.FLOOR_Y, z = dock.z   },
     }
+end
+
+-- Compatibility wrapper (turtle already at junction on red taxiway).
+-- Prefer internalReturnRouteFrom for general use.
+function W.internalReturnRoute(dock)
+    return W.internalReturnRouteFrom(dock, dock.junction.x, W.RED_Z)
 end
 
 -- Returns the facing direction a turtle should hold while at its dock.
