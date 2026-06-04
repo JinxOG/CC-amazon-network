@@ -181,10 +181,10 @@
         /* Covers the side panel and header (normal DOM stacking) */
         #backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:1000; }
         #backdrop.show { display:block; }
-        /* Covers the iframe — iframes form their own stacking context and cannot
-           be covered by a fixed-position element from outside; this div sits
-           inside #map-wrap at absolute position so it paints over the iframe. */
-        #map-overlay { display:none; position:absolute; inset:0; background:rgba(0,0,0,0.8); z-index:999; }
+        /* Fills the map area while the iframe is hidden during modal open.
+           The iframe is hidden via visibility:hidden (not display:none) so
+           Dynmap stays loaded — this div provides the solid background. */
+        #map-overlay { display:none; position:absolute; inset:0; background:#0a0a0f; z-index:999; }
         #map-overlay.show { display:block; }
         #modal {
             display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
@@ -781,15 +781,19 @@ function showDeliveryModal(x, z) {
 }
 
 function showModal() {
-    document.getElementById('backdrop').classList.add('show');
+    // visibility:hidden keeps Dynmap loaded but removes it from the compositor
+    // layer — the only reliable way to prevent iframe bleed-through
+    document.getElementById('dynmap-frame').style.visibility = 'hidden';
     document.getElementById('map-overlay').classList.add('show');
+    document.getElementById('backdrop').classList.add('show');
     document.getElementById('modal').classList.add('show');
     document.getElementById('m-x').focus();
 }
 
 function closeModal() {
-    document.getElementById('backdrop').classList.remove('show');
+    document.getElementById('dynmap-frame').style.visibility = 'visible';
     document.getElementById('map-overlay').classList.remove('show');
+    document.getElementById('backdrop').classList.remove('show');
     document.getElementById('modal').classList.remove('show');
 }
 
