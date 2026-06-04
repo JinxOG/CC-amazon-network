@@ -18,7 +18,7 @@ local CFG = {
     -- before the next pair starts their departure route.
     DISPATCH_STAGGER  = 60,
     -- Web dashboard bridge
-    BRIDGE_URL        = "http://192.168.86.33:3000/update",
+    BRIDGE_URL        = "http://127.0.0.1:3000/update",
     BRIDGE_INTERVAL   = 2,      -- seconds between state pushes
 }
 
