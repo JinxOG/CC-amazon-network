@@ -33,42 +33,42 @@
         #header-stats { margin-left: auto; display: flex; gap: 16px; font-size: 11px; align-items: center; }
         .stat { color: #555; letter-spacing: 1px; }
         .stat b { color: #00ff88; font-weight: normal; }
-
         #status-dot {
             width: 7px; height: 7px; border-radius: 50%;
             background: #00ff88; box-shadow: 0 0 6px #00ff88; flex-shrink: 0;
         }
         #status-dot.offline { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
 
-        /* ── Main ── */
+        /* ── Main layout ── */
         #main { display: flex; flex: 1; overflow: hidden; }
 
         /* ── Map / iframe ── */
         #map-wrap { flex: 1; position: relative; background: #0a0a0f; min-width: 0; overflow: hidden; }
+        #dynmap-frame { width: 100%; height: 100%; border: none; display: block; }
 
-        #dynmap-frame {
-            width: 100%; height: 100%;
-            border: none; display: block;
+        /* Coordinate preview — follows the cursor, updated by injected mousemove handler */
+        #coord-preview {
+            display: none;
+            position: absolute;
+            background: rgba(8,8,16,0.88);
+            border: 1px solid #00ff8855;
+            color: #00ff88;
+            font-size: 11px;
+            letter-spacing: 2px;
+            padding: 3px 10px;
+            border-radius: 3px;
+            pointer-events: none;
+            z-index: 200;
+            white-space: nowrap;
         }
 
-        /* Transparent right-click capture overlay — pointer-events off normally,
-           only captures contextmenu which bubbles from the iframe via injection */
+        /* Hint bar at bottom-left */
         #map-hint {
             position: absolute; bottom: 10px; left: 10px; z-index: 10;
             background: rgba(10,10,15,0.85); border: 1px solid #1a1a2e;
             color: #333; font-size: 10px; padding: 4px 10px; border-radius: 2px;
             pointer-events: none; letter-spacing: 1px;
         }
-
-        /* coord flash when right-clicking */
-        #coord-flash {
-            display: none;
-            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-            background: rgba(0,255,136,0.15); border: 1px solid #00ff8866;
-            color: #00ff88; font-size: 11px; padding: 5px 14px; border-radius: 3px;
-            pointer-events: none; letter-spacing: 1px; z-index: 10;
-        }
-        #coord-flash.show { display: block; }
 
         /* ── Side panel ── */
         #side-panel {
@@ -110,10 +110,7 @@
         .tc-name { font-size: 13px; color: #fff; font-weight: bold; letter-spacing: 1px; }
         .tc-sub  { font-size: 10px; color: #444; margin-top: 1px; letter-spacing: 1px; }
 
-        .sbadge {
-            font-size: 9px; padding: 2px 7px; border-radius: 2px;
-            letter-spacing: 1px; font-weight: bold;
-        }
+        .sbadge { font-size: 9px; padding: 2px 7px; border-radius: 2px; letter-spacing: 1px; font-weight: bold; }
         .sbadge.IDLE       { background:#0a2a1a; color:#00ff88; }
         .sbadge.TRAVELLING { background:#2a2a0a; color:#ffcc00; }
         .sbadge.WORKING    { background:#0a1a3a; color:#4499ff; }
@@ -129,20 +126,15 @@
 
         .tc-row { display:flex; gap:12px; font-size:10px; color:#555; flex-wrap:wrap; }
         .tc-row .v { color:#aaa; }
-
         .tc-locate {
             float:right; font-size:9px; color:#444; cursor:pointer;
             padding:1px 5px; border:1px solid #1e1e3e; border-radius:2px;
-            letter-spacing:1px; background:transparent; font-family:'Courier New',monospace;
-            margin-left:6px;
+            letter-spacing:1px; background:transparent; font-family:'Courier New',monospace; margin-left:6px;
         }
         .tc-locate:hover { color:#00ff88; border-color:#00ff88; }
 
         /* ── Job card ── */
-        .job-card {
-            background:#12121e; border:1px solid #1a1a2e;
-            border-left:3px solid #333; border-radius:3px; padding:10px;
-        }
+        .job-card { background:#12121e; border:1px solid #1a1a2e; border-left:3px solid #333; border-radius:3px; padding:10px; }
         .job-card.IN_PROGRESS { border-left-color:#4488ff; }
         .job-card.PENDING     { border-left-color:#ffaa00; }
         .job-card.COMPLETE    { border-left-color:#00ff88; opacity:0.45; }
@@ -210,8 +202,7 @@
 
         .coord-hint {
             background:#0a1a0a; border:1px solid #004422; border-radius:3px;
-            padding:6px 10px; font-size:10px; color:#448844; letter-spacing:1px;
-            margin-bottom:10px;
+            padding:6px 10px; font-size:10px; color:#448844; letter-spacing:1px; margin-bottom:10px;
         }
 
         /* ── Toast ── */
@@ -247,10 +238,9 @@
 
 <div id="main">
     <div id="map-wrap">
-        <!-- Dynmap runs natively inside the iframe — same-origin via our proxy -->
         <iframe id="dynmap-frame" src="/dynmap-frame"></iframe>
+        <div id="coord-preview"></div>
         <div id="map-hint">RIGHT-CLICK MAP → DISPATCH DELIVERY</div>
-        <div id="coord-flash"></div>
     </div>
 
     <div id="side-panel">
@@ -318,116 +308,196 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
-// DYNMAP IFRAME — same-origin via /dynmap-frame proxy
+// CONSTANTS & STATE
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DEPOT_X = 154, DEPOT_Z = -2803;
-let lastState = { turtles: {}, jobs: [] };
+let lastState  = { turtles: {}, jobs: [] };
+const frame    = document.getElementById('dynmap-frame');
+const coordBox = document.getElementById('coord-preview');
 
-const frame = document.getElementById('dynmap-frame');
+// Injected Leaflet markers living inside Dynmap's own map
+let injectedMarkers = {};   // id → L.circleMarker (in iframe's Leaflet)
 
-// Navigate the iframe to a Minecraft coordinate using Dynmap's URL hash.
-// Dynmap hash format: #;X;Y;Z;zoom;...;mapname
-function dynmapGoTo(x, y, z) {
+const MC_COLORS = {
+    DELIVERY: { IDLE:'#00ff88', TRAVELLING:'#ffdd00', WORKING:'#44aaff', LOADING:'#ff8844', RETURNING:'#aa66ff', ERROR:'#ff4444' },
+    SUPPORT:  { IDLE:'#4488ff', TRAVELLING:'#88aaff', WORKING:'#aaccff', LOADING:'#ff8844', RETURNING:'#aa66ff', ERROR:'#ff4444' },
+};
+function turtleColor(t) {
+    return (MC_COLORS[t.role] || MC_COLORS.DELIVERY)[t.status] || '#888';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DYNMAP COORDINATE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Convert Dynmap container-relative mouse event → Minecraft XZ
+function dynmapEventToMC(dw, e) {
+    const dm = dw.dynmap;
+    if (!dm || !dm.map) return null;
+    const cont   = dm.map.getContainer();
+    const rect   = cont.getBoundingClientRect();
+    const latlng = dm.map.containerPointToLatLng(
+        dw.L.point(e.clientX - rect.left, e.clientY - rect.top)
+    );
+    return latLngToMC(dm, latlng);
+}
+
+// Convert Dynmap latlng → Minecraft XZ using projection or flat-map fallback
+function latLngToMC(dm, latlng) {
+    try {
+        const proj = dm.getProjection ? dm.getProjection() : null;
+        if (proj && proj.fromLatLngToLocation) {
+            const loc = proj.fromLatLngToLocation(latlng, 64);
+            return { x: Math.round(loc.x), z: Math.round(loc.z) };
+        }
+    } catch(e) {}
+    // Flat-map fallback: lng=X, lat=-Z
+    return { x: Math.round(latlng.lng), z: Math.round(-latlng.lat) };
+}
+
+// Convert Minecraft XZ → Dynmap latlng (reverse of above)
+function mcToLatLng(dw, dm, t) {
+    try {
+        const proj = dm.getProjection ? dm.getProjection() : null;
+        if (proj && proj.fromLocationToLatLng) {
+            return proj.fromLocationToLatLng({ x: t.x, y: t.y || 64, z: t.z });
+        }
+    } catch(e) {}
+    return dw.L.latLng(-t.z, t.x);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DYNMAP IFRAME INJECTION
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Wait until dynmap.map is ready inside the iframe (Dynmap JS initialises
+// asynchronously after the HTML load event fires).
+function waitForDynmap(callback, attempts) {
+    attempts = attempts || 0;
     try {
         const dw = frame.contentWindow;
-        const cur = dw.location.hash || '';
-        const parts = cur.replace(/^#;?/, '').split(';');
-        // Preserve map name from current hash if present
-        const mapName = (parts.length > 8 && parts[8]) ? parts[8] : 'flat';
-        dw.location.hash = `#;${Math.round(x)};${Math.round(y)};${Math.round(z)};0;0;0;0;0;${mapName}`;
-    } catch (e) {
-        console.warn('[Frame] Hash nav failed:', e);
+        if (dw && dw.dynmap && dw.dynmap.map) {
+            callback(dw);
+            return;
+        }
+    } catch(e) {}
+    if (attempts < 40) setTimeout(() => waitForDynmap(callback, attempts + 1), 300);
+    else console.warn('[Dynmap] Map object never became ready.');
+}
+
+frame.addEventListener('load', () => {
+    // Navigate to depot immediately
+    dynmapGoTo(DEPOT_X, 67, DEPOT_Z);
+    // Wait for Dynmap's JS to finish, then inject everything
+    waitForDynmap(setupDynmapInjection);
+});
+
+function setupDynmapInjection(dw) {
+    const doc = frame.contentDocument;
+    const dm  = dw.dynmap;
+
+    // ── 1. Crosshair cursor ─────────────────────────────────────────────────
+    const style = doc.createElement('style');
+    style.textContent = `
+        #mcmap, .leaflet-container, .leaflet-grab, .leaflet-dragging {
+            cursor: crosshair !important;
+        }
+        /* Tooltip style for our injected markers */
+        .cc-tip {
+            background: transparent !important; border: none !important;
+            box-shadow: none !important; padding: 0 !important;
+            font-family: 'Courier New', monospace !important;
+            font-size: 10px !important; font-weight: bold !important;
+            letter-spacing: 1px !important; color: #00ff88 !important;
+            white-space: nowrap !important; text-shadow: 0 0 4px #000 !important;
+        }
+        .cc-tip::before { display: none !important; }
+        .cc-tip.support { color: #4488ff !important; }
+    `;
+    doc.head.appendChild(style);
+
+    // ── 2. Coordinate preview (mousemove → call parent) ─────────────────────
+    doc.addEventListener('mousemove', (e) => {
+        const mc = dynmapEventToMC(dw, e);
+        if (!mc) return;
+        // Position the overlay relative to map-wrap (iframe fills it exactly)
+        coordBox.style.left    = (e.clientX + 18) + 'px';
+        coordBox.style.top     = (e.clientY - 32) + 'px';
+        coordBox.style.display = 'block';
+        coordBox.textContent   = `X ${mc.x}   Z ${mc.z}`;
+    });
+    doc.addEventListener('mouseleave', () => { coordBox.style.display = 'none'; });
+
+    // ── 3. Right-click → delivery modal ────────────────────────────────────
+    doc.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const mc = dynmapEventToMC(dw, e);
+        showDeliveryModal(mc ? mc.x : null, mc ? mc.z : null);
+    });
+
+    // ── 4. Draw current turtle markers straight away ────────────────────────
+    updateInjectedMarkers(lastState.turtles || {});
+
+    console.log('[Dynmap] Injection complete — crosshair, coord preview, markers active');
+}
+
+// ── Inject / update L.circleMarker objects in Dynmap's Leaflet map ─────────
+function updateInjectedMarkers(turtles) {
+    try {
+        const dw = frame.contentWindow;
+        const dm = dw && dw.dynmap;
+        if (!dm || !dm.map || !dw.L) return;
+
+        for (const [id, t] of Object.entries(turtles)) {
+            if (t.x == null) continue;
+            const latlng = mcToLatLng(dw, dm, t);
+            const color  = turtleColor(t);
+            const r      = t.role === 'SUPPORT' ? 5 : 7;
+            const tc     = 'cc-tip' + (t.role === 'SUPPORT' ? ' support' : '');
+
+            if (injectedMarkers[id]) {
+                injectedMarkers[id].setLatLng(latlng);
+                injectedMarkers[id].setStyle({ color, fillColor: color });
+            } else {
+                const m = dw.L.circleMarker(latlng, {
+                    radius: r, color, fillColor: color,
+                    fillOpacity: 0.9, weight: 2,
+                })
+                .bindTooltip(id, {
+                    permanent: true, direction: 'top',
+                    offset: [0, -10], className: tc,
+                })
+                .addTo(dm.map);
+                injectedMarkers[id] = m;
+            }
+        }
+
+        // Remove turtles that have gone away
+        for (const id of Object.keys(injectedMarkers)) {
+            if (!turtles[id]) {
+                injectedMarkers[id].remove();
+                delete injectedMarkers[id];
+            }
+        }
+    } catch(e) {
+        // Dynmap map not ready yet — will retry on next poll
     }
 }
 
-// ── Inject right-click handler into Dynmap iframe once it loads ──────────────
-frame.addEventListener('load', () => {
-    // Navigate to depot on first load
-    dynmapGoTo(DEPOT_X, 67, DEPOT_Z);
+// ═══════════════════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════════════════
 
+// Pan Dynmap to a Minecraft coordinate via URL hash
+function dynmapGoTo(x, y, z) {
     try {
         const dw  = frame.contentWindow;
-        const doc = frame.contentDocument;
-
-        doc.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            let mcX = null, mcZ = null;
-
-            // ── Method 1: Use Dynmap's internal map projection ──────────────
-            // Dynmap exposes dynmap.map (Leaflet) and a coordinate projection.
-            const dm = dw.dynmap;
-            if (dm && dm.map) {
-                try {
-                    const dmMap   = dm.map;
-                    const cont    = dmMap.getContainer();
-                    const rect    = cont.getBoundingClientRect();
-                    const latlng  = dmMap.containerPointToLatLng(
-                        dw.L.point(e.clientX - rect.left, e.clientY - rect.top)
-                    );
-
-                    // Try Dynmap's own fromLatLngToLocation if available
-                    const proj = dm.getProjection ? dm.getProjection() : null;
-                    if (proj && proj.fromLatLngToLocation) {
-                        const loc = proj.fromLatLngToLocation(latlng, 64);
-                        mcX = Math.round(loc.x);
-                        mcZ = Math.round(loc.z);
-                        console.log('[Dynmap] Projection coords:', mcX, mcZ);
-                    } else {
-                        // Fallback: raw latlng — flat map: lng≈X, lat≈-Z
-                        mcX = Math.round(latlng.lng);
-                        mcZ = Math.round(-latlng.lat);
-                        console.log('[Dynmap] Raw latlng→MC (lng→X, -lat→Z):', mcX, mcZ, '| raw latlng:', latlng.lat.toFixed(1), latlng.lng.toFixed(1));
-                    }
-                } catch (err) {
-                    console.warn('[Dynmap] Map coord read failed:', err);
-                }
-            }
-
-            // ── Method 2: Read Dynmap's coordinate display text ─────────────
-            if (mcX == null) {
-                const coordSelectors = [
-                    '#mapcoords', '.mapcoords', '#coord', '.coord',
-                    '.leaflet-control-coordinates', '[class*="coord"]'
-                ];
-                for (const sel of coordSelectors) {
-                    const el = doc.querySelector(sel);
-                    if (el && el.textContent) {
-                        const txt = el.textContent;
-                        // Try patterns like "X: 154, Z: -2803" or "154, 64, -2803"
-                        const m1 = txt.match(/[Xx][:\s]+(-?\d+).*?[Zz][:\s]+(-?\d+)/);
-                        const m2 = txt.match(/(-?\d+),\s*-?\d+,\s*(-?\d+)/);
-                        if (m1) { mcX = parseInt(m1[1]); mcZ = parseInt(m1[2]); break; }
-                        if (m2) { mcX = parseInt(m2[1]); mcZ = parseInt(m2[2]); break; }
-                    }
-                }
-                if (mcX != null) console.log('[Dynmap] Coord from display text:', mcX, mcZ);
-            }
-
-            // ── Open delivery modal with whatever we got ─────────────────────
-            showDeliveryModal(mcX, mcZ);
-        });
-
-        console.log('[Dynmap] Frame ready — right-click handler injected');
-    } catch (err) {
-        console.warn('[Dynmap] Could not inject into frame (cross-origin?):', err);
-    }
-});
-
-function showDeliveryModal(x, z) {
-    document.getElementById('m-x').value    = x != null ? x : '';
-    document.getElementById('m-z').value    = z != null ? z : '';
-    document.getElementById('m-y').value    = '67';
-    document.getElementById('m-note').value = '';
-
-    if (x != null && z != null) {
-        const flash = document.getElementById('coord-flash');
-        flash.textContent = `X ${x}  Z ${z}`;
-        flash.classList.add('show');
-        setTimeout(() => flash.classList.remove('show'), 1500);
-    }
-
-    showModal();
+        const cur = dw.location.hash || '';
+        const pts = cur.replace(/^#;?/, '').split(';');
+        const map = (pts.length > 8 && pts[8]) ? pts[8] : 'flat';
+        dw.location.hash = `#;${Math.round(x)};${Math.round(y)};${Math.round(z)};0;0;0;0;0;${map}`;
+    } catch(e) {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -470,14 +540,12 @@ function renderAll(d) {
     const turtles = d.turtles || {};
     const jobs    = d.jobs    || [];
     const tarr    = Object.values(turtles);
-    const online  = tarr.filter(t => t.online).length;
-    const active  = tarr.filter(t => t.online && t.status !== 'IDLE').length;
-    const jobAct  = jobs.filter(j => j.status !== 'COMPLETE').length;
 
-    document.getElementById('s-online').textContent = online;
-    document.getElementById('s-active').textContent = active;
-    document.getElementById('s-jobs').textContent   = jobAct;
+    document.getElementById('s-online').textContent = tarr.filter(t => t.online).length;
+    document.getElementById('s-active').textContent = tarr.filter(t => t.online && t.status !== 'IDLE').length;
+    document.getElementById('s-jobs').textContent   = jobs.filter(j => j.status !== 'COMPLETE').length;
 
+    updateInjectedMarkers(turtles);   // live markers inside Dynmap
     renderFleet(turtles);
     renderJobs(jobs);
     refreshTurtleSel(turtles);
@@ -531,7 +599,6 @@ function renderJobs(jobs) {
     const recent = jobs.filter(j => j.status === 'COMPLETE').slice(-5);
     const all    = [...active, ...recent];
     if (!all.length) { el.innerHTML = '<div class="empty">NO ACTIVE JOBS</div>'; return; }
-
     el.innerHTML = all.map(j => `
         <div class="job-card ${j.status||''}">
             <div class="jc-top">
@@ -551,17 +618,24 @@ function refreshTurtleSel(turtles) {
         ).join('');
 }
 
-// Navigate Dynmap map to a turtle's position
 function focusTurtle(id) {
     const t = lastState.turtles ? lastState.turtles[id] : null;
     if (!t || t.x == null) { toast('No position data for ' + id, true); return; }
     dynmapGoTo(t.x, t.y || 67, t.z);
-    toast('Locating ' + id + '…');
+    toast('Locating ' + id);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MODAL
 // ═══════════════════════════════════════════════════════════════════════════
+
+function showDeliveryModal(x, z) {
+    document.getElementById('m-x').value    = x != null ? x : '';
+    document.getElementById('m-z').value    = z != null ? z : '';
+    document.getElementById('m-y').value    = '67';
+    document.getElementById('m-note').value = '';
+    showModal();
+}
 
 function showModal() {
     document.getElementById('backdrop').classList.add('show');
@@ -603,24 +677,20 @@ async function cmdRecall() {
     await sendCmd('RECALL', { turtleId: id, reason: 'admin_recall' });
     toast(`Recall sent → ${id}`);
 }
-
 async function cmdRecallAll() {
     if (!confirm('Recall ALL turtles to dock?')) return;
     await sendCmd('RECALL_ALL', { reason: 'admin_recall' });
     toast('Recall all sent');
 }
-
 async function cmdUpdateAll() {
     if (!confirm('OTA update all turtles? They will reboot.')) return;
     await sendCmd('UPDATE_ALL', {});
     toast('Update all sent');
 }
-
 async function sendCmd(type, params) {
     try {
         await fetch('/command', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type, params }),
         });
     } catch(e) { toast('Command failed', true); }
