@@ -178,8 +178,14 @@
         .btn.warning:hover  { background:#1e1a0a; border-color:#ffaa00; color:#ffaa00; }
 
         /* ── Modal ── */
+        /* Covers the side panel and header (normal DOM stacking) */
         #backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:1000; }
         #backdrop.show { display:block; }
+        /* Covers the iframe — iframes form their own stacking context and cannot
+           be covered by a fixed-position element from outside; this div sits
+           inside #map-wrap at absolute position so it paints over the iframe. */
+        #map-overlay { display:none; position:absolute; inset:0; background:rgba(0,0,0,0.8); z-index:999; }
+        #map-overlay.show { display:block; }
         #modal {
             display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
             background:#0f0f1a; border:1px solid #00ff8866; border-radius:4px;
@@ -239,6 +245,7 @@
 <div id="main">
     <div id="map-wrap">
         <iframe id="dynmap-frame" src="/dynmap-frame"></iframe>
+        <div id="map-overlay"></div>
         <div id="coord-preview"></div>
         <div id="map-hint">RIGHT-CLICK MAP → DISPATCH DELIVERY</div>
     </div>
@@ -775,12 +782,14 @@ function showDeliveryModal(x, z) {
 
 function showModal() {
     document.getElementById('backdrop').classList.add('show');
+    document.getElementById('map-overlay').classList.add('show');
     document.getElementById('modal').classList.add('show');
     document.getElementById('m-x').focus();
 }
 
 function closeModal() {
     document.getElementById('backdrop').classList.remove('show');
+    document.getElementById('map-overlay').classList.remove('show');
     document.getElementById('modal').classList.remove('show');
 }
 
