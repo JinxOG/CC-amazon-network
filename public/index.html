@@ -318,7 +318,8 @@ const coordBox = document.getElementById('coord-preview');
 
 // Injected Leaflet objects living inside Dynmap's own map
 let injectedMarkers  = {};   // id → L.circleMarker
-let pathPolylines    = {};   // id → L.polyline (turtle → destination preview)
+let routePolylines   = {};   // id → L.polyline (click-activated full route)
+let selectedTurtleId = null; // turtle whose route is currently shown
 
 const MC_COLORS = {
     DELIVERY: { IDLE:'#00ff88', TRAVELLING:'#ffdd00', WORKING:'#44aaff', LOADING:'#ff8844', RETURNING:'#aa66ff', ERROR:'#ff4444' },
@@ -326,6 +327,71 @@ const MC_COLORS = {
 };
 function turtleColor(t) {
     return (MC_COLORS[t.role] || MC_COLORS.DELIVERY)[t.status] || '#888';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEPOT ROUTING  (mirrors waypoints.lua — update both if layout changes)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DEPOT = {
+    FLOOR_Y:       67,
+    UNDERGROUND_Y: 60,
+    WHITE_Z:       -2803,                          // outbound dispatch lane
+    DISPATCH_HOLE: { x: 143, y: 67,  z: -2813 },  // go DOWN to leave
+};
+
+// Compute the full ordered waypoint list for a delivery turtle.
+// t must have dockX, dockZ, dockJX from the bridge; dest = job.destination.
+function computeDeliveryRoute(t, dest) {
+    const destY = (dest.y && dest.y !== DEPOT.FLOOR_Y) ? dest.y : DEPOT.FLOOR_Y;
+    if (t.dockX == null || t.dockZ == null || t.dockJX == null) {
+        // No dock info yet — simplified route from dispatch hole onward
+        return [
+            { x: DEPOT.DISPATCH_HOLE.x, y: DEPOT.FLOOR_Y,       z: DEPOT.WHITE_Z         },
+            { x: DEPOT.DISPATCH_HOLE.x, y: DEPOT.FLOOR_Y,       z: DEPOT.DISPATCH_HOLE.z },
+            { x: DEPOT.DISPATCH_HOLE.x, y: DEPOT.UNDERGROUND_Y, z: DEPOT.DISPATCH_HOLE.z },
+            { x: dest.x,               y: DEPOT.UNDERGROUND_Y,  z: dest.z                },
+            { x: dest.x,               y: destY,                z: dest.z                },
+        ];
+    }
+    // aisleZ: 2 blocks away from taxiway (departure aisle, same as waypoints.lua)
+    const az = DEPOT.WHITE_Z > t.dockZ ? t.dockZ - 2 : t.dockZ + 2;
+    return [
+        { x: t.dockX,              y: DEPOT.FLOOR_Y,       z: t.dockZ               }, // dock slot
+        { x: t.dockX,              y: DEPOT.FLOOR_Y,       z: az                    }, // back aisle
+        { x: t.dockJX,             y: DEPOT.FLOOR_Y,       z: az                    }, // centre column
+        { x: t.dockJX,             y: DEPOT.FLOOR_Y,       z: DEPOT.WHITE_Z         }, // taxiway entry
+        { x: DEPOT.DISPATCH_HOLE.x,y: DEPOT.FLOOR_Y,       z: DEPOT.WHITE_Z         }, // hole approach
+        { x: DEPOT.DISPATCH_HOLE.x,y: DEPOT.FLOOR_Y,       z: DEPOT.DISPATCH_HOLE.z }, // at hole
+        { x: DEPOT.DISPATCH_HOLE.x,y: DEPOT.UNDERGROUND_Y, z: DEPOT.DISPATCH_HOLE.z }, // descend
+        { x: dest.x,               y: DEPOT.UNDERGROUND_Y, z: dest.z                }, // underground
+        { x: dest.x,               y: destY,               z: dest.z                }, // surface arrival
+    ];
+}
+
+// Estimate ETA from turtle's current position to end of route (~0.4s/block).
+function routeETA(turtle, route) {
+    const p = { x: Math.round(turtle.x||0), y: Math.round(turtle.y||DEPOT.FLOOR_Y), z: Math.round(turtle.z||0) };
+    let best = Infinity, bi = 0;
+    route.forEach((wp, i) => {
+        const d = Math.abs(wp.x-p.x) + Math.abs(wp.y-p.y) + Math.abs(wp.z-p.z);
+        if (d < best) { best = d; bi = i; }
+    });
+    let blocks = best;
+    for (let i = bi; i < route.length - 1; i++) {
+        const a = route[i], b = route[i+1];
+        blocks += Math.abs(b.x-a.x) + Math.abs(b.y-a.y) + Math.abs(b.z-a.z);
+    }
+    const s = Math.round(blocks * 0.4);
+    return s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s % 60}s`;
+}
+
+// Remove any visible route polyline.
+function clearSelectedRoute() {
+    for (const id of Object.keys(routePolylines)) {
+        try { routePolylines[id].remove(); } catch(e) {}
+        delete routePolylines[id];
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -390,7 +456,8 @@ function waitForDynmap(callback, attempts) {
 frame.addEventListener('load', () => {
     // Iframe reloaded — Leaflet objects are gone, clear all refs
     injectedMarkers = {};
-    pathPolylines   = {};
+    routePolylines  = {};
+    // selectedTurtleId persists — route redraws once Dynmap reinitialises
     dynmapGoTo(DEPOT_X, 67, DEPOT_Z);
     waitForDynmap(setupDynmapInjection);
 });
@@ -416,6 +483,15 @@ function setupDynmapInjection(dw) {
         }
         .cc-tip::before { display: none !important; }
         .cc-tip.support { color: #4488ff !important; }
+        /* Route ETA tooltip */
+        .cc-route-tip {
+            background: #1a73e8 !important; border: none !important;
+            color: #fff !important; font-family: 'Courier New', monospace !important;
+            font-size: 11px !important; letter-spacing: 2px !important;
+            padding: 5px 12px !important; border-radius: 3px !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+        }
+        .cc-route-tip::before { display: none !important; }
     `;
     doc.head.appendChild(style);
 
@@ -431,7 +507,13 @@ function setupDynmapInjection(dw) {
     });
     doc.addEventListener('mouseleave', () => { coordBox.style.display = 'none'; });
 
-    // ── 3. Right-click → delivery modal ────────────────────────────────────
+    // ── 3. Map left-click → deselect route ─────────────────────────────────
+    dm.map.on('click', () => {
+        clearSelectedRoute();
+        selectedTurtleId = null;
+    });
+
+    // ── 4. Right-click → delivery modal ────────────────────────────────────
     doc.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const mc = dynmapEventToMC(dw, e);
@@ -451,16 +533,25 @@ function updateInjectedMarkers(turtles) {
         const dm = dw && dw.dynmap;
         if (!dm || !dm.map || !dw.L) return;
 
+        const jobsArr = Array.isArray(lastState.jobs)
+            ? lastState.jobs : Object.values(lastState.jobs || {});
+
+        // ── Turtle markers ───────────────────────────────────────────────
         for (const [id, t] of Object.entries(turtles)) {
             if (t.x == null) continue;
             const latlng = mcToLatLng(dw, dm, t);
             const color  = turtleColor(t);
             const r      = t.role === 'SUPPORT' ? 5 : 7;
             const tc     = 'cc-tip' + (t.role === 'SUPPORT' ? ' support' : '');
+            const sel    = id === selectedTurtleId;
 
             if (injectedMarkers[id]) {
                 injectedMarkers[id].setLatLng(latlng);
-                injectedMarkers[id].setStyle({ color, fillColor: color });
+                injectedMarkers[id].setStyle({
+                    color: sel ? '#ffffff' : color,
+                    fillColor: color, weight: sel ? 3 : 2,
+                });
+                injectedMarkers[id].setRadius(sel ? r + 3 : r);
             } else {
                 const m = dw.L.circleMarker(latlng, {
                     radius: r, color, fillColor: color,
@@ -470,52 +561,58 @@ function updateInjectedMarkers(turtles) {
                     permanent: true, direction: 'top',
                     offset: [0, -10], className: tc,
                 })
+                .on('click', (e) => {
+                    dw.L.DomEvent.stopPropagation(e);
+                    if (selectedTurtleId === id) {
+                        clearSelectedRoute();
+                        selectedTurtleId = null;
+                    } else {
+                        clearSelectedRoute();
+                        selectedTurtleId = id;
+                    }
+                })
                 .addTo(dm.map);
                 injectedMarkers[id] = m;
             }
         }
 
-        // ── Route preview lines (turtle → destination) ──────────────────
-        // Shows where each turtle is HEADED, not where it has been.
-        // Uses job.destination from the latest /state response.
-        const jobsArr = lastState.jobs || [];
-
-        for (const [id, t] of Object.entries(turtles)) {
-            if (t.x == null || !t.online || !t.jobId) {
-                if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
-                continue;
-            }
-
-            // Find this turtle's active job and its destination
-            const job  = jobsArr.find(j => j.id === t.jobId);
-            const dest = job && job.destination;
-
-            if (!dest || dest.x == null) {
-                if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
-                continue;
-            }
-
-            // Two-point line: current position → destination
-            const tLL    = mcToLatLng(dw, dm, t);
-            const destLL = mcToLatLng(dw, dm, { x: dest.x, y: dest.y || 64, z: dest.z });
-            const pts    = [tLL, destLL];
-            const lc     = t.role === 'SUPPORT' ? '#4488ff' : '#00ff88';
-
-            if (pathPolylines[id]) {
-                pathPolylines[id].setLatLngs(pts);
-            } else {
-                pathPolylines[id] = dw.L.polyline(pts, {
-                    color: lc, weight: 2, opacity: 0.65,
-                    dashArray: '8,6',
-                }).addTo(dm.map);
+        // ── Route polyline for selected turtle ───────────────────────────
+        // Click a marker to show its full planned route + ETA.
+        // Click the marker again or anywhere on the map to dismiss.
+        if (selectedTurtleId) {
+            const t = turtles[selectedTurtleId];
+            if (t && t.jobId && t.online && t.x != null) {
+                const job  = jobsArr.find(j => j.id === t.jobId);
+                const dest = job && job.destination;
+                if (dest && dest.x != null) {
+                    const route   = computeDeliveryRoute(t, dest);
+                    const latlngs = route.map(wp => mcToLatLng(dw, dm, wp));
+                    const tip     = `ETA  ${routeETA(t, route)}`;
+                    if (routePolylines[selectedTurtleId]) {
+                        routePolylines[selectedTurtleId].setLatLngs(latlngs);
+                        routePolylines[selectedTurtleId].setTooltipContent(tip);
+                    } else {
+                        routePolylines[selectedTurtleId] = dw.L.polyline(latlngs, {
+                            color: '#1a73e8', weight: 5, opacity: 0.85,
+                            lineJoin: 'round', lineCap: 'round',
+                        })
+                        .bindTooltip(tip, { sticky: true, className: 'cc-route-tip' })
+                        .addTo(dm.map);
+                    }
+                }
+            } else if (t && !t.jobId) {
+                // Turtle went idle — auto-dismiss route
+                clearSelectedRoute();
+                selectedTurtleId = null;
             }
         }
 
-        // Remove stale markers
+        // ── Remove stale markers ─────────────────────────────────────────
         for (const id of Object.keys(injectedMarkers)) {
             if (!turtles[id]) {
                 injectedMarkers[id].remove();
                 delete injectedMarkers[id];
+                if (id === selectedTurtleId) { clearSelectedRoute(); selectedTurtleId = null; }
             }
         }
     } catch(e) {
