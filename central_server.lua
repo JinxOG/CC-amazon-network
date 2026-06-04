@@ -117,24 +117,17 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
                 logInfo(string.format("Re-linked %s to job %s at %d,%d,%d (server was down)",
                     id, job.id, position.x or 0, position.y or 0, position.z or 0))
             else
-                -- Turtle rebooted — recall the linked support turtle first, then re-queue
-                logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
-                if job.linkedJob then
-                    local sj = state.jobs[job.linkedJob]
-                    if sj and (sj.status == "ASSIGNED" or sj.status == "IN_PROGRESS") then
-                        if sj.assignedTo then
-                            sendTo(sj.assignedTo, proto.MSG.RECALL,
-                                proto.payloadRecall("partner_rebooted"))
-                            local st = state.registry[sj.assignedTo]
-                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
-                        end
-                        sj.status = "CANCELLED"
-                        logInfo("Cancelled linked support job " .. job.linkedJob)
-                    end
-                end
-                job.status     = "PENDING"
-                job.assignedTo = nil
-                job.linkedJob  = nil
+                -- Turtle rebooted — re-send the SAME job back to it.
+                -- Do NOT re-queue and do NOT dispatch a new pair.  The existing
+                -- support turtle keeps its assignment; the rebooted delivery turtle
+                -- simply restarts its journey from depot toward the same destination.
+                logWarn(string.format("Re-sending %s to rebooted turtle %s", job.id, id))
+                state.registry[id].status = proto.STATUS.TRAVELLING
+                state.registry[id].jobId  = job.id
+                job.status = "IN_PROGRESS"
+                job.ackBy  = os.epoch("utc") + (CFG.ACK_TIMEOUT * 1000)
+                sendTo(id, proto.MSG.JOB_ASSIGN,
+                    proto.payloadJobAssign(job.id, job.type, job.params))
             end
         end
     end
@@ -844,15 +837,19 @@ function server.run()
         local jobs = {}
         for id, j in pairs(state.jobs) do
             table.insert(jobs, {
-                id     = id,
-                status = j.status,
-                assignedTo = j.assignedTo,
-                type   = j.type,
+                id          = id,
+                status      = j.status,
+                assignedTo  = j.assignedTo,
+                type        = j.type,
+                linkedJob   = j.linkedJob,
+                destination = j.params and j.params.destination or nil,
             })
         end
         local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs })
-        local ok, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
-        if not ok then
+        local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
+        if resp then
+            resp.close()   -- must close or CC leaks the connection handle
+        else
             logWarn("Bridge push failed: " .. tostring(err))
         end
     end
