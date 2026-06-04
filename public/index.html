@@ -558,10 +558,10 @@ async function poll() {
         const r = await fetch('/state');
         const d = await r.json();
         lastState = d;
-        renderAll(d);
         document.getElementById('status-dot').className = '';
         const ago = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : '?';
         document.getElementById('last-update').textContent = `synced ${ago}s ago`;
+        try { renderAll(d); } catch(re) { console.error('[render error]', re); }
     } catch(e) {
         document.getElementById('status-dot').className = 'offline';
         document.getElementById('last-update').textContent = 'server offline';
@@ -576,7 +576,8 @@ poll();
 
 function renderAll(d) {
     const turtles = d.turtles || {};
-    const jobs    = d.jobs    || [];
+    // CC serialises an empty table as {} not [] — normalise to always be an array
+    const jobs = Array.isArray(d.jobs) ? d.jobs : Object.values(d.jobs || {});
     const tarr    = Object.values(turtles);
 
     document.getElementById('s-online').textContent = tarr.filter(t => t.online).length;
