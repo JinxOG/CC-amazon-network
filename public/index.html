@@ -379,10 +379,16 @@ const DynmapTiles = L.GridLayer.extend({
 
         const zoomOut   = Math.max(0, -coords.z);
         const tpr       = Math.max(1, 4 >> zoomOut);        // tiles per region dim
-        const regionX   = Math.floor(coords.x / tpr);
-        const regionZ   = Math.floor(coords.y / tpr);
-        const localX    = ((coords.x % tpr) + tpr) % tpr;
-        const localZ    = ((coords.y % tpr) + tpr) % tpr;
+
+        // L.CRS.Simple flips Y: screen_y = -blockZ, so coords.y = floor(-blockZ/tileBlocks).
+        // Dynmap tile Z = floor(blockZ/tileBlocks) = -(coords.y + 1).
+        const dtx = coords.x;
+        const dtz = -(coords.y + 1);
+
+        const regionX   = Math.floor(dtx / tpr);
+        const regionZ   = Math.floor(dtz / tpr);
+        const localX    = ((dtx % tpr) + tpr) % tpr;
+        const localZ    = ((dtz % tpr) + tpr) % tpr;
         const prefix    = 'z'.repeat(zoomOut);
 
         img.onload  = () => done(null, img);
