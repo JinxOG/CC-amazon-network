@@ -268,6 +268,7 @@
         <div class="stat">ONLINE <b id="s-online">0</b></div>
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
         <div class="stat">JOBS <b id="s-jobs">0</b></div>
+        <a href="http://192.168.86.35:8123" target="_blank" style="color:#444;font-size:11px;text-decoration:none;border:1px solid #1e1e3e;padding:3px 10px;border-radius:2px;letter-spacing:1px;margin-left:8px;" onmouseover="this.style.color='#00ff88';this.style.borderColor='#00ff88'" onmouseout="this.style.color='#444';this.style.borderColor='#1e1e3e'">DYNMAP ↗</a>
     </div>
 </div>
 
@@ -345,8 +346,8 @@
 // LEAFLET MAP
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DYNMAP_URL  = 'http://192.168.86.35:8123/tiles/MODPACK';
-const MAP_NAME    = 'surface';   // Dynmap surface map name
+const DYNMAP_URL  = '/tiles/MODPACK';   // proxied through our server
+const MAP_NAME    = 'surface';          // Dynmap surface map name
 const TILE_SIZE   = 128;
 const DEPOT_X     = 154;
 const DEPOT_Z     = -2803;
@@ -363,7 +364,7 @@ const map = L.map('map', {
     preferCanvas:     true,
 });
 
-map.setView([DEPOT_Z, DEPOT_X], -2);
+map.setView([DEPOT_Z, DEPOT_X], 0);
 
 // ── Custom Dynmap tile layer ──────────────────────────────────────────────
 const DynmapTiles = L.GridLayer.extend({
