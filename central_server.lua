@@ -117,8 +117,21 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
                 logInfo(string.format("Re-linked %s to job %s at %d,%d,%d (server was down)",
                     id, job.id, position.x or 0, position.y or 0, position.z or 0))
             else
-                -- Turtle rebooted — re-queue so a fresh pair is dispatched
+                -- Turtle rebooted — recall the linked support turtle first, then re-queue
                 logWarn("Re-queuing " .. job.id .. " — turtle " .. id .. " rebooted")
+                if job.linkedJob then
+                    local sj = state.jobs[job.linkedJob]
+                    if sj and (sj.status == "ASSIGNED" or sj.status == "IN_PROGRESS") then
+                        if sj.assignedTo then
+                            sendTo(sj.assignedTo, proto.MSG.RECALL,
+                                proto.payloadRecall("partner_rebooted"))
+                            local st = state.registry[sj.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
+                        end
+                        sj.status = "CANCELLED"
+                        logInfo("Cancelled linked support job " .. job.linkedJob)
+                    end
+                end
                 job.status     = "PENDING"
                 job.assignedTo = nil
                 job.linkedJob  = nil
@@ -409,6 +422,20 @@ local JOB_ROLE = {
 
 local dispatcher = {}
 
+-- Returns true if another job is already ASSIGNED or IN_PROGRESS to the same (x, z).
+local function destinationBusy(dest)
+    if not dest then return false end
+    for _, j in pairs(state.jobs) do
+        if (j.status == JOB_STATUS.ASSIGNED or j.status == JOB_STATUS.IN_PROGRESS)
+           and j.params and j.params.destination
+           and j.params.destination.x == dest.x
+           and j.params.destination.z == dest.z then
+            return true
+        end
+    end
+    return false
+end
+
 function dispatcher.tick()
     local pending = jobQueue.getPending()
     if #pending == 0 then return end
@@ -432,6 +459,12 @@ function dispatcher.tick()
     end
 
     for _, job in ipairs(workerJobs) do
+        -- Skip if another delivery is already active to this exact destination
+        if job.params and destinationBusy(job.params.destination) then
+            logInfo(string.format("Skip %s — destination already has an active delivery", job.id))
+            -- continue loop; another pending job may have a different destination
+        else
+
         local role     = JOB_ROLE[job.type]
         local workers  = registry.getIdle(role)
         local supports = registry.getIdle(proto.ROLE.SUPPORT)
@@ -488,6 +521,8 @@ function dispatcher.tick()
             -- Only dispatch ONE pair per tick (stagger enforced above for subsequent ticks)
             return
         end
+
+        end -- destination-busy else
     end
 end
 
