@@ -316,8 +316,10 @@ let lastState  = { turtles: {}, jobs: [] };
 const frame    = document.getElementById('dynmap-frame');
 const coordBox = document.getElementById('coord-preview');
 
-// Injected Leaflet markers living inside Dynmap's own map
-let injectedMarkers = {};   // id → L.circleMarker (in iframe's Leaflet)
+// Injected Leaflet objects living inside Dynmap's own map
+let injectedMarkers  = {};   // id → L.circleMarker
+let pathPolylines    = {};   // id → L.polyline
+let pathHistory      = {};   // id → { jobId, pts:[latlng,...], lastX, lastZ }
 
 const MC_COLORS = {
     DELIVERY: { IDLE:'#00ff88', TRAVELLING:'#ffdd00', WORKING:'#44aaff', LOADING:'#ff8844', RETURNING:'#aa66ff', ERROR:'#ff4444' },
@@ -387,9 +389,10 @@ function waitForDynmap(callback, attempts) {
 }
 
 frame.addEventListener('load', () => {
-    // Navigate to depot immediately
+    // Iframe reloaded — Leaflet objects are gone, clear refs (history stays)
+    injectedMarkers = {};
+    pathPolylines   = {};
     dynmapGoTo(DEPOT_X, 67, DEPOT_Z);
-    // Wait for Dynmap's JS to finish, then inject everything
     waitForDynmap(setupDynmapInjection);
 });
 
@@ -473,7 +476,42 @@ function updateInjectedMarkers(turtles) {
             }
         }
 
-        // Remove turtles that have gone away
+        // ── Path lines ───────────────────────────────────────────────────
+        for (const [id, t] of Object.entries(turtles)) {
+            if (t.x == null) continue;
+
+            if (t.jobId && t.online) {
+                // New job → reset trail
+                if (!pathHistory[id] || pathHistory[id].jobId !== t.jobId) {
+                    if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
+                    pathHistory[id] = { jobId: t.jobId, pts: [], lastX: null, lastZ: null };
+                }
+                const hist = pathHistory[id];
+                // Only record if moved > 1 block (avoid duplicate points)
+                if (hist.lastX == null || Math.abs(t.x - hist.lastX) > 1 || Math.abs(t.z - hist.lastZ) > 1) {
+                    hist.pts.push(mcToLatLng(dw, dm, t));
+                    hist.lastX = t.x; hist.lastZ = t.z;
+                    if (hist.pts.length > 600) hist.pts.shift();
+                }
+                if (hist.pts.length >= 2) {
+                    const lc = t.role === 'SUPPORT' ? '#4488ff' : '#00ff88';
+                    if (pathPolylines[id]) {
+                        pathPolylines[id].setLatLngs(hist.pts);
+                    } else {
+                        pathPolylines[id] = dw.L.polyline(hist.pts, {
+                            color: lc, weight: 2, opacity: 0.7,
+                            dashArray: t.role === 'SUPPORT' ? '6,5' : null,
+                        }).addTo(dm.map);
+                    }
+                }
+            } else {
+                // Job done or turtle idle — clear trail
+                if (pathHistory[id])  delete pathHistory[id];
+                if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
+            }
+        }
+
+        // Remove stale markers
         for (const id of Object.keys(injectedMarkers)) {
             if (!turtles[id]) {
                 injectedMarkers[id].remove();
