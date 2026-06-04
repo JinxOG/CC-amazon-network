@@ -135,16 +135,18 @@ app.post('/command', (req, res) => {
     res.json({ ok: true });
 });
 
-// Proxy Dynmap tiles through our server (avoids cross-origin image issues)
+// Proxy Dynmap resources through our server
 const http = require('http');
-app.use('/tiles', (req, res) => {
-    const url = `http://127.0.0.1:8123/tiles${req.path}`;
+function proxyDynmap(req, res, basePath) {
+    const url = `http://127.0.0.1:8123${basePath}${req.path}`;
     http.get(url, (upstream) => {
-        res.setHeader('Content-Type', upstream.headers['content-type'] || 'image/png');
+        res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
         res.setHeader('Cache-Control', 'public, max-age=10');
         upstream.pipe(res);
     }).on('error', () => res.status(404).end());
-});
+}
+app.use('/tiles', (req, res) => proxyDynmap(req, res, '/tiles'));
+app.use('/up',    (req, res) => proxyDynmap(req, res, '/up'));
 
 // Health check
 app.get('/ping', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
