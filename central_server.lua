@@ -66,6 +66,10 @@ end
 
 local registry = {}
 
+-- registry.register returns (dock, reSendJob).
+-- reSendJob is non-nil when a rebooted turtle had an active job — the caller
+-- must send JOB_ASSIGN AFTER sending REGISTER_ACK so the turtle sets its dock
+-- from the ACK before receiving the job assignment.
 function registry.register(id, role, fuel, fuelMax, position, midJob)
     local isNew = state.registry[id] == nil
 
@@ -104,35 +108,34 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
 
     -- Handle jobs currently assigned to this turtle.
     -- midJob=true: turtle was mid-job when server went down, just re-link it.
-    -- midJob=false/nil: turtle actually rebooted, re-queue for fresh dispatch.
+    -- midJob=false/nil: turtle actually rebooted — keep job active and flag it
+    --   for re-dispatch, but do NOT call sendTo here.  The handler must send
+    --   JOB_ASSIGN AFTER REGISTER_ACK so the turtle sets its dock first.
+    local reSendJob = nil
     for _, job in pairs(state.jobs) do
         if job.assignedTo == id and
            (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
             if midJob then
                 -- Server was down; turtle's job coroutine is still alive and paused.
-                -- Re-link so heartbeat/status tracking works. No JOB_ASSIGN needed —
-                -- serverDown will clear and the job resumes automatically.
+                -- Re-link so heartbeat/status tracking works. No JOB_ASSIGN needed.
                 state.registry[id].status = proto.STATUS.TRAVELLING
                 state.registry[id].jobId  = job.id
                 logInfo(string.format("Re-linked %s to job %s at %d,%d,%d (server was down)",
                     id, job.id, position.x or 0, position.y or 0, position.z or 0))
             else
-                -- Turtle rebooted — re-send the SAME job back to it.
-                -- Do NOT re-queue and do NOT dispatch a new pair.  The existing
-                -- support turtle keeps its assignment; the rebooted delivery turtle
-                -- simply restarts its journey from depot toward the same destination.
-                logWarn(string.format("Re-sending %s to rebooted turtle %s", job.id, id))
+                -- Turtle rebooted — keep job IN_PROGRESS so no new pair is dispatched
+                -- to the same destination.  Re-send JOB_ASSIGN after REGISTER_ACK.
+                logWarn(string.format("Queuing re-send of %s to rebooted turtle %s", job.id, id))
                 state.registry[id].status = proto.STATUS.TRAVELLING
                 state.registry[id].jobId  = job.id
                 job.status = "IN_PROGRESS"
                 job.ackBy  = os.epoch("utc") + (CFG.ACK_TIMEOUT * 1000)
-                sendTo(id, proto.MSG.JOB_ASSIGN,
-                    proto.payloadJobAssign(job.id, job.type, job.params))
+                reSendJob  = job
             end
         end
     end
 
-    return dock
+    return dock, reSendJob
 end
 
 function registry.update(id, status, fuel, position, jobId)
@@ -525,13 +528,19 @@ local handlers = {}
 
 handlers[proto.MSG.REGISTER] = function(msg)
     local p    = msg.payload
-    local dock = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob)
+    local dock, reSendJob = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob)
+    -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
         ok       = true,
         serverTs = os.epoch("utc"),
-        dock     = dock,   -- nil if depot full, turtle will log a warning
+        dock     = dock,
     })
-    -- Immediately try to dispatch any pending jobs now that a new turtle is online
+    -- Re-send job to rebooted turtle AFTER the ACK so it has its dock set.
+    if reSendJob then
+        sendTo(msg.from, proto.MSG.JOB_ASSIGN,
+            proto.payloadJobAssign(reSendJob.id, reSendJob.type, reSendJob.params))
+        logInfo(string.format("Re-sent job %s to %s (after REGISTER_ACK)", reSendJob.id, msg.from))
+    end
     pcall(dispatcher.tick)
 end
 
