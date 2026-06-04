@@ -3,8 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>CC Amazon Network</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -32,7 +30,7 @@
         }
         #header h1 { color: #00ff88; font-size: 14px; letter-spacing: 3px; }
         #last-update { color: #444; font-size: 11px; }
-        #header-stats { margin-left: auto; display: flex; gap: 16px; font-size: 11px; }
+        #header-stats { margin-left: auto; display: flex; gap: 16px; font-size: 11px; align-items: center; }
         .stat { color: #555; letter-spacing: 1px; }
         .stat b { color: #00ff88; font-weight: normal; }
 
@@ -45,47 +43,32 @@
         /* ── Main ── */
         #main { display: flex; flex: 1; overflow: hidden; }
 
-        /* ── Map ── */
-        #map-wrap { flex: 1; position: relative; background: #0a0a0f; min-width: 0; }
-        #map { width: 100%; height: 100%; }
+        /* ── Map / iframe ── */
+        #map-wrap { flex: 1; position: relative; background: #0a0a0f; min-width: 0; overflow: hidden; }
 
-        /* dark Leaflet background */
-        .leaflet-container { background: #0a0a0f !important; }
+        #dynmap-frame {
+            width: 100%; height: 100%;
+            border: none; display: block;
+        }
 
-        /* ── Turtle tooltips ── */
-        .turtle-tip {
-            background: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            color: #00ff88;
-            font-family: 'Courier New', monospace;
-            font-size: 10px;
-            font-weight: bold;
-            letter-spacing: 1px;
-            padding: 0 !important;
-            white-space: nowrap;
+        /* Transparent right-click capture overlay — pointer-events off normally,
+           only captures contextmenu which bubbles from the iframe via injection */
+        #map-hint {
+            position: absolute; bottom: 10px; left: 10px; z-index: 10;
+            background: rgba(10,10,15,0.85); border: 1px solid #1a1a2e;
+            color: #333; font-size: 10px; padding: 4px 10px; border-radius: 2px;
+            pointer-events: none; letter-spacing: 1px;
         }
-        .turtle-tip.support { color: #4488ff; }
-        .turtle-tip::before { display: none !important; }
 
-        /* ── Turtle popups ── */
-        .leaflet-popup-content-wrapper {
-            background: #12121e !important;
-            border: 1px solid #00ff8844 !important;
-            border-radius: 3px !important;
-            box-shadow: 0 4px 20px rgba(0,255,136,0.1) !important;
-            padding: 0 !important;
-            color: #ccc;
+        /* coord flash when right-clicking */
+        #coord-flash {
+            display: none;
+            position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,255,136,0.15); border: 1px solid #00ff8866;
+            color: #00ff88; font-size: 11px; padding: 5px 14px; border-radius: 3px;
+            pointer-events: none; letter-spacing: 1px; z-index: 10;
         }
-        .leaflet-popup-content {
-            margin: 0 !important;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            line-height: 1.6;
-        }
-        .leaflet-popup-tip { background: #12121e !important; }
-        .leaflet-popup-close-button { color: #444 !important; top: 4px !important; right: 6px !important; }
-        .leaflet-popup-close-button:hover { color: #ff4444 !important; }
+        #coord-flash.show { display: block; }
 
         /* ── Side panel ── */
         #side-panel {
@@ -139,10 +122,7 @@
         .sbadge.ERROR      { background:#2a0a0a; color:#ff4444; }
 
         .fuel-track { background:#080810; height:3px; border-radius:2px; margin:7px 0; overflow:hidden; }
-        .fuel-fill {
-            height:100%; border-radius:2px; background:#00ff88;
-            transition: width 1s, background 0.5s;
-        }
+        .fuel-fill  { height:100%; border-radius:2px; background:#00ff88; transition:width 1s,background 0.5s; }
         .fuel-fill.med  { background:#ffcc00; }
         .fuel-fill.low  { background:#ff8844; }
         .fuel-fill.crit { background:#ff4444; }
@@ -150,14 +130,13 @@
         .tc-row { display:flex; gap:12px; font-size:10px; color:#555; flex-wrap:wrap; }
         .tc-row .v { color:#aaa; }
 
-        /* focus button on card */
         .tc-locate {
-            float: right; font-size: 9px; color: #444; cursor: pointer;
-            padding: 1px 5px; border: 1px solid #1e1e3e; border-radius: 2px;
-            letter-spacing: 1px; background: transparent; font-family: 'Courier New', monospace;
-            margin-left: 6px;
+            float:right; font-size:9px; color:#444; cursor:pointer;
+            padding:1px 5px; border:1px solid #1e1e3e; border-radius:2px;
+            letter-spacing:1px; background:transparent; font-family:'Courier New',monospace;
+            margin-left:6px;
         }
-        .tc-locate:hover { color: #00ff88; border-color: #00ff88; }
+        .tc-locate:hover { color:#00ff88; border-color:#00ff88; }
 
         /* ── Job card ── */
         .job-card {
@@ -169,7 +148,7 @@
         .job-card.COMPLETE    { border-left-color:#00ff88; opacity:0.45; }
         .job-card.FAILED      { border-left-color:#ff4444; }
 
-        .jc-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; }
+        .jc-top  { display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; }
         .jc-id   { font-size:10px; color:#444; }
         .jc-type { font-size:12px; color:#ccc; letter-spacing:1px; }
         .jc-assigned { font-size:10px; color:#4488ff; margin-top:4px; }
@@ -185,8 +164,7 @@
         .cmd-title { font-size:10px; color:#00ff88; letter-spacing:3px; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid #1a1a2e; }
 
         .field-row { display:flex; gap:6px; margin-bottom:7px; align-items:center; }
-        .field-row input,
-        .field-row select {
+        .field-row input, .field-row select {
             flex:1; background:#080810; border:1px solid #1e1e3e; color:#ddd;
             font-family:'Courier New',monospace; font-size:11px; padding:6px 8px;
             border-radius:2px; outline:none; transition:border-color 0.15s;
@@ -201,11 +179,11 @@
         }
         .btn:hover    { background:#1a1a2e; border-color:#3e3e6e; color:#fff; }
         .btn.primary  { border-color:#004422; color:#00ff88; }
-        .btn.primary:hover { background:#0a1e14; border-color:#00ff88; }
+        .btn.primary:hover  { background:#0a1e14; border-color:#00ff88; }
         .btn.danger   { border-color:#3a1010; color:#ff6666; }
-        .btn.danger:hover  { background:#1e0a0a; border-color:#ff4444; color:#ff4444; }
+        .btn.danger:hover   { background:#1e0a0a; border-color:#ff4444; color:#ff4444; }
         .btn.warning  { border-color:#3a2a00; color:#ffaa44; }
-        .btn.warning:hover { background:#1e1a0a; border-color:#ffaa00; color:#ffaa00; }
+        .btn.warning:hover  { background:#1e1a0a; border-color:#ffaa00; color:#ffaa00; }
 
         /* ── Modal ── */
         #backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.8); z-index:1000; }
@@ -231,9 +209,9 @@
         .modal-actions .btn { margin:0; flex:1; text-align:center; }
 
         .coord-hint {
-            background: #0a1a0a; border: 1px solid #004422; border-radius: 3px;
-            padding: 6px 10px; font-size: 10px; color: #448844; letter-spacing: 1px;
-            margin-bottom: 10px;
+            background:#0a1a0a; border:1px solid #004422; border-radius:3px;
+            padding:6px 10px; font-size:10px; color:#448844; letter-spacing:1px;
+            margin-bottom:10px;
         }
 
         /* ── Toast ── */
@@ -247,14 +225,6 @@
         #toast.err  { border-color:#ff444466; color:#ff4444; }
 
         .empty { color:#2a2a4a; font-size:12px; text-align:center; padding:30px 0; letter-spacing:1px; }
-
-        /* ── Zoom hint ── */
-        #map-hint {
-            position:absolute; bottom:10px; left:10px; z-index:400;
-            background:rgba(10,10,15,0.85); border:1px solid #1a1a2e;
-            color:#333; font-size:10px; padding:4px 10px; border-radius:2px;
-            pointer-events:none; letter-spacing:1px;
-        }
     </style>
 </head>
 <body>
@@ -268,19 +238,19 @@
         <div class="stat">ONLINE <b id="s-online">0</b></div>
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
         <div class="stat">JOBS <b id="s-jobs">0</b></div>
-        <select id="map-sel" onchange="changeMap(this.value)" style="background:#080810;border:1px solid #1e1e3e;color:#888;font-family:'Courier New',monospace;font-size:11px;padding:3px 8px;border-radius:2px;outline:none;cursor:pointer;letter-spacing:1px">
-            <option value="flat">flat</option>
-            <option value="surface">surface</option>
-            <option value="cave">cave</option>
-        </select>
-        <a href="http://192.168.86.35:8123" target="_blank" style="color:#444;font-size:11px;text-decoration:none;border:1px solid #1e1e3e;padding:3px 10px;border-radius:2px;letter-spacing:1px;" onmouseover="this.style.color='#00ff88';this.style.borderColor='#00ff88'" onmouseout="this.style.color='#444';this.style.borderColor='#1e1e3e'">DYNMAP ↗</a>
+        <a href="http://192.168.86.35:8123" target="_blank"
+           style="color:#444;font-size:11px;text-decoration:none;border:1px solid #1e1e3e;padding:3px 10px;border-radius:2px;letter-spacing:1px;"
+           onmouseover="this.style.color='#00ff88';this.style.borderColor='#00ff88'"
+           onmouseout="this.style.color='#444';this.style.borderColor='#1e1e3e'">DYNMAP ↗</a>
     </div>
 </div>
 
 <div id="main">
     <div id="map-wrap">
-        <div id="map"></div>
+        <!-- Dynmap runs natively inside the iframe — same-origin via our proxy -->
+        <iframe id="dynmap-frame" src="/dynmap-frame"></iframe>
         <div id="map-hint">RIGHT-CLICK MAP → DISPATCH DELIVERY</div>
+        <div id="coord-flash"></div>
     </div>
 
     <div id="side-panel">
@@ -339,7 +309,7 @@
         <input id="m-note" type="text" placeholder="e.g. building supplies">
     </div>
     <div class="modal-actions">
-        <button class="btn danger" onclick="closeModal()">CANCEL</button>
+        <button class="btn danger"  onclick="closeModal()">CANCEL</button>
         <button class="btn primary" onclick="submitDelivery()">DISPATCH</button>
     </div>
 </div>
@@ -348,204 +318,116 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
-// LEAFLET MAP
+// DYNMAP IFRAME — same-origin via /dynmap-frame proxy
 // ═══════════════════════════════════════════════════════════════════════════
 
-const DYNMAP_URL  = '/tiles/MODPACK';   // proxied through our server
-let   MAP_NAME    = 'flat';             // Dynmap flat (top-down) map name
-const TILE_SIZE   = 128;
-const DEPOT_X     = 154;
-const DEPOT_Z     = -2803;
+const DEPOT_X = 154, DEPOT_Z = -2803;
+let lastState = { turtles: {}, jobs: [] };
 
-// L.CRS.Simple: 1 unit = 1 Minecraft block
-// lat = Minecraft Z, lng = Minecraft X
-const map = L.map('map', {
-    crs:              L.CRS.Simple,
-    minZoom:         -4,
-    maxZoom:          3,
-    zoomSnap:         1,
-    zoomDelta:        1,
-    attributionControl: false,
-    preferCanvas:     true,
-});
+const frame = document.getElementById('dynmap-frame');
 
-map.setView([DEPOT_Z, DEPOT_X], 0);
-
-// ── Custom Dynmap tile layer ──────────────────────────────────────────────
-const DynmapTiles = L.GridLayer.extend({
-    createTile(coords, done) {
-        const img = document.createElement('img');
-        img.style.cssText = `width:${TILE_SIZE}px;height:${TILE_SIZE}px;image-rendering:pixelated`;
-
-        const zoomOut   = Math.max(0, -coords.z);
-        const tpr       = Math.max(1, 4 >> zoomOut);        // tiles per region dim
-
-        // L.CRS.Simple flips Y: screen_y = -blockZ, so coords.y = floor(-blockZ/tileBlocks).
-        // Dynmap tile Z = floor(blockZ/tileBlocks) = -(coords.y + 1).
-        const dtx = coords.x;
-        const dtz = -(coords.y + 1);
-
-        const regionX   = Math.floor(dtx / tpr);
-        const regionZ   = Math.floor(dtz / tpr);
-        const localX    = ((dtx % tpr) + tpr) % tpr;
-        const localZ    = ((dtz % tpr) + tpr) % tpr;
-        const prefix    = 'z'.repeat(zoomOut);
-
-        img.onload  = () => done(null, img);
-        img.onerror = () => done(null, img);   // leave blank on missing tile
-        img.src = `${DYNMAP_URL}/${prefix}${MAP_NAME}/${regionX}_${regionZ}/${localX}_${localZ}.png`;
-        return img;
+// Navigate the iframe to a Minecraft coordinate using Dynmap's URL hash.
+// Dynmap hash format: #;X;Y;Z;zoom;...;mapname
+function dynmapGoTo(x, y, z) {
+    try {
+        const dw = frame.contentWindow;
+        const cur = dw.location.hash || '';
+        const parts = cur.replace(/^#;?/, '').split(';');
+        // Preserve map name from current hash if present
+        const mapName = (parts.length > 8 && parts[8]) ? parts[8] : 'flat';
+        dw.location.hash = `#;${Math.round(x)};${Math.round(y)};${Math.round(z)};0;0;0;0;0;${mapName}`;
+    } catch (e) {
+        console.warn('[Frame] Hash nav failed:', e);
     }
-});
-
-let tileLayer = new DynmapTiles({ tileSize: TILE_SIZE, updateWhenIdle: false, keepBuffer: 4 }).addTo(map);
-
-function changeMap(name) {
-    MAP_NAME = name;
-    tileLayer.remove();
-    tileLayer = new DynmapTiles({ tileSize: TILE_SIZE, updateWhenIdle: false, keepBuffer: 4 }).addTo(map);
 }
 
-// Auto-detect available maps from Dynmap config
-fetch('/up/configuration').then(r => r.json()).then(cfg => {
-    const world = (cfg.worlds || []).find(w => w.name === 'MODPACK');
-    if (!world) { console.warn('[Map] World MODPACK not found in /up/configuration'); return; }
+// ── Inject right-click handler into Dynmap iframe once it loads ──────────────
+frame.addEventListener('load', () => {
+    // Navigate to depot on first load
+    dynmapGoTo(DEPOT_X, 67, DEPOT_Z);
 
-    const maps = world.maps || [];
-    console.log('[Map] Available Dynmap maps:', maps.map(m => `${m.name} (prefix="${m.prefix}")`));
+    try {
+        const dw  = frame.contentWindow;
+        const doc = frame.contentDocument;
 
-    const sel = document.getElementById('map-sel');
-    sel.innerHTML = maps.map(m =>
-        `<option value="${m.prefix}">${m.name || m.prefix}</option>`
-    ).join('');
+        doc.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            let mcX = null, mcZ = null;
 
-    if (maps.length > 0) {
-        // Prefer a top-down / flat map — avoid isometric (surface) maps.
-        // Common flat-map prefixes/names: flat, top, f, overhead.
-        const FLAT_HINTS = ['flat', 'top', 'overhead'];
-        const flatOpt = Array.from(sel.options).find(o =>
-            FLAT_HINTS.some(h => o.value.toLowerCase().includes(h) || o.text.toLowerCase().includes(h))
-        );
-        if (flatOpt) {
-            MAP_NAME = flatOpt.value;
-            sel.value = MAP_NAME;
-            console.log('[Map] Auto-selected flat map:', MAP_NAME);
-            changeMap(MAP_NAME);
-        } else {
-            // No flat map found — keep the hardcoded default and don't switch.
-            // Show the dropdown but don't call changeMap (keeps MAP_NAME = 'flat').
-            console.warn('[Map] No flat map found in Dynmap config. Check /up/configuration. Available prefixes:', maps.map(m => m.prefix));
-        }
-    }
-}).catch(e => console.warn('[Map] Could not fetch Dynmap config:', e));
+            // ── Method 1: Use Dynmap's internal map projection ──────────────
+            // Dynmap exposes dynmap.map (Leaflet) and a coordinate projection.
+            const dm = dw.dynmap;
+            if (dm && dm.map) {
+                try {
+                    const dmMap   = dm.map;
+                    const cont    = dmMap.getContainer();
+                    const rect    = cont.getBoundingClientRect();
+                    const latlng  = dmMap.containerPointToLatLng(
+                        dw.L.point(e.clientX - rect.left, e.clientY - rect.top)
+                    );
 
-// ── Right-click delivery ──────────────────────────────────────────────────
-map.on('contextmenu', e => {
-    const x = Math.round(e.latlng.lng);
-    const z = Math.round(e.latlng.lat);
-    document.getElementById('m-x').value    = x;
-    document.getElementById('m-z').value    = z;
-    document.getElementById('m-y').value    = '67';
-    document.getElementById('m-note').value = '';
-    showModal();
-});
-
-// ── Turtle markers & paths ────────────────────────────────────────────────
-const turtleMarkers = {};
-const pathPolylines = {};
-const pathHistory   = {};
-
-const STATUS_COLORS = {
-    DELIVERY: {
-        IDLE: '#00ff88', TRAVELLING: '#ffdd00', WORKING: '#44aaff',
-        LOADING: '#ff8844', RETURNING: '#aa66ff', ERROR: '#ff4444',
-    },
-    SUPPORT: {
-        IDLE: '#4488ff', TRAVELLING: '#88aaff', WORKING: '#aaccff',
-        LOADING: '#ff8844', RETURNING: '#aa66ff', ERROR: '#ff4444',
-    },
-};
-
-function turtleColor(t) {
-    return (STATUS_COLORS[t.role] || STATUS_COLORS.DELIVERY)[t.status] || '#666666';
-}
-
-function popupHtml(id, t) {
-    const fuel = t.fuel || 0;
-    const max  = t.fuelMax || 100000;
-    const pct  = Math.round(fuel / max * 100);
-    return `<div style="padding:10px 12px;min-width:160px">
-        <div style="color:#00ff88;font-size:12px;font-weight:bold;margin-bottom:6px">${id}</div>
-        <div style="color:#555;margin-bottom:2px">ROLE&nbsp;&nbsp; <span style="color:#aaa">${t.role || '?'}</span></div>
-        <div style="color:#555;margin-bottom:2px">STATUS <span style="color:#aaa">${t.status || '?'}</span></div>
-        <div style="color:#555;margin-bottom:2px">FUEL&nbsp;&nbsp; <span style="color:#aaa">${pct}%</span></div>
-        <div style="color:#555;margin-bottom:2px">DOCK&nbsp;&nbsp; <span style="color:#aaa">${t.dock || '?'}</span></div>
-        ${t.jobId ? `<div style="color:#555;margin-bottom:2px">JOB&nbsp;&nbsp;&nbsp; <span style="color:#4488ff">${t.jobId}</span></div>` : ''}
-        <div style="color:#555">POS&nbsp;&nbsp;&nbsp; <span style="color:#aaa">${Math.round(t.x||0)}, ${Math.round(t.z||0)}</span></div>
-    </div>`;
-}
-
-function updateMarkers(turtles) {
-    for (const [id, t] of Object.entries(turtles)) {
-        if (t.x == null) continue;
-        const ll    = [t.z, t.x];
-        const color = turtleColor(t);
-        const r     = t.role === 'SUPPORT' ? 5 : 7;
-
-        if (turtleMarkers[id]) {
-            turtleMarkers[id].setLatLng(ll);
-            turtleMarkers[id].setStyle({ color, fillColor: color });
-            if (turtleMarkers[id].isPopupOpen()) {
-                turtleMarkers[id].setPopupContent(popupHtml(id, t));
-            }
-        } else {
-            const tipClass = 'turtle-tip' + (t.role === 'SUPPORT' ? ' support' : '');
-            const m = L.circleMarker(ll, {
-                radius: r, color, fillColor: color, fillOpacity: 0.9, weight: 2,
-            })
-            .bindPopup(popupHtml(id, t), { className: 'dark-popup', maxWidth: 220 })
-            .bindTooltip(id, { permanent: true, direction: 'top', offset: [0, -10], className: tipClass })
-            .addTo(map);
-            turtleMarkers[id] = m;
-        }
-
-        // ── Path line ──
-        if (t.jobId && t.online) {
-            if (!pathHistory[id] || pathHistory[id].jobId !== t.jobId) {
-                if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
-                pathHistory[id] = { jobId: t.jobId, pts: [] };
-            }
-            const pts  = pathHistory[id].pts;
-            const last = pts[pts.length - 1];
-            if (!last || Math.abs(last[0] - t.z) > 1 || Math.abs(last[1] - t.x) > 1) {
-                pts.push([t.z, t.x]);
-                if (pts.length > 500) pts.shift();
-            }
-            if (pts.length >= 2) {
-                const lc = t.role === 'SUPPORT' ? '#4488ff' : '#00ff88';
-                if (pathPolylines[id]) {
-                    pathPolylines[id].setLatLngs(pts);
-                } else {
-                    pathPolylines[id] = L.polyline(pts, {
-                        color: lc, weight: 2, opacity: 0.65,
-                        dashArray: t.role === 'SUPPORT' ? '5,5' : null,
-                    }).addTo(map);
+                    // Try Dynmap's own fromLatLngToLocation if available
+                    const proj = dm.getProjection ? dm.getProjection() : null;
+                    if (proj && proj.fromLatLngToLocation) {
+                        const loc = proj.fromLatLngToLocation(latlng, 64);
+                        mcX = Math.round(loc.x);
+                        mcZ = Math.round(loc.z);
+                        console.log('[Dynmap] Projection coords:', mcX, mcZ);
+                    } else {
+                        // Fallback: raw latlng — flat map: lng≈X, lat≈-Z
+                        mcX = Math.round(latlng.lng);
+                        mcZ = Math.round(-latlng.lat);
+                        console.log('[Dynmap] Raw latlng→MC (lng→X, -lat→Z):', mcX, mcZ, '| raw latlng:', latlng.lat.toFixed(1), latlng.lng.toFixed(1));
+                    }
+                } catch (err) {
+                    console.warn('[Dynmap] Map coord read failed:', err);
                 }
             }
-        } else {
-            // Job finished — clear trail
-            if (pathHistory[id]) { delete pathHistory[id]; }
-            if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
-        }
+
+            // ── Method 2: Read Dynmap's coordinate display text ─────────────
+            if (mcX == null) {
+                const coordSelectors = [
+                    '#mapcoords', '.mapcoords', '#coord', '.coord',
+                    '.leaflet-control-coordinates', '[class*="coord"]'
+                ];
+                for (const sel of coordSelectors) {
+                    const el = doc.querySelector(sel);
+                    if (el && el.textContent) {
+                        const txt = el.textContent;
+                        // Try patterns like "X: 154, Z: -2803" or "154, 64, -2803"
+                        const m1 = txt.match(/[Xx][:\s]+(-?\d+).*?[Zz][:\s]+(-?\d+)/);
+                        const m2 = txt.match(/(-?\d+),\s*-?\d+,\s*(-?\d+)/);
+                        if (m1) { mcX = parseInt(m1[1]); mcZ = parseInt(m1[2]); break; }
+                        if (m2) { mcX = parseInt(m2[1]); mcZ = parseInt(m2[2]); break; }
+                    }
+                }
+                if (mcX != null) console.log('[Dynmap] Coord from display text:', mcX, mcZ);
+            }
+
+            // ── Open delivery modal with whatever we got ─────────────────────
+            showDeliveryModal(mcX, mcZ);
+        });
+
+        console.log('[Dynmap] Frame ready — right-click handler injected');
+    } catch (err) {
+        console.warn('[Dynmap] Could not inject into frame (cross-origin?):', err);
+    }
+});
+
+function showDeliveryModal(x, z) {
+    document.getElementById('m-x').value    = x != null ? x : '';
+    document.getElementById('m-z').value    = z != null ? z : '';
+    document.getElementById('m-y').value    = '67';
+    document.getElementById('m-note').value = '';
+
+    if (x != null && z != null) {
+        const flash = document.getElementById('coord-flash');
+        flash.textContent = `X ${x}  Z ${z}`;
+        flash.classList.add('show');
+        setTimeout(() => flash.classList.remove('show'), 1500);
     }
 
-    // Remove stale markers
-    for (const id of Object.keys(turtleMarkers)) {
-        if (!turtles[id]) {
-            turtleMarkers[id].remove(); delete turtleMarkers[id];
-            if (pathPolylines[id]) { pathPolylines[id].remove(); delete pathPolylines[id]; }
-        }
-    }
+    showModal();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -567,6 +449,7 @@ async function poll() {
     try {
         const r = await fetch('/state');
         const d = await r.json();
+        lastState = d;
         renderAll(d);
         document.getElementById('status-dot').className = '';
         const ago = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : '?';
@@ -595,7 +478,6 @@ function renderAll(d) {
     document.getElementById('s-active').textContent = active;
     document.getElementById('s-jobs').textContent   = jobAct;
 
-    updateMarkers(turtles);
     renderFleet(turtles);
     renderJobs(jobs);
     refreshTurtleSel(turtles);
@@ -617,12 +499,12 @@ function renderFleet(turtles) {
     if (!arr.length) { el.innerHTML = '<div class="empty">NO TURTLES REGISTERED</div>'; return; }
 
     el.innerHTML = arr.map(([id, t]) => {
-        const fuel  = t.fuel || 0;
-        const max   = t.fuelMax || 100000;
-        const pct   = Math.min(1, fuel / max);
-        const fc    = fuelClass(pct);
-        const pos   = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
-        const st    = t.status || 'UNKNOWN';
+        const fuel = t.fuel || 0;
+        const max  = t.fuelMax || 100000;
+        const pct  = Math.min(1, fuel / max);
+        const fc   = fuelClass(pct);
+        const pos  = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
+        const st   = t.status || 'UNKNOWN';
         return `<div class="turtle-card ${t.role||''}${!t.online?' offline':''}">
             <div class="tc-header">
                 <div>
@@ -636,7 +518,7 @@ function renderFleet(turtles) {
             <div class="tc-row">
                 <span>FUEL <span class="v">${Math.round(pct*100)}%</span></span>
                 <span>POS <span class="v">${pos}</span></span>
-                ${t.jobId  ? `<span>JOB <span class="v">${t.jobId}</span></span>` : ''}
+                ${t.jobId   ? `<span>JOB <span class="v">${t.jobId}</span></span>` : ''}
                 ${!t.online ? '<span style="color:#ff4444">OFFLINE</span>' : ''}
             </div>
         </div>`;
@@ -669,12 +551,12 @@ function refreshTurtleSel(turtles) {
         ).join('');
 }
 
+// Navigate Dynmap map to a turtle's position
 function focusTurtle(id) {
-    const m = turtleMarkers[id];
-    if (!m) return;
-    map.setView(m.getLatLng(), 0, { animate: true });
-    m.openPopup();
-    switchTab('fleet');
+    const t = lastState.turtles ? lastState.turtles[id] : null;
+    if (!t || t.x == null) { toast('No position data for ' + id, true); return; }
+    dynmapGoTo(t.x, t.y || 67, t.z);
+    toast('Locating ' + id + '…');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

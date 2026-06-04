@@ -2,6 +2,7 @@
 const express = require('express');
 const { Rcon }  = require('rcon-client');
 const path      = require('path');
+const http      = require('http');
 
 // Prevent unhandled rejections from crashing the process
 process.on('unhandledRejection', (err) => {
@@ -39,7 +40,7 @@ let state = {
 };
 
 let pendingCommands = [];   // commands queued by dashboard, picked up by CC on next poll
-let markerExists    = {};   // track which turtle markers already exist on Dynmap (for direct Dynmap access)
+let markerExists    = {};   // track which turtle markers already exist on Dynmap
 
 // ─── RCON ────────────────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ async function initMarkerSet() {
 }
 
 async function upsertMarker(id, t) {
-    if (!t.x && t.x !== 0) return;   // no position yet
+    if (!t.x && t.x !== 0) return;
     const x = Math.round(t.x);
     const y = Math.round(t.y ?? 67);
     const z = Math.round(t.z);
@@ -74,11 +75,9 @@ async function upsertMarker(id, t) {
         if (markerExists[id]) {
             await rcon(`dmarker update id:${id} set:${CFG.dynmap.set} x:${x} y:${y} z:${z} label:${label} world:${CFG.dynmap.world}`);
         } else {
-            // Try add — if it fails (already exists), delete and re-add
             try {
                 await rcon(`dmarker add id:${id} label:${label} world:${CFG.dynmap.world} x:${x} y:${y} z:${z} icon:${icon} set:${CFG.dynmap.set}`);
             } catch (addErr) {
-                // Marker already exists — delete and re-add
                 await rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`);
                 await rcon(`dmarker add id:${id} label:${label} world:${CFG.dynmap.world} x:${x} y:${y} z:${z} icon:${icon} set:${CFG.dynmap.set}`);
             }
@@ -87,7 +86,7 @@ async function upsertMarker(id, t) {
         }
     } catch (e) {
         console.error(`[RCON] Marker error for ${id}:`, e.message);
-        markerExists[id] = false;   // retry next time
+        markerExists[id] = false;
     }
 }
 
@@ -100,6 +99,37 @@ async function removeMarker(id) {
         console.error(`[RCON] Delete error for ${id}:`, e.message);
     }
 }
+
+// ─── Dynmap proxy helpers ─────────────────────────────────────────────────────
+
+function proxyDynmap(req, res, basePath) {
+    const url = `http://127.0.0.1:8123${basePath}${req.path}`;
+    http.get(url, (upstream) => {
+        res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=10');
+        upstream.pipe(res);
+    }).on('error', () => res.status(404).end());
+}
+
+// ─── Dynmap static asset proxies (makes iframe same-origin) ──────────────────
+// These must come BEFORE the /update, /state, /command routes.
+
+app.use('/tiles',      (req, res) => proxyDynmap(req, res, '/tiles'));
+app.use('/up',         (req, res) => proxyDynmap(req, res, '/up'));
+app.use('/js',         (req, res) => proxyDynmap(req, res, '/js'));
+app.use('/css',        (req, res) => proxyDynmap(req, res, '/css'));
+app.use('/images',     (req, res) => proxyDynmap(req, res, '/images'));
+app.use('/standalone', (req, res) => proxyDynmap(req, res, '/standalone'));
+app.use('/webstart',   (req, res) => proxyDynmap(req, res, '/webstart'));
+app.get('/favicon.ico',(req, res) => proxyDynmap(req, res, '/favicon.ico'));
+
+// Serve Dynmap's main page for iframe embedding (same-origin = can inject JS)
+app.get('/dynmap-frame', (req, res) => {
+    http.get('http://127.0.0.1:8123/', (upstream) => {
+        res.setHeader('Content-Type', 'text/html');
+        upstream.pipe(res);
+    }).on('error', () => res.status(502).send('<h3>Dynmap unavailable (port 8123)</h3>'));
+});
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
@@ -134,19 +164,6 @@ app.post('/command', (req, res) => {
     console.log(`[CMD] Queued: ${type}`, params || '');
     res.json({ ok: true });
 });
-
-// Proxy Dynmap resources through our server
-const http = require('http');
-function proxyDynmap(req, res, basePath) {
-    const url = `http://127.0.0.1:8123${basePath}${req.path}`;
-    http.get(url, (upstream) => {
-        res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
-        res.setHeader('Cache-Control', 'public, max-age=10');
-        upstream.pipe(res);
-    }).on('error', () => res.status(404).end());
-}
-app.use('/tiles', (req, res) => proxyDynmap(req, res, '/tiles'));
-app.use('/up',    (req, res) => proxyDynmap(req, res, '/up'));
 
 // Health check
 app.get('/ping', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
