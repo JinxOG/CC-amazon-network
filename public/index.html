@@ -269,8 +269,8 @@
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
         <div class="stat">JOBS <b id="s-jobs">0</b></div>
         <select id="map-sel" onchange="changeMap(this.value)" style="background:#080810;border:1px solid #1e1e3e;color:#888;font-family:'Courier New',monospace;font-size:11px;padding:3px 8px;border-radius:2px;outline:none;cursor:pointer;letter-spacing:1px">
-            <option value="surface">surface</option>
             <option value="flat">flat</option>
+            <option value="surface">surface</option>
             <option value="cave">cave</option>
         </select>
         <a href="http://192.168.86.35:8123" target="_blank" style="color:#444;font-size:11px;text-decoration:none;border:1px solid #1e1e3e;padding:3px 10px;border-radius:2px;letter-spacing:1px;" onmouseover="this.style.color='#00ff88';this.style.borderColor='#00ff88'" onmouseout="this.style.color='#444';this.style.borderColor='#1e1e3e'">DYNMAP ↗</a>
@@ -352,7 +352,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DYNMAP_URL  = '/tiles/MODPACK';   // proxied through our server
-let   MAP_NAME    = 'surface';          // Dynmap surface map name
+let   MAP_NAME    = 'flat';             // Dynmap flat (top-down) map name
 const TILE_SIZE   = 128;
 const DEPOT_X     = 154;
 const DEPOT_Z     = -2803;
@@ -409,7 +409,10 @@ fetch('/up/configuration').then(r => r.json()).then(cfg => {
         `<option value="${m.prefix}">${m.name || m.prefix}</option>`
     ).join('');
     if (sel.options.length > 0) {
-        MAP_NAME = sel.options[0].value;
+        // Prefer flat map, fall back to first available
+        const flatOpt = Array.from(sel.options).find(o => o.value === 'flat' || o.value.includes('flat'));
+        MAP_NAME = flatOpt ? flatOpt.value : sel.options[0].value;
+        sel.value = MAP_NAME;
         changeMap(MAP_NAME);
     }
 }).catch(() => {});  // silently ignore if endpoint unavailable
