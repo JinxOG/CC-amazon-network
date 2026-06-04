@@ -56,10 +56,16 @@ async function rcon(cmd) {
 
 async function initMarkerSet() {
     try {
-        await rcon(`dmarker addset id:${CFG.dynmap.set} label:Turtles`);
+        await rcon(`dmarker addset id:${CFG.dynmap.set} label:Turtles hidebydefault:false`);
         console.log('[RCON] Marker set created');
     } catch (e) {
-        console.log('[RCON] Marker set already exists (ok)');
+        // Already exists — update it to ensure it's visible
+        try {
+            await rcon(`dmarker updateset id:${CFG.dynmap.set} label:Turtles hidebydefault:false`);
+            console.log('[RCON] Marker set updated (hidebydefault:false)');
+        } catch (e2) {
+            console.log('[RCON] Marker set already exists (ok)');
+        }
     }
 }
 
