@@ -136,9 +136,9 @@ app.post('/command', (req, res) => {
 });
 
 // Proxy Dynmap tiles through our server (avoids cross-origin image issues)
-app.get('/tiles/*', (req, res) => {
-    const url = `http://127.0.0.1:8123${req.path}`;
-    const http = require('http');
+const http = require('http');
+app.use('/tiles', (req, res) => {
+    const url = `http://127.0.0.1:8123/tiles${req.path}`;
     http.get(url, (upstream) => {
         res.setHeader('Content-Type', upstream.headers['content-type'] || 'image/png');
         res.setHeader('Cache-Control', 'public, max-age=10');
