@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CC Amazon Network</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: 'Courier New', monospace;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ── */
+        #header {
+            background: #0f0f1a;
+            border-bottom: 1px solid #00ff8844;
+            padding: 0 16px;
+            height: 46px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        #header h1 {
+            color: #00ff88;
+            font-size: 14px;
+            letter-spacing: 3px;
+        }
+        .header-divider { color: #1e1e3e; }
+        #last-update { color: #444; font-size: 11px; }
+        #header-stats {
+            margin-left: auto;
+            display: flex;
+            gap: 16px;
+            font-size: 11px;
+        }
+        .stat { color: #666; }
+        .stat span { color: #00ff88; }
+        .stat.warn span { color: #ffaa00; }
+        .stat.err  span { color: #ff4444; }
+
+        #status-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: #00ff88;
+            box-shadow: 0 0 6px #00ff88;
+            flex-shrink: 0;
+        }
+        #status-dot.offline { background: #ff4444; box-shadow: 0 0 6px #ff4444; }
+
+        /* ── Main layout ── */
+        #main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ── Map ── */
+        #map-area {
+            flex: 1;
+            position: relative;
+            background: #000;
+            min-width: 0;
+        }
+        #map-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+        }
+        #map-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 10;
+            cursor: crosshair;
+        }
+        #map-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.75);
+            border: 1px solid #1e1e3e;
+            color: #444;
+            font-size: 10px;
+            padding: 4px 10px;
+            border-radius: 3px;
+            pointer-events: none;
+            z-index: 11;
+            letter-spacing: 1px;
+        }
+
+        /* ── Side panel ── */
+        #side-panel {
+            width: 320px;
+            flex-shrink: 0;
+            background: #0f0f1a;
+            border-left: 1px solid #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Tabs ── */
+        #tabs {
+            display: flex;
+            border-bottom: 1px solid #1a1a2e;
+            flex-shrink: 0;
+        }
+        .tab {
+            flex: 1;
+            padding: 11px 4px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 11px;
+            letter-spacing: 2px;
+            color: #444;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s;
+            font-family: 'Courier New', monospace;
+        }
+        .tab:hover { color: #888; }
+        .tab.active { color: #00ff88; border-bottom-color: #00ff88; }
+
+        /* ── Tab content ── */
+        .tab-content {
+            display: none;
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .tab-content.active { display: flex; }
+
+        /* scrollbar */
+        ::-webkit-scrollbar { width: 3px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 2px; }
+
+        /* ── Turtle card ── */
+        .turtle-card {
+            background: #12121e;
+            border: 1px solid #1a1a2e;
+            border-left: 3px solid #2a2a4a;
+            border-radius: 3px;
+            padding: 10px;
+            transition: border-color 0.2s;
+        }
+        .turtle-card.DELIVERY { border-left-color: #00ff88; }
+        .turtle-card.SUPPORT  { border-left-color: #4488ff; }
+        .turtle-card.offline  { opacity: 0.45; }
+
+        .tc-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 7px;
+        }
+        .tc-name { font-size: 13px; color: #fff; font-weight: bold; letter-spacing: 1px; }
+        .tc-sub  { font-size: 10px; color: #444; margin-top: 1px; letter-spacing: 1px; }
+
+        .status-badge {
+            font-size: 9px;
+            padding: 2px 7px;
+            border-radius: 2px;
+            letter-spacing: 1px;
+            font-weight: bold;
+        }
+        .status-badge.IDLE       { background: #0a2a1a; color: #00ff88; }
+        .status-badge.TRAVELLING { background: #2a2a0a; color: #ffcc00; }
+        .status-badge.WORKING    { background: #0a1a3a; color: #4499ff; }
+        .status-badge.LOADING    { background: #2a1a0a; color: #ff8844; }
+        .status-badge.RETURNING  { background: #1a0a2a; color: #aa66ff; }
+        .status-badge.ERROR      { background: #2a0a0a; color: #ff4444; }
+
+        .fuel-track {
+            background: #080810;
+            height: 3px;
+            border-radius: 2px;
+            margin: 7px 0;
+            overflow: hidden;
+        }
+        .fuel-fill {
+            height: 100%;
+            border-radius: 2px;
+            background: #00ff88;
+            transition: width 1s, background 0.5s;
+        }
+        .fuel-fill.med  { background: #ffcc00; }
+        .fuel-fill.low  { background: #ff8844; }
+        .fuel-fill.crit { background: #ff4444; }
+
+        .tc-row {
+            display: flex;
+            gap: 12px;
+            font-size: 10px;
+            color: #555;
+            flex-wrap: wrap;
+        }
+        .tc-row .val { color: #aaa; }
+
+        /* ── Job card ── */
+        .job-card {
+            background: #12121e;
+            border: 1px solid #1a1a2e;
+            border-left: 3px solid #333;
+            border-radius: 3px;
+            padding: 10px;
+        }
+        .job-card.IN_PROGRESS { border-left-color: #4488ff; }
+        .job-card.PENDING     { border-left-color: #ffaa00; }
+        .job-card.COMPLETE    { border-left-color: #00ff88; opacity: 0.5; }
+        .job-card.FAILED      { border-left-color: #ff4444; }
+
+        .jc-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .jc-id   { font-size: 10px; color: #444; }
+        .jc-type { font-size: 12px; color: #ccc; letter-spacing: 1px; }
+        .jc-assigned { font-size: 10px; color: #4488ff; margin-top: 4px; }
+
+        .jbadge {
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 2px;
+            letter-spacing: 1px;
+        }
+        .jbadge.PENDING     { background: #2a2000; color: #ffaa00; }
+        .jbadge.IN_PROGRESS { background: #001030; color: #4488ff; }
+        .jbadge.COMPLETE    { background: #002010; color: #00ff88; }
+        .jbadge.FAILED      { background: #200000; color: #ff4444; }
+
+        /* ── Commands ── */
+        .cmd-section { margin-bottom: 18px; }
+        .cmd-title {
+            font-size: 10px;
+            color: #00ff88;
+            letter-spacing: 3px;
+            margin-bottom: 8px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #1a1a2e;
+        }
+
+        .field-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 7px;
+        }
+        .field-row input,
+        .field-row select,
+        .field-row textarea {
+            flex: 1;
+            background: #080810;
+            border: 1px solid #1e1e3e;
+            color: #ddd;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            padding: 6px 8px;
+            border-radius: 2px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        .field-row input:focus,
+        .field-row select:focus { border-color: #00ff8866; }
+        .field-row label {
+            font-size: 10px;
+            color: #444;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            letter-spacing: 1px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 8px 12px;
+            background: #12121e;
+            border: 1px solid #1e1e3e;
+            color: #bbb;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            border-radius: 2px;
+            text-align: left;
+            margin-bottom: 5px;
+            transition: all 0.15s;
+        }
+        .btn:hover    { background: #1a1a2e; border-color: #3e3e6e; color: #fff; }
+        .btn.primary  { border-color: #004422; color: #00ff88; }
+        .btn.primary:hover { background: #0a1e14; border-color: #00ff88; }
+        .btn.danger   { border-color: #3a1010; color: #ff6666; }
+        .btn.danger:hover  { background: #1e0a0a; border-color: #ff4444; color: #ff4444; }
+        .btn.warning  { border-color: #3a2a00; color: #ffaa44; }
+        .btn.warning:hover { background: #1e1a0a; border-color: #ffaa00; color: #ffaa00; }
+
+        /* ── Modal ── */
+        #backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 100;
+        }
+        #backdrop.show { display: block; }
+
+        #modal {
+            display: none;
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: #0f0f1a;
+            border: 1px solid #00ff8866;
+            border-radius: 4px;
+            padding: 20px;
+            width: 340px;
+            z-index: 101;
+        }
+        #modal.show { display: block; }
+
+        .modal-title {
+            color: #00ff88;
+            font-size: 12px;
+            letter-spacing: 3px;
+            margin-bottom: 16px;
+        }
+        .modal-field { margin-bottom: 10px; }
+        .modal-field label {
+            display: block;
+            font-size: 10px;
+            color: #444;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+        .modal-field input {
+            width: 100%;
+            background: #080810;
+            border: 1px solid #1e1e3e;
+            color: #ddd;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            padding: 7px 10px;
+            border-radius: 2px;
+            outline: none;
+        }
+        .modal-field input:focus { border-color: #00ff8866; }
+        .modal-coord-row { display: flex; gap: 6px; }
+        .modal-coord-row input { flex: 1; }
+        .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
+        .modal-actions .btn { margin: 0; flex: 1; text-align: center; }
+
+        .empty {
+            color: #2a2a4a;
+            font-size: 12px;
+            text-align: center;
+            padding: 30px 0;
+            letter-spacing: 1px;
+        }
+
+        /* ── Toast ── */
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #0f0f1a;
+            border: 1px solid #00ff8866;
+            color: #00ff88;
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 16px;
+            border-radius: 3px;
+            z-index: 200;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        #toast.show { opacity: 1; }
+        #toast.err  { border-color: #ff444466; color: #ff4444; }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+    <div id="status-dot"></div>
+    <h1>◆ CC AMAZON NETWORK</h1>
+    <div class="header-divider">|</div>
+    <div id="last-update">connecting...</div>
+    <div id="header-stats">
+        <div class="stat" id="stat-online">ONLINE <span>0</span></div>
+        <div class="stat" id="stat-active">ACTIVE <span>0</span></div>
+        <div class="stat" id="stat-jobs">JOBS <span>0</span></div>
+    </div>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+    <!-- Map -->
+    <div id="map-area">
+        <iframe id="map-iframe" src="http://192.168.86.35:8123" title="Dynmap"></iframe>
+        <div id="map-overlay"></div>
+        <div id="map-hint">RIGHT-CLICK → REQUEST DELIVERY</div>
+    </div>
+
+    <!-- Side panel -->
+    <div id="side-panel">
+        <div id="tabs">
+            <div class="tab active" onclick="switchTab('fleet')">FLEET</div>
+            <div class="tab"        onclick="switchTab('jobs')">JOBS</div>
+            <div class="tab"        onclick="switchTab('commands')">COMMANDS</div>
+        </div>
+
+        <!-- Fleet -->
+        <div id="tab-fleet" class="tab-content active">
+            <div class="empty">Loading...</div>
+        </div>
+
+        <!-- Jobs -->
+        <div id="tab-jobs" class="tab-content">
+            <div class="empty">No active jobs</div>
+        </div>
+
+        <!-- Commands -->
+        <div id="tab-commands" class="tab-content">
+
+            <div class="cmd-section">
+                <div class="cmd-title">DISPATCH DELIVERY</div>
+                <div class="field-row">
+                    <label>X</label>
+                    <input id="cx" type="number" placeholder="0">
+                    <label>Y</label>
+                    <input id="cy" type="number" placeholder="67" value="67">
+                    <label>Z</label>
+                    <input id="cz" type="number" placeholder="0">
+                </div>
+                <button class="btn primary" onclick="openModalFromCmd()">▶ DISPATCH JOB</button>
+            </div>
+
+            <div class="cmd-section">
+                <div class="cmd-title">FLEET CONTROL</div>
+                <div class="field-row">
+                    <select id="turtle-sel">
+                        <option value="">— Select turtle —</option>
+                    </select>
+                </div>
+                <button class="btn" onclick="cmdRecall()">↩ RECALL SELECTED</button>
+                <button class="btn danger" onclick="cmdRecallAll()">⚠ RECALL ALL TURTLES</button>
+            </div>
+
+            <div class="cmd-section">
+                <div class="cmd-title">SYSTEM</div>
+                <button class="btn warning" onclick="cmdUpdateAll()">↻ OTA UPDATE ALL TURTLES</button>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<!-- Modal backdrop -->
+<div id="backdrop" onclick="closeModal()"></div>
+
+<!-- Delivery modal -->
+<div id="modal">
+    <div class="modal-title">▶ REQUEST DELIVERY</div>
+
+    <div class="modal-field">
+        <label>DESTINATION COORDINATES</label>
+        <div class="modal-coord-row">
+            <input id="m-x" type="number" placeholder="X">
+            <input id="m-y" type="number" placeholder="Y" value="67">
+            <input id="m-z" type="number" placeholder="Z">
+        </div>
+    </div>
+
+    <div class="modal-field">
+        <label>NOTES (optional)</label>
+        <input id="m-note" type="text" placeholder="e.g. building supplies">
+    </div>
+
+    <div class="modal-actions">
+        <button class="btn danger" onclick="closeModal()">CANCEL</button>
+        <button class="btn primary" onclick="submitDelivery()">DISPATCH</button>
+    </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let appState = { turtles: {}, jobs: [] };
+
+// ─── Tabs ────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    const idx = ['fleet','jobs','commands'].indexOf(name);
+    document.querySelectorAll('.tab')[idx].classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ─── Poll ────────────────────────────────────────────────────────────────────
+async function poll() {
+    try {
+        const r  = await fetch('/state');
+        const d  = await r.json();
+        appState = d;
+        renderAll(d);
+        document.getElementById('status-dot').className = '';
+        const ago = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : '?';
+        document.getElementById('last-update').textContent = `synced ${ago}s ago`;
+    } catch(e) {
+        document.getElementById('status-dot').className = 'offline';
+        document.getElementById('last-update').textContent = 'server offline';
+    }
+}
+setInterval(poll, 2000);
+poll();
+
+// ─── Render ──────────────────────────────────────────────────────────────────
+function renderAll(d) {
+    const turtles = d.turtles || {};
+    const jobs    = d.jobs    || [];
+
+    // Header stats
+    const tArr   = Object.values(turtles);
+    const online = tArr.filter(t => t.online).length;
+    const active = tArr.filter(t => t.online && t.status !== 'IDLE').length;
+    const jobAct = jobs.filter(j => j.status !== 'COMPLETE').length;
+
+    document.querySelector('#stat-online span').textContent = online;
+    document.querySelector('#stat-active span').textContent = active;
+    document.querySelector('#stat-jobs span').textContent   = jobAct;
+
+    document.getElementById('stat-active').className = 'stat' + (active > 0 ? '' : '');
+    document.getElementById('stat-jobs').className   = 'stat' + (jobAct > 0 ? '' : '');
+
+    renderFleet(turtles);
+    renderJobs(jobs);
+    refreshTurtleSelect(turtles);
+}
+
+function fuelClass(pct) {
+    if (pct < 0.05) return 'crit';
+    if (pct < 0.20) return 'low';
+    if (pct < 0.40) return 'med';
+    return '';
+}
+
+function renderFleet(turtles) {
+    const el  = document.getElementById('tab-fleet');
+    const arr = Object.entries(turtles).sort((a, b) => {
+        if (a[1].role !== b[1].role) return a[1].role === 'DELIVERY' ? -1 : 1;
+        return a[0].localeCompare(b[0]);
+    });
+
+    if (!arr.length) {
+        el.innerHTML = '<div class="empty">NO TURTLES REGISTERED</div>';
+        return;
+    }
+
+    el.innerHTML = arr.map(([id, t]) => {
+        const fuel    = t.fuel    || 0;
+        const fuelMax = t.fuelMax || 100000;
+        const pct     = Math.min(1, fuel / fuelMax);
+        const pctPx   = Math.round(pct * 100);
+        const fc      = fuelClass(pct);
+        const offline = !t.online;
+        const pos     = (t.x != null) ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
+        const status  = t.status || 'UNKNOWN';
+
+        return `
+        <div class="turtle-card ${t.role || ''}${offline ? ' offline' : ''}">
+            <div class="tc-header">
+                <div>
+                    <div class="tc-name">${id}</div>
+                    <div class="tc-sub">${t.role || '?'} · ${t.dock || '?'}</div>
+                </div>
+                <div class="status-badge ${status}">${status}</div>
+            </div>
+            <div class="fuel-track">
+                <div class="fuel-fill ${fc}" style="width:${pctPx}%"></div>
+            </div>
+            <div class="tc-row">
+                <span>FUEL <span class="val">${Math.round(pct*100)}%</span></span>
+                <span>POS <span class="val">${pos}</span></span>
+                ${t.jobId  ? `<span>JOB <span class="val">${t.jobId}</span></span>` : ''}
+                ${offline  ? `<span style="color:#ff4444">OFFLINE</span>` : ''}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderJobs(jobs) {
+    const el     = document.getElementById('tab-jobs');
+    const active = jobs.filter(j => j.status !== 'COMPLETE');
+    const recent = jobs.filter(j => j.status === 'COMPLETE').slice(-5);
+    const all    = [...active, ...recent];
+
+    if (!all.length) {
+        el.innerHTML = '<div class="empty">NO ACTIVE JOBS</div>';
+        return;
+    }
+
+    el.innerHTML = all.map(j => `
+        <div class="job-card ${j.status || ''}">
+            <div class="jc-top">
+                <div>
+                    <div class="jc-id">${j.id}</div>
+                    <div class="jc-type">${j.type || 'DELIVER'}</div>
+                </div>
+                <div class="jbadge ${j.status || ''}">${j.status || '?'}</div>
+            </div>
+            ${j.assignedTo ? `<div class="jc-assigned">→ ${j.assignedTo}</div>` : ''}
+        </div>
+    `).join('');
+}
+
+function refreshTurtleSelect(turtles) {
+    const sel = document.getElementById('turtle-sel');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— Select turtle —</option>' +
+        Object.keys(turtles).sort().map(id =>
+            `<option value="${id}"${id === cur ? ' selected' : ''}>${id} [${turtles[id].status || '?'}]</option>`
+        ).join('');
+}
+
+// ─── Right-click delivery ─────────────────────────────────────────────────────
+document.getElementById('map-overlay').addEventListener('contextmenu', e => {
+    e.preventDefault();
+    document.getElementById('m-x').value = '';
+    document.getElementById('m-z').value = '';
+    document.getElementById('m-y').value = '67';
+    document.getElementById('m-note').value = '';
+    document.getElementById('backdrop').classList.add('show');
+    document.getElementById('modal').classList.add('show');
+    document.getElementById('m-x').focus();
+});
+
+function openModalFromCmd() {
+    const x = document.getElementById('cx').value;
+    const y = document.getElementById('cy').value || '67';
+    const z = document.getElementById('cz').value;
+    document.getElementById('m-x').value    = x;
+    document.getElementById('m-y').value    = y;
+    document.getElementById('m-z').value    = z;
+    document.getElementById('m-note').value = '';
+    document.getElementById('backdrop').classList.add('show');
+    document.getElementById('modal').classList.add('show');
+}
+
+function closeModal() {
+    document.getElementById('backdrop').classList.remove('show');
+    document.getElementById('modal').classList.remove('show');
+}
+
+async function submitDelivery() {
+    const x = parseInt(document.getElementById('m-x').value);
+    const y = parseInt(document.getElementById('m-y').value) || 67;
+    const z = parseInt(document.getElementById('m-z').value);
+    if (isNaN(x) || isNaN(z)) { toast('Enter valid X and Z coordinates', true); return; }
+
+    await sendCommand('DISPATCH_DELIVERY', { x, y, z, note: document.getElementById('m-note').value });
+    closeModal();
+    toast('Delivery dispatched!');
+    switchTab('jobs');
+}
+
+// ─── Commands ────────────────────────────────────────────────────────────────
+async function cmdRecall() {
+    const id = document.getElementById('turtle-sel').value;
+    if (!id) { toast('Select a turtle first', true); return; }
+    await sendCommand('RECALL', { turtleId: id, reason: 'admin_recall' });
+    toast(`Recall sent → ${id}`);
+}
+
+async function cmdRecallAll() {
+    if (!confirm('Recall ALL turtles to dock?')) return;
+    await sendCommand('RECALL_ALL', { reason: 'admin_recall' });
+    toast('Recall all sent');
+}
+
+async function cmdUpdateAll() {
+    if (!confirm('Send OTA update to all turtles? They will reboot.')) return;
+    await sendCommand('UPDATE_ALL', {});
+    toast('Update all sent');
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+async function sendCommand(type, params) {
+    try {
+        await fetch('/command', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ type, params }),
+        });
+    } catch(e) {
+        toast('Failed to send command', true);
+    }
+}
+
+let toastTimer;
+function toast(msg, isErr) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className   = 'show' + (isErr ? ' err' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = ''; }, 3000);
+}
+</script>
+</body>
+</html>

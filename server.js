@@ -40,6 +40,7 @@ let state = {
 
 let pendingCommands = [];   // commands queued by dashboard, picked up by CC on next poll
 let markerExists    = {};   // track which turtle markers already exist on Dynmap
+let turtlePaths     = {};   // { id: { jobId, points:[{x,y,z}] } } — path history per active job
 
 // ─── RCON ────────────────────────────────────────────────────────────────────
 
@@ -91,6 +92,53 @@ async function upsertMarker(id, t) {
     }
 }
 
+// ─── Path tracking ───────────────────────────────────────────────────────────
+
+function trackPath(id, t) {
+    if (!t.jobId || t.x == null) return;
+
+    // New job or first point — reset path
+    if (!turtlePaths[id] || turtlePaths[id].jobId !== t.jobId) {
+        if (turtlePaths[id]) deletePathLine(id).catch(() => {});
+        turtlePaths[id] = { jobId: t.jobId, points: [], dirty: false };
+    }
+
+    const pts  = turtlePaths[id].points;
+    const last = pts[pts.length - 1];
+    const x = Math.round(t.x), y = Math.round(t.y ?? 67), z = Math.round(t.z);
+
+    if (!last || Math.abs(last.x - x) > 1 || Math.abs(last.z - z) > 1) {
+        pts.push({ x, y, z });
+        if (pts.length > 300) pts.shift();   // cap history
+        turtlePaths[id].dirty = true;
+    }
+}
+
+async function flushPaths() {
+    for (const [id, path] of Object.entries(turtlePaths)) {
+        if (!path.dirty || path.points.length < 2) continue;
+        path.dirty = false;
+        const xs = path.points.map(p => p.x).join(',');
+        const ys = path.points.map(p => p.y).join(',');
+        const zs = path.points.map(p => p.z).join(',');
+        const lineId = `path_${id}`;
+        try {
+            try { await rcon(`dmarker deleteline id:${lineId} set:${CFG.dynmap.set}`); } catch(e) {}
+            await rcon(`dmarker addline id:${lineId} set:${CFG.dynmap.set} world:${CFG.dynmap.world} x:${xs} y:${ys} z:${zs} color:00ff88 weight:2 opacity:0.6`);
+        } catch(e) {
+            console.error(`[RCON] Path error ${id}:`, e.message);
+        }
+    }
+}
+
+async function deletePathLine(id) {
+    try { await rcon(`dmarker deleteline id:path_${id} set:${CFG.dynmap.set}`); } catch(e) {}
+    delete turtlePaths[id];
+}
+
+// Flush path lines every 4 seconds
+setInterval(() => flushPaths().catch(() => {}), 4000);
+
 async function removeMarker(id) {
     if (!markerExists[id]) return;
     try {
@@ -111,7 +159,13 @@ app.post('/update', async (req, res) => {
     if (turtles) {
         for (const [id, data] of Object.entries(turtles)) {
             state.turtles[id] = { ...state.turtles[id], ...data };
-            upsertMarker(id, state.turtles[id]).catch(() => {});
+            const t = state.turtles[id];
+            upsertMarker(id, t).catch(() => {});
+            trackPath(id, t);
+            // Job finished — clear path line
+            if (turtlePaths[id] && !t.jobId) {
+                deletePathLine(id).catch(() => {});
+            }
         }
     }
 
