@@ -127,7 +127,9 @@ app.use('/css',        (req, res) => proxyDynmap(req, res, '/css'));
 app.use('/images',     (req, res) => proxyDynmap(req, res, '/images'));
 app.use('/standalone', (req, res) => proxyDynmap(req, res, '/standalone'));
 app.use('/webstart',   (req, res) => proxyDynmap(req, res, '/webstart'));
-app.get('/favicon.ico',(req, res) => proxyDynmap(req, res, '/favicon.ico'));
+app.get('/favicon.ico',  (req, res) => proxyDynmap(req, res, '/favicon.ico'));
+// Root-level Dynmap files (version.js etc.) — req.path is the full path here
+app.get('/version.js', (req, res) => proxyDynmap(req, res, ''));
 
 // Serve Dynmap's main page for iframe embedding (same-origin = can inject JS)
 app.get('/dynmap-frame', (req, res) => {
