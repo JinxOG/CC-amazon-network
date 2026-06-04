@@ -76,10 +76,7 @@
             display: block;
         }
         #map-overlay {
-            position: absolute;
-            inset: 0;
-            z-index: 10;
-            cursor: crosshair;
+            display: none;
         }
         #map-hint {
             position: absolute;
@@ -410,7 +407,7 @@
     <div id="map-area">
         <iframe id="map-iframe" src="http://192.168.86.35:8123" title="Dynmap"></iframe>
         <div id="map-overlay"></div>
-        <div id="map-hint">RIGHT-CLICK → REQUEST DELIVERY</div>
+        <div id="map-hint">USE COMMANDS TAB → DISPATCH DELIVERY</div>
     </div>
 
     <!-- Side panel -->
