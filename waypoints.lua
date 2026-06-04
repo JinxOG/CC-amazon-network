@@ -224,6 +224,24 @@ function W.returnRoute(dock)
     }
 end
 
+-- Internal return: already inside the building → skip arrivals hole, go straight
+-- to the dock's junction column on the red taxiway then follow the return aisle.
+-- Use this for startup homing and post-RECALL when the turtle is already on the
+-- depot floor.  Never call this from underground.
+function W.internalReturnRoute(dock)
+    local az = returnAisleZ(dock)
+    return {
+        -- 1. Move to red taxiway at dock's junction column (centre column, always clear)
+        { x = dock.junction.x, y = CFG.FLOOR_Y, z = W.RED_Z },
+        -- 2. Drop down from taxiway to return aisle via centre column
+        { x = dock.junction.x, y = CFG.FLOOR_Y, z = az      },
+        -- 3. Move along return aisle to dock's column X
+        { x = dock.x,          y = CFG.FLOOR_Y, z = az      },
+        -- 4. Enter dock slot
+        { x = dock.x,          y = CFG.FLOOR_Y, z = dock.z  },
+    }
+end
+
 -- Returns the facing direction a turtle should hold while at its dock.
 -- "Toward the taxiway" — the direction of the first departure move is then
 -- consistently the OPPOSITE (into the back aisle), which move.face() handles.

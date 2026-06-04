@@ -590,16 +590,25 @@ function base.returnToDock()
 end
 
 -- Navigate from dock back to dock after a RECALL while inside building.
--- Uses internal red taxiway only — no underground needed.
+-- Uses the internal route (junction column → return aisle) instead of going
+-- all the way to the arrivals hole first.
 function base.returnToDockInternal()
     if not _self.dock then return true end
     base.setStatus(proto.STATUS.RETURNING)
     logInfo("Returning to dock via internal taxiway...")
-    local route = W.returnRoute(_self.dock)
+    local route = W.internalReturnRoute(_self.dock)
     local ok, err = move.followRoute(route)
     if not ok then return false, "internal return failed: " .. (err or "?") end
+    -- GPS verify — correct any sub-block drift before accepting future jobs.
+    gpsSync()
+    if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
+        logWarn(string.format("Post-dock mismatch: at %d,%d want %d,%d — correcting",
+            _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
+        move.to(_self.dock.x, 67, _self.dock.z)
+    end
+    move.face(W.dockFacing(_self.dock))
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
-    if not _self.canDig then fuel.dockRefuel() end
+    if not _self.canDig then base.fuel.dockRefuel() end
     return true
 end
 
@@ -1032,6 +1041,22 @@ function base.init(role)
     initPosition()
     fuel.refuel()
     register()
+    -- If not physically at assigned dock, home there now before accepting any jobs.
+    -- This corrects position mismatches caused by crashes, reassignments, or reboots.
+    -- Only runs when inside the building at floor level (safe to use internal taxiway).
+    if _self.dock then
+        gpsSync()
+        local p = _self.pos
+        local insideBuilding = p.y >= 66
+            and p.x >= 143 and p.x <= 228
+            and p.z >= -2817 and p.z <= -2782
+        local atDock = (p.x == _self.dock.x and p.z == _self.dock.z)
+        if insideBuilding and not atDock then
+            logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
+                _self.dock.x, _self.dock.z, p.x, p.z))
+            base.returnToDockInternal()
+        end
+    end
     -- Face toward taxiway so the turtle is oriented consistently at its dock on boot.
     if _self.dock then move.face(W.dockFacing(_self.dock)) end
     logInfo(string.format("Ready. Fuel:%d/%d  Pos:%d,%d,%d  Dock:%s",
