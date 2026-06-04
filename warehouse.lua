@@ -227,6 +227,35 @@ local function routeMsg(raw)
         return
     end
 
+    -- ── DELIVERY_ARRIVED: auto-queue if ITEM_REQUEST was lost ───────────────
+    -- Turtles include their items list in DELIVERY_ARRIVED so we can queue them
+    -- even if their original ITEM_REQUEST never arrived (warehouse reboot, blip).
+    -- If they are already queued or being served this is a no-op.
+    if msg.type == proto.MSG.DELIVERY_ARRIVED then
+        local p = msg.payload
+        local known = current and current.turtleId == msg.from
+        if not known then
+            for _, e in ipairs(queue) do
+                if e.turtleId == msg.from then known = true; break end
+            end
+        end
+        if not known and p.items then
+            local n = chestsNeeded(p.items)
+            table.insert(queue, {
+                jobId        = p.jobId,
+                turtleId     = msg.from,
+                items        = p.items,
+                chestsNeeded = n,
+            })
+            sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
+                jobId = p.jobId, position = #queue, chests = n,
+            })
+            log(string.format("Auto-queued %s (job %s) — ITEM_REQUEST was lost",
+                msg.from, tostring(p.jobId)))
+        end
+        -- Fall through to inboxPut so state machine can consume it in WAIT_ARRIVE
+    end
+
     -- ── Mid-job messages from unknown jobs ───────────────────────────────────
     -- If the warehouse rebooted, it has no record of in-progress jobs.
     -- Turtles stuck in Phase 2 will keep re-sending CHESTS_PLACED.

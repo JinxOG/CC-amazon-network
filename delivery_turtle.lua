@@ -308,14 +308,26 @@ base.run(function(job)
     end
     print("Dumped " .. dumped .. " slot(s) of debris into ender chest")
 
-    -- Tell warehouse we're here — it will clear the ender chest into RS first
-    base.sendToServer(proto.MSG.DELIVERY_ARRIVED, { jobId = job.id })
+    -- Tell warehouse we're here.
+    -- Include items list in payload so the warehouse can auto-queue us if
+    -- our earlier ITEM_REQUEST was lost (e.g. warehouse reboot, network blip).
+    local function sendArrived()
+        base.sendToServer(proto.MSG.DELIVERY_ARRIVED, {
+            jobId = job.id,
+            items = params.items or {},
+        })
+    end
+    sendArrived()
 
-    -- Wait for our turn (warehouse may be serving another turtle)
+    -- Wait for our turn (warehouse may be serving another turtle).
+    -- Re-ping every 5s with DELIVERY_ARRIVED (contains items for auto-queue).
+    -- Re-send ITEM_REQUEST every 60s as a belt-and-suspenders fallback.
     base.sendProgress("Waiting for warehouse queue...")
-    local chestsReady = false
-    local chestCount  = 0
-    local deadline    = os.clock() + 600   -- 10 min max queue wait (frozen while server down)
+    local chestsReady    = false
+    local chestCount     = 0
+    local deadline       = os.clock() + 600   -- 10 min max queue wait
+    local lastIReq       = os.clock()
+    local waitTick       = 0
     while os.clock() < deadline do
         if base.isServerDown() then
             deadline = os.clock() + 600   -- freeze deadline during outage
@@ -327,14 +339,30 @@ base.run(function(job)
             proto.MSG.JOB_ABORT,
         }, 5)
         if not msg then
-            -- Ping warehouse again (every 5s so a missed CHESTS_READY is recovered quickly)
-            base.sendToServer(proto.MSG.DELIVERY_ARRIVED, { jobId = job.id })
+            -- Re-ping warehouse (keeps DELIVERY_ARRIVED fresh in inbox;
+            -- also re-queues us if our ITEM_REQUEST was never received)
+            sendArrived()
+            waitTick = waitTick + 1
+            print(string.format(
+                "[WH] Waiting for warehouse... %ds remaining (ping #%d)",
+                math.max(0, math.floor(deadline - os.clock())), waitTick))
+            -- Belt-and-suspenders: re-send ITEM_REQUEST every 60s in case
+            -- the warehouse lost our queue slot (e.g. it rebooted)
+            if os.clock() - lastIReq >= 60 then
+                base.sendToServer(proto.MSG.ITEM_REQUEST, {
+                    jobId = job.id,
+                    items = params.items or {},
+                })
+                lastIReq = os.clock()
+                print("[WH] Re-sent ITEM_REQUEST (safety re-queue)")
+            end
         elseif msg.type == proto.MSG.JOB_ABORT then
             -- Pick up entangled chest and abort
             turtle.select(EC_SLOT); turtle.digDown()
             return base.sendFailed("job_aborted_at_destination", false)
         elseif msg.type == proto.MSG.WAREHOUSE_QUEUED then
             local pos = msg.payload.position or "?"
+            print(string.format("[WH] Queue position: %s", tostring(pos)))
             base.sendProgress("Queue position: " .. tostring(pos))
         elseif msg.type == proto.MSG.CHESTS_READY then
             chestCount  = msg.payload.count or 1
