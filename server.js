@@ -72,8 +72,7 @@ async function upsertMarker(id, t) {
 
     try {
         if (markerExists[id]) {
-            const res = await rcon(`dmarker update id:${id} set:${CFG.dynmap.set} x:${x} y:${y} z:${z} label:${label} world:${CFG.dynmap.world}`);
-            console.log(`[RCON] update ${id}: ${res}`);
+            await rcon(`dmarker update id:${id} set:${CFG.dynmap.set} x:${x} y:${y} z:${z} label:${label} world:${CFG.dynmap.world}`);
         } else {
             // Try add — if it fails (already exists), delete and re-add
             try {
