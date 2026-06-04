@@ -403,19 +403,35 @@ function changeMap(name) {
 // Auto-detect available maps from Dynmap config
 fetch('/up/configuration').then(r => r.json()).then(cfg => {
     const world = (cfg.worlds || []).find(w => w.name === 'MODPACK');
-    if (!world) return;
+    if (!world) { console.warn('[Map] World MODPACK not found in /up/configuration'); return; }
+
+    const maps = world.maps || [];
+    console.log('[Map] Available Dynmap maps:', maps.map(m => `${m.name} (prefix="${m.prefix}")`));
+
     const sel = document.getElementById('map-sel');
-    sel.innerHTML = (world.maps || []).map(m =>
+    sel.innerHTML = maps.map(m =>
         `<option value="${m.prefix}">${m.name || m.prefix}</option>`
     ).join('');
-    if (sel.options.length > 0) {
-        // Prefer flat map, fall back to first available
-        const flatOpt = Array.from(sel.options).find(o => o.value === 'flat' || o.value.includes('flat'));
-        MAP_NAME = flatOpt ? flatOpt.value : sel.options[0].value;
-        sel.value = MAP_NAME;
-        changeMap(MAP_NAME);
+
+    if (maps.length > 0) {
+        // Prefer a top-down / flat map — avoid isometric (surface) maps.
+        // Common flat-map prefixes/names: flat, top, f, overhead.
+        const FLAT_HINTS = ['flat', 'top', 'overhead'];
+        const flatOpt = Array.from(sel.options).find(o =>
+            FLAT_HINTS.some(h => o.value.toLowerCase().includes(h) || o.text.toLowerCase().includes(h))
+        );
+        if (flatOpt) {
+            MAP_NAME = flatOpt.value;
+            sel.value = MAP_NAME;
+            console.log('[Map] Auto-selected flat map:', MAP_NAME);
+            changeMap(MAP_NAME);
+        } else {
+            // No flat map found — keep the hardcoded default and don't switch.
+            // Show the dropdown but don't call changeMap (keeps MAP_NAME = 'flat').
+            console.warn('[Map] No flat map found in Dynmap config. Check /up/configuration. Available prefixes:', maps.map(m => m.prefix));
+        }
     }
-}).catch(() => {});  // silently ignore if endpoint unavailable
+}).catch(e => console.warn('[Map] Could not fetch Dynmap config:', e));
 
 // ── Right-click delivery ──────────────────────────────────────────────────
 map.on('contextmenu', e => {
