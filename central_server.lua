@@ -865,6 +865,15 @@ function server.run()
             sendBroadcast(proto.MSG.UPDATE_ALL, {})
             logInfo("Dashboard: UPDATE_ALL broadcast sent")
 
+        elseif t == "RESET_STATUS" then
+            local count = 0
+            for _, tr in pairs(state.registry) do
+                tr.status = proto.STATUS.IDLE
+                tr.jobId  = nil
+                count = count + 1
+            end
+            logInfo(string.format("Dashboard: reset %d turtle(s) to IDLE", count))
+
         elseif t == "CLEAR_JOBS" then
             local count = 0
             for _, job in pairs(state.jobs) do

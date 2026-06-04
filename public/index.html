@@ -284,6 +284,7 @@
             <div class="cmd-section">
                 <div class="cmd-title">JOBS</div>
                 <button class="btn danger" onclick="cmdClearJobs()">✕ CLEAR ALL JOBS</button>
+                <button class="btn warning" onclick="cmdResetStatus()">↺ SET ALL STATUS TO IDLE</button>
             </div>
 
             <div class="cmd-section">
@@ -835,6 +836,11 @@ async function cmdRecallAll() {
     if (!confirm('Recall ALL turtles to dock?')) return;
     await sendCmd('RECALL_ALL', { reason: 'admin_recall' });
     toast('Recall all sent');
+}
+async function cmdResetStatus() {
+    if (!confirm('Force all turtles to IDLE? Only use if turtles are stuck.')) return;
+    await sendCmd('RESET_STATUS', {});
+    toast('All statuses reset to IDLE');
 }
 async function cmdClearJobs() {
     if (!confirm('Clear ALL jobs? Active deliveries will be recalled.')) return;
