@@ -282,6 +282,11 @@
             </div>
 
             <div class="cmd-section">
+                <div class="cmd-title">JOBS</div>
+                <button class="btn danger" onclick="cmdClearJobs()">✕ CLEAR ALL JOBS</button>
+            </div>
+
+            <div class="cmd-section">
                 <div class="cmd-title">SYSTEM</div>
                 <button class="btn warning" onclick="cmdUpdateAll()">↻ OTA UPDATE ALL TURTLES</button>
             </div>
@@ -830,6 +835,11 @@ async function cmdRecallAll() {
     if (!confirm('Recall ALL turtles to dock?')) return;
     await sendCmd('RECALL_ALL', { reason: 'admin_recall' });
     toast('Recall all sent');
+}
+async function cmdClearJobs() {
+    if (!confirm('Clear ALL jobs? Active deliveries will be recalled.')) return;
+    await sendCmd('CLEAR_JOBS', {});
+    toast('All jobs cleared');
 }
 async function cmdUpdateAll() {
     if (!confirm('OTA update all turtles? They will reboot.')) return;

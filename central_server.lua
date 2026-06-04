@@ -865,6 +865,22 @@ function server.run()
             sendBroadcast(proto.MSG.UPDATE_ALL, {})
             logInfo("Dashboard: UPDATE_ALL broadcast sent")
 
+        elseif t == "CLEAR_JOBS" then
+            local count = 0
+            for _, job in pairs(state.jobs) do
+                -- Recall any turtle currently assigned to this job
+                if job.assignedTo and
+                   (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
+                    sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("jobs_cleared"))
+                    local tr = state.registry[job.assignedTo]
+                    if tr then tr.status = proto.STATUS.IDLE; tr.jobId = nil end
+                end
+                count = count + 1
+            end
+            state.jobs = {}
+            saveJobs()
+            logInfo(string.format("Dashboard: cleared %d job(s)", count))
+
         else
             logWarn("Unknown bridge command: " .. tostring(t))
         end
