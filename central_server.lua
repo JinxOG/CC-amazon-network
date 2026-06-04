@@ -827,7 +827,53 @@ function server.run()
     proto.openChannels(state.modem, {
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
+    -- ── Bridge command handler ────────────────────────────────────────────────
+    -- Called for each command the dashboard queued since the last push.
+    -- Commands arrive in the response body of the /update POST.
+    local function handleBridgeCommand(cmd)
+        local t = cmd.type or ""
+        local p = cmd.params or {}
+        logInfo("Bridge cmd: " .. t)
+
+        if t == "DISPATCH_DELIVERY" then
+            local x = tonumber(p.x)
+            local y = tonumber(p.y) or 67
+            local z = tonumber(p.z)
+            if not (x and z) then
+                logWarn("DISPATCH_DELIVERY: missing x/z coords — ignored")
+                return
+            end
+            local id = server.submitJob(proto.JOB.DELIVER, {
+                items       = { ["minecraft:cobblestone"] = 1 },
+                destination = { x = x, y = y, z = z },
+            }, 5)
+            logInfo(string.format("Dashboard dispatch: %s → %d,%d,%d", id, x, y, z))
+
+        elseif t == "RECALL" then
+            local tid = p.turtleId
+            if tid and state.registry[tid] then
+                sendTo(tid, proto.MSG.RECALL, proto.payloadRecall(p.reason or "admin_recall"))
+                logInfo("Dashboard recall: " .. tid)
+            else
+                logWarn("RECALL: turtle not found: " .. tostring(tid))
+            end
+
+        elseif t == "RECALL_ALL" then
+            server.recallAll(p.reason or "admin_recall")
+
+        elseif t == "UPDATE_ALL" then
+            sendBroadcast(proto.MSG.UPDATE_ALL, {})
+            logInfo("Dashboard: UPDATE_ALL broadcast sent")
+
+        else
+            logWarn("Unknown bridge command: " .. tostring(t))
+        end
+    end
+
     -- ── Bridge push ───────────────────────────────────────────────────────────
+    -- Pushes state to the Node bridge every BRIDGE_INTERVAL seconds.
+    -- The bridge returns any dashboard commands queued since the last push
+    -- in the response body — we read and execute them here.
     local function pushToBridge()
         local turtles = {}
         for id, t in pairs(state.registry) do
@@ -860,7 +906,17 @@ function server.run()
         local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs })
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
-            resp.close()   -- must close or CC leaks the connection handle
+            -- Read the body BEFORE closing — the bridge sends pending dashboard
+            -- commands in the response (commands: [...]).  Previously we called
+            -- resp.close() immediately and silently discarded all of them.
+            local body = resp.readAll()
+            resp.close()
+            local ok2, data = pcall(textutils.unserialiseJSON, body)
+            if ok2 and type(data) == "table" and type(data.commands) == "table" then
+                for _, cmd in ipairs(data.commands) do
+                    pcall(handleBridgeCommand, cmd)
+                end
+            end
         else
             logWarn("Bridge push failed: " .. tostring(err))
         end
