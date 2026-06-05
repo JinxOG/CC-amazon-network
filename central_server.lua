@@ -384,10 +384,9 @@ function jobQueue.complete(jobId)
         local linked = state.jobs[job.linkedJob]
         if linked then
             linked.status = JOB_STATUS.COMPLETE
-            if linked.assignedTo and state.registry[linked.assignedTo] then
-                state.registry[linked.assignedTo].status = proto.STATUS.IDLE
-                state.registry[linked.assignedTo].jobId  = nil
-            end
+            -- Do NOT reset the support turtle's registry entry here.
+            -- The support turtle may still be physically returning to dock.
+            -- It will send its own JOB_COMPLETE message which will free it correctly.
         end
     end
     saveJobs()
