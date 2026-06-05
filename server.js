@@ -13,7 +13,7 @@ process.on('uncaughtException', (err) => {
 });
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ app.get('/dynmap-frame', (req, res) => {
 // CC central_server.lua pushes state here every 2s
 app.post('/update', async (req, res) => {
     const { turtles, jobs, version } = req.body;
-    if (!turtles && !jobs) return res.status(400).json({ error: 'missing data' });
+    if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
     if (turtles) {
         for (const [id, data] of Object.entries(turtles)) {

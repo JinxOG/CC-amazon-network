@@ -684,8 +684,14 @@ async function poll() {
         const d = await r.json();
         lastState = d;
         document.getElementById('status-dot').className = '';
-        const ago = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : '?';
-        document.getElementById('last-update').textContent = `synced ${ago}s ago`;
+        const ageSeconds = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : null;
+        const stale = ageSeconds !== null && ageSeconds > 10;
+        const ago = ageSeconds !== null ? ageSeconds : '?';
+        const lastUpdateEl = document.getElementById('last-update');
+        lastUpdateEl.textContent = stale
+            ? `synced ${ago}s ago — CC OFFLINE?`
+            : `synced ${ago}s ago`;
+        lastUpdateEl.style.color = stale ? '#f87171' : '';
         if (d.version) document.getElementById('cc-version').textContent = `v${d.version}`;
         try { renderAll(d); } catch(re) { console.error('[render error]', re); }
     } catch(e) {
@@ -841,6 +847,10 @@ function closeModal() {
     document.getElementById('modal').classList.remove('show');
 }
 
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+});
+
 function openModalFromCmd() {
     document.getElementById('m-x').value    = document.getElementById('cx').value;
     document.getElementById('m-y').value    = document.getElementById('cy').value || '67';
@@ -851,7 +861,8 @@ function openModalFromCmd() {
 
 async function submitDelivery() {
     const x = parseInt(document.getElementById('m-x').value);
-    const y = parseInt(document.getElementById('m-y').value) || 67;
+    const yRaw = parseInt(document.getElementById('m-y').value);
+    const y = isNaN(yRaw) ? 67 : yRaw;
     const z = parseInt(document.getElementById('m-z').value);
     if (isNaN(x) || isNaN(z)) { toast('Enter valid X and Z coordinates', true); return; }
     await sendCmd('DISPATCH_DELIVERY', { x, y, z, note: document.getElementById('m-note').value });
