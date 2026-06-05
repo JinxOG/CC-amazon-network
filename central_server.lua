@@ -865,6 +865,27 @@ function server.run()
             sendBroadcast(proto.MSG.UPDATE_ALL, {})
             logInfo("Dashboard: UPDATE_ALL broadcast sent")
 
+        elseif t == "CANCEL_JOB" then
+            local jobId = p.jobId
+            if jobId then
+                local ok, reason = server.cancelJob(jobId)
+                if ok then
+                    logInfo("Dashboard cancelled job: " .. tostring(jobId))
+                else
+                    logWarn("Dashboard cancel " .. tostring(jobId) .. ": " .. tostring(reason))
+                end
+            end
+
+        elseif t == "SET_IDLE" then
+            local tid = p.turtleId
+            if tid and state.registry[tid] then
+                state.registry[tid].status = proto.STATUS.IDLE
+                state.registry[tid].jobId  = nil
+                logInfo("Dashboard set idle: " .. tid)
+            else
+                logWarn("SET_IDLE: turtle not found: " .. tostring(tid))
+            end
+
         elseif t == "RESET_STATUS" then
             local count = 0
             for _, tr in pairs(state.registry) do

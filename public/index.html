@@ -722,10 +722,14 @@ function renderFleet(turtles) {
         const fc   = fuelClass(pct);
         const pos  = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
         const st   = t.status || 'UNKNOWN';
+        const idleBtn = st !== 'IDLE'
+            ? `<button class="tc-locate" onclick="setTurtleIdle('${id}')" style="color:#ffaa44;border-color:#3a2a00">IDLE</button>`
+            : '';
         return `<div class="turtle-card ${t.role||''}${!t.online?' offline':''}">
             <div class="tc-header">
                 <div>
                     <button class="tc-locate" onclick="focusTurtle('${id}')">LOCATE</button>
+                    ${idleBtn}
                     <div class="tc-name">${id}</div>
                     <div class="tc-sub">${t.role||'?'} · ${t.dock||'?'}</div>
                 </div>
@@ -748,14 +752,24 @@ function renderJobs(jobs) {
     const recent = jobs.filter(j => j.status === 'COMPLETE').slice(-5);
     const all    = [...active, ...recent];
     if (!all.length) { el.innerHTML = '<div class="empty">NO ACTIVE JOBS</div>'; return; }
-    el.innerHTML = all.map(j => `
-        <div class="job-card ${j.status||''}">
+    const terminal = new Set(['COMPLETE','FAILED','CANCELLED']);
+    el.innerHTML = all.map(j => {
+        const canCancel = !terminal.has(j.status);
+        const cancelBtn = canCancel
+            ? `<button class="tc-locate" onclick="cancelJob('${j.id}')" style="color:#ff6666;border-color:#3a1010">CANCEL</button>`
+            : '';
+        return `<div class="job-card ${j.status||''}">
             <div class="jc-top">
-                <div><div class="jc-id">${j.id}</div><div class="jc-type">${j.type||'DELIVER'}</div></div>
+                <div>
+                    ${cancelBtn}
+                    <div class="jc-id">${j.id}</div>
+                    <div class="jc-type">${j.type||'DELIVER'}</div>
+                </div>
                 <div class="jbadge ${j.status||''}">${j.status||'?'}</div>
             </div>
             ${j.assignedTo ? `<div class="jc-assigned">→ ${j.assignedTo}</div>` : ''}
-        </div>`).join('');
+        </div>`;
+    }).join('');
 }
 
 function refreshTurtleSel(turtles) {
@@ -836,6 +850,15 @@ async function cmdRecallAll() {
     if (!confirm('Recall ALL turtles to dock?')) return;
     await sendCmd('RECALL_ALL', { reason: 'admin_recall' });
     toast('Recall all sent');
+}
+async function cancelJob(jobId) {
+    if (!confirm(`Cancel job ${jobId}?`)) return;
+    await sendCmd('CANCEL_JOB', { jobId });
+    toast(`Cancelled ${jobId}`);
+}
+async function setTurtleIdle(id) {
+    await sendCmd('SET_IDLE', { turtleId: id });
+    toast(`${id} → IDLE`);
 }
 async function cmdResetStatus() {
     if (!confirm('Force all turtles to IDLE? Only use if turtles are stuck.')) return;
