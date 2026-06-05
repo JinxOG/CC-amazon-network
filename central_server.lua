@@ -949,7 +949,7 @@ function server.run()
                 destination = j.params and j.params.destination or nil,
             })
         end
-        local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs })
+        local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs, version = proto.VERSION })
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
             -- Read the body BEFORE closing — the bridge sends pending dashboard

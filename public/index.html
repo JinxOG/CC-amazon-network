@@ -229,6 +229,7 @@
 <div id="header">
     <div id="status-dot"></div>
     <h1>◆ CC AMAZON NETWORK</h1>
+    <span id="cc-version" style="font-size:10px;color:#1e1e3e;letter-spacing:1px;margin-left:2px">—</span>
     <span style="color:#1e1e3e">|</span>
     <div id="last-update">connecting...</div>
     <div id="header-stats">
@@ -671,6 +672,7 @@ async function poll() {
         document.getElementById('status-dot').className = '';
         const ago = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : '?';
         document.getElementById('last-update').textContent = `synced ${ago}s ago`;
+        if (d.version) document.getElementById('cc-version').textContent = `v${d.version}`;
         try { renderAll(d); } catch(re) { console.error('[render error]', re); }
     } catch(e) {
         document.getElementById('status-dot').className = 'offline';
