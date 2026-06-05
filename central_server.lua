@@ -53,6 +53,10 @@ local function newJobId()
 end
 
 local function sendTo(turtleId, msgType, payload)
+    if not turtleId or not state.registry[turtleId] then
+        logWarn("sendTo: unknown turtle '" .. tostring(turtleId) .. "' — dropping " .. tostring(msgType))
+        return
+    end
     local msg = proto.encode(msgType, "server", turtleId, payload)
     proto.send(state.modem, proto.CH_PRIVATE, msg)
 end
@@ -235,14 +239,19 @@ local function saveJobs()
             toSave[id] = job
         end
     end
-    local f = fs.open(JOB_SAVE_FILE, "w")
-    if f then
-        f.write(textutils.serialise({
+    local ok, err = pcall(function()
+        local data = textutils.serialise({
             jobs       = toSave,
             jobCounter = state.jobCounter,
-        }))
+        })
+        local f = fs.open("jobs.tmp", "w")
+        if not f then error("could not open jobs.tmp for writing") end
+        f.write(data)
         f.close()
-    end
+        if fs.exists(JOB_SAVE_FILE) then fs.delete(JOB_SAVE_FILE) end
+        fs.move("jobs.tmp", JOB_SAVE_FILE)
+    end)
+    if not ok then logWarn("saveJobs failed: " .. tostring(err)) end
 end
 
 local function loadJobs()
@@ -368,13 +377,20 @@ function jobQueue.complete(jobId)
 
     local t = state.registry[job.assignedTo or ""]
     if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
-    saveJobs()
 
-    -- NOTE: do NOT auto-complete the linked support job here.
-    -- The support turtle is still physically returning to dock — marking it IDLE
-    -- early causes the dispatcher to assign it a new job before it's actually
-    -- free, which it then rejects, leaving delivery to run without support.
-    -- Let the support turtle send its own JOB_COMPLETE when it docks.
+    -- Complete the linked support job too so it isn't left dangling as an active
+    -- job (which would keep its destination marked busy and block re-dispatch).
+    if job.linkedJob then
+        local linked = state.jobs[job.linkedJob]
+        if linked then
+            linked.status = JOB_STATUS.COMPLETE
+            if linked.assignedTo and state.registry[linked.assignedTo] then
+                state.registry[linked.assignedTo].status = proto.STATUS.IDLE
+                state.registry[linked.assignedTo].jobId  = nil
+            end
+        end
+    end
+    saveJobs()
 end
 
 function jobQueue.fail(jobId, reason, recoverable)

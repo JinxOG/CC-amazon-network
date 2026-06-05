@@ -238,7 +238,9 @@ function proto.openChannels(modem, channels)
 end
 
 function proto.send(modem, channel, msg)
-    modem.transmit(channel, proto.CH_SERVER, textutils.serialise(msg))
+    local ok, encoded = pcall(textutils.serialise, msg)
+    if not ok then return end  -- silently drop unserializable message
+    modem.transmit(channel, proto.CH_SERVER, encoded)
 end
 
 -- Receive one message addressed to selfId (or "broadcast"), with optional timeout.

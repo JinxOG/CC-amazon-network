@@ -18,7 +18,11 @@ local CFG = {
     REGISTER_TIMEOUT    = 5,
     GPS_TIMEOUT         = 3,
     GPS_RESYNC_INTERVAL = 50,   -- re-sync GPS every N moves
+    FLOOR_Y             = 67,   -- building floor Y; turtles are "inside" at or above this
 }
+
+-- x/z bounding box of the depot building (used for "inside the building" checks).
+local BUILDING = { minX = 143, maxX = 228, minZ = -2817, maxZ = -2782 }
 
 -- ─── Internal State ──────────────────────────────────────────────────────────
 
@@ -85,8 +89,10 @@ local function gpsSync()
     if x then
         _self.pos = { x=math.floor(x), y=math.floor(y), z=math.floor(z) }
         return true
+    else
+        logWarn("GPS locate failed — continuing with dead-reckoned position")
+        return false
     end
-    return false
 end
 
 -- Public GPS resync — corrects position drift before precision bay navigation.
@@ -300,8 +306,8 @@ local function bypassForward()
     if tryStrafe(true)  then logInfo("Bypass: left lane");  return true end
     if tryStrafe(false) then logInfo("Bypass: right lane"); return true end
     -- Vertical bypass (dig up/down) is only safe underground in tight tunnels.
-    -- Inside the surface depot (y >= 66) never dig — just wait or strafe.
-    if _self.pos.y < 66 then
+    -- Inside the surface depot (y >= FLOOR_Y) never dig — just wait or strafe.
+    if _self.pos.y < CFG.FLOOR_Y then
         if tryVertical(true)  then logInfo("Bypass: dug UP over blocker");    return true end
         if tryVertical(false) then logInfo("Bypass: dug DOWN under blocker"); return true end
     end
@@ -528,7 +534,7 @@ function base.returnToDock()
 
     base.setStatus(proto.STATUS.RETURNING)
 
-    local FLOOR_Y       = 67
+    local FLOOR_Y       = CFG.FLOOR_Y
     local UNDERGROUND_Y = W.WORLD_ENTRY.y  -- 60
 
     -- If turtle is at surface level outside, descend to underground travel Y first
@@ -621,6 +627,10 @@ function base.returnToDockInternal()
     if not _self.dock then return true end
     -- GPS sync first so current position is accurate
     gpsSync()
+    -- Re-derive heading from GPS before following the route. A physical bump or
+    -- chunk reload can desync _self.facing; a wrong heading here causes the most
+    -- damage (cutting across occupied dock rows), so correct it up front.
+    detectFacing()
     -- Already at dock? Just orient and done.
     if _self.pos.x == _self.dock.x and _self.pos.z == _self.dock.z then
         move.face(W.dockFacing(_self.dock))
@@ -645,7 +655,7 @@ function base.returnToDockInternal()
     if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
         logWarn(string.format("Post-dock mismatch: at %d,%d want %d,%d — correcting",
             _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
-        move.to(_self.dock.x, 67, _self.dock.z)
+        move.to(_self.dock.x, CFG.FLOOR_Y, _self.dock.z)
     end
     move.face(W.dockFacing(_self.dock))
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
@@ -1085,9 +1095,9 @@ function base.init(role)
     if _self.dock then
         gpsSync()
         local p = _self.pos
-        local insideBuilding = p.y >= 66
-            and p.x >= 143 and p.x <= 228
-            and p.z >= -2817 and p.z <= -2782
+        local insideBuilding = p.y >= CFG.FLOOR_Y
+            and p.x >= BUILDING.minX and p.x <= BUILDING.maxX
+            and p.z >= BUILDING.minZ and p.z <= BUILDING.maxZ
         local atDock = (p.x == _self.dock.x and p.z == _self.dock.z)
         if insideBuilding and not atDock then
             logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
@@ -1153,9 +1163,9 @@ function base.run(jobHandler)
                                 pendingJob = nil
                             else
                                 -- Idle turtle: navigate directly.
-                                local insideBuilding = _self.pos.y >= 67
-                                    and _self.pos.x >= 143 and _self.pos.x <= 228
-                                    and _self.pos.z >= -2817 and _self.pos.z <= -2782
+                                local insideBuilding = _self.pos.y >= CFG.FLOOR_Y
+                                    and _self.pos.x >= BUILDING.minX and _self.pos.x <= BUILDING.maxX
+                                    and _self.pos.z >= BUILDING.minZ and _self.pos.z <= BUILDING.maxZ
                                 if insideBuilding then
                                     base.returnToDockInternal()
                                 else

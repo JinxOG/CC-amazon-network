@@ -26,8 +26,8 @@ W.RED_Z   = -2801   -- inbound return lane
 W.DISPATCH_HOLE    = { x = 143, y = CFG.FLOOR_Y,      z = -2813 }  -- go DOWN to leave
 W.DISPATCH_STAGING = { x = 143, y = CFG.FLOOR_Y,      z = -2812 }  -- 1 block before hole (support waits here)
 W.ARRIVALS_HOLE    = { x = 228, y = CFG.FLOOR_Y,      z = -2782 }  -- come UP to return
-W.WORLD_EXIT       = { x = 143, y = CFG.BELOW_HOLE_Y, z = -2813 }  -- below dispatch hole
-W.WORLD_ENTRY      = { x = 228, y = CFG.BELOW_HOLE_Y, z = -2782 }  -- below arrivals hole
+W.WORLD_EXIT       = { x = W.DISPATCH_HOLE.x, y = CFG.BELOW_HOLE_Y, z = W.DISPATCH_HOLE.z }  -- below dispatch hole
+W.WORLD_ENTRY      = { x = W.ARRIVALS_HOLE.x, y = CFG.BELOW_HOLE_Y, z = W.ARRIVALS_HOLE.z }  -- below arrivals hole
 
 -- ─── Bay Slot Layout ─────────────────────────────────────────────────────────
 -- Each bay has 2 rows of 8 slots. Pillar sits at center X so slots

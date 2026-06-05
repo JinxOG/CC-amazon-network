@@ -47,6 +47,10 @@ base.run(function(job)
             sleep(2)
         end
         local msg = proto.receive(base.getSelfId(), 5)
+        if base.isRecalled() then
+            print("[SUPPORT] Recalled while waiting — aborting")
+            return base.sendFailed("recalled", false)
+        end
         if msg and msg.from == partnerId then
             if msg.type == proto.MSG.HOLE_READY then
                 print("HOLE_READY received — heading to dispatch hole!")
@@ -103,6 +107,11 @@ base.run(function(job)
 
     while true do
         local msg = proto.receive(base.getSelfId(), 15)
+
+        if base.isRecalled() then
+            print("[SUPPORT] Recalled mid-follow — returning to dock")
+            break
+        end
 
         if not msg then
             -- Timeout — if server is down just wait, don't abandon partner

@@ -42,11 +42,26 @@ local function placeDownClear()
     return turtle.placeDown()
 end
 
+-- Pick up the entangled chest below (best-effort) and verify it landed in EC_SLOT.
+-- If the turtle isn't centred over it, the EC can be left behind — warn loudly.
+local function pickUpECAndVerify()
+    turtle.select(EC_SLOT)
+    turtle.digDown()
+    local item = turtle.getItemDetail(EC_SLOT)
+    if not item or not item.name:find("ender") then
+        print("[DELIVERY] WARNING: EC pickup may have failed — slot " .. EC_SLOT
+            .. " does not contain ender chest")
+    end
+end
+
 -- Navigate to position and place a chest below
 local function placeChestAt(x, y, z, chestSlot)
     base.move.to(x, y, z)
     turtle.select(chestSlot)
-    placeDownClear()
+    local placed, reason = placeDownClear()
+    if not placed then
+        print("[DELIVERY] Failed to place chest: " .. (reason or "?"))
+    end
 end
 
 -- Build a set of slots that must NEVER be dropped or placed.
@@ -208,6 +223,9 @@ end
 
 base.run(function(job)
     local params = job.params
+    if not params.destination or not params.destination.x or not params.destination.z then
+        return base.sendFailed("invalid destination params", false)
+    end
     local d      = params.destination
     base.setPartnerId(params.partnerId)
 
@@ -290,7 +308,11 @@ base.run(function(job)
 
     -- Place entangled chest below
     turtle.select(EC_SLOT)
-    placeDownClear()
+    local ecPlaced, ecReason = placeDownClear()
+    if not ecPlaced then
+        -- Continue anyway — the batch timeout will catch a stalled handshake.
+        print("[DELIVERY] Failed to place entangled chest: " .. (ecReason or "?"))
+    end
 
     -- ── Inventory dump — clear road debris into ender chest ──────────────────
     -- The turtle digs through terrain during travel and accumulates blocks.
@@ -341,7 +363,7 @@ base.run(function(job)
         if not msg then
             if base.isRecalled() then
                 print("[WH] Recalled while waiting for warehouse — aborting wait")
-                turtle.select(EC_SLOT); turtle.digDown()
+                pickUpECAndVerify()
                 return base.sendFailed("recalled_while_waiting_for_warehouse", false)
             end
             -- Re-ping warehouse (keeps DELIVERY_ARRIVED fresh in inbox;
@@ -363,7 +385,7 @@ base.run(function(job)
             end
         elseif msg.type == proto.MSG.JOB_ABORT then
             -- Pick up entangled chest and abort
-            turtle.select(EC_SLOT); turtle.digDown()
+            pickUpECAndVerify()
             return base.sendFailed("job_aborted_at_destination", false)
         elseif msg.type == proto.MSG.WAREHOUSE_QUEUED then
             local pos = msg.payload.position or "?"
@@ -377,7 +399,7 @@ base.run(function(job)
     end
 
     if not chestsReady then
-        turtle.select(EC_SLOT); turtle.digDown()
+        pickUpECAndVerify()
         return base.sendFailed("warehouse_chest_timeout", true)
     end
 
@@ -448,7 +470,7 @@ base.run(function(job)
             if os.epoch("utc") / 1000 > batchDeadline then
                 print("[WH] Batch phase timed out — aborting delivery")
                 base.move.to(d.x, d.y, d.z)
-                turtle.select(EC_SLOT); turtle.digDown()
+                pickUpECAndVerify()
                 return base.sendFailed("batch_phase_timeout", true)
             end
             -- Re-ping warehouse in case CHESTS_PLACED was missed

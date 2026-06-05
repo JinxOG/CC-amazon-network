@@ -153,6 +153,7 @@ local S = {
 
 local state      = S.IDLE
 local stateTs    = 0      -- os.epoch("utc") when we entered current state
+local lastHeartbeatLog = 0  -- last time we logged the "still alive" heartbeat
 local lastLoaded = 0      -- chests loaded (kept for CHESTS_READY re-pings)
 local batches    = {}     -- item batches queued for delivery
 local batchIdx   = 0      -- index of batch currently being sent
@@ -337,6 +338,14 @@ end
 
 local function tick()
     local now = os.epoch("utc")
+
+    -- ── Heartbeat: periodic "still alive in state X" log ──────────────────────
+    local nowSec = now / 1000
+    if nowSec - lastHeartbeatLog > 30 then
+        log(string.format("alive | state=%s | queue=%d | current=%s",
+            state, #queue, current and current.turtleId or "none"))
+        lastHeartbeatLog = nowSec
+    end
 
     -- ── IDLE: pick up next job ────────────────────────────────────────────────
     if state == S.IDLE then
