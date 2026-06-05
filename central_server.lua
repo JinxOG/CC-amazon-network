@@ -702,15 +702,6 @@ handlers[proto.MSG.JOB_REQUEST] = function(msg)
         msg.from, id, dest.x, dest.y, dest.z))
 end
 
--- Server receives its own UPDATE_ALL broadcast and self-updates.
--- Small delay lets the broadcast reach all turtles before we go offline.
-handlers[proto.MSG.UPDATE_ALL] = function(msg)
-    if msg.to ~= "broadcast" then return end
-    logWarn("UPDATE_ALL received — updating server and rebooting...")
-    sleep(3)
-    if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
-end
-
 function server.submitJob(jobType, params, priority)
     local id = jobQueue.add(jobType, params, priority)
     -- Dispatch immediately rather than waiting for the next 2s timer tick
@@ -936,6 +927,11 @@ function server.run()
         elseif t == "UPDATE_ALL" then
             sendBroadcast(proto.MSG.UPDATE_ALL, {})
             logInfo("Dashboard: UPDATE_ALL broadcast sent")
+            -- Modems don't receive their own transmissions, so self-update directly.
+            -- Sleep 3s so turtles receive the broadcast before we go offline.
+            logWarn("UPDATE_ALL — updating server in 3s...")
+            sleep(3)
+            if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
 
         elseif t == "CANCEL_JOB" then
             local jobId = p.jobId
