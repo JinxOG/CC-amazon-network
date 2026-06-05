@@ -545,14 +545,6 @@ function dispatcher.tick()
             -- Record dispatch time — stagger next pair
             state.lastDispatchTime = os.epoch("utc")
 
-            -- Auto-mock
-            if job.mockOnReady then
-                job.mockOnReady = nil
-                os.startTimer(3)
-                state.pendingMock = { jobId = job.id, turtleId = worker.id }
-                logInfo("Auto-mock queued for " .. job.id)
-            end
-
             -- Only dispatch ONE pair per tick (stagger enforced above for subsequent ticks)
             return
         end
@@ -626,14 +618,6 @@ handlers[proto.MSG.ITEM_REQUEST] = function(msg)
     -- Forward with the real turtle ID so the warehouse knows who to talk to
     local fwd = proto.encode(proto.MSG.ITEM_REQUEST, msg.from, "warehouse", msg.payload)
     proto.send(state.modem, proto.CH_WAREHOUSE, fwd)
-end
-
-handlers[proto.MSG.ITEM_READY] = function(msg)
-    local p   = msg.payload
-    local job = state.jobs[p.jobId]
-    if job and job.assignedTo then
-        sendTo(job.assignedTo, proto.MSG.ITEM_READY, p)
-    end
 end
 
 -- ── Warehouse delivery handshake forwarding ───────────────────────────────────
@@ -1085,14 +1069,6 @@ function server.run()
                 pcall(pushToBridge)
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
-            elseif state.pendingMock then
-                -- Fire auto-mock ITEM_READY after the small delay
-                local m = state.pendingMock
-                state.pendingMock = nil
-                local msg = proto.encode(proto.MSG.ITEM_READY, "server", m.turtleId,
-                    { jobId = m.jobId, loaded = {} })
-                proto.send(state.modem, proto.CH_PRIVATE, msg)
-                logInfo("Auto-mock ITEM_READY sent to " .. m.turtleId)
             end
 
         elseif event == "char" then
