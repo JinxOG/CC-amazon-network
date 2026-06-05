@@ -432,6 +432,9 @@ function base.depart()
             turtle.getFuelLevel(), CFG.FUEL_RESERVE))
         base.fuel.dockRefuel()
         if turtle.getFuelLevel() < CFG.FUEL_RESERVE then
+            base.setStatus(proto.STATUS.ERROR)
+            comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(
+                _self.jobId, proto.STATUS.ERROR, "insufficient fuel for departure", base.getPos()))
             return false, "insufficient fuel for departure (have " .. turtle.getFuelLevel()
                 .. ", need " .. CFG.FUEL_RESERVE .. ")"
         end
