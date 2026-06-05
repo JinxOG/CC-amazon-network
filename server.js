@@ -102,16 +102,6 @@ async function upsertMarker(id, t) {
     }
 }
 
-async function removeMarker(id) {
-    if (!markerExists[id]) return;
-    try {
-        await rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`);
-        markerExists[id] = false;
-    } catch (e) {
-        console.error(`[RCON] Delete error for ${id}:`, e.message);
-    }
-}
-
 // ─── Dynmap proxy helpers ─────────────────────────────────────────────────────
 
 function proxyDynmap(req, res, basePath) {

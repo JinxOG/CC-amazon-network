@@ -32,8 +32,7 @@ proto.MSG = {
     JOB_FAILED     = "JOB_FAILED",      -- turtle → server: failed, here's why
 
     -- Warehouse
-    ITEM_REQUEST   = "ITEM_REQUEST",    -- turtle → server: need items exported
-    ITEM_READY     = "ITEM_READY",      -- server → turtle: items loaded, proceed
+    ITEM_REQUEST   = "ITEM_REQUEST",    -- turtle → warehouse: periodic queue-ping while waiting (not a pickup handshake)
 
     -- Position queries (used by support turtles to track their partner)
     TURTLE_QUERY   = "TURTLE_QUERY",    -- turtle → server: what is turtle X's position?
@@ -44,9 +43,6 @@ proto.MSG = {
 
     -- Server → turtle heartbeat acknowledgement
     HEARTBEAT_ACK  = "HEARTBEAT_ACK",   -- server → turtle: I'm alive, you're still registered
-
-    -- Turtle ↔ turtle underground sync (CH_LOCAL)
-    SUPPORT_READY  = "SUPPORT_READY",   -- support → delivery: I'm underground, proceed
 
     -- Real-time follow signals (CH_LOCAL)
     POSITION_UPDATE = "POSITION_UPDATE", -- delivery → support: here is where I just was
@@ -212,10 +208,6 @@ function proto.payloadItemRequest(jobId, items, pickupPoint)
         items       = items,
         pickupPoint = pickupPoint,
     }
-end
-
-function proto.payloadItemReady(jobId, loaded)
-    return { jobId = jobId, loaded = loaded }
 end
 
 function proto.payloadRecall(reason)

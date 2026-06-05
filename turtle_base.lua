@@ -1034,19 +1034,6 @@ function base.sendToServer(msgType, payload)
     comms.toServer(msgType, payload)
 end
 
-function base.requestItems(items, pickupPoint, timeout)
-    comms.toServer(proto.MSG.ITEM_REQUEST, proto.payloadItemRequest(
-        _self.jobId, items, pickupPoint or base.getPos()))
-    logInfo("Waiting for warehouse... (use 'mock " .. (_self.jobId or "?") .. "' on server to bypass)")
-    local reply = proto.receive(_self.id, timeout or 300)  -- 5 min default
-    if reply and reply.type == proto.MSG.ITEM_READY then
-        logInfo("Items loaded.")
-        return reply.payload.loaded
-    end
-    logWarn("Item request timed out.")
-    return nil
-end
-
 -- Send a direct CH_LOCAL signal to the paired partner turtle
 function base.signalPartner(msgType, payload)
     if not _self.partnerId or not _self.modem then return end
@@ -1118,7 +1105,7 @@ end
 
 -- ─── Main Event Loop ─────────────────────────────────────────────────────────
 -- Uses parallel to run the job handler and the control loop concurrently.
--- This ensures the job coroutine receives events it's waiting for (e.g. ITEM_READY)
+-- This ensures the job coroutine receives warehouse events (e.g. CHESTS_READY)
 -- while the control loop still handles heartbeats and RECALL.
 
 function base.run(jobHandler)
