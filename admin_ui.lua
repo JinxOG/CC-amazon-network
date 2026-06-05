@@ -838,6 +838,11 @@ local function onMsg(msg)
         end
         local v=state.turtles[msg.from]; if v then v.status="IDLE"; v.jobId=nil end
         addLog("WARN","Fail: "..(jid or"?").." "..(p.reason or"?"))
+
+    elseif msg.type == proto.MSG.UPDATE_ALL then
+        addLog("WARN", "UPDATE_ALL — updating and rebooting...")
+        sleep(1)
+        if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
     end
 end
 
