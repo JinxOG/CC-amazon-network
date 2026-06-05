@@ -22,14 +22,14 @@ base.init(proto.ROLE.DELIVERY)
 local function waitForAny(types, seconds)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end
-    local deadline = os.clock() + seconds
-    while os.clock() < deadline do
+    local deadline = os.epoch("utc") / 1000 + seconds
+    while os.epoch("utc") / 1000 < deadline do
         if base.isRecalled() then return nil end
         if base.isServerDown() then
-            deadline = os.clock() + seconds
+            deadline = os.epoch("utc") / 1000 + seconds
             sleep(2)
         else
-            local msg = proto.receive(base.getSelfId(), math.max(1, deadline - os.clock()))
+            local msg = proto.receive(base.getSelfId(), math.max(1, deadline - os.epoch("utc") / 1000))
             if msg and set[msg.type] then return msg end
         end
     end
@@ -325,12 +325,12 @@ base.run(function(job)
     base.sendProgress("Waiting for warehouse queue...")
     local chestsReady    = false
     local chestCount     = 0
-    local deadline       = os.clock() + 600   -- 10 min max queue wait
-    local lastIReq       = os.clock()
+    local deadline       = os.epoch("utc") / 1000 + 600   -- 10 min max queue wait
+    local lastIReq       = os.epoch("utc") / 1000
     local waitTick       = 0
-    while os.clock() < deadline do
+    while os.epoch("utc") / 1000 < deadline do
         if base.isServerDown() then
-            deadline = os.clock() + 600   -- freeze deadline during outage
+            deadline = os.epoch("utc") / 1000 + 600   -- freeze deadline during outage
             sleep(2)
         end
         local msg = waitForAny({
@@ -339,21 +339,26 @@ base.run(function(job)
             proto.MSG.JOB_ABORT,
         }, 5)
         if not msg then
+            if base.isRecalled() then
+                print("[WH] Recalled while waiting for warehouse — aborting wait")
+                turtle.select(EC_SLOT); turtle.digDown()
+                return base.sendFailed("recalled_while_waiting_for_warehouse", false)
+            end
             -- Re-ping warehouse (keeps DELIVERY_ARRIVED fresh in inbox;
             -- also re-queues us if our ITEM_REQUEST was never received)
             sendArrived()
             waitTick = waitTick + 1
             print(string.format(
                 "[WH] Waiting for warehouse... %ds remaining (ping #%d)",
-                math.max(0, math.floor(deadline - os.clock())), waitTick))
+                math.max(0, math.floor(deadline - os.epoch("utc") / 1000)), waitTick))
             -- Belt-and-suspenders: re-send ITEM_REQUEST every 60s in case
             -- the warehouse lost our queue slot (e.g. it rebooted)
-            if os.clock() - lastIReq >= 60 then
+            if os.epoch("utc") / 1000 - lastIReq >= 60 then
                 base.sendToServer(proto.MSG.ITEM_REQUEST, {
                     jobId = job.id,
                     items = params.items or {},
                 })
-                lastIReq = os.clock()
+                lastIReq = os.epoch("utc") / 1000
                 print("[WH] Re-sent ITEM_REQUEST (safety re-queue)")
             end
         elseif msg.type == proto.MSG.JOB_ABORT then
@@ -427,6 +432,7 @@ base.run(function(job)
 
     base.sendProgress("Receiving items from warehouse")
     local chestIdx = 1   -- tracks which chest we are currently filling
+    local batchDeadline = os.epoch("utc") / 1000 + 300  -- 5 minute max for full delivery
 
     while true do
         local msg = waitForAny({
@@ -439,6 +445,12 @@ base.run(function(job)
             print("Recalled — picking up EC and returning to dock")
             break
         elseif not msg then
+            if os.epoch("utc") / 1000 > batchDeadline then
+                print("[WH] Batch phase timed out — aborting delivery")
+                base.move.to(d.x, d.y, d.z)
+                turtle.select(EC_SLOT); turtle.digDown()
+                return base.sendFailed("batch_phase_timeout", true)
+            end
             -- Re-ping warehouse in case CHESTS_PLACED was missed
             sendChestsPlaced()
             print("Still waiting for warehouse items...")
@@ -453,6 +465,9 @@ base.run(function(job)
             base.move.to(d.x, d.y, d.z)
             turtle.select(1)
             while turtle.suckDown() do end
+
+            -- Fresh batch — start distributing from the first chest again
+            chestIdx = 1
 
             -- Distribute items across placed regular chests
             while chestIdx <= #chestPositions do
