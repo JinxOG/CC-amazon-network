@@ -6,8 +6,7 @@
 local base  = require("turtle_base")
 local proto = require("protocol")
 
-local UNDERGROUND_Y = 60
-local POLL_INTERVAL = 5    -- seconds between job-complete checks
+-- OPT #63: removed unused UNDERGROUND_Y and POLL_INTERVAL locals
 
 base.setCanDig(false)
 base.init(proto.ROLE.SUPPORT)
@@ -17,20 +16,11 @@ base.run(function(job)
     local params      = job.params
     local partnerId   = params.partnerId
     local masterJobId = params.masterJobId
-    local dest        = params.destination   -- {x,y,z} passed from dispatcher
+    -- dest is passed from the dispatcher for informational use; navigation is
+    -- handled by following the delivery turtle's POSITION_UPDATE broadcasts.
 
     base.setPartnerId(partnerId)
     base.setStatus(proto.STATUS.WORKING, job.id)
-
-    -- Debug: print all received params
-    print("Params received:")
-    print("  partnerId=" .. tostring(partnerId))
-    print("  masterJobId=" .. tostring(masterJobId))
-    if dest then
-        print(string.format("  dest=%d,%d,%d", dest.x, dest.y, dest.z))
-    else
-        print("  dest=NIL (server may need update)")
-    end
 
     -- ── Step 1: Wait for HOLE_READY from delivery turtle ─────────────────────
     -- Delivery sends this when it reaches the dispatch hole entrance

@@ -44,14 +44,31 @@ let pendingCommands = [];   // commands queued by dashboard, picked up by CC on 
 let markerExists    = {};   // track which turtle markers already exist on Dynmap
 
 // ─── RCON ────────────────────────────────────────────────────────────────────
+// PERF #58: Persistent singleton connection — reuse across calls instead of
+// creating a new TCP connection for every marker write.
+
+let rconClient = null;
+
+async function getRcon() {
+    if (rconClient) {
+        try {
+            await rconClient.send('');   // ping to verify connection is alive
+            return rconClient;
+        } catch (e) {
+            rconClient = null;           // stale — fall through to reconnect
+        }
+    }
+    rconClient = await Rcon.connect(CFG.rcon);
+    return rconClient;
+}
 
 async function rcon(cmd) {
-    const client = await Rcon.connect(CFG.rcon);
     try {
-        const res = await client.send(cmd);
-        return res;
-    } finally {
-        await client.end();
+        const client = await getRcon();
+        return await client.send(cmd);
+    } catch (e) {
+        rconClient = null;   // reset so next call reconnects
+        throw e;
     }
 }
 
@@ -104,13 +121,25 @@ async function upsertMarker(id, t) {
 
 // ─── Dynmap proxy helpers ─────────────────────────────────────────────────────
 
+// PERF #59: 5s timeout on upstream Dynmap requests — prevents browser hangs
+// if Dynmap is slow or unreachable.
 function proxyDynmap(req, res, basePath) {
     const url = `http://127.0.0.1:8123${basePath}${req.path}`;
+    let settled = false;
+    const timeout = setTimeout(() => {
+        if (!settled) { settled = true; res.status(504).end(); }
+    }, 5000);
     http.get(url, (upstream) => {
+        if (settled) { upstream.resume(); return; }   // already timed out — drain and discard
+        settled = true;
+        clearTimeout(timeout);
         res.setHeader('Content-Type', upstream.headers['content-type'] || 'application/octet-stream');
         res.setHeader('Cache-Control', 'public, max-age=10');
         upstream.pipe(res);
-    }).on('error', () => res.status(404).end());
+    }).on('error', () => {
+        clearTimeout(timeout);
+        if (!settled) { settled = true; res.status(404).end(); }
+    });
 }
 
 // ─── Dynmap static asset proxies (makes iframe same-origin) ──────────────────
@@ -128,11 +157,22 @@ app.get('/favicon.ico',  (req, res) => proxyDynmap(req, res, '/favicon.ico'));
 app.get('/version.js', (req, res) => proxyDynmap(req, res, ''));
 
 // Serve Dynmap's main page for iframe embedding (same-origin = can inject JS)
+// PERF #59: same 5s timeout as proxyDynmap to prevent indefinite hangs.
 app.get('/dynmap-frame', (req, res) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+        if (!settled) { settled = true; res.status(504).send('<h3>Dynmap timeout</h3>'); }
+    }, 5000);
     http.get('http://127.0.0.1:8123/', (upstream) => {
+        if (settled) { upstream.resume(); return; }
+        settled = true;
+        clearTimeout(timeout);
         res.setHeader('Content-Type', 'text/html');
         upstream.pipe(res);
-    }).on('error', () => res.status(502).send('<h3>Dynmap unavailable (port 8123)</h3>'));
+    }).on('error', () => {
+        clearTimeout(timeout);
+        if (!settled) { settled = true; res.status(502).send('<h3>Dynmap unavailable (port 8123)</h3>'); }
+    });
 });
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -142,16 +182,28 @@ app.post('/update', async (req, res) => {
     const { turtles, jobs, version } = req.body;
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
+    const now = Date.now();
+
     if (turtles) {
         for (const [id, data] of Object.entries(turtles)) {
-            state.turtles[id] = { ...state.turtles[id], ...data };
+            // PERF #57: stamp lastSeen on every update so we can prune stale entries
+            state.turtles[id] = { ...state.turtles[id], ...data, lastSeen: now };
             upsertMarker(id, state.turtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
+        }
+
+        // PERF #57: prune turtles absent from pushes for >10 minutes
+        for (const [id, t] of Object.entries(state.turtles)) {
+            if (t.lastSeen && now - t.lastSeen > 10 * 60 * 1000) {
+                delete state.turtles[id];
+                delete markerExists[id];
+                console.log(`[STATE] Pruned stale turtle: ${id}`);
+            }
         }
     }
 
     if (jobs) state.jobs = jobs;
     if (version) state.version = version;
-    state.updatedAt = Date.now();
+    state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });
 });

@@ -1081,18 +1081,25 @@ function server.run()
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then
-                pcall(pushToBridge)
+                -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge
+                -- cannot stall the main event loop indefinitely.
+                parallel.waitForAny(
+                    function() pcall(pushToBridge) end,
+                    function() sleep(5) end   -- abandon push if it takes >5s
+                )
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
             end
 
         elseif event == "char" then
-            handleConsoleChar(p1)
+            -- OPT #64: pcall so a throw from handleConsoleChar can't kill server.run
+            pcall(handleConsoleChar, p1)
 
         elseif event == "key" then
             -- p1 = key code; 28 = Enter, 14 = Backspace
+            -- OPT #64: pcall so a throw from handleConsoleEnter can't kill server.run
             if p1 == keys.enter then
-                handleConsoleEnter()
+                pcall(handleConsoleEnter)
             elseif p1 == keys.backspace then
                 if #consoleBuffer > 0 then
                     consoleBuffer = consoleBuffer:sub(1, -2)

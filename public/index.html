@@ -892,6 +892,7 @@ async function cancelJob(jobId) {
     toast(`Cancelled ${jobId}`);
 }
 async function setTurtleIdle(id) {
+    if (!confirm('Set ' + id + ' to IDLE?')) return;
     await sendCmd('SET_IDLE', { turtleId: id });
     toast(`${id} → IDLE`);
 }

@@ -244,12 +244,15 @@ function proto.send(modem, channel, msg)
 end
 
 -- Receive one message addressed to selfId (or "broadcast"), with optional timeout.
+-- OPT #60: renamed 'side' to 'evtArg2' — for modem_message it is the modem side,
+-- for timer events it is the timer ID; the old name was misleading.
 function proto.receive(selfId, timeout)
     local timer
     if timeout then timer = os.startTimer(timeout) end
 
     while true do
-        local event, side, ch, repCh, raw = os.pullEvent()
+        local event, evtArg2, ch, repCh, raw = os.pullEvent()
+        -- evtArg2: modem side (modem_message) or timer ID (timer)
 
         if event == "modem_message" then
             local msg = type(raw) == "table" and raw or textutils.unserialise(raw)
@@ -260,7 +263,7 @@ function proto.receive(selfId, timeout)
                     return decoded
                 end
             end
-        elseif event == "timer" and side == timer then
+        elseif event == "timer" and evtArg2 == timer then
             return nil
         end
     end
