@@ -30,8 +30,8 @@ base.run(function(job)
 
     local signalReceived = false
     local aborted        = false
-    local deadline = os.clock() + 180
-    while os.clock() < deadline do
+    local deadline = os.epoch("utc") / 1000 + 180
+    while os.epoch("utc") / 1000 < deadline do
         if base.isServerDown() then
             deadline = os.clock() + 180   -- freeze while server unreachable
             sleep(2)

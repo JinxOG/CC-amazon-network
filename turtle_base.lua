@@ -473,8 +473,8 @@ function base.depart()
             -- Wait for support to reach staging position (1 block behind us)
             -- Loop so we don't consume unrelated messages (heartbeat ACKs etc.)
             logInfo("Waiting for SUPPORT_STAGED...")
-            local deadline = os.clock() + 60
-            while os.clock() < deadline do
+            local deadline = os.epoch("utc") / 1000 + 60
+            while os.epoch("utc") / 1000 < deadline do
                 local msg = proto.receive(_self.id, 5)
                 if not msg then
                     -- timeout tick — keep waiting
