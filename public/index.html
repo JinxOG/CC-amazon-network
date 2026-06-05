@@ -551,7 +551,30 @@ function setupDynmapInjection(dw) {
     // ── 4. Draw current turtle markers straight away ────────────────────────
     updateInjectedMarkers(lastState.turtles || {});
 
-    // ── 5. Force MODPACK / flat on every load ────────────────────────────────
+    // ── 5. Hide player + turtle marker layers on every load ─────────────────
+    try {
+        // Player tracking layer (dm.playermarkers is the standard Dynmap ref)
+        if (dm.playermarkers && dm.map.hasLayer(dm.playermarkers)) {
+            dm.map.removeLayer(dm.playermarkers);
+        }
+        // Our RCON "turtles" dmarker set — we use injected Leaflet circles instead
+        const sets = dm.namedmarkersets || dm.markersets || {};
+        if (sets['turtles'] && dm.map.hasLayer(sets['turtles'])) {
+            dm.map.removeLayer(sets['turtles']);
+        }
+        // DOM fallback: uncheck layer control checkboxes by label text
+        const overlayLabels = doc.querySelectorAll(
+            '.leaflet-control-layers-overlays label, .dynmap-layercontrol label');
+        for (const lbl of overlayLabels) {
+            const name = lbl.textContent.trim().toLowerCase();
+            if (name === 'players' || name === 'turtles') {
+                const cb = lbl.querySelector('input');
+                if (cb && cb.checked) cb.click();
+            }
+        }
+    } catch(e) { console.warn('[Dynmap] Layer hide failed:', e.message); }
+
+    // ── 6. Force MODPACK / flat on every load ────────────────────────────────
     // dm.worlds is keyed by name in most Dynmap builds: { MODPACK: { maps: { flat: {...} } } }
     try {
         const W = 'MODPACK', M = 'flat';

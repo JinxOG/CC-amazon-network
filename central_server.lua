@@ -1024,10 +1024,32 @@ function server.run()
                 logWarn("REASSIGN_BAY: invalid bay number for " .. tostring(tid))
                 return
             end
+            -- Cancel any active job so it is not re-dispatched when the turtle
+            -- reboots. Also recall the partner if one exists.
+            for _, job in pairs(state.jobs) do
+                if job.assignedTo == tid and
+                   (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
+                    job.status = "CANCELLED"
+                    if job.linkedJob then
+                        local linked = state.jobs[job.linkedJob]
+                        if linked and linked.assignedTo then
+                            sendTo(linked.assignedTo, proto.MSG.RECALL,
+                                proto.payloadRecall("partner_bay_reassigned"))
+                            local st = state.registry[linked.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
+                            linked.status = "CANCELLED"
+                        end
+                    end
+                end
+            end
+            -- Recall the turtle so it stops whatever it is doing and idles.
+            sendTo(tid, proto.MSG.RECALL, proto.payloadRecall("bay_reassigned"))
+            tr.jobId = nil
+            -- Reassign the dock slot.
             local newDock = W.assignDockAt(tr.role, tid, bay)
             if newDock then
                 tr.dock = newDock
-                logInfo(string.format("Dashboard reassigned %s → bay %d%s",
+                logInfo(string.format("Dashboard reassigned %s → bay %d%s (recalled)",
                     tid, newDock.bay, newDock.row))
             else
                 logWarn(string.format("REASSIGN_BAY: no free slot at bay %d for %s [%s]",
