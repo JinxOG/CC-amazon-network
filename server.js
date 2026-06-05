@@ -3,6 +3,7 @@ const express = require('express');
 const { Rcon }  = require('rcon-client');
 const path      = require('path');
 const http      = require('http');
+const { exec }  = require('child_process');
 
 // Prevent unhandled rejections from crashing the process
 process.on('unhandledRejection', (err) => {
@@ -244,6 +245,29 @@ app.post('/command', (req, res) => {
 
 // Health check
 app.get('/ping', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
+
+// Self-update: git pull + queue UPDATE_ALL for CC computers + restart dashboard
+app.post('/self-update', (req, res) => {
+    exec('git pull origin master', { cwd: __dirname }, (err, stdout, stderr) => {
+        const output = (stdout + stderr).trim();
+        console.log('[SELF-UPDATE] git pull:\n' + output);
+
+        // Queue UPDATE_ALL so CC computers update on the next bridge push
+        pendingCommands.push({ type: 'UPDATE_ALL', params: {}, ts: Date.now() });
+        console.log('[SELF-UPDATE] UPDATE_ALL queued for CC computers');
+
+        res.json({ ok: true, output });
+
+        // Wait for CC to pick up the command (bridge polls every 2s, use 5s buffer)
+        // then restart the dashboard service with the new code
+        setTimeout(() => {
+            console.log('[SELF-UPDATE] Restarting dashboard service...');
+            exec('sudo systemctl restart cc-dashboard', (e) => {
+                if (e) console.error('[SELF-UPDATE] Restart error:', e.message);
+            });
+        }, 5000);
+    });
+});
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 

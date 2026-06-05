@@ -290,7 +290,8 @@
 
             <div class="cmd-section">
                 <div class="cmd-title">SYSTEM</div>
-                <button class="btn warning" onclick="cmdUpdateAll()">↻ OTA UPDATE ALL TURTLES</button>
+                <button class="btn primary" onclick="cmdUpdateSystem()">↻ UPDATE WHOLE SYSTEM</button>
+                <button class="btn warning" onclick="cmdUpdateAll()">↻ OTA UPDATE CC ONLY</button>
             </div>
 
         </div>
@@ -968,10 +969,22 @@ async function cmdClearJobs() {
     await sendCmd('CLEAR_JOBS', {});
     toast('All jobs cleared');
 }
+async function cmdUpdateSystem() {
+    if (!confirm('Update the WHOLE system?\n\n• git pull on the server\n• OTA update all CC computers (turtles, server, warehouse, admin)\n• Dashboard will restart in ~5 seconds')) return;
+    try {
+        const r = await fetch('/self-update', { method: 'POST' });
+        const d = await r.json();
+        toast('System update started — dashboard restarting in 5s');
+        console.log('[self-update] git output:', d.output);
+        setTimeout(() => location.reload(), 7000);
+    } catch(e) {
+        toast('Update request failed: ' + e.message, true);
+    }
+}
 async function cmdUpdateAll() {
-    if (!confirm('OTA update all turtles? They will reboot.')) return;
+    if (!confirm('OTA update all CC computers? They will reboot.')) return;
     await sendCmd('UPDATE_ALL', {});
-    toast('Update all sent');
+    toast('OTA update sent to all CC computers');
 }
 async function sendCmd(type, params) {
     try {
