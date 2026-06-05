@@ -99,12 +99,10 @@ async function upsertMarker(id, t) {
         if (markerExists[id]) {
             await rcon(`dmarker update id:${id} set:${CFG.dynmap.set} x:${x} y:${y} z:${z} label:${label} world:${CFG.dynmap.world}`);
         } else {
-            try {
-                await rcon(`dmarker add id:${id} label:${label} world:${CFG.dynmap.world} x:${x} y:${y} z:${z} icon:${icon} set:${CFG.dynmap.set}`);
-            } catch (addErr) {
-                await rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`);
-                await rcon(`dmarker add id:${id} label:${label} world:${CFG.dynmap.world} x:${x} y:${y} z:${z} icon:${icon} set:${CFG.dynmap.set}`);
-            }
+            // Always delete first — prevents stale marker at old position if the
+            // turtle was pruned offline and came back at a new position.
+            await rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
+            await rcon(`dmarker add id:${id} label:${label} world:${CFG.dynmap.world} x:${x} y:${y} z:${z} icon:${icon} set:${CFG.dynmap.set}`);
             markerExists[id] = true;
             console.log(`[RCON] Marker created: ${id} @ ${x},${y},${z}`);
         }
@@ -196,6 +194,7 @@ app.post('/update', async (req, res) => {
             if (t.lastSeen && now - t.lastSeen > 10 * 60 * 1000) {
                 delete state.turtles[id];
                 delete markerExists[id];
+                rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
                 console.log(`[STATE] Pruned stale turtle: ${id}`);
             }
         }

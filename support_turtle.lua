@@ -33,7 +33,7 @@ base.run(function(job)
     local deadline = os.epoch("utc") / 1000 + 180
     while os.epoch("utc") / 1000 < deadline do
         if base.isServerDown() then
-            deadline = os.clock() + 180   -- freeze while server unreachable
+            deadline = os.epoch("utc") / 1000 + 180   -- freeze while server unreachable
             sleep(2)
         end
         local msg = proto.receive(base.getSelfId(), 5)
