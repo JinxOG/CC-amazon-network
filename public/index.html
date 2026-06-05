@@ -322,6 +322,20 @@
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
+// SECURITY HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CONSTANTS & STATE
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -718,30 +732,34 @@ function renderFleet(turtles) {
     if (!arr.length) { el.innerHTML = '<div class="empty">NO TURTLES REGISTERED</div>'; return; }
 
     el.innerHTML = arr.map(([id, t]) => {
-        const fuel = t.fuel || 0;
-        const max  = t.fuelMax || 100000;
-        const pct  = Math.min(1, fuel / max);
-        const fc   = fuelClass(pct);
-        const pos  = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
-        const st   = t.status || 'UNKNOWN';
+        const fuel  = t.fuel || 0;
+        const max   = t.fuelMax || 100000;
+        const pct   = Math.min(1, fuel / max);
+        const fc    = fuelClass(pct);
+        const pos   = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
+        const st    = t.status || 'UNKNOWN';
+        const eid   = escapeHtml(id);
+        const erole = escapeHtml(t.role);
+        const edock = escapeHtml(t.dock);
+        const est   = escapeHtml(st);
         const idleBtn = st !== 'IDLE'
-            ? `<button class="tc-locate" onclick="setTurtleIdle('${id}')" style="color:#ffaa44;border-color:#3a2a00">IDLE</button>`
+            ? `<button class="tc-locate" onclick="setTurtleIdle('${eid}')" style="color:#ffaa44;border-color:#3a2a00">IDLE</button>`
             : '';
-        return `<div class="turtle-card ${t.role||''}${!t.online?' offline':''}">
+        return `<div class="turtle-card ${erole}${!t.online?' offline':''}">
             <div class="tc-header">
                 <div>
-                    <button class="tc-locate" onclick="focusTurtle('${id}')">LOCATE</button>
+                    <button class="tc-locate" onclick="focusTurtle('${eid}')">LOCATE</button>
                     ${idleBtn}
-                    <div class="tc-name">${id}</div>
-                    <div class="tc-sub">${t.role||'?'} · ${t.dock||'?'}</div>
+                    <div class="tc-name">${eid}</div>
+                    <div class="tc-sub">${erole||'?'} · ${edock||'?'}</div>
                 </div>
-                <div class="sbadge ${st}">${st}</div>
+                <div class="sbadge ${est}">${est}</div>
             </div>
             <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${Math.round(pct*100)}%"></div></div>
             <div class="tc-row">
                 <span>FUEL <span class="v">${Math.round(pct*100)}%</span></span>
                 <span>POS <span class="v">${pos}</span></span>
-                ${t.jobId   ? `<span>JOB <span class="v">${t.jobId}</span></span>` : ''}
+                ${t.jobId   ? `<span>JOB <span class="v">${escapeHtml(t.jobId)}</span></span>` : ''}
                 ${!t.online ? '<span style="color:#ff4444">OFFLINE</span>' : ''}
             </div>
         </div>`;
@@ -757,19 +775,23 @@ function renderJobs(jobs) {
     const terminal = new Set(['COMPLETE','FAILED','CANCELLED']);
     el.innerHTML = all.map(j => {
         const canCancel = !terminal.has(j.status);
+        const ejid    = escapeHtml(j.id);
+        const ejtype  = escapeHtml(j.type);
+        const ejstat  = escapeHtml(j.status);
+        const ejassig = escapeHtml(j.assignedTo);
         const cancelBtn = canCancel
-            ? `<button class="tc-locate" onclick="cancelJob('${j.id}')" style="color:#ff6666;border-color:#3a1010">CANCEL</button>`
+            ? `<button class="tc-locate" onclick="cancelJob('${ejid}')" style="color:#ff6666;border-color:#3a1010">CANCEL</button>`
             : '';
-        return `<div class="job-card ${j.status||''}">
+        return `<div class="job-card ${ejstat||''}">
             <div class="jc-top">
                 <div>
                     ${cancelBtn}
-                    <div class="jc-id">${j.id}</div>
-                    <div class="jc-type">${j.type||'DELIVER'}</div>
+                    <div class="jc-id">${ejid}</div>
+                    <div class="jc-type">${ejtype||'DELIVER'}</div>
                 </div>
-                <div class="jbadge ${j.status||''}">${j.status||'?'}</div>
+                <div class="jbadge ${ejstat||''}">${ejstat||'?'}</div>
             </div>
-            ${j.assignedTo ? `<div class="jc-assigned">→ ${j.assignedTo}</div>` : ''}
+            ${j.assignedTo ? `<div class="jc-assigned">→ ${ejassig}</div>` : ''}
         </div>`;
     }).join('');
 }
@@ -779,7 +801,7 @@ function refreshTurtleSel(turtles) {
     const cur = sel.value;
     sel.innerHTML = '<option value="">— Select turtle —</option>' +
         Object.keys(turtles).sort().map(id =>
-            `<option value="${id}"${id===cur?' selected':''}>${id} [${turtles[id].status||'?'}]</option>`
+            `<option value="${escapeHtml(id)}"${id===cur?' selected':''}>${escapeHtml(id)} [${escapeHtml(turtles[id].status)||'?'}]</option>`
         ).join('');
 }
 

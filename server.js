@@ -36,6 +36,7 @@ const CFG = {
 let state = {
     turtles:  {},   // { nodeId: { x, y, z, status, fuel, role, jobId, dock, online } }
     jobs:     [],   // job queue from CC server
+    version:  null,
     updatedAt: null,
 };
 
@@ -91,8 +92,13 @@ async function upsertMarker(id, t) {
             console.log(`[RCON] Marker created: ${id} @ ${x},${y},${z}`);
         }
     } catch (e) {
-        console.error(`[RCON] Marker error for ${id}:`, e.message);
+        if (!markerExists[`_err_${id}`]) {
+            console.error(`[RCON] Marker error for ${id}:`, e.message);
+        }
+        markerExists[`_err_${id}`] = true;
         markerExists[id] = false;
+        // Clear error flag after 30s so we retry
+        setTimeout(() => { delete markerExists[`_err_${id}`]; }, 30000);
     }
 }
 
@@ -149,7 +155,7 @@ app.post('/update', async (req, res) => {
     if (turtles) {
         for (const [id, data] of Object.entries(turtles)) {
             state.turtles[id] = { ...state.turtles[id], ...data };
-            upsertMarker(id, state.turtles[id]).catch(() => {});
+            upsertMarker(id, state.turtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
         }
     }
 
