@@ -44,15 +44,30 @@ local ROLE_FILES = {
 
 -- ─── Read role ───────────────────────────────────────────────────────────────
 
+local role
 local roleFile = fs.open("role.txt", "r")
-if not roleFile then
+if roleFile then
+    role = roleFile.readLine()
+    roleFile.close()
+    role = role and role:match("^%s*(.-)%s*$"):upper()
+else
+    -- Accept role as command-line argument for first-time setup
+    local arg = ...
+    if arg then
+        role = arg:match("^%s*(.-)%s*$"):upper()
+        local f = fs.open("role.txt", "w")
+        f.writeLine(role)
+        f.close()
+        print("Created role.txt: " .. role)
+    end
+end
+
+if not role then
     print("ERROR: No role.txt found!")
-    print("Create role.txt with one of: DELIVERY SUPPORT WAREHOUSE SERVER ADMIN")
+    print("Usage: updater <ROLE>  or create role.txt manually")
+    print("Valid roles: DELIVERY SUPPORT WAREHOUSE SERVER ADMIN")
     return
 end
-local role = roleFile.readLine()
-roleFile.close()
-role = role and role:match("^%s*(.-)%s*$"):upper()
 
 if not ROLE_FILES[role] then
     print("ERROR: Unknown role '" .. tostring(role) .. "'")
