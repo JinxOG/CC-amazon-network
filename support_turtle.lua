@@ -77,6 +77,13 @@ base.run(function(job)
     -- ── Step 2: Depart depot via dispatch hole ────────────────────────────────
     -- base.depart() handles: navigate to staging → send SUPPORT_STAGED → descend
 
+    -- Pre-flight fuel check
+    base.fuel.dockRefuel()
+    if base.fuel.isCritical() then
+        print("[SUPPORT] Insufficient fuel to begin job — aborting")
+        return base.sendFailed("insufficient_fuel", false)
+    end
+
     local ok, err = base.depart()
     if not ok then
         return base.sendFailed("departure_failed: " .. (err or "?"), true)
@@ -117,8 +124,10 @@ base.run(function(job)
             if msg.type == proto.MSG.POSITION_UPDATE and not ascending then
                 -- Move to where delivery just was (1 block behind)
                 local prev = msg.payload.prev
-                if prev then
+                if prev and type(prev.x) == "number" and type(prev.y) == "number" and type(prev.z) == "number" then
                     base.move.to(prev.x, prev.y, prev.z)
+                else
+                    print("[SUPPORT] Invalid POSITION_UPDATE payload, skipping move")
                 end
 
             elseif msg.type == proto.MSG.ASCENDING then
