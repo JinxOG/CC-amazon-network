@@ -12,6 +12,7 @@ local base = {}
 local CFG = {
     HEARTBEAT_INTERVAL  = 10,
     FUEL_CRITICAL       = 200,
+    FUEL_RESERVE        = 500,   -- conservative pre-departure reserve (full warehouse run)
     MOVE_RETRIES        = 3,
     REGISTER_RETRIES    = 10,
     REGISTER_TIMEOUT    = 5,
@@ -424,6 +425,18 @@ base.move = move
 function base.depart()
     if not _self.dock then logWarn("No dock assigned, departing from current pos.") return true end
 
+    -- Pre-departure fuel reserve check. A flat critical threshold isn't enough for a
+    -- full warehouse run, so require a conservative reserve before leaving the dock.
+    if turtle.getFuelLevel() < CFG.FUEL_RESERVE then
+        logWarn(string.format("Pre-departure fuel check: %d < %d, attempting refuel",
+            turtle.getFuelLevel(), CFG.FUEL_RESERVE))
+        base.fuel.dockRefuel()
+        if turtle.getFuelLevel() < CFG.FUEL_RESERVE then
+            return false, "insufficient fuel for departure (have " .. turtle.getFuelLevel()
+                .. ", need " .. CFG.FUEL_RESERVE .. ")"
+        end
+    end
+
     logInfo("Departing via dispatch lane...")
     base.setStatus(proto.STATUS.TRAVELLING)
 
@@ -569,7 +582,12 @@ function base.returnToDock()
     -- Follow red taxiway back to dock
     local route = W.returnRoute(_self.dock)
     ok, err = move.followRoute(route)
-    if not ok then return false, "return route failed: " .. (err or "?") end
+    if not ok then
+        base.setStatus(proto.STATUS.ERROR)
+        comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(
+            _self.jobId, proto.STATUS.ERROR, "return route failed: " .. (err or "?"), base.getPos()))
+        return false, "return route failed: " .. (err or "?")
+    end
 
     -- GPS verify final dock position; correct if off by 1 from route rounding.
     gpsSync()
@@ -613,7 +631,12 @@ function base.returnToDockInternal()
     -- column so the turtle never traverses another dock row sideways.
     local route = W.internalReturnRouteFrom(_self.dock, _self.pos.x, _self.pos.z)
     local ok, err = move.followRoute(route)
-    if not ok then return false, "internal return failed: " .. (err or "?") end
+    if not ok then
+        base.setStatus(proto.STATUS.ERROR)
+        comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(
+            _self.jobId, proto.STATUS.ERROR, "internal return route failed: " .. (err or "?"), base.getPos()))
+        return false, "internal return failed: " .. (err or "?")
+    end
     -- GPS verify — correct any sub-block drift before accepting future jobs.
     gpsSync()
     if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
@@ -856,8 +879,17 @@ function fuel.dockRefuel()
     return gained > 0
 end
 
+local MAX_FUEL_RETRIES = 5
+
 function fuel.ensureFuel()
+    local fuelRetries = 0
     while fuel.isCritical() do
+        fuelRetries = fuelRetries + 1
+        if fuelRetries > MAX_FUEL_RETRIES then
+            logWarn("Cannot refuel after " .. MAX_FUEL_RETRIES .. " attempts — setting ERROR status")
+            base.setStatus(proto.STATUS.ERROR)
+            return false  -- caller must handle
+        end
         logWarn(string.format("Fuel critical (%d) — deploying entangled chest...", fuel.level()))
         -- Send heartbeat so server doesn't mark us offline during refuel
         if _self.id then
@@ -879,6 +911,7 @@ function fuel.ensureFuel()
             end
         end
     end
+    return true
 end
 
 base.fuel = fuel
