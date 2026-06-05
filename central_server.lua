@@ -101,6 +101,7 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
         jobId    = nil,
         lastSeen = os.epoch("utc"),
         online   = true,
+        offlineSince = nil,   -- cleared on (re-)register so active turtles aren't pruned
     }
     logInfo(string.format("%s %s [%s] fuel=%d/%d dock=%s",
         isNew and "Registered" or "Re-registered", id, role, fuel, fuelMax,
@@ -147,6 +148,7 @@ function registry.update(id, status, fuel, position, jobId)
     t.jobId    = jobId
     t.lastSeen = os.epoch("utc")
     t.online   = true
+    t.offlineSince = nil   -- back online via heartbeat — don't prune
 end
 
 function registry.getIdle(role)
@@ -169,6 +171,7 @@ function registry.markOffline(id)
         t.online = false
         t.status = proto.STATUS.IDLE
         t.jobId  = nil
+        t.offlineSince = os.epoch("utc") / 1000   -- mark for stale-pruning
         logWarn("Turtle offline: " .. id)
         -- Do NOT release the dock here. Turtles temporarily offline (chunk unload,
         -- server reboot) should return to the same dock. Docks are released only
@@ -202,6 +205,15 @@ function registry.checkTimeouts()
                         logInfo("Cancelled linked support job " .. tostring(linkedId) .. " after partner timeout")
                     end
                 end
+            end
+        elseif not t.online then
+            -- Already offline — prune if it has been offline for >5 minutes so
+            -- the registry doesn't accumulate ghost turtles indefinitely.
+            local offlineSince = t.offlineSince or (now / 1000)
+            if not t.offlineSince then t.offlineSince = offlineSince end
+            if (now / 1000) - t.offlineSince > 300 then
+                state.registry[id] = nil
+                logInfo("Pruned stale offline turtle: " .. id)
             end
         end
     end
@@ -416,9 +428,16 @@ function jobQueue.checkAckTimeouts()
     for _, job in pairs(state.jobs) do
         if job.status == JOB_STATUS.ASSIGNED and job.ackBy and now > job.ackBy then
             logWarn(string.format("ACK timeout: job %s from %s", job.id, job.assignedTo))
-            local t = state.registry[job.assignedTo or ""]
-            if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
-            jobQueue.reassign(job.id, job.assignedTo, "ack_timeout")
+            -- BUG #13: Don't re-queue while the turtle may still be travelling —
+            -- that would let a second pair target the same destination (destinationBusy
+            -- only checks ASSIGNED/IN_PROGRESS jobs). Instead, RECALL the turtle and
+            -- leave the job ASSIGNED. The turtle will return and send JOB_FAILED,
+            -- which re-queues the job via the existing failure handler.
+            if job.assignedTo then
+                sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("ack_timeout"))
+            end
+            -- Stop firing this timeout repeatedly while we wait for the recall.
+            job.ackBy = nil
         end
     end
 end
@@ -847,10 +866,32 @@ function server.run()
     proto.openChannels(state.modem, {
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
+    -- ── Bridge command dedup (BUG #11) ────────────────────────────────────────
+    -- If the CC server's HTTP response is lost in transit, the bridge has already
+    -- cleared its queue, but a re-send could double-dispatch a command. Guard with
+    -- a small cache keyed on the server-assigned timestamp + command type.
+    local recentCmds = {}
+    local function isDuplicate(cmd)
+        local key = (cmd.ts or 0) .. ":" .. (cmd.type or "")
+        if recentCmds[key] then return true end
+        recentCmds[key] = true
+        -- Prune entries older than 60s (cmd.ts is a Unix ms timestamp from server.js).
+        local now = os.epoch("utc") / 1000
+        for k, _ in pairs(recentCmds) do
+            local ts = (tonumber(k:match("^(%d+)")) or 0) / 1000
+            if now - ts > 60 then recentCmds[k] = nil end
+        end
+        return false
+    end
+
     -- ── Bridge command handler ────────────────────────────────────────────────
     -- Called for each command the dashboard queued since the last push.
     -- Commands arrive in the response body of the /update POST.
     local function handleBridgeCommand(cmd)
+        if isDuplicate(cmd) then
+            logInfo("Bridge cmd: duplicate ignored (" .. tostring(cmd.type) .. ")")
+            return
+        end
         local t = cmd.type or ""
         local p = cmd.params or {}
         logInfo("Bridge cmd: " .. t)
@@ -924,6 +965,16 @@ function server.run()
                     sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("jobs_cleared"))
                     local tr = state.registry[job.assignedTo]
                     if tr then tr.status = proto.STATUS.IDLE; tr.jobId = nil end
+                    -- BUG #12: also recall the paired support turtle, otherwise it
+                    -- keeps flying with no delivery partner.
+                    if job.linkedJob then
+                        local linked = state.jobs[job.linkedJob]
+                        if linked and linked.assignedTo then
+                            sendTo(linked.assignedTo, proto.MSG.RECALL, proto.payloadRecall("jobs_cleared"))
+                            local st = state.registry[linked.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
+                        end
+                    end
                 end
                 count = count + 1
             end
