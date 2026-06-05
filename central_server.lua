@@ -167,6 +167,8 @@ function registry.markOffline(id)
     local t = state.registry[id]
     if t and t.online then
         t.online = false
+        t.status = proto.STATUS.IDLE
+        t.jobId  = nil
         logWarn("Turtle offline: " .. id)
         -- Do NOT release the dock here. Turtles temporarily offline (chunk unload,
         -- server reboot) should return to the same dock. Docks are released only
@@ -178,10 +180,28 @@ function registry.checkTimeouts()
     local now = os.epoch("utc")
     for id, t in pairs(state.registry) do
         if t.online and (now - t.lastSeen) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
+            local jobId = t.jobId
             registry.markOffline(id)
-            if t.jobId then
-                jobQueue.reassign(t.jobId, id, "turtle_timeout")
+            if jobId then
+                local job = state.jobs[jobId]
+                jobQueue.reassign(jobId, id, "turtle_timeout")
                 t.jobId = nil
+
+                local linkedId = job and job.linkedJob
+                if linkedId then
+                    local linkedJob = state.jobs[linkedId]
+                    if linkedJob and (linkedJob.status == "ASSIGNED" or linkedJob.status == "IN_PROGRESS") then
+                        local supportTurtle = linkedJob.assignedTo
+                        linkedJob.status = "CANCELLED"
+                        linkedJob.assignedTo = nil
+                        if supportTurtle and state.registry[supportTurtle] then
+                            state.registry[supportTurtle].status = proto.STATUS.IDLE
+                            state.registry[supportTurtle].jobId  = nil
+                            sendTo(supportTurtle, proto.MSG.RECALL, proto.payloadRecall("partner_timed_out"))
+                        end
+                        logInfo("Cancelled linked support job " .. tostring(linkedId) .. " after partner timeout")
+                    end
+                end
             end
         end
     end
