@@ -66,7 +66,7 @@ print("=== Updater [" .. role .. "] ===")
 
 local function download(src, dst)
     dst = dst or src
-    local url = REPO .. src
+    local url = REPO .. src .. "?cb=" .. tostring(os.epoch("utc"))
     io.write("  " .. src)
     if dst ~= src then io.write(" -> " .. dst) end
     io.write("... ")
