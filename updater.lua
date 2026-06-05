@@ -79,14 +79,16 @@ print("=== Updater [" .. role .. "] ===")
 
 -- ─── Download helper ─────────────────────────────────────────────────────────
 
+local NO_CACHE = { ["Cache-Control"] = "no-cache", ["Pragma"] = "no-cache" }
+
 local function download(src, dst)
     dst = dst or src
-    local url = REPO .. src .. "?cb=" .. tostring(os.epoch("utc"))
+    local url = REPO .. src
     io.write("  " .. src)
     if dst ~= src then io.write(" -> " .. dst) end
     io.write("... ")
 
-    local response = http.get(url)
+    local response = http.get(url, NO_CACHE)
     if not response then
         print("FAILED (no response)")
         return false

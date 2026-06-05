@@ -21,8 +21,8 @@ end
 print("=== Setup [" .. role:upper() .. "] ===")
 print("Downloading updater...")
 
-local url = REPO .. "updater.lua?cb=" .. tostring(os.epoch("utc"))
-local r = http.get(url)
+local url = REPO .. "updater.lua"
+local r = http.get(url, { ["Cache-Control"] = "no-cache", ["Pragma"] = "no-cache" })
 if not r then
     print("ERROR: HTTP request failed.")
     print("Make sure HTTP is enabled in the CC config.")
