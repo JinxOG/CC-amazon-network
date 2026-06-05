@@ -984,6 +984,56 @@ function server.run()
             saveJobs()
             logInfo(string.format("Dashboard: cleared %d job(s)", count))
 
+        elseif t == "REMOVE_TURTLE" then
+            local tid = p.turtleId
+            local tr  = state.registry[tid]
+            if not tr then
+                logWarn("REMOVE_TURTLE: turtle not found: " .. tostring(tid))
+                return
+            end
+            -- Cancel active job and recall the linked partner
+            for _, job in pairs(state.jobs) do
+                if job.assignedTo == tid and
+                   (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
+                    job.status = "CANCELLED"
+                    if job.linkedJob then
+                        local linked = state.jobs[job.linkedJob]
+                        if linked and linked.assignedTo then
+                            sendTo(linked.assignedTo, proto.MSG.RECALL,
+                                proto.payloadRecall("turtle_removed"))
+                            local st = state.registry[linked.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
+                            linked.status = "CANCELLED"
+                        end
+                    end
+                end
+            end
+            W.releaseDock(tr.role, tid)
+            state.registry[tid] = nil
+            logInfo("Dashboard removed turtle from fleet: " .. tid)
+
+        elseif t == "REASSIGN_BAY" then
+            local tid = p.turtleId
+            local bay = tonumber(p.bay)
+            local tr  = state.registry[tid]
+            if not tr then
+                logWarn("REASSIGN_BAY: turtle not found: " .. tostring(tid))
+                return
+            end
+            if not bay then
+                logWarn("REASSIGN_BAY: invalid bay number for " .. tostring(tid))
+                return
+            end
+            local newDock = W.assignDockAt(tr.role, tid, bay)
+            if newDock then
+                tr.dock = newDock
+                logInfo(string.format("Dashboard reassigned %s → bay %d%s",
+                    tid, newDock.bay, newDock.row))
+            else
+                logWarn(string.format("REASSIGN_BAY: no free slot at bay %d for %s [%s]",
+                    bay, tid, tr.role))
+            end
+
         else
             logWarn("Unknown bridge command: " .. tostring(t))
         end

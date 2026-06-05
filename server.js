@@ -224,6 +224,19 @@ app.get('/state', (req, res) => {
 app.post('/command', (req, res) => {
     const { type, params } = req.body;
     if (!type) return res.status(400).json({ error: 'missing type' });
+
+    // REMOVE_TURTLE: immediately evict from bridge state so the turtle vanishes
+    // from the dashboard and map without waiting for central_server to process it.
+    if (type === 'REMOVE_TURTLE' && params && params.turtleId) {
+        const id = params.turtleId;
+        delete state.turtles[id];
+        if (markerExists[id]) {
+            rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
+            delete markerExists[id];
+        }
+        console.log(`[CMD] Evicted turtle from bridge state: ${id}`);
+    }
+
     pendingCommands.push({ type, params: params || {}, ts: Date.now() });
     console.log(`[CMD] Queued: ${type}`, params || '');
     res.json({ ok: true });

@@ -780,6 +780,8 @@ function renderFleet(turtles) {
                 <div>
                     <button class="tc-locate" onclick="focusTurtle('${eid}')">LOCATE</button>
                     ${idleBtn}
+                    <button class="tc-locate" onclick="reassignBay('${eid}')" style="color:#88aaff;border-color:#001a3a">BAY</button>
+                    <button class="tc-locate" onclick="deleteTurtle('${eid}')" style="color:#ff4444;border-color:#3a0000">DEL</button>
                     <div class="tc-name">${eid}</div>
                     <div class="tc-sub">${erole||'?'} · ${edock||'?'}</div>
                 </div>
@@ -919,6 +921,19 @@ async function setTurtleIdle(id) {
     if (!confirm('Set ' + id + ' to IDLE?')) return;
     await sendCmd('SET_IDLE', { turtleId: id });
     toast(`${id} → IDLE`);
+}
+async function deleteTurtle(id) {
+    if (!confirm(`Remove ${id} from fleet?\nThis releases its dock slot. Only use for destroyed turtles.`)) return;
+    await sendCmd('REMOVE_TURTLE', { turtleId: id });
+    toast(`${id} removed from fleet`);
+}
+async function reassignBay(id) {
+    const bay = prompt(`Reassign ${id} to bay number:\n(enter the numeric bay, e.g. 2)`);
+    if (bay === null) return;
+    const n = parseInt(bay);
+    if (isNaN(n) || n < 1) { toast('Invalid bay number', true); return; }
+    await sendCmd('REASSIGN_BAY', { turtleId: id, bay: n });
+    toast(`${id} → bay ${n} requested`);
 }
 async function cmdResetStatus() {
     if (!confirm('Force all turtles to IDLE? Only use if turtles are stuck.')) return;

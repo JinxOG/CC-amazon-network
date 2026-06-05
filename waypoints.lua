@@ -146,6 +146,22 @@ function W.getDockFor(role, turtleId)
     return nil
 end
 
+-- Release current dock and assign the turtle to the first free slot at targetBay.
+-- Returns the new dock, or nil if that bay has no free slots.
+function W.assignDockAt(role, turtleId, targetBay)
+    W.releaseDock(role, turtleId)
+    if not _assigned[role] then _assigned[role] = {} end
+    local docks = W.docks[role]
+    for i, dock in ipairs(docks) do
+        if dock.bay == targetBay and not _assigned[role][i] then
+            _assigned[role][i] = turtleId
+            saveDockAssignments()
+            return dock
+        end
+    end
+    return nil  -- bay full or does not exist
+end
+
 -- ─── Route Builders (turtle-side) ────────────────────────────────────────────
 -- Each route is an ordered list of {x, y, z} waypoints.
 -- Turtles call move.to() on each in sequence.
