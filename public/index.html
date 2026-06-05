@@ -245,7 +245,7 @@
 
 <div id="main">
     <div id="map-wrap">
-        <iframe id="dynmap-frame" src="/dynmap-frame"></iframe>
+        <iframe id="dynmap-frame" src="/dynmap-frame#MODPACK;flat;154;64;-2803;6"></iframe>
         <div id="map-overlay"></div>
         <div id="coord-preview"></div>
         <div id="map-hint">RIGHT-CLICK MAP → DISPATCH DELIVERY</div>
@@ -550,6 +550,30 @@ function setupDynmapInjection(dw) {
 
     // ── 4. Draw current turtle markers straight away ────────────────────────
     updateInjectedMarkers(lastState.turtles || {});
+
+    // ── 5. Force MODPACK / flat on every load ────────────────────────────────
+    // Covers cases where Dynmap's localStorage overrode the src hash.
+    try {
+        const TARGET_WORLD = 'MODPACK', TARGET_MAP = 'flat';
+        const curWorld = dm.world && dm.world.name;
+        if (curWorld !== TARGET_WORLD) {
+            const worlds = dm.worlds
+                ? (Array.isArray(dm.worlds) ? dm.worlds : Object.values(dm.worlds))
+                : [];
+            const w = worlds.find(w => w.name === TARGET_WORLD);
+            if (w) {
+                const maps = w.maps
+                    ? (Array.isArray(w.maps) ? w.maps : Object.values(w.maps))
+                    : [];
+                const m = maps.find(m => m.name === TARGET_MAP) || maps[0];
+                if (m) {
+                    if      (typeof dm.map.setWorld  === 'function') dm.map.setWorld(w, m);
+                    else if (typeof dm.map.loadMap   === 'function') dm.map.loadMap(w, m);
+                    else if (typeof dm.setWorld      === 'function') dm.setWorld(w, m);
+                }
+            }
+        }
+    } catch(e) { console.warn('[Dynmap] Could not force world/map:', e.message); }
 
     console.log('[Dynmap] Injection complete — crosshair, coord preview, markers active');
 }
