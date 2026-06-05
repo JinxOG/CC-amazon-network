@@ -552,28 +552,28 @@ function setupDynmapInjection(dw) {
     updateInjectedMarkers(lastState.turtles || {});
 
     // ── 5. Force MODPACK / flat on every load ────────────────────────────────
-    // Covers cases where Dynmap's localStorage overrode the src hash.
+    // dm.worlds is keyed by name in most Dynmap builds: { MODPACK: { maps: { flat: {...} } } }
     try {
-        const TARGET_WORLD = 'MODPACK', TARGET_MAP = 'flat';
-        const curWorld = dm.world && dm.world.name;
-        if (curWorld !== TARGET_WORLD) {
-            const worlds = dm.worlds
-                ? (Array.isArray(dm.worlds) ? dm.worlds : Object.values(dm.worlds))
-                : [];
-            const w = worlds.find(w => w.name === TARGET_WORLD);
-            if (w) {
-                const maps = w.maps
-                    ? (Array.isArray(w.maps) ? w.maps : Object.values(w.maps))
-                    : [];
-                const m = maps.find(m => m.name === TARGET_MAP) || maps[0];
-                if (m) {
-                    if      (typeof dm.map.setWorld  === 'function') dm.map.setWorld(w, m);
-                    else if (typeof dm.map.loadMap   === 'function') dm.map.loadMap(w, m);
-                    else if (typeof dm.setWorld      === 'function') dm.setWorld(w, m);
+        const W = 'MODPACK', M = 'flat';
+        const curWorld = typeof dm.world === 'string' ? dm.world
+                       : (dm.world ? dm.world.name : null);
+        if (curWorld !== W) {
+            if      (typeof dm.selectWorld     === 'function') { dm.selectWorld(W, M); }
+            else if (typeof dm.map.selectWorld === 'function') { dm.map.selectWorld(W, M); }
+            else {
+                // worlds keyed by name: dm.worlds['MODPACK'] → world def
+                // maps keyed by name:   wDef.maps['flat']    → map def
+                const wDef = dm.worlds && (dm.worlds[W]
+                    || (Array.isArray(dm.worlds) ? dm.worlds.find(x => x.name === W) : null));
+                if (wDef) {
+                    const mDef = wDef.maps && (wDef.maps[M]
+                        || (Array.isArray(wDef.maps) ? wDef.maps.find(x => x.name === M) : null));
+                    if      (typeof dm.map.setWorld === 'function') dm.map.setWorld(wDef, mDef);
+                    else if (typeof dm.map.loadMap  === 'function') dm.map.loadMap(wDef, mDef);
                 }
             }
         }
-    } catch(e) { console.warn('[Dynmap] Could not force world/map:', e.message); }
+    } catch(e) { console.warn('[Dynmap] world force failed:', e.message); }
 
     console.log('[Dynmap] Injection complete — crosshair, coord preview, markers active');
 }

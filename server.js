@@ -186,7 +186,15 @@ app.post('/update', async (req, res) => {
         for (const [id, data] of Object.entries(turtles)) {
             // PERF #57: stamp lastSeen on every update so we can prune stale entries
             state.turtles[id] = { ...state.turtles[id], ...data, lastSeen: now };
-            upsertMarker(id, state.turtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
+            if (data.online === false) {
+                // Offline turtle — remove pin from map, keep in state for dashboard panel
+                if (markerExists[id]) {
+                    rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
+                    markerExists[id] = false;
+                }
+            } else {
+                upsertMarker(id, state.turtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
+            }
         }
 
         // PERF #57: prune turtles absent from pushes for >10 minutes
