@@ -1103,6 +1103,12 @@ function base.init(role)
             logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
                 _self.dock.x, _self.dock.z, p.x, p.z))
             base.returnToDockInternal()
+        elseif not insideBuilding then
+            -- Rebooted outside the building (e.g. at a destination, or underground
+            -- mid-delivery). Use the full return route: descend → arrivals hole → dock.
+            logInfo(string.format("Rebooted outside building at %d,%d,%d — returning via arrivals hole",
+                p.x, p.y, p.z))
+            base.returnToDock()
         end
     end
     -- Face toward taxiway so the turtle is oriented consistently at its dock on boot.
