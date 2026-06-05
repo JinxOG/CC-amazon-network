@@ -667,6 +667,9 @@ handlers[proto.MSG.WAREHOUSE_QUEUED] = fwdToTurtle
 handlers[proto.MSG.CHESTS_READY]     = fwdToTurtle
 handlers[proto.MSG.ITEMS_READY]      = fwdToTurtle
 handlers[proto.MSG.ITEMS_DONE]       = fwdToTurtle
+-- Warehouse can proactively recall a turtle on a timeout-abort (carries jobId so
+-- it routes by jobId → assignedTo, same as the other warehouse→turtle messages).
+handlers[proto.MSG.RECALL]           = fwdToTurtle
 
 handlers[proto.MSG.TURTLE_QUERY] = function(msg)
     local targetId = msg.payload.targetId

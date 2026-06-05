@@ -68,15 +68,25 @@ local function clearEnderChest()
         log("WARNING: cannot wrap ender chest on '" .. CFG.entangledChest .. "'")
         return 0
     end
-    local slots = chest.list()
-    if not slots or next(slots) == nil then
-        log("Ender chest already empty — no clear needed")
-        return 0
-    end
     local total = 0
-    for _, item in pairs(slots) do
-        local moved = rsBridge.importItem({ name = item.name, count = item.count }, CFG.entangledChest)
-        total = total + ((type(moved) == "number") and moved or (moved and moved.count or 0))
+    -- Verification loop: 1 initial pass + up to 3 retries. RS storage being full
+    -- or an un-insertable item can leave residue that contaminates the next batch.
+    for attempt = 1, 4 do
+        local slots = chest.list()
+        if not slots or next(slots) == nil then
+            if attempt == 1 then log("Ender chest already empty — no clear needed") end
+            return total
+        end
+        for _, item in pairs(slots) do
+            local moved = rsBridge.importItem({ name = item.name, count = item.count }, CFG.entangledChest)
+            total = total + ((type(moved) == "number") and moved or (moved and moved.count or 0))
+        end
+        if attempt < 4 then sleep(1) end
+    end
+    -- Final check after all attempts
+    local remaining = chest.list()
+    if remaining and next(remaining) ~= nil then
+        log("WARNING: EC not fully cleared after 4 attempts — residue may contaminate next batch")
     end
     log(string.format("Cleared %d item(s) from ender chest into RS", total))
     return total
@@ -99,8 +109,9 @@ local function checkStock(name, needed)
     local have = info and info.amount or 0
     if have < needed then
         log(string.format("WARNING: need %d x %s but RS only has %d", needed, name, have))
+        return false, have
     end
-    return have
+    return true, have
 end
 
 -- ─── Inbox ───────────────────────────────────────────────────────────────────
@@ -151,14 +162,34 @@ local function enterState(s)
     stateTs = os.epoch("utc")
 end
 
+-- Re-broadcast every waiting turtle's current position. Called whenever the
+-- queue advances so turtles don't display a stale enqueue-time position.
+local function broadcastQueuePositions()
+    for i, entry in ipairs(queue) do
+        sendToServer(proto.MSG.WAREHOUSE_QUEUED, entry.turtleId, {
+            jobId    = entry.jobId,
+            position = i,
+            chests   = entry.chestsNeeded,
+        })
+    end
+end
+
 local function abortCurrent(reason)
     if current then
         log(string.format("Abort [%s]: %s — sweeping EC", current.jobId, reason))
+        -- Proactively recall the turtle so it fails fast instead of waiting for
+        -- its own batch deadline. Routed via the server (fwdToTurtle by jobId),
+        -- same path as CHESTS_READY etc., so the payload must carry the jobId.
+        sendToServer(proto.MSG.RECALL, current.turtleId, {
+            jobId  = current.jobId,
+            reason = reason or "warehouse_abort",
+        })
         clearEnderChest()
         current = nil
     end
     batches  = {}
     batchIdx = 0
+    broadcastQueuePositions()
     enterState(S.IDLE)
 end
 
@@ -233,25 +264,40 @@ local function routeMsg(raw)
     -- If they are already queued or being served this is a no-op.
     if msg.type == proto.MSG.DELIVERY_ARRIVED then
         local p = msg.payload
-        local known = current and current.turtleId == msg.from
-        if not known then
-            for _, e in ipairs(queue) do
-                if e.turtleId == msg.from then known = true; break end
+        if p.items then
+            -- De-dup by BOTH turtleId AND jobId. A turtle whose job was cancelled
+            -- and re-issued (same turtle, new jobId) must not be blocked by a stale
+            -- queue entry — replace it so it isn't served with the wrong jobId.
+            local existingIdx = nil
+            for i, e in ipairs(queue) do
+                if e.turtleId == msg.from then existingIdx = i; break end
             end
-        end
-        if not known and p.items then
-            local n = chestsNeeded(p.items)
-            table.insert(queue, {
-                jobId        = p.jobId,
-                turtleId     = msg.from,
-                items        = p.items,
-                chestsNeeded = n,
-            })
-            sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
-                jobId = p.jobId, position = #queue, chests = n,
-            })
-            log(string.format("Auto-queued %s (job %s) — ITEM_REQUEST was lost",
-                msg.from, tostring(p.jobId)))
+            if existingIdx then
+                if queue[existingIdx].jobId ~= p.jobId then
+                    queue[existingIdx] = {
+                        jobId        = p.jobId,
+                        turtleId     = msg.from,
+                        items        = p.items,
+                        chestsNeeded = chestsNeeded(p.items),
+                    }
+                    log(string.format("Replaced stale queue entry for %s with new job %s",
+                        msg.from, tostring(p.jobId)))
+                end
+                -- same turtle + same jobId already queued: no-op
+            elseif not (current and current.turtleId == msg.from and current.jobId == p.jobId) then
+                local n = chestsNeeded(p.items)
+                table.insert(queue, {
+                    jobId        = p.jobId,
+                    turtleId     = msg.from,
+                    items        = p.items,
+                    chestsNeeded = n,
+                })
+                sendToServer(proto.MSG.WAREHOUSE_QUEUED, msg.from, {
+                    jobId = p.jobId, position = #queue, chests = n,
+                })
+                log(string.format("Auto-queued %s (job %s) — ITEM_REQUEST was lost",
+                    msg.from, tostring(p.jobId)))
+            end
         end
         -- Fall through to inboxPut so state machine can consume it in WAIT_ARRIVE
     end
@@ -301,6 +347,8 @@ local function tick()
         sendToServer(proto.MSG.WAREHOUSE_QUEUED, current.turtleId, {
             jobId = current.jobId, position = 0, chests = current.chestsNeeded,
         })
+        -- Queue advanced — refresh positions for everyone still waiting behind us.
+        broadcastQueuePositions()
         enterState(S.WAIT_ARRIVE)
 
     -- ── WAIT_ARRIVE: turtle travelling to destination ─────────────────────────
@@ -339,8 +387,15 @@ local function tick()
             batches = {}
             local batch, bStacks = {}, 0
             for itemName, totalCount in pairs(current.items) do
-                checkStock(itemName, totalCount)
-                local remaining = totalCount
+                local ok, have = checkStock(itemName, totalCount)
+                -- Stock shortfall: only batch up what RS actually has so we never
+                -- promise more than we can export. Skip entirely if there's none.
+                local deliverable = ok and totalCount or have
+                if not ok then
+                    log(string.format("Stock short for %s — delivering %d of %d (have %d)",
+                        itemName, deliverable, totalCount, have))
+                end
+                local remaining = deliverable
                 while remaining > 0 do
                     local sc = math.min(remaining, 64)
                     table.insert(batch, { name = itemName, count = sc })
