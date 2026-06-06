@@ -1186,4 +1186,4 @@ function server.run()
     end
 end
 
-return server
+server.run()
