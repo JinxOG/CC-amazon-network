@@ -212,7 +212,8 @@ app.post('/update', async (req, res) => {
 
     if (jobs)    state.jobs    = jobs;
     if (version) state.version = version;
-    if (storage) state.storage = storage;
+    console.log(`[UPDATE] storage type=${Array.isArray(storage)?'array':'other'} len=${Array.isArray(storage)?storage.length:JSON.stringify(storage)?.slice(0,40)}`);
+    if (Array.isArray(storage) && storage.length > 0) state.storage = storage;
     state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });
