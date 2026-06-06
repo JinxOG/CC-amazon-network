@@ -179,8 +179,9 @@ app.get('/dynmap-frame', (req, res) => {
 
 // CC central_server.lua pushes state here every 2s
 app.post('/update', async (req, res) => {
-    const { turtles, jobs, version, storage } = req.body;
-    if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
+    console.log('[UPDATE] hit — body keys:', Object.keys(req.body || {}).join(','), '| storage len:', Array.isArray((req.body||{}).storage) ? req.body.storage.length : typeof (req.body||{}).storage);
+    const { turtles, jobs, version, storage } = req.body || {};
+    if (!turtles && !jobs && !version) { console.log('[UPDATE] rejected — missing turtles/jobs/version'); return res.status(400).json({ error: 'missing data' }); }
 
     const now = Date.now();
 
@@ -268,6 +269,12 @@ app.post('/self-update', (req, res) => {
             process.exit(0);
         }, 5000);
     });
+});
+
+// Catch JSON parse errors from express.json()
+app.use((err, req, res, next) => {
+    console.log('[ERROR] middleware:', err.type, err.message?.slice(0, 80));
+    res.status(400).json({ error: 'bad request' });
 });
 
 // ─── Start ───────────────────────────────────────────────────────────────────
