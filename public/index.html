@@ -283,11 +283,17 @@
         .om-result-amt.zero  { color:#333;    font-size:10px; }
         .cart-list { display:flex; flex-direction:column; gap:5px; min-height:28px; }
         .cart-empty { color:#2a2a4a; font-size:11px; letter-spacing:1px; padding:6px 0; }
-        .cart-item  { display:flex; align-items:center; gap:7px; font-size:11px; }
-        .ci-name { flex:1; color:#ccc; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .cart-item  { display:flex; align-items:center; gap:5px; font-size:11px; min-width:0; }
+        .ci-name { flex:1; min-width:0; color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .ci-craft { font-size:9px; color:#4488ff; letter-spacing:1px; white-space:nowrap; flex-shrink:0; }
+        .ci-step {
+            flex-shrink:0; background:transparent; border:1px solid #1e1e3e; color:#555;
+            font-family:'Courier New',monospace; font-size:13px; width:22px; height:22px;
+            cursor:pointer; line-height:20px; text-align:center; border-radius:2px; padding:0;
+        }
+        .ci-step:hover { border-color:#00ff88; color:#00ff88; }
         .ci-qty {
-            width:64px; background:#080810; border:1px solid #1e1e3e; color:#ddd;
+            flex-shrink:0; width:52px; background:#080810; border:1px solid #1e1e3e; color:#ddd;
             font-family:'Courier New',monospace; font-size:11px; padding:4px 6px;
             border-radius:2px; outline:none; text-align:right;
         }
@@ -1029,6 +1035,14 @@ function cartSetQty(name, val) {
     updateOrderBtn();
 }
 
+function cartStep(name, delta) {
+    if (!orderCart[name]) return;
+    const next = Math.max(1, (orderCart[name].count || 1) + delta);
+    orderCart[name].count = Math.min(next, orderCart[name].maxAvail || 9999);
+    renderOrderCart();
+    updateOrderBtn();
+}
+
 function renderOrderCart() {
     const el   = document.getElementById('om-cart');
     const keys = Object.keys(orderCart);
@@ -1041,9 +1055,11 @@ function renderOrderCart() {
         return `<div class="cart-item">
             <span class="ci-name" title="${escapeHtml(name)}">${dn}</span>
             ${it.craftable ? '<span class="ci-craft">CRAFT</span>' : ''}
-            <input class="ci-qty${qcls}" type="number" min="1" value="${it.count}"
+            <button class="ci-step" onclick="cartStep(${nm}, -1)">−</button>
+            <input class="ci-qty${qcls}" type="text" inputmode="numeric" value="${it.count}"
                 onchange="cartSetQty(${nm}, this.value)"
                 oninput="cartSetQty(${nm}, this.value)">
+            <button class="ci-step" onclick="cartStep(${nm}, 1)">+</button>
             <button class="ci-del" onclick="cartRemove(${nm})">×</button>
         </div>`;
     }).join('');
