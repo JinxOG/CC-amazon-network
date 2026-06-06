@@ -927,11 +927,11 @@ function server.run()
         elseif t == "UPDATE_ALL" then
             sendBroadcast(proto.MSG.UPDATE_ALL, {})
             logInfo("Dashboard: UPDATE_ALL broadcast sent")
-            -- Modems don't receive their own transmissions, so self-update directly.
-            -- Sleep 3s so turtles receive the broadcast before we go offline.
-            logWarn("UPDATE_ALL — updating server in 3s...")
-            sleep(3)
-            if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
+            -- Flag for self-update; handled in the main loop OUTSIDE the
+            -- parallel.waitForAny(pushToBridge, sleep(5)) timeout so the
+            -- updater is not killed mid-download.
+            logWarn("UPDATE_ALL — self-update queued...")
+            pendingUpdate = true
 
         elseif t == "CANCEL_JOB" then
             local jobId = p.jobId
@@ -1066,6 +1066,10 @@ function server.run()
         end
     end
 
+    -- Set by UPDATE_ALL handler; acted on in the main loop outside the
+    -- parallel.waitForAny timeout so the updater is not killed mid-download.
+    local pendingUpdate = false
+
     -- ── Bridge push ───────────────────────────────────────────────────────────
     -- Pushes state to the Node bridge every BRIDGE_INTERVAL seconds.
     -- The bridge returns any dashboard commands queued since the last push
@@ -1165,6 +1169,15 @@ function server.run()
                     function() sleep(5) end   -- abandon push if it takes >5s
                 )
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
+
+                -- Run updater AFTER the parallel context exits so it is not
+                -- killed by the 5s timeout above.
+                if pendingUpdate then
+                    pendingUpdate = false
+                    logWarn("UPDATE_ALL — updating server in 3s...")
+                    sleep(3)
+                    if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
+                end
 
             end
 
