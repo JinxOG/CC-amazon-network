@@ -897,7 +897,14 @@ function server.run()
             end
         end
         local ok, raw = pcall(function() return rsBridge.listItems() end)
-        if not ok or type(raw) ~= "table" then return end
+        if not ok then
+            logWarn("RS listItems failed: " .. tostring(raw))
+            return
+        end
+        if type(raw) ~= "table" then
+            logWarn("RS listItems returned non-table: " .. type(raw))
+            return
+        end
         local result = {}
         for _, item in ipairs(raw) do
             if item.name then
@@ -910,6 +917,7 @@ function server.run()
             end
         end
         storageItems = result
+        logInfo("RS storage refreshed: " .. #storageItems .. " items")
     end
 
     local recentCmds = {}
