@@ -143,7 +143,7 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
     return dock, reSendJob
 end
 
-function registry.update(id, status, fuel, position, jobId)
+function registry.update(id, status, fuel, position, jobId, version)
     local t = state.registry[id]
     if not t then logWarn("Heartbeat from unknown turtle: " .. id) return end
     t.status   = status   or t.status
@@ -153,6 +153,7 @@ function registry.update(id, status, fuel, position, jobId)
     t.lastSeen = os.epoch("utc")
     t.online   = true
     t.offlineSince = nil   -- back online via heartbeat — don't prune
+    if version then t.version = version end
 end
 
 function registry.getIdle(role)
@@ -594,7 +595,7 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
     local p = msg.payload
     local known = state.registry[msg.from] ~= nil
     if known then
-        registry.update(msg.from, p.status, p.fuel, p.position, p.jobId)
+        registry.update(msg.from, p.status, p.fuel, p.position, p.jobId, p.version)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
     else
@@ -1080,18 +1081,19 @@ function server.run()
         local turtles = {}
         for id, t in pairs(state.registry) do
             turtles[id] = {
-                role   = t.role,
-                status = t.status,
-                fuel   = t.fuel,
-                jobId  = t.jobId,
-                online = t.online,
-                dock   = t.dock and string.format("bay%d%s", t.dock.bay, t.dock.row) or nil,
-                dockX  = t.dock and t.dock.x or nil,
-                dockZ  = t.dock and t.dock.z or nil,
-                dockJX = t.dock and t.dock.junction and t.dock.junction.x or nil,
-                x      = t.position and t.position.x or nil,
-                y      = t.position and t.position.y or nil,
-                z      = t.position and t.position.z or nil,
+                role    = t.role,
+                status  = t.status,
+                fuel    = t.fuel,
+                jobId   = t.jobId,
+                online  = t.online,
+                version = t.version,
+                dock    = t.dock and string.format("bay%d%s", t.dock.bay, t.dock.row) or nil,
+                dockX   = t.dock and t.dock.x or nil,
+                dockZ   = t.dock and t.dock.z or nil,
+                dockJX  = t.dock and t.dock.junction and t.dock.junction.x or nil,
+                x       = t.position and t.position.x or nil,
+                y       = t.position and t.position.y or nil,
+                z       = t.position and t.position.z or nil,
             }
         end
         local jobs = {}

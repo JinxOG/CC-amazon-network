@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.2"
+proto.VERSION = "1.6.3"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -158,6 +158,7 @@ function proto.payloadHeartbeat(status, fuelLevel, position, jobId)
         fuel     = fuelLevel,
         position = position,
         jobId    = jobId,
+        version  = proto.VERSION,
     }
 end
 

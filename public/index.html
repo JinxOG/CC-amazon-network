@@ -790,12 +790,16 @@ function renderFleet(turtles) {
         const max   = t.fuelMax || 100000;
         const pct   = Math.min(1, fuel / max);
         const fc    = fuelClass(pct);
-        const pos   = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
-        const st    = t.status || 'UNKNOWN';
-        const eid   = escapeHtml(id);
-        const erole = escapeHtml(t.role);
-        const edock = escapeHtml(t.dock);
-        const est   = escapeHtml(st);
+        const pos    = t.x != null ? `${Math.round(t.x)}, ${Math.round(t.z)}` : '—';
+        const st     = t.status || 'UNKNOWN';
+        const eid    = escapeHtml(id);
+        const erole  = escapeHtml(t.role);
+        const edock  = escapeHtml(t.dock);
+        const est    = escapeHtml(st);
+        const sysVer = lastState.version || '';
+        const tVer   = t.version || '?';
+        const verOutdated = tVer !== '?' && sysVer && tVer !== sysVer;
+        const verStyle = verOutdated ? 'color:#ff4444;font-weight:bold' : 'color:#555';
         const idleBtn = st !== 'IDLE'
             ? `<button class="tc-locate" onclick="setTurtleIdle('${eid}')" style="color:#ffaa44;border-color:#3a2a00">IDLE</button>`
             : '';
@@ -815,6 +819,7 @@ function renderFleet(turtles) {
             <div class="tc-row">
                 <span>FUEL <span class="v">${Math.round(pct*100)}%</span></span>
                 <span>POS <span class="v">${pos}</span></span>
+                <span style="${verStyle}">v${escapeHtml(tVer)}${verOutdated ? ' !' : ''}</span>
                 ${t.jobId   ? `<span>JOB <span class="v">${escapeHtml(t.jobId)}</span></span>` : ''}
                 ${!t.online ? '<span style="color:#ff4444">OFFLINE</span>' : ''}
             </div>
