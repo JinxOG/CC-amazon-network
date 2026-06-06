@@ -293,7 +293,7 @@
         }
         .ci-step:hover { border-color:#00ff88; color:#00ff88; }
         .ci-qty {
-            flex-shrink:0; width:52px; background:#080810; border:1px solid #1e1e3e; color:#ddd;
+            flex-shrink:0; width:48px; height:26px; background:#080810; border:1px solid #1e1e3e; color:#ddd;
             font-family:'Courier New',monospace; font-size:11px; padding:4px 6px;
             border-radius:2px; outline:none; text-align:right;
         }
@@ -1055,11 +1055,11 @@ function renderOrderCart() {
         return `<div class="cart-item">
             <span class="ci-name" title="${escapeHtml(name)}">${dn}</span>
             ${it.craftable ? '<span class="ci-craft">CRAFT</span>' : ''}
-            <button class="ci-step" onclick="cartStep(${nm}, -1)">−</button>
+            <button class="ci-step" onclick="cartStep(${nm}, 1)">+</button>
             <input class="ci-qty${qcls}" type="text" inputmode="numeric" value="${it.count}"
                 onchange="cartSetQty(${nm}, this.value)"
                 oninput="cartSetQty(${nm}, this.value)">
-            <button class="ci-step" onclick="cartStep(${nm}, 1)">+</button>
+            <button class="ci-step" onclick="cartStep(${nm}, -1)">−</button>
             <button class="ci-del" onclick="cartRemove(${nm})">×</button>
         </div>`;
     }).join('');
