@@ -995,7 +995,7 @@ function renderStorage(items) {
         return `<div class="sr">
             <span class="sr-name" title="${nm}">${dn}</span>
             <span class="sr-amt ${cls}">${escapeHtml(text)}</span>
-            <button class="sr-add" onclick="cartAdd(${JSON.stringify(item.name)})">+</button>
+            <button class="sr-add" onclick="cartAdd(${escapeHtml(JSON.stringify(item.name))})">+</button>
         </div>`;
     }).join('');
 }
@@ -1036,7 +1036,7 @@ function renderOrderCart() {
     el.innerHTML = keys.map(name => {
         const it   = orderCart[name];
         const dn   = escapeHtml(it.displayName || name);
-        const nm   = JSON.stringify(name);
+        const nm   = escapeHtml(JSON.stringify(name));
         const qcls = it.craftable ? ' craft' : '';
         return `<div class="cart-item">
             <span class="ci-name" title="${escapeHtml(name)}">${dn}</span>
@@ -1067,7 +1067,7 @@ function updateOrderSearch() {
     res.innerHTML = matches.map(item => {
         const { text, cls } = fmtAmt(item);
         const dn = escapeHtml(item.displayName || item.name);
-        return `<div class="om-result" onclick="cartAddFromModal(${JSON.stringify(item.name)})">
+        return `<div class="om-result" onclick="cartAddFromModal(${escapeHtml(JSON.stringify(item.name))})">
             <span class="om-result-name">${dn}</span>
             <span class="om-result-amt ${cls}">${escapeHtml(text)}</span>
         </div>`;
