@@ -43,6 +43,7 @@ if not modem    then error("Warehouse: no modem found") end
 if not rsBridge then error("Warehouse: no rsBridge found — attach an Advanced Peripherals RS Bridge") end
 
 modem.open(proto.CH_SERVER)
+modem.open(proto.CH_BROADCAST)
 modem.open(proto.CH_WAREHOUSE)
 
 -- ─── Helpers ─────────────────────────────────────────────────────────────────
