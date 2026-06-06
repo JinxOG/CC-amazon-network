@@ -179,18 +179,15 @@ app.get('/dynmap-frame', (req, res) => {
 
 // CC central_server.lua pushes state here every 2s
 app.post('/update', async (req, res) => {
-    console.log('[UPDATE] hit — body keys:', Object.keys(req.body || {}).join(','), '| storage len:', Array.isArray((req.body||{}).storage) ? req.body.storage.length : typeof (req.body||{}).storage);
     const { turtles, jobs, version, storage } = req.body || {};
-    if (!turtles && !jobs && !version) { console.log('[UPDATE] rejected — missing turtles/jobs/version'); return res.status(400).json({ error: 'missing data' }); }
+    if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
     const now = Date.now();
 
     if (turtles) {
         for (const [id, data] of Object.entries(turtles)) {
-            // PERF #57: stamp lastSeen on every update so we can prune stale entries
             state.turtles[id] = { ...state.turtles[id], ...data, lastSeen: now };
             if (data.online === false) {
-                // Offline turtle — remove pin from map, keep in state for dashboard panel
                 if (markerExists[id]) {
                     rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
                     markerExists[id] = false;
@@ -200,7 +197,6 @@ app.post('/update', async (req, res) => {
             }
         }
 
-        // PERF #57: prune turtles absent from pushes for >10 minutes
         for (const [id, t] of Object.entries(state.turtles)) {
             if (t.lastSeen && now - t.lastSeen > 10 * 60 * 1000) {
                 delete state.turtles[id];
@@ -213,7 +209,6 @@ app.post('/update', async (req, res) => {
 
     if (jobs)    state.jobs    = jobs;
     if (version) state.version = version;
-    console.log(`[UPDATE] storage type=${Array.isArray(storage)?'array':'other'} len=${Array.isArray(storage)?storage.length:JSON.stringify(storage)?.slice(0,40)}`);
     if (Array.isArray(storage) && storage.length > 0) state.storage = storage;
     state.updatedAt = now;
 
