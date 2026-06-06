@@ -261,12 +261,10 @@ app.post('/self-update', (req, res) => {
         res.json({ ok: true, output });
 
         // Wait for CC to pick up the command (bridge polls every 2s, use 5s buffer)
-        // then restart the dashboard service with the new code
+        // then exit — pm2 / nodemon / the start script will restart automatically.
         setTimeout(() => {
-            console.log('[SELF-UPDATE] Restarting dashboard service...');
-            exec('sudo systemctl restart cc-dashboard', (e) => {
-                if (e) console.error('[SELF-UPDATE] Restart error:', e.message);
-            });
+            console.log('[SELF-UPDATE] Exiting for restart...');
+            process.exit(0);
         }, 5000);
     });
 });
