@@ -869,6 +869,14 @@ function server.run()
     proto.openChannels(state.modem, {
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
     })
+
+    local rsBridge = peripheral.find("rsBridge")
+    if rsBridge then
+        logInfo("RS Bridge found — storage features enabled")
+    else
+        logWarn("No RS Bridge found — attach one for storage features")
+    end
+
     -- ── Bridge command dedup (BUG #11) ────────────────────────────────────────
     -- If the CC server's HTTP response is lost in transit, the bridge has already
     -- cleared its queue, but a re-send could double-dispatch a command. Guard with
@@ -876,6 +884,33 @@ function server.run()
     -- Declared before handleBridgeCommand so the UPDATE_ALL branch can capture
     -- it as an upvalue. Acted on in the main loop outside parallel.waitForAny.
     local pendingUpdate = false
+
+    -- RS storage snapshot — refreshed every 5s, included in every bridge push.
+    local storageItems = {}
+    local function refreshStorage()
+        if not rsBridge then return end
+        local craftable = {}
+        local ok2, craft = pcall(function() return rsBridge.listCraftableItems() end)
+        if ok2 and type(craft) == "table" then
+            for _, item in ipairs(craft) do
+                if item.name then craftable[item.name] = true end
+            end
+        end
+        local ok, raw = pcall(function() return rsBridge.listItems() end)
+        if not ok or type(raw) ~= "table" then return end
+        local result = {}
+        for _, item in ipairs(raw) do
+            if item.name then
+                table.insert(result, {
+                    name        = item.name,
+                    displayName = item.displayName or item.name,
+                    amount      = item.amount or 0,
+                    craftable   = craftable[item.name] or false,
+                })
+            end
+        end
+        storageItems = result
+    end
 
     local recentCmds = {}
     local function isDuplicate(cmd)
@@ -1066,6 +1101,43 @@ function server.run()
                     bay, tid, tr.role))
             end
 
+        elseif t == "ORDER_DELIVERY" then
+            local dest  = p.destination
+            local items = p.items
+            if not dest or not dest.x or not dest.z or not items or #items == 0 then
+                logWarn("ORDER_DELIVERY: missing destination or items"); return
+            end
+            -- Trigger RS autocraft for items that need it
+            if rsBridge then
+                for _, item in ipairs(items) do
+                    if item.craft then
+                        local ok, res = pcall(function()
+                            return rsBridge.craftItem({ name = item.name, count = item.count })
+                        end)
+                        if ok then
+                            logInfo(string.format("Craft queued: %d × %s (%s)", item.count, item.name, tostring(res)))
+                        else
+                            logWarn(string.format("Craft failed: %s — %s", item.name, tostring(res)))
+                        end
+                    end
+                end
+            end
+            local itemsDict = {}
+            for _, item in ipairs(items) do
+                if (item.count or 0) > 0 then
+                    itemsDict[item.name] = (itemsDict[item.name] or 0) + item.count
+                end
+            end
+            if next(itemsDict) == nil then
+                logWarn("ORDER_DELIVERY: all items have count 0"); return
+            end
+            local id = server.submitJob(proto.JOB.DELIVER, {
+                items       = itemsDict,
+                destination = { x = dest.x, y = dest.y or 67, z = dest.z },
+            }, p.priority or 5)
+            logInfo(string.format("Dashboard order %s → %d,%d,%d (%d types)",
+                id, dest.x, dest.y or 67, dest.z, #items))
+
         else
             logWarn("Unknown bridge command: " .. tostring(t))
         end
@@ -1107,7 +1179,7 @@ function server.run()
                 destination = j.params and j.params.destination or nil,
             })
         end
-        local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs, version = proto.VERSION })
+        local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs, version = proto.VERSION, storage = storageItems })
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
             -- Read the body BEFORE closing — the bridge sends pending dashboard
@@ -1134,6 +1206,8 @@ function server.run()
     local dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
     local healthTimer   = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
     local bridgeTimer   = os.startTimer(CFG.BRIDGE_INTERVAL)
+    local storageTimer  = os.startTimer(5)
+    pcall(refreshStorage)   -- initial load
 
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
@@ -1164,6 +1238,10 @@ function server.run()
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
+
+            elseif p1 == storageTimer then
+                pcall(refreshStorage)
+                storageTimer = os.startTimer(5)
 
             elseif p1 == bridgeTimer then
                 -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge

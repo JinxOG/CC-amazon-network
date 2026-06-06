@@ -38,6 +38,7 @@ let state = {
     turtles:  {},   // { nodeId: { x, y, z, status, fuel, role, jobId, dock, online } }
     jobs:     [],   // job queue from CC server
     version:  null,
+    storage:  [],   // RS storage snapshot [{name, displayName, amount, craftable}]
     updatedAt: null,
 };
 
@@ -178,7 +179,7 @@ app.get('/dynmap-frame', (req, res) => {
 
 // CC central_server.lua pushes state here every 2s
 app.post('/update', async (req, res) => {
-    const { turtles, jobs, version } = req.body;
+    const { turtles, jobs, version, storage } = req.body;
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
     const now = Date.now();
@@ -209,8 +210,9 @@ app.post('/update', async (req, res) => {
         }
     }
 
-    if (jobs) state.jobs = jobs;
+    if (jobs)    state.jobs    = jobs;
     if (version) state.version = version;
+    if (storage) state.storage = storage;
     state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });
