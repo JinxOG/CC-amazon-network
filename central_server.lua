@@ -872,6 +872,10 @@ function server.run()
     -- If the CC server's HTTP response is lost in transit, the bridge has already
     -- cleared its queue, but a re-send could double-dispatch a command. Guard with
     -- a small cache keyed on the server-assigned timestamp + command type.
+    -- Declared before handleBridgeCommand so the UPDATE_ALL branch can capture
+    -- it as an upvalue. Acted on in the main loop outside parallel.waitForAny.
+    local pendingUpdate = false
+
     local recentCmds = {}
     local function isDuplicate(cmd)
         local key = (cmd.ts or 0) .. ":" .. (cmd.type or "")
@@ -1068,8 +1072,6 @@ function server.run()
 
     -- Set by UPDATE_ALL handler; acted on in the main loop outside the
     -- parallel.waitForAny timeout so the updater is not killed mid-download.
-    local pendingUpdate = false
-
     -- ── Bridge push ───────────────────────────────────────────────────────────
     -- Pushes state to the Node bridge every BRIDGE_INTERVAL seconds.
     -- The bridge returns any dashboard commands queued since the last push
