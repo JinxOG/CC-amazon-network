@@ -209,7 +209,7 @@ app.post('/update', async (req, res) => {
 
     if (jobs)    state.jobs    = jobs;
     if (version) state.version = version;
-    if (Array.isArray(storage) && storage.length > 0) state.storage = storage;
+    if (Array.isArray(storage)) state.storage = storage;
     state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });
