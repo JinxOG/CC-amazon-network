@@ -886,19 +886,26 @@ function server.run()
     local pendingUpdate = false
 
     -- RS storage snapshot — refreshed every 5s, included in every bridge push.
-    local storageItems = {}
+    -- Craftable index is refreshed separately every 60s (listCraftableItems is slow).
+    local storageItems  = {}
+    local craftableMap  = {}
+
+    local function refreshCraftable()
+        if not rsBridge then return end
+        local ok, craft = pcall(function() return rsBridge.listCraftableItems() end)
+        if ok and type(craft) == "table" then
+            craftableMap = {}
+            for _, item in ipairs(craft) do
+                if item.name then craftableMap[item.name] = true end
+            end
+        end
+    end
+
     local function refreshStorage()
         if not rsBridge then
             rsBridge = peripheral.find("rsBridge")
             if not rsBridge then return end
             logInfo("RS Bridge re-acquired")
-        end
-        local craftable = {}
-        local ok2, craft = pcall(function() return rsBridge.listCraftableItems() end)
-        if ok2 and type(craft) == "table" then
-            for _, item in ipairs(craft) do
-                if item.name then craftable[item.name] = true end
-            end
         end
         local ok, raw = pcall(function() return rsBridge.listItems() end)
         if not ok then
@@ -917,7 +924,7 @@ function server.run()
                     name        = item.name,
                     displayName = item.displayName or item.name,
                     amount      = item.amount or 0,
-                    craftable   = craftable[item.name] or false,
+                    craftable   = craftableMap[item.name] or false,
                 })
             end
         end
@@ -1216,10 +1223,11 @@ function server.run()
     loadJobs()
     print("Console ready. Type 'help' for commands.")
 
-    local dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
-    local healthTimer   = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
-    local bridgeTimer   = os.startTimer(CFG.BRIDGE_INTERVAL)
-    local storageTimer  = os.startTimer(5)
+    local dispatchTimer   = os.startTimer(CFG.DISPATCH_INTERVAL)
+    local healthTimer     = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
+    local bridgeTimer     = os.startTimer(CFG.BRIDGE_INTERVAL)
+    local storageTimer    = os.startTimer(5)
+    local craftableTimer  = os.startTimer(1)   -- first craftable refresh very soon after boot
     pcall(refreshStorage)   -- initial load
 
     while true do
@@ -1255,6 +1263,10 @@ function server.run()
             elseif p1 == storageTimer then
                 pcall(refreshStorage)
                 storageTimer = os.startTimer(5)
+
+            elseif p1 == craftableTimer then
+                pcall(refreshCraftable)
+                craftableTimer = os.startTimer(60)
 
             elseif p1 == bridgeTimer then
                 -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge

@@ -831,7 +831,7 @@ async function poll() {
         lastState = d;
         document.getElementById('status-dot').className = '';
         const ageSeconds = d.updatedAt ? Math.round((Date.now() - d.updatedAt) / 1000) : null;
-        const stale = ageSeconds !== null && ageSeconds > 10;
+        const stale = ageSeconds !== null && ageSeconds > 30;
         const ago = ageSeconds !== null ? ageSeconds : '?';
         const lastUpdateEl = document.getElementById('last-update');
         lastUpdateEl.textContent = stale
