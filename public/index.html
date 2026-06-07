@@ -281,27 +281,28 @@
         .om-result-amt.low   { color:#ffaa44; font-size:10px; }
         .om-result-amt.craft { color:#4488ff; font-size:10px; }
         .om-result-amt.zero  { color:#333;    font-size:10px; }
-        .cart-list { display:flex; flex-direction:column; gap:5px; min-height:28px; }
+        .cart-list  { display:flex; flex-direction:column; gap:5px; min-height:28px; }
         .cart-empty { color:#2a2a4a; font-size:11px; letter-spacing:1px; padding:6px 0; }
-        .cart-item  { display:flex; align-items:center; gap:5px; font-size:11px; min-width:0; }
-        .ci-name { flex:1; min-width:0; color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .ci-craft { font-size:9px; color:#4488ff; letter-spacing:1px; white-space:nowrap; flex-shrink:0; }
-        .ci-step {
-            flex-shrink:0; background:transparent; border:1px solid #1e1e3e; color:#555;
-            font-family:'Courier New',monospace; font-size:13px; width:22px; height:22px;
-            cursor:pointer; line-height:20px; text-align:center; border-radius:2px; padding:0;
+        .cart-item  { display:grid; grid-template-columns:1fr 22px 52px 22px 16px; align-items:center; gap:5px; }
+        .ci-name  { min-width:0; color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+        .ci-craft { font-size:9px; color:#4488ff; letter-spacing:1px; }
+        .ci-step  {
+            background:transparent; border:1px solid #1e1e3e; color:#555;
+            font-family:'Courier New',monospace; font-size:13px;
+            width:22px; height:22px; cursor:pointer; line-height:20px;
+            text-align:center; border-radius:2px; padding:0;
         }
         .ci-step:hover { border-color:#00ff88; color:#00ff88; }
         .ci-qty {
-            flex-shrink:0; width:48px; height:26px; background:#080810; border:1px solid #1e1e3e; color:#ddd;
-            font-family:'Courier New',monospace; font-size:11px; padding:4px 6px;
-            border-radius:2px; outline:none; text-align:right;
+            width:100%; height:22px; background:#080810; border:1px solid #1e1e3e; color:#ddd;
+            font-family:'Courier New',monospace; font-size:11px; padding:2px 4px;
+            border-radius:2px; outline:none; text-align:center; box-sizing:border-box;
         }
         .ci-qty:focus { border-color:#00ff8866; }
         .ci-qty.craft { border-color:#4488ff; background:#00082a; color:#88aaff; }
         .ci-del {
             background:transparent; border:none; color:#333; cursor:pointer;
-            font-size:14px; padding:0 2px; line-height:1; flex-shrink:0;
+            font-size:14px; padding:0; line-height:1; text-align:center;
         }
         .ci-del:hover { color:#ff4444; }
     </style>
