@@ -888,7 +888,11 @@ function server.run()
     -- RS storage snapshot — refreshed every 5s, included in every bridge push.
     local storageItems = {}
     local function refreshStorage()
-        if not rsBridge then return end
+        if not rsBridge then
+            rsBridge = peripheral.find("rsBridge")
+            if not rsBridge then return end
+            logInfo("RS Bridge re-acquired")
+        end
         local craftable = {}
         local ok2, craft = pcall(function() return rsBridge.listCraftableItems() end)
         if ok2 and type(craft) == "table" then
@@ -899,6 +903,7 @@ function server.run()
         local ok, raw = pcall(function() return rsBridge.listItems() end)
         if not ok then
             logWarn("RS listItems failed: " .. tostring(raw))
+            rsBridge = nil   -- force re-acquire next cycle
             return
         end
         if type(raw) ~= "table" then
