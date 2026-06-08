@@ -1238,9 +1238,13 @@ function server.run()
     local dispatchTimer   = os.startTimer(CFG.DISPATCH_INTERVAL)
     local healthTimer     = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
     local bridgeTimer     = os.startTimer(CFG.BRIDGE_INTERVAL)
-    local storageTimer    = os.startTimer(5)
-    local craftableTimer  = os.startTimer(1)   -- first craftable refresh very soon after boot
-    pcall(refreshStorage)   -- initial load
+    -- Wall-clock timestamps for storage/craftable refresh; no separate timers
+    -- because separate timers can be consumed by parallel.waitForAny in the
+    -- bridgeTimer handler, causing them to silently stop firing.
+    pcall(refreshStorage)
+    pcall(refreshCraftable)
+    local lastStorageRefresh   = os.epoch("utc")
+    local lastCraftableRefresh = os.epoch("utc")
 
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
@@ -1272,18 +1276,21 @@ function server.run()
                 if not ok then logError("Health check: " .. tostring(err)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
-            elseif p1 == storageTimer then
-                local t0 = os.epoch("utc")
-                pcall(refreshStorage)
-                local dt = os.epoch("utc") - t0
-                if dt > 3000 then logWarn("RS refresh took " .. dt .. "ms") end
-                storageTimer = os.startTimer(5)
-
-            elseif p1 == craftableTimer then
-                pcall(refreshCraftable)
-                craftableTimer = os.startTimer(60)
-
             elseif p1 == bridgeTimer then
+                -- Refresh storage/craftable using wall-clock checks so events
+                -- cannot be consumed by the parallel.waitForAny below.
+                local now = os.epoch("utc")
+                if now - lastStorageRefresh >= 5000 then
+                    local t0 = os.epoch("utc")
+                    pcall(refreshStorage)
+                    local dt = os.epoch("utc") - t0
+                    if dt > 3000 then logWarn("RS refresh took " .. dt .. "ms") end
+                    lastStorageRefresh = os.epoch("utc")
+                end
+                if now - lastCraftableRefresh >= 60000 then
+                    pcall(refreshCraftable)
+                    lastCraftableRefresh = os.epoch("utc")
+                end
                 -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge
                 -- cannot stall the main event loop indefinitely.
                 local pushDone = false
