@@ -887,8 +887,10 @@ function server.run()
 
     -- RS storage snapshot — refreshed every 5s, included in every bridge push.
     -- Craftable index is refreshed separately every 60s (listCraftableItems is slow).
+    -- storageJSON is pre-serialised here so pushToBridge never does it inside parallel.
     local storageItems  = {}
     local craftableMap  = {}
+    local storageJSON   = "[]"
 
     local function refreshCraftable()
         if not rsBridge then return end
@@ -929,6 +931,7 @@ function server.run()
             end
         end
         storageItems = result
+        storageJSON  = textutils.serialiseJSON(result)
         logInfo("RS storage refreshed: " .. #storageItems .. " items")
     end
 
@@ -1199,7 +1202,11 @@ function server.run()
                 destination = j.params and j.params.destination or nil,
             })
         end
-        local payload = textutils.serialiseJSON({ turtles = turtles, jobs = jobs, version = proto.VERSION, storage = storageItems })
+        -- Use pre-serialised storageJSON so we never serialise 300+ items inside parallel
+        local payload = '{"turtles":' .. textutils.serialiseJSON(turtles) ..
+                        ',"jobs":'    .. textutils.serialiseJSON(jobs) ..
+                        ',"version":' .. textutils.serialiseJSON(proto.VERSION) ..
+                        ',"storage":' .. storageJSON .. '}'
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
             -- Read the body BEFORE closing — the bridge sends pending dashboard
@@ -1273,7 +1280,7 @@ function server.run()
                 -- cannot stall the main event loop indefinitely.
                 parallel.waitForAny(
                     function() pcall(pushToBridge) end,
-                    function() sleep(5) end   -- abandon push if it takes >5s
+                    function() sleep(15) end   -- abandon push if it takes >15s
                 )
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
