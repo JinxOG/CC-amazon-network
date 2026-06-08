@@ -995,6 +995,7 @@ function renderStorage(items) {
     const el = document.getElementById('storage-list');
     if (!items.length) { el.innerHTML = '<div class="empty">NO RS DATA</div>'; return; }
     if (!list.length)  { el.innerHTML = '<div class="empty">NO MATCHES</div>'; return; }
+    const savedScroll = el.scrollTop;
     el.innerHTML = list.map(item => {
         const { text, cls } = fmtAmt(item);
         const dn = escapeHtml(item.displayName || item.name);
@@ -1005,6 +1006,7 @@ function renderStorage(items) {
             <button class="sr-add" onclick="cartAdd(${escapeHtml(JSON.stringify(item.name))})">+</button>
         </div>`;
     }).join('');
+    el.scrollTop = savedScroll;
 }
 
 function filterStorage() { renderStorage(storageData); }

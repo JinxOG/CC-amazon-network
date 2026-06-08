@@ -925,7 +925,7 @@ function server.run()
                 table.insert(result, {
                     name        = item.name,
                     displayName = item.displayName or item.name,
-                    amount      = item.amount or 0,
+                    amount      = item.amount or item.count or 0,
                     craftable   = craftableMap[item.name] or false,
                 })
             end
