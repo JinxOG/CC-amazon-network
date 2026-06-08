@@ -1209,11 +1209,16 @@ function server.run()
                         ',"storage":' .. storageJSON .. '}'
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
+            local status = resp.getResponseCode()
             -- Read the body BEFORE closing — the bridge sends pending dashboard
             -- commands in the response (commands: [...]).  Previously we called
             -- resp.close() immediately and silently discarded all of them.
             local body = resp.readAll()
             resp.close()
+            if status ~= 200 then
+                logWarn("Bridge HTTP " .. tostring(status) .. ": " .. body:sub(1, 60))
+                return
+            end
             local ok2, data = pcall(textutils.unserialiseJSON, body)
             if ok2 and type(data) == "table" and type(data.commands) == "table" then
                 for _, cmd in ipairs(data.commands) do

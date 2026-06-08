@@ -180,6 +180,7 @@ app.get('/dynmap-frame', (req, res) => {
 // CC central_server.lua pushes state here every 2s
 app.post('/update', async (req, res) => {
     const { turtles, jobs, version, storage } = req.body || {};
+    console.log(`[UPDATE] v=${version} turtles=${Object.keys(turtles||{}).length} storage=${Array.isArray(storage)?storage.length:'?'}`);
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
     const now = Date.now();
