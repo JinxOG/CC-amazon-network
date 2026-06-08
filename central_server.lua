@@ -1268,7 +1268,10 @@ function server.run()
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == storageTimer then
+                local t0 = os.epoch("utc")
                 pcall(refreshStorage)
+                local dt = os.epoch("utc") - t0
+                if dt > 3000 then logWarn("RS refresh took " .. dt .. "ms") end
                 storageTimer = os.startTimer(5)
 
             elseif p1 == craftableTimer then
@@ -1278,10 +1281,12 @@ function server.run()
             elseif p1 == bridgeTimer then
                 -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge
                 -- cannot stall the main event loop indefinitely.
+                local pushDone = false
                 parallel.waitForAny(
-                    function() pcall(pushToBridge) end,
+                    function() pcall(pushToBridge); pushDone = true end,
                     function() sleep(15) end   -- abandon push if it takes >15s
                 )
+                if not pushDone then logWarn("Bridge push timed out (>15s)") end
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
                 -- Run updater AFTER the parallel context exits so it is not
