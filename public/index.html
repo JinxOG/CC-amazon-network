@@ -31,6 +31,14 @@
         #cc-version { font-size:10px; color:#00ff8877; letter-spacing:1px; }
         #header .sep { color:#2a2a4a; }
         #last-update { color:#9a9aaa; font-size:11px; letter-spacing:1px; }
+        #feed-badge {
+            font-size:10px; letter-spacing:1px; padding:2px 8px;
+            border-radius:10px; border:1px solid; transition:color .3s,border-color .3s,background .3s;
+        }
+        #feed-badge.live    { color:#00ff88; border-color:#00ff8844; background:#00ff8808; }
+        #feed-badge.stale   { color:#ffaa44; border-color:#ffaa4444; background:#ffaa4408; animation:stalePulse 1.4s ease-in-out infinite; }
+        #feed-badge.offline { color:#ff4444; border-color:#ff444444; background:#ff444408; }
+        @keyframes stalePulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
         #header-stats { margin-left:auto; display:flex; gap:16px; font-size:11px; align-items:center; }
         .stat { color:#7a8a9a; letter-spacing:1px; }
         .stat b { color:#00ff88; font-weight:normal; text-shadow:0 0 6px #00ff8844; }
@@ -423,6 +431,7 @@
     <span id="cc-version">—</span>
     <span class="sep">|</span>
     <div id="last-update">connecting...</div>
+    <div id="feed-badge" class="offline">● —</div>
     <div id="header-stats">
         <div class="stat">ONLINE <b id="s-online">0</b></div>
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
@@ -850,15 +859,20 @@ async function poll(){
         lastState=d;
         document.getElementById('status-dot').className='';
         const age=d.updatedAt?Math.round((Date.now()-d.updatedAt)/1000):null;
-        const stale=age!==null&&age>30;
-        const el=document.getElementById('last-update');
-        el.textContent=stale?`synced ${age}s ago — CC OFFLINE?`:`synced ${age??'?'}s ago`;
-        el.style.color=stale?'#f87171':'';
+        const stale=age!==null&&age>8;
+        const lu=document.getElementById('last-update');
+        const badge=document.getElementById('feed-badge');
+        lu.textContent=age!=null?`synced ${age}s ago`:'synced ?s ago';
+        lu.style.color=stale?'#ffaa44':'';
+        if(stale){badge.className='stale';badge.textContent='⚠ STALE';}
+        else{badge.className='live';badge.textContent='● LIVE';}
         if(d.version)document.getElementById('cc-version').textContent=`v${d.version}`;
         try{renderAll(d);}catch(re){console.error('[render error]',re);}
     }catch(e){
         document.getElementById('status-dot').className='offline';
         document.getElementById('last-update').textContent='server offline';
+        document.getElementById('feed-badge').className='offline';
+        document.getElementById('feed-badge').textContent='✕ OFFLINE';
     }
 }
 setInterval(poll,2000);poll();
