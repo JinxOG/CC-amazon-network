@@ -975,25 +975,35 @@ function findJobTurtles(j, turtles, turtleEntries, allJobs){
     let delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
     let supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
 
-    // Support turtles run a separate SUPPORT_FOLLOW job — find it via masterJobId or partnerId
-    if(!supEntry && allJobs){
-        const supportJob=allJobs.find(sj=>{
-            const jt=sj.jobType||sj.type;
-            if(jt!=='SUPPORT_FOLLOW')return false;
-            const p=sj.params||{};
-            return p.masterJobId===j.id||(delEntry&&p.partnerId===delEntry[0]);
-        });
-        if(supportJob){
-            supEntry=turtleEntries.find(([,t])=>t.jobId===supportJob.id&&t.role==='SUPPORT');
-            if(!supEntry&&supportJob.turtleId&&turtles[supportJob.turtleId]){
-                supEntry=[supportJob.turtleId,turtles[supportJob.turtleId]];
+    // Use j.linkedJob — server stores the paired support job ID directly on the delivery job
+    if(!supEntry&&j.linkedJob){
+        supEntry=turtleEntries.find(([,t])=>t.jobId===j.linkedJob);
+        if(!supEntry&&allJobs){
+            const supJob=allJobs.find(sj=>sj.id===j.linkedJob);
+            if(supJob&&supJob.assignedTo&&turtles[supJob.assignedTo]){
+                supEntry=[supJob.assignedTo,turtles[supJob.assignedTo]];
             }
         }
     }
 
-    // Fallback: job object stores turtle IDs (covers completed jobs)
+    // Broader fallback: search SUPPORT_FOLLOW jobs by params
+    if(!supEntry&&allJobs){
+        const supportJob=allJobs.find(sj=>{
+            if(sj.type!=='SUPPORT_FOLLOW')return false;
+            const p=sj.params||{};
+            return p.masterJobId===j.id||(delEntry&&p.partnerId===delEntry[0]);
+        });
+        if(supportJob){
+            supEntry=turtleEntries.find(([,t])=>t.jobId===supportJob.id);
+            if(!supEntry&&supportJob.assignedTo&&turtles[supportJob.assignedTo]){
+                supEntry=[supportJob.assignedTo,turtles[supportJob.assignedTo]];
+            }
+        }
+    }
+
+    // Fallback for completed jobs where turtles have cleared their jobId
     if(!delEntry){
-        const did=j.turtleId||j.deliveryTurtleId||j.deliveryId;
+        const did=j.assignedTo||j.turtleId||j.deliveryTurtleId;
         if(did&&turtles[did])delEntry=[did,turtles[did]];
     }
     if(!supEntry){
@@ -1008,7 +1018,7 @@ let _prevJobIds=new Set();
 function renderJobs(jobs,turtles){
     const el=document.getElementById('jobs-list');
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
-    const isFollowJob=j=>(j.jobType||j.type)==='SUPPORT_FOLLOW';
+    const isFollowJob=j=>j.type==='SUPPORT_FOLLOW';
 
     // Apply filter, always hiding SUPPORT_FOLLOW (folded into delivery card)
     let filtered;
