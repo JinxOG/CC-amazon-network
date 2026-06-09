@@ -20,11 +20,11 @@
         #status-dot {
             width:8px; height:8px; border-radius:50%;
             background:#00ff88; box-shadow:0 0 8px #00ff88,0 0 20px #00ff8833;
-            flex-shrink:0; animation:pulse 2s ease-in-out infinite;
+            flex-shrink:0; animation:dotPulse 2s ease-in-out infinite;
         }
-        @keyframes pulse {
+        @keyframes dotPulse {
             0%,100%{box-shadow:0 0 8px #00ff88,0 0 20px #00ff8833}
-            50%{box-shadow:0 0 12px #00ff88,0 0 30px #00ff8855}
+            50%{box-shadow:0 0 14px #00ff88,0 0 34px #00ff8855}
         }
         #status-dot.offline { background:#ff4444; box-shadow:0 0 6px #ff4444; animation:none; }
         #header h1 { color:#00ff88; font-size:14px; letter-spacing:4px; text-shadow:0 0 10px #00ff8866; }
@@ -110,6 +110,7 @@
         .tcard {
             background:#08080e; border:1px solid #00ff8818;
             border-radius:3px; padding:11px; flex-shrink:0;
+            animation:cardIn .2s ease forwards;
         }
         .tcard.offline { opacity:.45; }
         .tcard-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
@@ -118,11 +119,11 @@
         .tcard-name.s { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
         .tcard-sub { font-size:10px; color:#2a2a4a; letter-spacing:1px; }
         .fuel-track { background:#040407; height:3px; border-radius:2px; margin:6px 0; }
-        .fuel-fill { height:100%; border-radius:2px; transition:width .5s; }
+        .fuel-fill { height:100%; border-radius:2px; transition:width .6s ease; }
         .fuel-fill.ok   { background:linear-gradient(90deg,#00ff88,#00ccaa); box-shadow:0 0 4px #00ff8844; }
         .fuel-fill.med  { background:linear-gradient(90deg,#ffcc00,#ff8800); }
         .fuel-fill.low  { background:#ff8844; }
-        .fuel-fill.crit { background:#ff4444; }
+        .fuel-fill.crit { background:#ff4444; animation:critBlink 1s ease-in-out infinite; }
         .tcard-row { display:flex; gap:14px; font-size:11px; color:#444; flex-wrap:wrap; margin-bottom:8px; }
         .tcard-row .v { color:#aaa; }
         .tcard-btns { display:flex; gap:5px; flex-wrap:wrap; }
@@ -130,11 +131,11 @@
         /* ── Shared badge ── */
         .sbadge { font-size:10px; padding:2px 8px; border-radius:2px; letter-spacing:1px; white-space:nowrap; border-width:1px; border-style:solid; }
         .sbadge.IDLE       { background:#0a2a1a; color:#00ff88; border-color:#00ff8822; }
-        .sbadge.TRAVELLING { background:#2a2a0a; color:#ffcc00; border-color:#ffcc0022; }
-        .sbadge.WORKING    { background:#0a1a3a; color:#4488ff; border-color:#4488ff22; }
-        .sbadge.LOADING    { background:#2a1a0a; color:#ff8844; border-color:#ff884422; }
-        .sbadge.RETURNING  { background:#1a0a2a; color:#aa66ff; border-color:#aa66ff22; }
-        .sbadge.ERROR      { background:#2a0a0a; color:#ff4444; border-color:#ff444422; }
+        .sbadge.TRAVELLING { background:#2a2a0a; color:#ffcc00; border-color:#ffcc0022; animation:badgeGlow 1.8s ease-in-out infinite; }
+        .sbadge.WORKING    { background:#0a1a3a; color:#4488ff; border-color:#4488ff22; animation:badgeGlowBlue 1.8s ease-in-out infinite; }
+        .sbadge.LOADING    { background:#2a1a0a; color:#ff8844; border-color:#ff884422; animation:badgeGlowAmber 1.8s ease-in-out infinite; }
+        .sbadge.RETURNING  { background:#1a0a2a; color:#aa66ff; border-color:#aa66ff22; animation:badgeGlowPurple 1.8s ease-in-out infinite; }
+        .sbadge.ERROR      { background:#2a0a0a; color:#ff4444; border-color:#ff444422; animation:critBlink 1s ease-in-out infinite; }
         .sbadge.OFFLINE, .sbadge.UNKNOWN { background:#1a1a2a; color:#555; border-color:#2a2a3a; }
 
         /* ── Shared buttons ── */
@@ -148,23 +149,44 @@
         .pbtn.amber:hover { border-color:#ffaa4433; color:#ffaa44; }
         .pbtn.blue:hover  { border-color:#4488ff33; color:#4488ff; }
 
+        /* ── Job filter bar ── */
+        .jfilter-wrap { padding:0 !important; gap:0 !important; }
+        .jfilter-bar {
+            display:flex; gap:4px; padding:8px 10px; border-bottom:1px solid #00ff8808;
+            flex-shrink:0; background:#050508;
+        }
+        .jfbtn {
+            background:transparent; border:1px solid #1a1a2e; color:#333;
+            font-family:'Courier New',monospace; font-size:10px; padding:4px 14px;
+            border-radius:2px; cursor:pointer; letter-spacing:2px; transition:all .15s;
+        }
+        .jfbtn:hover { color:#666; border-color:#2a2a3a; }
+        .jfbtn.active { color:#00ff88; border-color:#00ff8833; background:#0a1e14; text-shadow:0 0 6px #00ff8833; }
+        #jobs-list {
+            flex:1; overflow-y:auto; padding:10px;
+            display:flex; flex-direction:column; gap:8px;
+        }
+
         /* ── Job cards ── */
         .job-card {
             background:#08080e; border:1px solid #00ff8818;
             border-left:3px solid #333; border-radius:3px; padding:11px; flex-shrink:0;
+            animation:cardIn .22s ease forwards;
         }
-        .job-card.IN_PROGRESS { border-left-color:#4488ff; box-shadow:-2px 0 8px #4488ff18; }
-        .job-card.PENDING     { border-left-color:#ffaa00; box-shadow:-2px 0 8px #ffaa0018; }
-        .job-card.COMPLETE    { border-left-color:#00ff88; opacity:.4; }
+        .job-card.IN_PROGRESS {
+            border-left-color:#4488ff;
+            animation:cardIn .22s ease forwards, jobActivePulse 3s ease-in-out infinite;
+        }
+        .job-card.PENDING     { border-left-color:#ffaa00; box-shadow:-2px 0 8px #ffaa0014; }
+        .job-card.COMPLETE    { border-left-color:#00ff88; opacity:.45; }
         .job-card.FAILED      { border-left-color:#ff4444; }
         .job-card.CANCELLED   { border-left-color:#555; opacity:.4; }
 
-        .jc-top { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-        .jc-id { font-size:11px; color:#2a2a3a; letter-spacing:1px; }
-        .jc-turtle { font-size:11px; color:#4488ff55; letter-spacing:1px; }
-        .jbadge { font-size:10px; padding:2px 8px; border-radius:2px; letter-spacing:1px; margin-left:auto; border-width:1px; border-style:solid; }
+        .jc-top { display:flex; align-items:center; gap:8px; margin-bottom:9px; }
+        .jc-id { font-size:12px; color:#2a2a3a; letter-spacing:1px; }
+        .jbadge { font-size:11px; padding:2px 9px; border-radius:2px; letter-spacing:1px; margin-left:auto; border-width:1px; border-style:solid; }
         .jbadge.PENDING     { background:#2a2000; color:#ffaa00; border-color:#ffaa0022; }
-        .jbadge.IN_PROGRESS { background:#001030; color:#4488ff; border-color:#4488ff22; }
+        .jbadge.IN_PROGRESS { background:#001030; color:#4488ff; border-color:#4488ff22; animation:badgeGlowBlue 2s ease-in-out infinite; }
         .jbadge.COMPLETE    { background:#002010; color:#00ff88; border-color:transparent; }
         .jbadge.FAILED      { background:#200000; color:#ff4444; border-color:transparent; }
         .jbadge.CANCELLED   { background:#1a1a1a; color:#555;   border-color:transparent; }
@@ -176,29 +198,29 @@
         .jc-cancel:hover { border-color:#ff444433; color:#ff4444; }
 
         .jprog { display:flex; gap:2px; margin-bottom:10px; }
-        .jstep { flex:1; position:relative; padding-bottom:16px; }
+        .jstep { flex:1; position:relative; padding-bottom:18px; }
         .jstep-bar { height:3px; background:#1a1a2e; border-radius:2px; }
-        .jstep-bar.done { background:#4488ff; box-shadow:0 0 4px #4488ff44; }
-        .jstep-bar.cur  { background:#4488ff55; }
-        .jstep-lbl { position:absolute; top:6px; left:50%; transform:translateX(-50%); font-size:8px; color:#1a1a2e; white-space:nowrap; }
+        .jstep-bar.done { background:#4488ff; box-shadow:0 0 5px #4488ff55; }
+        .jstep-bar.cur  { background:#4488ff88; animation:stepPulse 1.2s ease-in-out infinite; }
+        .jstep-lbl { position:absolute; top:7px; left:50%; transform:translateX(-50%); font-size:9px; color:#1a1a2e; white-space:nowrap; }
         .jstep-bar.done + .jstep-lbl { color:#4488ff55; }
-        .jstep-bar.cur  + .jstep-lbl { color:#4488ff44; }
+        .jstep-bar.cur  + .jstep-lbl { color:#4488ffaa; }
 
-        .jitems { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:7px; }
-        .jtag { background:#0a0a18; border:1px solid #1a1a2e; color:#888; font-size:11px; padding:2px 7px; border-radius:2px; }
+        .jitems { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+        .jtag { background:#0a0a18; border:1px solid #1a1a2e; color:#999; font-size:12px; padding:2px 8px; border-radius:2px; }
         .jtag .qty { color:#4488ff77; }
-        .jdest { font-size:11px; color:#333; letter-spacing:1px; margin-bottom:8px; }
+        .jdest { font-size:12px; color:#333; letter-spacing:1px; margin-bottom:9px; }
         .jdest span { color:#00ff8555; }
 
         /* ── Paired turtle section inside job cards ── */
         .jturtles { display:flex; gap:6px; border-top:1px solid #00ff8808; padding-top:9px; }
-        .jtside { flex:1; background:#050508; border:1px solid #0d0d1a; border-radius:2px; padding:7px 8px; }
-        .jtside-role { font-size:9px; letter-spacing:2px; margin-bottom:3px; }
-        .jtside-name { font-size:12px; letter-spacing:1px; margin-bottom:4px; }
+        .jtside { flex:1; background:#050508; border:1px solid #0d0d1a; border-radius:2px; padding:8px; }
+        .jtside-role { font-size:9px; letter-spacing:2px; margin-bottom:4px; }
+        .jtside-name { font-size:13px; letter-spacing:1px; margin-bottom:5px; }
         .jtside-name.d { color:#00ff88; text-shadow:0 0 6px #00ff8833; }
         .jtside-name.s { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
         .jtside-name.dim { color:#2a2a3a; }
-        .jtside-info { font-size:10px; color:#333; letter-spacing:1px; }
+        .jtside-info { font-size:11px; color:#333; letter-spacing:1px; }
 
         /* ── Storage ── */
         .store-header { display:flex; gap:6px; margin-bottom:6px; flex-shrink:0; align-items:center; }
@@ -286,7 +308,7 @@
             padding:20px; width:440px; max-height:88vh; overflow-y:auto;
             z-index:1001; box-shadow:0 0 40px #00ff8811,0 0 80px #00000088;
         }
-        #order-modal.show { display:block; }
+        #order-modal.show { display:block; animation:modalIn .18s ease forwards; }
         .modal-title { color:#00ff88; font-size:12px; letter-spacing:3px; margin-bottom:16px; text-shadow:0 0 8px #00ff8855; }
         .modal-field { margin-bottom:12px; }
         .modal-field label { display:block; font-size:10px; color:#444; letter-spacing:1px; margin-bottom:4px; }
@@ -348,8 +370,49 @@
             padding:8px 16px; border-radius:3px; z-index:2000; opacity:0;
             transition:opacity 0.3s; pointer-events:none;
         }
-        #toast.show { opacity:1; }
+        #toast.show { opacity:1; animation:toastIn .2s ease forwards; }
         #toast.err  { border-color:#ff444466; color:#ff4444; }
+
+        /* ── Animations ── */
+        @keyframes cardIn {
+            from { opacity:0; transform:translateY(5px); }
+            to   { opacity:1; transform:translateY(0); }
+        }
+        @keyframes modalIn {
+            from { opacity:0; transform:translate(-50%,-48%); }
+            to   { opacity:1; transform:translate(-50%,-50%); }
+        }
+        @keyframes toastIn {
+            from { opacity:0; transform:translateY(6px); }
+            to   { opacity:1; transform:translateY(0); }
+        }
+        @keyframes critBlink {
+            0%,100%{ opacity:1; } 50%{ opacity:.4; }
+        }
+        @keyframes stepPulse {
+            0%,100%{ opacity:1; box-shadow:0 0 4px #4488ff44; }
+            50%     { opacity:.5; box-shadow:0 0 10px #4488ff88; }
+        }
+        @keyframes jobActivePulse {
+            0%,100%{ box-shadow:-2px 0 8px #4488ff18; }
+            50%    { box-shadow:-2px 0 16px #4488ff44; }
+        }
+        @keyframes badgeGlow {
+            0%,100%{ text-shadow:none; }
+            50%    { text-shadow:0 0 8px #ffcc0088; }
+        }
+        @keyframes badgeGlowBlue {
+            0%,100%{ text-shadow:none; }
+            50%    { text-shadow:0 0 8px #4488ff88; }
+        }
+        @keyframes badgeGlowAmber {
+            0%,100%{ text-shadow:none; }
+            50%    { text-shadow:0 0 8px #ff884488; }
+        }
+        @keyframes badgeGlowPurple {
+            0%,100%{ text-shadow:none; }
+            50%    { text-shadow:0 0 8px #aa66ff88; }
+        }
     </style>
 </head>
 <body>
@@ -414,7 +477,15 @@
         </div>
 
         <div id="tab-fleet" class="tab-content active"><div class="empty">LOADING...</div></div>
-        <div id="tab-jobs"  class="tab-content"><div class="empty">NO ACTIVE JOBS</div></div>
+
+        <div id="tab-jobs" class="tab-content jfilter-wrap">
+            <div class="jfilter-bar">
+                <button class="jfbtn active" id="jf-active" onclick="setJobFilter('active')">ACTIVE</button>
+                <button class="jfbtn" id="jf-all" onclick="setJobFilter('all')">ALL</button>
+                <button class="jfbtn" id="jf-done" onclick="setJobFilter('done')">COMPLETE</button>
+            </div>
+            <div id="jobs-list"><div class="empty">NO ACTIVE JOBS</div></div>
+        </div>
 
         <div id="tab-storage" class="tab-content">
             <div class="store-header">
@@ -531,6 +602,7 @@ const coordBox = document.getElementById('coord-preview');
 let injectedMarkers  = {};
 let routePolylines   = {};
 let selectedTurtleId = null;
+let jobFilter        = 'active';
 
 const MC_COLORS = {
     DELIVERY:{ IDLE:'#00ff88', TRAVELLING:'#ffdd00', WORKING:'#44aaff', LOADING:'#ff8844', RETURNING:'#aa66ff', ERROR:'#ff4444' },
@@ -723,8 +795,7 @@ function switchTab(name){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RESIZABLE DIVIDER — disables iframe pointer events while dragging so the
-// iframe doesn't steal mousemove/mouseup events
+// RESIZABLE DIVIDER
 // ═══════════════════════════════════════════════════════════════════════════
 
 (function(){
@@ -734,7 +805,7 @@ function switchTab(name){
     div.addEventListener('mousedown',(e)=>{
         dragging=true;
         div.classList.add('dragging');
-        frame.style.pointerEvents='none';   // stop iframe swallowing events
+        frame.style.pointerEvents='none';
         e.preventDefault();
     });
     document.addEventListener('mousemove',(e)=>{
@@ -748,7 +819,7 @@ function switchTab(name){
         if(!dragging)return;
         dragging=false;
         div.classList.remove('dragging');
-        frame.style.pointerEvents='';       // restore
+        frame.style.pointerEvents='';
     });
 })();
 
@@ -850,9 +921,19 @@ function renderFleet(turtles){
     }).join('');
 }
 
-// ── Jobs: stepper + paired turtle section ────────────────────────────────
+// ── Jobs: filter + stepper + paired turtle section ───────────────────────
 
 const JOB_STEPS=['QUEUE','LOAD','TRAVEL','DELIVER','RETURN'];
+
+let jobFilter='active';
+
+function setJobFilter(f){
+    jobFilter=f;
+    document.querySelectorAll('.jfbtn').forEach(b=>b.classList.remove('active'));
+    document.getElementById('jf-'+f).classList.add('active');
+    const jobs=Array.isArray(lastState.jobs)?lastState.jobs:Object.values(lastState.jobs||{});
+    renderJobs(jobs,lastState.turtles||{});
+}
 
 function getJobStep(job,turtles){
     if(!job)return-1;
@@ -871,7 +952,7 @@ function getJobStep(job,turtles){
 function renderJobTurtle(id,t,role){
     const roleCls=role==='DELIVERY'?'d':'s';
     const roleColor=role==='DELIVERY'?'#00ff8833':'#4488ff33';
-    if(!t){
+    if(!id||!t){
         return `<div class="jtside">
             <div class="jtside-role" style="color:#1a1a2e;">${role}</div>
             <div class="jtside-name dim">—</div>
@@ -889,15 +970,43 @@ function renderJobTurtle(id,t,role){
     </div>`;
 }
 
+function findJobTurtles(j, turtles, turtleEntries){
+    // Primary: turtle's jobId still matches (active jobs)
+    let delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
+    let supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
+    // Fallback: job object stores turtle IDs (covers completed jobs after jobId is cleared)
+    if(!delEntry){
+        const did=j.turtleId||j.deliveryTurtleId||j.deliveryId;
+        if(did&&turtles[did])delEntry=[did,turtles[did]];
+    }
+    if(!supEntry){
+        const sid=j.supportTurtleId||j.supportId||j.partnerId;
+        if(sid&&turtles[sid])supEntry=[sid,turtles[sid]];
+    }
+    return{delEntry,supEntry};
+}
+
 function renderJobs(jobs,turtles){
-    const el=document.getElementById('tab-jobs');
-    const active=jobs.filter(j=>j.status!=='COMPLETE');
-    const recent=jobs.filter(j=>j.status==='COMPLETE').slice(-3);
-    const all=[...active,...recent];
-    if(!all.length){el.innerHTML='<div class="empty">NO ACTIVE JOBS</div>';return;}
+    const el=document.getElementById('jobs-list');
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+
+    // Apply filter
+    let filtered;
+    if(jobFilter==='done'){
+        filtered=[...jobs].filter(j=>j.status==='COMPLETE').reverse();
+    }else if(jobFilter==='active'){
+        filtered=[...jobs].filter(j=>!terminal.has(j.status));
+    }else{
+        filtered=[...jobs].reverse();
+    }
+
+    if(!filtered.length){
+        el.innerHTML=`<div class="empty">${jobFilter==='done'?'NO COMPLETED JOBS':'NO ACTIVE JOBS'}</div>`;
+        return;
+    }
+
     const turtleEntries=Object.entries(turtles||{});
-    el.innerHTML=all.map(j=>{
+    el.innerHTML=filtered.map(j=>{
         const canCancel=!terminal.has(j.status);
         const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
         const curStep=getJobStep(j,turtles);
@@ -913,9 +1022,7 @@ function renderJobs(jobs,turtles){
             ?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
         const dest=j.destination;
         const destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
-        // Find paired turtles
-        const delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
-        const supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
+        const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries);
         const turtlesHtml=`<div class="jturtles">
             ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
             ${renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT')}
