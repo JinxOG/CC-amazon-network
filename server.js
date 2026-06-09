@@ -15,6 +15,15 @@ process.on('uncaughtException', (err) => {
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+
+// Serve index.html with no-cache so the browser always fetches the latest version
+app.get('/', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
