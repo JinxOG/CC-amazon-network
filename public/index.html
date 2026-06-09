@@ -757,10 +757,13 @@ function updateInjectedMarkers(turtles){
                 if(ll&&(Math.abs(ll.lat-latlng.lat)>1e-6||Math.abs(ll.lng-latlng.lng)>1e-6)){
                     const fromLat=ll.lat,fromLng=ll.lng,toLat=latlng.lat,toLng=latlng.lng;
                     const start=performance.now(),dur=1800;
+                    const tip=m.getTooltip();
                     m._tweenId=requestAnimationFrame(function step(now){
-                        const t=Math.min(1,(now-start)/dur);
-                        try{m._latlng={lat:fromLat+(toLat-fromLat)*t,lng:fromLng+(toLng-fromLng)*t};m._project();m._updatePath();}catch(_){}
-                        if(t<1)m._tweenId=requestAnimationFrame(step);
+                        const p=Math.min(1,(now-start)/dur);
+                        const clat=fromLat+(toLat-fromLat)*p,clng=fromLng+(toLng-fromLng)*p;
+                        try{m._latlng={lat:clat,lng:clng};m._project();m._updatePath();}catch(_){}
+                        try{if(tip){tip._latlng={lat:clat,lng:clng};tip._updatePosition();}}catch(_){}
+                        if(p<1)m._tweenId=requestAnimationFrame(step);
                         else{try{m.setLatLng(latlng);}catch(_){}delete m._tweenId;}
                     });
                 }else{
