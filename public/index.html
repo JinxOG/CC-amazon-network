@@ -1231,8 +1231,8 @@ function cartAdd(name){
 function cartRemove(name){delete orderCart[name];renderOrderCart();updateOrderBtn();}
 function cartSetQty(name,val){
     const n=parseInt(val);if(!orderCart[name])return;
-    if(isNaN(n)||n<=0){cartRemove(name);return;}
-    orderCart[name].count=Math.min(n,orderCart[name].maxAvail||9999);updateOrderBtn();
+    if(!isNaN(n)&&n>0)orderCart[name].count=Math.min(n,orderCart[name].maxAvail||9999);
+    updateOrderBtn();
 }
 function cartStep(name,delta){
     if(!orderCart[name])return;
