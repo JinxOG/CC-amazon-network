@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>CC Dashboard Mockup v2</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0d0d1a; display:flex; flex-direction:column; align-items:center; padding:24px 16px; font-family:'Courier New',monospace; min-height:100vh; gap:16px; }
+h2 { color:#00ff88; font-size:13px; letter-spacing:3px; text-shadow:0 0 10px #00ff8866; }
+.subtitle { color:#444; font-size:11px; letter-spacing:1px; }
+
+.db { width:100%; max-width:1140px; height:600px; background:#050508; border:1px solid #00ff8833; border-radius:4px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 0 60px #00ff8808,0 0 120px #00000066; position:relative; }
+
+/* Header */
+.hdr { height:46px; background:#08080e; border-bottom:1px solid #00ff8833; display:flex; align-items:center; padding:0 16px; gap:10px; flex-shrink:0; }
+.hdr-dot { width:7px; height:7px; border-radius:50%; background:#00ff88; box-shadow:0 0 8px #00ff88,0 0 20px #00ff8833; flex-shrink:0; animation:pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 8px #00ff88,0 0 20px #00ff8833}50%{box-shadow:0 0 12px #00ff88,0 0 30px #00ff8855} }
+.hdr-title { color:#00ff88; font-size:13px; letter-spacing:4px; text-shadow:0 0 10px #00ff8866; }
+.hdr-ver { color:#00ff8855; font-size:9px; letter-spacing:1px; }
+.hdr-sep { color:#1a1a2e; font-size:16px; }
+.hdr-sync { color:#444; font-size:10px; letter-spacing:1px; }
+.hdr-stats { margin-left:auto; display:flex; gap:16px; align-items:center; }
+.hdr-stat { color:#2a2a3a; font-size:10px; letter-spacing:1px; }
+.hdr-stat b { color:#00ff88; font-weight:normal; text-shadow:0 0 6px #00ff8844; }
+.dynmap-link { color:#2a2a3a; font-size:10px; text-decoration:none; border:1px solid #1a1a2e; padding:2px 8px; border-radius:2px; letter-spacing:1px; transition:all .15s; }
+.dynmap-link:hover { color:#00ff88; border-color:#00ff8833; }
+
+/* Layout */
+.main { display:flex; flex:1; overflow:hidden; }
+
+/* Map */
+.map { flex:1; background:#07070d; position:relative; overflow:hidden; min-width:0; cursor:crosshair; }
+.map-grid { position:absolute; inset:0; background-image:linear-gradient(#00ff8803 1px,transparent 1px),linear-gradient(90deg,#00ff8803 1px,transparent 1px); background-size:44px 44px; }
+.map-marker { position:absolute; border-radius:50%; transform:translate(-50%,-50%); }
+.map-marker.d { width:10px; height:10px; background:#00ff88; box-shadow:0 0 8px #00ff88,0 0 16px #00ff8844; }
+.map-marker.s { width:8px; height:8px; background:#4488ff; box-shadow:0 0 6px #4488ff,0 0 12px #4488ff33; }
+.map-marker.i { width:6px; height:6px; background:#1a1a2e; border:1px solid #2a2a4a; }
+.map-lbl { position:absolute; font-size:7px; color:#00ff8866; letter-spacing:1px; transform:translate(-50%,-20px); white-space:nowrap; }
+.map-coord { position:absolute; top:10px; left:10px; background:rgba(5,5,8,.9); border:1px solid #00ff8844; color:#00ff88; font-size:10px; letter-spacing:2px; padding:3px 10px; border-radius:2px; }
+.map-hint { position:absolute; bottom:10px; left:10px; background:rgba(5,5,8,.85); border:1px solid #1a1a2e; color:#2a2a4a; font-size:9px; padding:3px 8px; border-radius:2px; letter-spacing:1px; }
+
+/* Divider */
+.divider { width:5px; background:#00ff8808; cursor:col-resize; display:flex; align-items:center; justify-content:center; flex-shrink:0; transition:background .2s; }
+.divider:hover { background:#00ff8822; }
+.divider::after { content:'⋮⋮'; color:#00ff8833; font-size:9px; line-height:1; }
+
+/* Panel */
+.panel { width:480px; flex-shrink:0; background:#06060b; display:flex; flex-direction:column; overflow:hidden; }
+
+/* Stats bar */
+.sbar { background:#050508; border-bottom:1px solid #00ff8818; padding:5px 10px; display:flex; align-items:center; flex-shrink:0; }
+.sbar-item { display:flex; flex-direction:column; align-items:center; flex:1; }
+.sbar-val { font-size:14px; line-height:1; text-shadow:0 0 8px currentColor; }
+.sbar-lbl { color:#2a2a3a; font-size:7px; letter-spacing:1px; margin-top:2px; }
+.sbar-sep { width:1px; background:#00ff8811; height:22px; margin:0 2px; flex-shrink:0; }
+
+/* Tabs */
+.tabs { display:flex; border-bottom:1px solid #00ff8811; flex-shrink:0; background:#050508; }
+.tbtn { flex:1; padding:8px 4px; text-align:center; cursor:pointer; font-size:10px; letter-spacing:2px; color:#2a2a4a; border:none; border-bottom:2px solid transparent; font-family:'Courier New',monospace; background:none; transition:all .15s; }
+.tbtn:hover { color:#555; }
+.tbtn.on { color:#00ff88; border-bottom-color:#00ff88; text-shadow:0 0 6px #00ff8844; }
+
+/* Tab content */
+.tc { display:none; flex:1; overflow-y:auto; padding:10px; flex-direction:column; gap:8px; }
+.tc.on { display:flex; }
+.tc::-webkit-scrollbar { width:2px; }
+.tc::-webkit-scrollbar-thumb { background:#00ff8822; border-radius:2px; }
+
+/* ── FLEET pair cards ── */
+.pcard { background:#08080e; border:1px solid #00ff8818; border-radius:3px; overflow:hidden; }
+.pcard-hdr { padding:8px 10px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #00ff8808; }
+.pcard-job { flex:1; min-width:0; }
+.pcard-items { color:#ccc; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pcard-dest { color:#00ff8855; font-size:9px; letter-spacing:1px; margin-top:1px; }
+.sbadge { font-size:8px; padding:2px 7px; border-radius:2px; letter-spacing:1px; white-space:nowrap; }
+.sb-travel { background:#2a2a0a; color:#ffcc00; border:1px solid #ffcc0022; }
+.sb-idle { background:#0a1a0a; color:#00ff88; border:1px solid #00ff8822; }
+.sb-load { background:#2a1a0a; color:#ff8844; border:1px solid #ff884422; }
+.pcard-turtles { display:flex; }
+.th { flex:1; padding:7px 10px; }
+.th.left { border-right:1px solid #00ff8808; }
+.th-role { font-size:7px; letter-spacing:2px; margin-bottom:3px; }
+.th-name { font-size:11px; letter-spacing:1px; margin-bottom:4px; }
+.th-name.g { color:#00ff88; text-shadow:0 0 6px #00ff8833; }
+.th-name.b { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
+.ftrack { background:#040407; height:2px; border-radius:2px; margin:3px 0; }
+.ffill { height:100%; border-radius:2px; }
+.ffill.g { background:linear-gradient(90deg,#00ff88,#00ccaa); box-shadow:0 0 4px #00ff8844; }
+.ffill.y { background:linear-gradient(90deg,#ffcc00,#ff8800); }
+.th-info { font-size:9px; color:#2a2a3a; letter-spacing:1px; }
+.pcard-foot { padding:5px 10px; border-top:1px solid #00ff8808; display:flex; align-items:center; gap:6px; }
+.eta { font-size:9px; letter-spacing:1px; }
+.eta.a { color:#ffcc00; text-shadow:0 0 4px #ffcc0033; }
+.eta.i { color:#2a2a4a; }
+.pbtns { margin-left:auto; display:flex; gap:4px; }
+.pbtn { background:transparent; border:1px solid #1a1a2e; color:#2a2a3a; font-size:8px; padding:2px 6px; border-radius:2px; cursor:pointer; font-family:'Courier New',monospace; letter-spacing:1px; transition:all .15s; }
+.pbtn:hover { border-color:#00ff8833; color:#00ff88; }
+.pbtn.d:hover { border-color:#ff444433; color:#ff4444; }
+
+/* ── JOBS ── */
+.jcard { background:#08080e; border:1px solid #00ff8818; border-left:3px solid #333; border-radius:3px; padding:10px; }
+.jcard.ip { border-left-color:#4488ff; box-shadow:-2px 0 8px #4488ff18; }
+.jcard.pend { border-left-color:#ffaa00; box-shadow:-2px 0 8px #ffaa0018; }
+.jcard.done { border-left-color:#00ff88; opacity:.45; }
+.jc-top { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
+.jc-id { font-size:9px; color:#2a2a3a; letter-spacing:1px; }
+.jc-turtle { font-size:9px; color:#4488ff55; letter-spacing:1px; }
+.jc-badge { font-size:8px; padding:2px 6px; border-radius:2px; letter-spacing:1px; margin-left:auto; }
+.jcb-ip { background:#001030; color:#4488ff; border:1px solid #4488ff22; }
+.jcb-pend { background:#2a2000; color:#ffaa00; border:1px solid #ffaa0022; }
+.jcb-done { background:#002010; color:#00ff88; }
+.jprog { display:flex; gap:2px; margin-bottom:8px; }
+.jstep { flex:1; height:3px; background:#1a1a2e; border-radius:2px; position:relative; }
+.jstep.done { background:#4488ff; box-shadow:0 0 4px #4488ff44; }
+.jstep.cur { background:#4488ff55; }
+.jstep-lbl { position:absolute; top:6px; left:50%; transform:translateX(-50%); font-size:6px; color:#1a1a2e; white-space:nowrap; }
+.jstep.done .jstep-lbl, .jstep.cur .jstep-lbl { color:#4488ff55; }
+.jitems { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px; }
+.jtag { background:#0a0a18; border:1px solid #1a1a2e; color:#777; font-size:9px; padding:2px 6px; border-radius:2px; }
+.jtag .qty { color:#4488ff77; }
+.jdest { font-size:9px; color:#2a2a3a; letter-spacing:1px; }
+.jdest span { color:#00ff8855; }
+.jcancel { margin-left:4px; background:transparent; border:1px solid #1a0a0a; color:#333; font-size:8px; padding:2px 6px; border-radius:2px; cursor:pointer; font-family:'Courier New',monospace; letter-spacing:1px; transition:all .15s; }
+.jcancel:hover { border-color:#ff444433; color:#ff4444; }
+
+/* ── STORE ── */
+.store-hdr { display:flex; gap:6px; margin-bottom:6px; flex-shrink:0; align-items:center; }
+.s-search { flex:1; background:#040407; border:1px solid #00ff8818; color:#ccc; font-family:'Courier New',monospace; font-size:11px; padding:6px 8px; border-radius:2px; outline:none; }
+.s-search:focus { border-color:#00ff8833; }
+.s-sort { background:#040407; border:1px solid #00ff8818; color:#444; font-family:'Courier New',monospace; font-size:9px; padding:5px 6px; border-radius:2px; outline:none; }
+.s-order { background:#0a1e14; border:1px solid #00ff8844; color:#00ff88; font-family:'Courier New',monospace; font-size:9px; padding:5px 8px; border-radius:2px; cursor:pointer; letter-spacing:1px; text-shadow:0 0 6px #00ff8833; white-space:nowrap; transition:all .15s; }
+.s-order:hover { background:#0f2e1e; }
+.slist { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
+.sr { display:flex; align-items:center; gap:8px; padding:5px 6px; border-bottom:1px solid #00ff8806; font-size:11px; transition:background .1s; }
+.sr:hover { background:#0a0a14; }
+.sr-name { flex:1; color:#999; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
+.sr-bar { width:40px; height:3px; background:#0d0d1a; border-radius:2px; overflow:hidden; flex-shrink:0; }
+.sr-bar-f { height:100%; border-radius:2px; }
+.sr-amt { font-size:10px; min-width:52px; text-align:right; letter-spacing:1px; }
+.sr-amt.ok { color:#00ff88; text-shadow:0 0 4px #00ff8822; }
+.sr-amt.low { color:#ffaa44; }
+.sr-amt.craft { color:#4488ff; }
+.sr-amt.zero { color:#1a1a2e; }
+.sr-add { background:transparent; border:1px solid #1a1a2e; color:#2a2a4a; font-size:11px; width:20px; height:20px; border-radius:2px; cursor:pointer; font-family:'Courier New',monospace; flex-shrink:0; line-height:18px; text-align:center; transition:all .15s; }
+.sr-add:hover { border-color:#00ff8833; color:#00ff88; }
+
+/* ── CMDS ── */
+.csec { margin-bottom:14px; }
+.csec-title { font-size:9px; letter-spacing:3px; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid; }
+.csec-title.green { color:#00ff88; border-color:#00ff8811; }
+.csec-title.red { color:#ff4444; border-color:#ff444411; }
+.csec-title.blue { color:#4488ff; border-color:#4488ff11; }
+.frow { display:flex; gap:6px; margin-bottom:7px; }
+.frow select { flex:1; background:#040407; border:1px solid #00ff8818; color:#ccc; font-family:'Courier New',monospace; font-size:10px; padding:6px 8px; border-radius:2px; outline:none; }
+.cbtn { width:100%; padding:7px 10px; background:#040407; border:1px solid #1a1a2e; color:#888; font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px; cursor:pointer; border-radius:2px; text-align:left; margin-bottom:5px; transition:all .15s; }
+.cbtn:hover { background:#0a0a14; }
+.cbtn.gr:hover { border-color:#00ff8833; color:#00ff88; }
+.cbtn.re { border-color:#1a0808; color:#555; }
+.cbtn.re:hover { border-color:#ff444433; color:#ff6666; background:#0d0505; }
+.cbtn.bl:hover { border-color:#4488ff33; color:#4488ff; background:#05050d; }
+.cconfirm { display:none; align-items:center; gap:6px; background:#0d0505; border:1px solid #ff444422; border-radius:2px; padding:5px 8px; margin-bottom:5px; font-size:9px; color:#ff6666; letter-spacing:1px; }
+.cconfirm span { flex:1; }
+.cy { background:#1a0505; border:1px solid #ff444433; color:#ff4444; font-family:'Courier New',monospace; font-size:9px; padding:2px 8px; border-radius:2px; cursor:pointer; }
+.cn { background:transparent; border:1px solid #1a1a2e; color:#333; font-family:'Courier New',monospace; font-size:9px; padding:2px 8px; border-radius:2px; cursor:pointer; }
+
+/* ── DISPATCH MODAL ── */
+.modal-backdrop { display:none; position:absolute; inset:0; background:rgba(0,0,0,0.82); z-index:100; }
+.modal-backdrop.show { display:block; }
+.modal { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:440px; background:#0a0a12; border:1px solid #00ff8844; border-radius:4px; padding:20px; z-index:101; box-shadow:0 0 40px #00ff8811,0 0 80px #00000088; }
+.modal-title { color:#00ff88; font-size:11px; letter-spacing:3px; margin-bottom:16px; text-shadow:0 0 8px #00ff8855; }
+.modal-label { font-size:9px; color:#444; letter-spacing:1px; margin-bottom:4px; display:block; }
+.modal-field { margin-bottom:12px; }
+.coord-row { display:flex; gap:6px; }
+.coord-row input { flex:1; min-width:0; background:#050508; border:1px solid #00ff8818; color:#ddd; font-family:'Courier New',monospace; font-size:12px; padding:7px 8px; border-radius:2px; outline:none; transition:border-color .15s; }
+.coord-row input:focus { border-color:#00ff8844; }
+.coord-hint { background:#0a1a0a; border:1px solid #00ff8822; border-radius:2px; padding:5px 10px; font-size:9px; color:#3a7a3a; letter-spacing:1px; margin-bottom:12px; }
+.modal-search-wrap { position:relative; }
+.modal-search { width:100%; background:#050508; border:1px solid #00ff8818; color:#ddd; font-family:'Courier New',monospace; font-size:11px; padding:7px 8px; border-radius:2px; outline:none; }
+.modal-search:focus { border-color:#00ff8844; }
+.modal-results { position:absolute; top:100%; left:0; right:0; z-index:10; background:#0a0a12; border:1px solid #00ff8822; border-top:none; border-radius:0 0 3px 3px; overflow:hidden; }
+.mres { display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:10px; border-bottom:1px solid #050508; transition:background .1s; }
+.mres:hover { background:#10101e; }
+.mres-name { flex:1; color:#ccc; }
+.mres-amt.ok { color:#00ff8888; font-size:9px; }
+.mres-amt.low { color:#ffaa44; font-size:9px; }
+.mres-amt.craft { color:#4488ff; font-size:9px; }
+.cart-list { display:flex; flex-direction:column; gap:5px; min-height:32px; }
+.cart-empty { color:#2a2a4a; font-size:10px; letter-spacing:1px; padding:8px 0; }
+.cart-item { display:grid; grid-template-columns:1fr 22px 52px 22px 16px; align-items:center; gap:5px; }
+.ci-name { color:#ccc; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
+.ci-step { background:transparent; border:1px solid #1e1e3e; color:#555; font-family:'Courier New',monospace; font-size:13px; width:22px; height:22px; cursor:pointer; line-height:20px; text-align:center; border-radius:2px; transition:all .15s; }
+.ci-step:hover { border-color:#00ff8833; color:#00ff88; }
+.ci-qty { width:100%; height:22px; background:#050508; border:1px solid #1e1e3e; color:#ddd; font-family:'Courier New',monospace; font-size:11px; padding:2px 4px; border-radius:2px; outline:none; text-align:center; }
+.ci-del { background:transparent; border:none; color:#333; cursor:pointer; font-size:14px; line-height:1; transition:color .15s; }
+.ci-del:hover { color:#ff4444; }
+.modal-actions { display:flex; gap:8px; margin-top:16px; }
+.mbtn { flex:1; padding:8px 12px; background:#040407; border:1px solid #1a1a2e; color:#888; font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px; cursor:pointer; border-radius:2px; text-align:center; transition:all .15s; }
+.mbtn.primary { border-color:#00ff8833; color:#00ff88; background:#0a1e14; }
+.mbtn.primary:hover { background:#0f2e1e; border-color:#00ff88; }
+.mbtn.cancel:hover { border-color:#ff444433; color:#ff6666; }
+</style>
+</head>
+<body>
+
+<h2>◆ DASHBOARD REDESIGN — v2</h2>
+<p class="subtitle">Icons removed · Dispatch modal working · Click OPEN DISPATCH or the map button to test</p>
+
+<div class="db">
+  <!-- Header -->
+  <div class="hdr">
+    <div class="hdr-dot"></div>
+    <span class="hdr-title">◆ CC AMAZON NETWORK</span>
+    <span class="hdr-ver">v1.6.12</span>
+    <span class="hdr-sep">|</span>
+    <span class="hdr-sync">synced 1s ago</span>
+    <div class="hdr-stats">
+      <div class="hdr-stat">ONLINE <b>8</b></div>
+      <div class="hdr-stat">ACTIVE <b>2</b></div>
+      <div class="hdr-stat">JOBS <b>3</b></div>
+      <a href="#" class="dynmap-link">DYNMAP ↗</a>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Map -->
+    <div class="map" onclick="handleMapClick(event)">
+      <div class="map-grid"></div>
+      <svg style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;" xmlns="http://www.w3.org/2000/svg">
+        <line x1="50%" y1="50%" x2="38%" y2="34%" stroke="#00ff8822" stroke-width="1" stroke-dasharray="4,4"/>
+        <line x1="50%" y1="50%" x2="63%" y2="57%" stroke="#4488ff22" stroke-width="1" stroke-dasharray="4,4"/>
+      </svg>
+      <div class="map-marker d" style="left:38%;top:34%"></div>
+      <div class="map-lbl" style="left:38%;top:34%">turtle_01</div>
+      <div class="map-marker s" style="left:39%;top:35%"></div>
+      <div class="map-marker d" style="left:63%;top:57%"></div>
+      <div class="map-lbl" style="left:63%;top:57%">turtle_03</div>
+      <div class="map-marker s" style="left:64%;top:58%"></div>
+      <div class="map-marker i" style="left:50%;top:49%"></div>
+      <div class="map-marker i" style="left:50%;top:52%"></div>
+      <div class="map-marker i" style="left:51%;top:50%"></div>
+      <div class="map-marker i" style="left:51%;top:51%"></div>
+      <div style="position:absolute;left:50%;top:50%;width:14px;height:14px;background:#0d0d1a;border:1px solid #00ff8833;border-radius:2px;transform:translate(-50%,-50%);"></div>
+      <div style="position:absolute;left:50%;top:50%;font-size:7px;color:#00ff8833;letter-spacing:1px;transform:translate(-50%,10px);">DEPOT</div>
+      <div class="map-coord">X -2,803 · Z 154</div>
+      <div class="map-hint">RIGHT-CLICK MAP → DISPATCH DELIVERY</div>
+      <button class="map-dispatch-btn" onclick="event.stopPropagation();openDispatch(null)">▶ DISPATCH</button>
+    </div>
+
+    <!-- Divider -->
+    <div class="divider"></div>
+
+    <!-- Panel -->
+    <div class="panel">
+      <!-- Stats bar -->
+      <div class="sbar">
+        <div class="sbar-item"><div class="sbar-val" style="color:#00ff88;">334</div><div class="sbar-lbl">RS ITEMS</div></div>
+        <div class="sbar-sep"></div>
+        <div class="sbar-item"><div class="sbar-val" style="color:#00ff88;">8</div><div class="sbar-lbl">TURTLES</div></div>
+        <div class="sbar-sep"></div>
+        <div class="sbar-item"><div class="sbar-val" style="color:#4488ff;text-shadow:0 0 8px #4488ff55;">2</div><div class="sbar-lbl">ACTIVE</div></div>
+        <div class="sbar-sep"></div>
+        <div class="sbar-item"><div class="sbar-val" style="color:#ffcc00;text-shadow:0 0 8px #ffcc0044;">3</div><div class="sbar-lbl">JOBS</div></div>
+        <div class="sbar-sep"></div>
+        <div class="sbar-item"><div class="sbar-val" style="color:#00ff8888;">12</div><div class="sbar-lbl">TODAY</div></div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <button class="tbtn on" onclick="sw('fleet',this)">FLEET</button>
+        <button class="tbtn" onclick="sw('jobs',this)">JOBS</button>
+        <button class="tbtn" onclick="sw('store',this)">STORE</button>
+        <button class="tbtn" onclick="sw('cmds',this)">CMDS</button>
+      </div>
+
+      <!-- FLEET -->
+      <div id="t-fleet" class="tc on">
+        <div class="pcard">
+          <div class="pcard-hdr">
+            <div class="pcard-job">
+              <div class="pcard-items">Iron Ingot ×64 · Oak Log ×128</div>
+              <div class="pcard-dest">→ -120, 64, -2800 &nbsp;·&nbsp; job_0001</div>
+            </div>
+            <span class="sbadge sb-travel">TRAVELLING</span>
+          </div>
+          <div class="pcard-turtles">
+            <div class="th left">
+              <div class="th-role" style="color:#00ff8844;">DELIVERY</div>
+              <div class="th-name g">turtle_01</div>
+              <div class="ftrack"><div class="ffill g" style="width:85%"></div></div>
+              <div class="th-info">85% · -2750, 64, 120</div>
+            </div>
+            <div class="th">
+              <div class="th-role" style="color:#4488ff44;">SUPPORT</div>
+              <div class="th-name b">turtle_02</div>
+              <div class="ftrack"><div class="ffill g" style="width:84%"></div></div>
+              <div class="th-info">84% · following</div>
+            </div>
+          </div>
+          <div class="pcard-foot">
+            <span class="eta a">⏱ ETA ~2 min</span>
+            <div class="pbtns">
+              <button class="pbtn">LOCATE</button>
+              <button class="pbtn">IDLE</button>
+              <button class="pbtn d">DEL</button>
+            </div>
+          </div>
+        </div>
+        <div class="pcard">
+          <div class="pcard-hdr">
+            <div class="pcard-job">
+              <div class="pcard-items">Stone Brick ×256 · Glass ×64</div>
+              <div class="pcard-dest">→ 50, 67, -100 &nbsp;·&nbsp; job_0002</div>
+            </div>
+            <span class="sbadge sb-load">LOADING</span>
+          </div>
+          <div class="pcard-turtles">
+            <div class="th left">
+              <div class="th-role" style="color:#00ff8844;">DELIVERY</div>
+              <div class="th-name g">turtle_03</div>
+              <div class="ftrack"><div class="ffill g" style="width:61%"></div></div>
+              <div class="th-info">61% · depot</div>
+            </div>
+            <div class="th">
+              <div class="th-role" style="color:#4488ff44;">SUPPORT</div>
+              <div class="th-name b">turtle_04</div>
+              <div class="ftrack"><div class="ffill g" style="width:60%"></div></div>
+              <div class="th-info">60% · staged</div>
+            </div>
+          </div>
+          <div class="pcard-foot">
+            <span class="eta a" style="color:#ff8844;">◉ LOADING ITEMS</span>
+            <div class="pbtns">
+              <button class="pbtn">LOCATE</button>
+              <button class="pbtn">IDLE</button>
+              <button class="pbtn d">DEL</button>
+            </div>
+          </div>
+        </div>
+        <div class="pcard" style="opacity:.38;">
+          <div class="pcard-hdr">
+            <div class="pcard-job">
+              <div class="pcard-items" style="color:#333;">No active job</div>
+              <div class="pcard-dest" style="color:#1a1a2e;">standing by</div>
+            </div>
+            <span class="sbadge sb-idle">IDLE</span>
+          </div>
+          <div class="pcard-turtles">
+            <div class="th left">
+              <div class="th-role" style="color:#00ff8833;">DELIVERY</div>
+              <div class="th-name g">turtle_05</div>
+              <div class="ftrack"><div class="ffill g" style="width:100%"></div></div>
+              <div class="th-info">100% · docked</div>
+            </div>
+            <div class="th">
+              <div class="th-role" style="color:#4488ff33;">SUPPORT</div>
+              <div class="th-name b">turtle_06</div>
+              <div class="ftrack"><div class="ffill g" style="width:100%"></div></div>
+              <div class="th-info">100% · docked</div>
+            </div>
+          </div>
+          <div class="pcard-foot">
+            <span class="eta i">READY</span>
+            <div class="pbtns"><button class="pbtn">LOCATE</button><button class="pbtn d">DEL</button></div>
+          </div>
+        </div>
+      </div><!-- /fleet -->
+
+      <!-- JOBS -->
+      <div id="t-jobs" class="tc">
+        <div class="jcard ip">
+          <div class="jc-top">
+            <span class="jc-id">job_0001</span>
+            <span class="jc-turtle">→ turtle_01</span>
+            <span class="jc-badge jcb-ip">IN PROGRESS</span>
+            <button class="jcancel">CANCEL</button>
+          </div>
+          <div class="jprog">
+            <div class="jstep done"><div class="jstep-lbl">QUEUE</div></div>
+            <div class="jstep done"><div class="jstep-lbl">LOAD</div></div>
+            <div class="jstep cur"><div class="jstep-lbl">TRAVEL</div></div>
+            <div class="jstep"><div class="jstep-lbl">DELIVER</div></div>
+            <div class="jstep"><div class="jstep-lbl">RETURN</div></div>
+          </div>
+          <div class="jitems">
+            <span class="jtag">Iron Ingot <span class="qty">×64</span></span>
+            <span class="jtag">Oak Log <span class="qty">×128</span></span>
+          </div>
+          <div class="jdest">DEST <span>-120, 64, -2800</span></div>
+        </div>
+        <div class="jcard pend">
+          <div class="jc-top">
+            <span class="jc-id">job_0002</span>
+            <span class="jc-turtle">→ turtle_03</span>
+            <span class="jc-badge jcb-pend">LOADING</span>
+            <button class="jcancel">CANCEL</button>
+          </div>
+          <div class="jprog">
+            <div class="jstep done"><div class="jstep-lbl">QUEUE</div></div>
+            <div class="jstep cur"><div class="jstep-lbl">LOAD</div></div>
+            <div class="jstep"><div class="jstep-lbl">TRAVEL</div></div>
+            <div class="jstep"><div class="jstep-lbl">DELIVER</div></div>
+            <div class="jstep"><div class="jstep-lbl">RETURN</div></div>
+          </div>
+          <div class="jitems">
+            <span class="jtag">Stone Brick <span class="qty">×256</span></span>
+            <span class="jtag">Glass <span class="qty">×64</span></span>
+          </div>
+          <div class="jdest">DEST <span>50, 67, -100</span></div>
+        </div>
+        <div class="jcard done">
+          <div class="jc-top">
+            <span class="jc-id">job_0000</span>
+            <span class="jc-turtle">→ turtle_01</span>
+            <span class="jc-badge jcb-done">COMPLETE</span>
+          </div>
+          <div class="jprog">
+            <div class="jstep done"></div><div class="jstep done"></div><div class="jstep done"></div><div class="jstep done"></div><div class="jstep done"></div>
+          </div>
+          <div class="jitems"><span class="jtag">Diamond <span class="qty">×4</span></span></div>
+          <div class="jdest">DEST <span>200, 64, -500</span></div>
+        </div>
+      </div><!-- /jobs -->
+
+      <!-- STORE -->
+      <div id="t-store" class="tc">
+        <div class="store-hdr">
+          <input class="s-search" placeholder="Search 334 items...">
+          <select class="s-sort"><option>A → Z</option><option>LOW STOCK ↑</option><option>HIGH STOCK ↓</option><option>CRAFTABLE</option></select>
+          <button class="s-order">ORDER (0)</button>
+        </div>
+        <div class="slist">
+          <div class="sr"><span class="sr-name">Cobblestone</span><div class="sr-bar"><div class="sr-bar-f" style="width:95%;background:linear-gradient(90deg,#00ff88,#00ccaa);box-shadow:0 0 3px #00ff8833;"></div></div><span class="sr-amt ok">54,892</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Iron Ingot</span><div class="sr-bar"><div class="sr-bar-f" style="width:60%;background:#00ff88;"></div></div><span class="sr-amt ok">1,024</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Stone Brick</span><div class="sr-bar"><div class="sr-bar-f" style="width:80%;background:#00ff88;"></div></div><span class="sr-amt ok">8,192</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Glass</span><div class="sr-bar"><div class="sr-bar-f" style="width:40%;background:#00ff88;"></div></div><span class="sr-amt ok">512</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Oak Log</span><div class="sr-bar"><div class="sr-bar-f" style="width:20%;background:#ffaa44;"></div></div><span class="sr-amt low">32</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Torch</span><div class="sr-bar"><div class="sr-bar-f" style="width:5%;background:#ff8844;"></div></div><span class="sr-amt low">8</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Diamond</span><div class="sr-bar"><div class="sr-bar-f" style="width:0%;"></div></div><span class="sr-amt craft">CRAFT</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Coal</span><div class="sr-bar"><div class="sr-bar-f" style="width:0%;"></div></div><span class="sr-amt zero">OUT</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Wheat</span><div class="sr-bar"><div class="sr-bar-f" style="width:55%;background:#00ff88;"></div></div><span class="sr-amt ok">640</span><button class="sr-add">+</button></div>
+          <div class="sr"><span class="sr-name">Beef</span><div class="sr-bar"><div class="sr-bar-f" style="width:30%;background:#ffaa44;"></div></div><span class="sr-amt low">48</span><button class="sr-add">+</button></div>
+        </div>
+      </div><!-- /store -->
+
+      <!-- CMDS -->
+      <div id="t-cmds" class="tc">
+        <div class="csec">
+          <div class="csec-title green">FLEET CONTROL</div>
+          <div class="frow">
+            <select><option>— Select turtle —</option><option>turtle_01 [TRAVELLING]</option><option>turtle_03 [LOADING]</option><option>turtle_05 [IDLE]</option></select>
+          </div>
+          <button class="cbtn gr">↩ RECALL SELECTED TURTLE</button>
+          <button class="cbtn gr" onclick="openDispatch(null)">◉ OPEN DISPATCH</button>
+        </div>
+        <div class="csec">
+          <div class="csec-title red">⚠ DANGEROUS ACTIONS</div>
+          <button class="cbtn re" id="ra-btn" onclick="showC('ra')">⚠ RECALL ALL TURTLES</button>
+          <div class="cconfirm" id="ra-conf"><span>Recall all 8 turtles now?</span><button class="cy">CONFIRM</button><button class="cn" onclick="hideC('ra')">CANCEL</button></div>
+          <button class="cbtn re" id="cj-btn" onclick="showC('cj')">✕ CLEAR ALL JOBS</button>
+          <div class="cconfirm" id="cj-conf"><span>Delete all 3 jobs?</span><button class="cy">CONFIRM</button><button class="cn" onclick="hideC('cj')">CANCEL</button></div>
+          <button class="cbtn re" id="rs-btn" onclick="showC('rs')">↺ RESET ALL STATUS TO IDLE</button>
+          <div class="cconfirm" id="rs-conf"><span>Force all turtles to IDLE?</span><button class="cy">CONFIRM</button><button class="cn" onclick="hideC('rs')">CANCEL</button></div>
+        </div>
+        <div class="csec">
+          <div class="csec-title blue">SYSTEM</div>
+          <button class="cbtn bl">↻ OTA UPDATE CC ONLY</button>
+          <button class="cbtn bl">↻ UPDATE WHOLE SYSTEM</button>
+        </div>
+      </div><!-- /cmds -->
+
+    </div><!-- /panel -->
+  </div><!-- /main -->
+
+  <!-- ── DISPATCH MODAL ── -->
+  <div class="modal-backdrop" id="backdrop" onclick="closeDispatch()"></div>
+  <div class="modal" id="dispatch-modal">
+    <div class="modal-title">▶ DISPATCH DELIVERY</div>
+
+    <div class="coord-hint">Coordinates pre-filled from map click — or enter manually</div>
+
+    <div class="modal-field">
+      <label class="modal-label">DESTINATION</label>
+      <div class="coord-row">
+        <input id="m-x" type="number" placeholder="X" value="-120">
+        <input id="m-y" type="number" placeholder="Y" value="64">
+        <input id="m-z" type="number" placeholder="Z" value="-2800">
+      </div>
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label">ADD ITEMS</label>
+      <div class="modal-search-wrap">
+        <input class="modal-search" id="m-search" placeholder="Search RS storage..." oninput="updateSearch()" autocomplete="off">
+        <div class="modal-results" id="m-results" style="display:none;">
+          <div class="mres" onclick="addItem('Iron Ingot','ok','1,024')"><span class="mres-name">Iron Ingot</span><span class="mres-amt ok">1,024</span></div>
+          <div class="mres" onclick="addItem('Oak Log','low','32')"><span class="mres-name">Oak Log</span><span class="mres-amt low">32</span></div>
+          <div class="mres" onclick="addItem('Stone Brick','ok','8,192')"><span class="mres-name">Stone Brick</span><span class="mres-amt ok">8,192</span></div>
+          <div class="mres" onclick="addItem('Diamond','craft','CRAFT')"><span class="mres-name">Diamond</span><span class="mres-amt craft">CRAFT</span></div>
+          <div class="mres" onclick="addItem('Glass','ok','512')"><span class="mres-name">Glass</span><span class="mres-amt ok">512</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label">ORDER</label>
+      <div class="cart-list" id="m-cart"><div class="cart-empty">No items added — search above</div></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="mbtn cancel" onclick="closeDispatch()">CANCEL</button>
+      <button class="mbtn primary">▶ DISPATCH ORDER</button>
+    </div>
+  </div>
+
+</div><!-- /db -->
+
+<p class="subtitle" style="font-size:10px;">Click DISPATCH button on map or OPEN DISPATCH in CMDS · Search in modal shows dropdown · Confirm flows on dangerous actions</p>
+
+<script>
+function sw(name, btn) {
+  document.querySelectorAll('.tc').forEach(el => el.classList.remove('on'));
+  document.querySelectorAll('.tbtn').forEach(el => el.classList.remove('on'));
+  document.getElementById('t-'+name).classList.add('on');
+  btn.classList.add('on');
+}
+
+function showC(id) {
+  document.getElementById(id+'-btn').style.display='none';
+  document.getElementById(id+'-conf').style.display='flex';
+}
+function hideC(id) {
+  document.getElementById(id+'-btn').style.display='';
+  document.getElementById(id+'-conf').style.display='none';
+}
+
+function openDispatch(coords) {
+  document.getElementById('backdrop').classList.add('show');
+  document.getElementById('dispatch-modal').style.display='block';
+}
+function closeDispatch() {
+  document.getElementById('backdrop').classList.remove('show');
+  document.getElementById('dispatch-modal').style.display='none';
+}
+
+function handleMapClick(e) {
+  // Right-click opens dispatch (simulated as any click outside markers for mockup)
+}
+
+function updateSearch() {
+  const v = document.getElementById('m-search').value;
+  document.getElementById('m-results').style.display = v.length > 0 ? 'block' : 'none';
+}
+
+let cartItems = [];
+function addItem(name, cls, amt) {
+  document.getElementById('m-search').value = '';
+  document.getElementById('m-results').style.display = 'none';
+  if (cartItems.find(i => i.name === name)) return;
+  cartItems.push({name, cls, amt});
+  renderCart();
+}
+function removeItem(name) {
+  cartItems = cartItems.filter(i => i.name !== name);
+  renderCart();
+}
+function renderCart() {
+  const el = document.getElementById('m-cart');
+  if (!cartItems.length) { el.innerHTML = '<div class="cart-empty">No items added — search above</div>'; return; }
+  el.innerHTML = cartItems.map(it => `
+    <div class="cart-item">
+      <span class="ci-name">${it.name}</span>
+      <button class="ci-step">−</button>
+      <input class="ci-qty" value="64">
+      <button class="ci-step">+</button>
+      <button class="ci-del" onclick="removeItem('${it.name}')">×</button>
+    </div>`).join('');
+}
+</script>
+</body>
+</html>
