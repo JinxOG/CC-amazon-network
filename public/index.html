@@ -18,7 +18,7 @@
             gap:10px; flex-shrink:0; z-index:500;
         }
         #status-dot {
-            width:7px; height:7px; border-radius:50%;
+            width:8px; height:8px; border-radius:50%;
             background:#00ff88; box-shadow:0 0 8px #00ff88,0 0 20px #00ff8833;
             flex-shrink:0; animation:pulse 2s ease-in-out infinite;
         }
@@ -27,15 +27,15 @@
             50%{box-shadow:0 0 12px #00ff88,0 0 30px #00ff8855}
         }
         #status-dot.offline { background:#ff4444; box-shadow:0 0 6px #ff4444; animation:none; }
-        #header h1 { color:#00ff88; font-size:13px; letter-spacing:4px; text-shadow:0 0 10px #00ff8866; }
-        #cc-version { font-size:9px; color:#00ff8844; letter-spacing:1px; }
+        #header h1 { color:#00ff88; font-size:14px; letter-spacing:4px; text-shadow:0 0 10px #00ff8866; }
+        #cc-version { font-size:10px; color:#00ff8844; letter-spacing:1px; }
         #header .sep { color:#1a1a2e; }
-        #last-update { color:#444; font-size:10px; letter-spacing:1px; }
-        #header-stats { margin-left:auto; display:flex; gap:16px; font-size:10px; align-items:center; }
+        #last-update { color:#555; font-size:11px; letter-spacing:1px; }
+        #header-stats { margin-left:auto; display:flex; gap:16px; font-size:11px; align-items:center; }
         .stat { color:#2a2a3a; letter-spacing:1px; }
         .stat b { color:#00ff88; font-weight:normal; text-shadow:0 0 6px #00ff8844; }
         #dynmap-link {
-            color:#2a2a3a; font-size:10px; text-decoration:none;
+            color:#2a2a3a; font-size:11px; text-decoration:none;
             border:1px solid #1a1a2e; padding:2px 8px; border-radius:2px; letter-spacing:1px; transition:all .15s;
         }
         #dynmap-link:hover { color:#00ff88; border-color:#00ff8833; }
@@ -56,7 +56,7 @@
         #map-hint {
             position:absolute; bottom:10px; left:10px; z-index:10;
             background:rgba(5,5,8,0.85); border:1px solid #1a1a2e;
-            color:#2a2a4a; font-size:9px; padding:3px 8px; border-radius:2px;
+            color:#2a2a4a; font-size:10px; padding:3px 8px; border-radius:2px;
             pointer-events:none; letter-spacing:1px;
         }
         #map-overlay { display:none; position:absolute; inset:0; background:#07070d; z-index:999; }
@@ -64,12 +64,12 @@
 
         /* ── Divider ── */
         #divider {
-            width:5px; background:#00ff8808; cursor:col-resize;
+            width:6px; background:#00ff8808; cursor:col-resize;
             display:flex; align-items:center; justify-content:center;
-            flex-shrink:0; z-index:10; transition:background .15s; user-select:none;
+            flex-shrink:0; z-index:600; transition:background .15s; user-select:none;
         }
-        #divider:hover, #divider.dragging { background:#00ff8822; }
-        #divider::after { content:'⋮⋮'; color:#00ff8833; font-size:9px; line-height:1; }
+        #divider:hover, #divider.dragging { background:#00ff8833; }
+        #divider::after { content:'⋮⋮'; color:#00ff8844; font-size:10px; line-height:1; }
 
         /* ── Side panel ── */
         #side-panel {
@@ -81,71 +81,66 @@
         /* ── Stats bar ── */
         #stats-bar {
             background:#050508; border-bottom:1px solid #00ff8818;
-            padding:5px 10px; display:flex; align-items:center; flex-shrink:0;
+            padding:6px 10px; display:flex; align-items:center; flex-shrink:0;
         }
         .sbar-item { display:flex; flex-direction:column; align-items:center; flex:1; }
-        .sbar-val  { font-size:14px; line-height:1; }
-        .sbar-lbl  { color:#2a2a3a; font-size:7px; letter-spacing:1px; margin-top:2px; }
-        .sbar-sep  { width:1px; background:#00ff8811; height:22px; margin:0 2px; flex-shrink:0; }
+        .sbar-val  { font-size:16px; line-height:1; }
+        .sbar-lbl  { color:#2a2a3a; font-size:9px; letter-spacing:1px; margin-top:3px; }
+        .sbar-sep  { width:1px; background:#00ff8811; height:26px; margin:0 2px; flex-shrink:0; }
 
         /* ── Tabs ── */
         #tabs { display:flex; border-bottom:1px solid #00ff8811; flex-shrink:0; background:#050508; }
         .tab {
-            flex:1; padding:8px 4px; text-align:center;
-            cursor:pointer; font-size:10px; letter-spacing:2px; color:#2a2a4a;
+            flex:1; padding:9px 4px; text-align:center;
+            cursor:pointer; font-size:11px; letter-spacing:2px; color:#333;
             border:none; border-bottom:2px solid transparent;
             transition:all .15s; font-family:'Courier New',monospace; background:none;
         }
-        .tab:hover { color:#555; }
+        .tab:hover { color:#666; }
         .tab.active { color:#00ff88; border-bottom-color:#00ff88; text-shadow:0 0 6px #00ff8844; }
 
         .tab-content { display:none; flex:1; overflow-y:auto; padding:10px; flex-direction:column; gap:8px; }
         .tab-content.active { display:flex; }
-        ::-webkit-scrollbar { width:2px; }
+        ::-webkit-scrollbar { width:3px; }
         ::-webkit-scrollbar-thumb { background:#00ff8822; border-radius:2px; }
 
-        .empty { color:#2a2a4a; font-size:11px; text-align:center; padding:30px 0; letter-spacing:1px; }
+        .empty { color:#2a2a4a; font-size:12px; text-align:center; padding:30px 0; letter-spacing:1px; }
 
-        /* ── Fleet pair cards ── */
-        .pcard { background:#08080e; border:1px solid #00ff8818; border-radius:3px; overflow:hidden; flex-shrink:0; }
-        .pcard-hdr { padding:8px 10px; display:flex; align-items:center; gap:8px; border-bottom:1px solid #00ff8808; }
-        .pcard-job { flex:1; min-width:0; }
-        .pcard-items { color:#ccc; font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .pcard-dest  { color:#00ff8855; font-size:9px; letter-spacing:1px; margin-top:1px; }
-        .sbadge { font-size:8px; padding:2px 7px; border-radius:2px; letter-spacing:1px; white-space:nowrap; border-width:1px; border-style:solid; }
+        /* ── Fleet turtle cards ── */
+        .tcard {
+            background:#08080e; border:1px solid #00ff8818;
+            border-radius:3px; padding:11px; flex-shrink:0;
+        }
+        .tcard.offline { opacity:.45; }
+        .tcard-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
+        .tcard-name { font-size:14px; letter-spacing:1px; margin-bottom:2px; }
+        .tcard-name.d { color:#00ff88; text-shadow:0 0 6px #00ff8833; }
+        .tcard-name.s { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
+        .tcard-sub { font-size:10px; color:#2a2a4a; letter-spacing:1px; }
+        .fuel-track { background:#040407; height:3px; border-radius:2px; margin:6px 0; }
+        .fuel-fill { height:100%; border-radius:2px; transition:width .5s; }
+        .fuel-fill.ok   { background:linear-gradient(90deg,#00ff88,#00ccaa); box-shadow:0 0 4px #00ff8844; }
+        .fuel-fill.med  { background:linear-gradient(90deg,#ffcc00,#ff8800); }
+        .fuel-fill.low  { background:#ff8844; }
+        .fuel-fill.crit { background:#ff4444; }
+        .tcard-row { display:flex; gap:14px; font-size:11px; color:#444; flex-wrap:wrap; margin-bottom:8px; }
+        .tcard-row .v { color:#aaa; }
+        .tcard-btns { display:flex; gap:5px; flex-wrap:wrap; }
+
+        /* ── Shared badge ── */
+        .sbadge { font-size:10px; padding:2px 8px; border-radius:2px; letter-spacing:1px; white-space:nowrap; border-width:1px; border-style:solid; }
         .sbadge.IDLE       { background:#0a2a1a; color:#00ff88; border-color:#00ff8822; }
         .sbadge.TRAVELLING { background:#2a2a0a; color:#ffcc00; border-color:#ffcc0022; }
         .sbadge.WORKING    { background:#0a1a3a; color:#4488ff; border-color:#4488ff22; }
         .sbadge.LOADING    { background:#2a1a0a; color:#ff8844; border-color:#ff884422; }
         .sbadge.RETURNING  { background:#1a0a2a; color:#aa66ff; border-color:#aa66ff22; }
         .sbadge.ERROR      { background:#2a0a0a; color:#ff4444; border-color:#ff444422; }
-        .sbadge.UNKNOWN, .sbadge.OFFLINE { background:#1a1a2a; color:#555; border-color:#2a2a3a; }
+        .sbadge.OFFLINE, .sbadge.UNKNOWN { background:#1a1a2a; color:#555; border-color:#2a2a3a; }
 
-        .pcard-turtles { display:flex; }
-        .pside { flex:1; padding:7px 10px; }
-        .pside.left { border-right:1px solid #00ff8808; }
-        .pside-role { font-size:7px; letter-spacing:2px; margin-bottom:3px; }
-        .pside-name { font-size:11px; letter-spacing:1px; margin-bottom:4px; }
-        .pside-name.d { color:#00ff88; text-shadow:0 0 6px #00ff8833; }
-        .pside-name.s { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
-        .pside-name.dim { color:#2a2a4a; text-shadow:none; }
-        .pside-name.off { opacity:.4; }
-        .fuel-track { background:#040407; height:2px; border-radius:2px; margin:3px 0; }
-        .fuel-fill { height:100%; border-radius:2px; transition:width .5s; }
-        .fuel-fill.ok   { background:linear-gradient(90deg,#00ff88,#00ccaa); box-shadow:0 0 4px #00ff8844; }
-        .fuel-fill.med  { background:linear-gradient(90deg,#ffcc00,#ff8800); }
-        .fuel-fill.low  { background:#ff8844; }
-        .fuel-fill.crit { background:#ff4444; }
-        .pside-info { font-size:9px; color:#2a2a4a; letter-spacing:1px; }
-        .pcard-foot { padding:5px 10px; border-top:1px solid #00ff8808; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-        .peta { font-size:9px; letter-spacing:1px; }
-        .peta.a { color:#ffcc00; text-shadow:0 0 4px #ffcc0033; }
-        .peta.i { color:#2a2a4a; }
-        .pbtns { display:flex; gap:4px; flex-wrap:wrap; }
-        .pbtns.ml { margin-left:auto; }
+        /* ── Shared buttons ── */
         .pbtn {
-            background:transparent; border:1px solid #1a1a2e; color:#2a2a4a;
-            font-size:8px; padding:2px 6px; border-radius:2px; cursor:pointer;
+            background:transparent; border:1px solid #1a1a2e; color:#444;
+            font-size:10px; padding:3px 8px; border-radius:2px; cursor:pointer;
             font-family:'Courier New',monospace; letter-spacing:1px; transition:all .15s;
         }
         .pbtn:hover       { border-color:#00ff8833; color:#00ff88; }
@@ -156,102 +151,111 @@
         /* ── Job cards ── */
         .job-card {
             background:#08080e; border:1px solid #00ff8818;
-            border-left:3px solid #333; border-radius:3px; padding:10px; flex-shrink:0;
+            border-left:3px solid #333; border-radius:3px; padding:11px; flex-shrink:0;
         }
         .job-card.IN_PROGRESS { border-left-color:#4488ff; box-shadow:-2px 0 8px #4488ff18; }
         .job-card.PENDING     { border-left-color:#ffaa00; box-shadow:-2px 0 8px #ffaa0018; }
-        .job-card.COMPLETE    { border-left-color:#00ff88; opacity:.45; }
+        .job-card.COMPLETE    { border-left-color:#00ff88; opacity:.4; }
         .job-card.FAILED      { border-left-color:#ff4444; }
         .job-card.CANCELLED   { border-left-color:#555; opacity:.4; }
 
-        .jc-top { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
-        .jc-id { font-size:9px; color:#2a2a3a; letter-spacing:1px; }
-        .jc-turtle { font-size:9px; color:#4488ff55; letter-spacing:1px; }
-        .jbadge { font-size:8px; padding:2px 6px; border-radius:2px; letter-spacing:1px; margin-left:auto; border-width:1px; border-style:solid; }
+        .jc-top { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+        .jc-id { font-size:11px; color:#2a2a3a; letter-spacing:1px; }
+        .jc-turtle { font-size:11px; color:#4488ff55; letter-spacing:1px; }
+        .jbadge { font-size:10px; padding:2px 8px; border-radius:2px; letter-spacing:1px; margin-left:auto; border-width:1px; border-style:solid; }
         .jbadge.PENDING     { background:#2a2000; color:#ffaa00; border-color:#ffaa0022; }
         .jbadge.IN_PROGRESS { background:#001030; color:#4488ff; border-color:#4488ff22; }
         .jbadge.COMPLETE    { background:#002010; color:#00ff88; border-color:transparent; }
         .jbadge.FAILED      { background:#200000; color:#ff4444; border-color:transparent; }
         .jbadge.CANCELLED   { background:#1a1a1a; color:#555;   border-color:transparent; }
         .jc-cancel {
-            background:transparent; border:1px solid #1a0808; color:#333;
-            font-size:8px; padding:2px 6px; border-radius:2px; cursor:pointer;
+            background:transparent; border:1px solid #1a0808; color:#444;
+            font-size:10px; padding:2px 8px; border-radius:2px; cursor:pointer;
             font-family:'Courier New',monospace; letter-spacing:1px; transition:all .15s;
         }
         .jc-cancel:hover { border-color:#ff444433; color:#ff4444; }
 
-        .jprog { display:flex; gap:2px; margin-bottom:8px; }
-        .jstep { flex:1; position:relative; padding-bottom:14px; }
+        .jprog { display:flex; gap:2px; margin-bottom:10px; }
+        .jstep { flex:1; position:relative; padding-bottom:16px; }
         .jstep-bar { height:3px; background:#1a1a2e; border-radius:2px; }
         .jstep-bar.done { background:#4488ff; box-shadow:0 0 4px #4488ff44; }
         .jstep-bar.cur  { background:#4488ff55; }
-        .jstep-bar.err  { background:#ff4444; }
-        .jstep-lbl { position:absolute; top:6px; left:50%; transform:translateX(-50%); font-size:6px; color:#1a1a2e; white-space:nowrap; }
+        .jstep-lbl { position:absolute; top:6px; left:50%; transform:translateX(-50%); font-size:8px; color:#1a1a2e; white-space:nowrap; }
         .jstep-bar.done + .jstep-lbl { color:#4488ff55; }
-        .jstep-bar.cur + .jstep-lbl  { color:#4488ff44; }
+        .jstep-bar.cur  + .jstep-lbl { color:#4488ff44; }
 
-        .jitems { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px; }
-        .jtag { background:#0a0a18; border:1px solid #1a1a2e; color:#777; font-size:9px; padding:2px 6px; border-radius:2px; }
+        .jitems { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:7px; }
+        .jtag { background:#0a0a18; border:1px solid #1a1a2e; color:#888; font-size:11px; padding:2px 7px; border-radius:2px; }
         .jtag .qty { color:#4488ff77; }
-        .jdest { font-size:9px; color:#2a2a3a; letter-spacing:1px; }
-        .jdest span { color:#00ff8855; }
+        .jdest { font-size:11px; color:#333; letter-spacing:1px; margin-bottom:8px; }
+        .jdest span { color:#00ff8555; }
+
+        /* ── Paired turtle section inside job cards ── */
+        .jturtles { display:flex; gap:6px; border-top:1px solid #00ff8808; padding-top:9px; }
+        .jtside { flex:1; background:#050508; border:1px solid #0d0d1a; border-radius:2px; padding:7px 8px; }
+        .jtside-role { font-size:9px; letter-spacing:2px; margin-bottom:3px; }
+        .jtside-name { font-size:12px; letter-spacing:1px; margin-bottom:4px; }
+        .jtside-name.d { color:#00ff88; text-shadow:0 0 6px #00ff8833; }
+        .jtside-name.s { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
+        .jtside-name.dim { color:#2a2a3a; }
+        .jtside-info { font-size:10px; color:#333; letter-spacing:1px; }
 
         /* ── Storage ── */
         .store-header { display:flex; gap:6px; margin-bottom:6px; flex-shrink:0; align-items:center; }
         #store-search {
             flex:1; background:#040407; border:1px solid #00ff8818; color:#ccc;
-            font-family:'Courier New',monospace; font-size:11px; padding:6px 8px;
+            font-family:'Courier New',monospace; font-size:12px; padding:6px 8px;
             border-radius:2px; outline:none; transition:border-color .15s;
         }
         #store-search:focus { border-color:#00ff8833; }
         #store-sort {
-            background:#040407; border:1px solid #00ff8818; color:#555;
-            font-family:'Courier New',monospace; font-size:9px; padding:5px 6px;
+            background:#040407; border:1px solid #00ff8818; color:#666;
+            font-family:'Courier New',monospace; font-size:10px; padding:5px 6px;
             border-radius:2px; outline:none; cursor:pointer;
         }
         #order-btn {
             background:#0a1e14; border:1px solid #00ff8844; color:#00ff88;
-            font-family:'Courier New',monospace; font-size:9px; padding:5px 8px;
+            font-family:'Courier New',monospace; font-size:10px; padding:6px 9px;
             border-radius:2px; cursor:pointer; white-space:nowrap;
             letter-spacing:1px; text-shadow:0 0 6px #00ff8833; transition:all .15s;
         }
         #order-btn:hover { background:#0f2e1e; }
-        #order-btn.dim { border-color:#1a1a2e; color:#2a2a4a; background:#040407; text-shadow:none; }
+        #order-btn.dim { border-color:#1a1a2e; color:#333; background:#040407; text-shadow:none; }
         .storage-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
-        .sr { display:flex; align-items:center; gap:8px; padding:5px 6px; border-bottom:1px solid #00ff8806; font-size:11px; transition:background .1s; }
+        .sr { display:flex; align-items:center; gap:8px; padding:6px 6px; border-bottom:1px solid #00ff8806; transition:background .1s; }
         .sr:hover { background:#0a0a14; }
-        .sr-name { flex:1; color:#999; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
+        .sr-name { flex:1; color:#aaa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
         .sr-bar { width:40px; height:3px; background:#0d0d1a; border-radius:2px; overflow:hidden; flex-shrink:0; }
         .sr-bar-f { height:100%; border-radius:2px; }
-        .sr-amt { font-size:10px; min-width:52px; text-align:right; letter-spacing:1px; }
+        .sr-amt { font-size:11px; min-width:58px; text-align:right; letter-spacing:1px; }
         .sr-amt.ok    { color:#00ff88; text-shadow:0 0 4px #00ff8822; }
         .sr-amt.low   { color:#ffaa44; }
         .sr-amt.craft { color:#4488ff; }
         .sr-amt.zero  { color:#1a1a2e; }
         .sr-add {
-            background:transparent; border:1px solid #1a1a2e; color:#2a2a4a;
-            font-size:11px; width:20px; height:20px; border-radius:2px; cursor:pointer;
-            font-family:'Courier New',monospace; flex-shrink:0; line-height:18px; text-align:center; transition:all .15s;
+            background:transparent; border:1px solid #1a1a2e; color:#333;
+            font-size:13px; width:22px; height:22px; border-radius:2px; cursor:pointer;
+            font-family:'Courier New',monospace; flex-shrink:0; line-height:20px; text-align:center; transition:all .15s;
         }
         .sr-add:hover { border-color:#00ff8833; color:#00ff88; }
 
         /* ── Commands ── */
-        .cmd-section { margin-bottom:14px; flex-shrink:0; }
-        .cmd-title { font-size:9px; letter-spacing:3px; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid; }
+        .cmd-section { margin-bottom:16px; flex-shrink:0; }
+        .cmd-title { font-size:11px; letter-spacing:3px; margin-bottom:9px; padding-bottom:6px; border-bottom:1px solid; }
         .cmd-title.green { color:#00ff88; border-color:#00ff8811; }
         .cmd-title.red   { color:#ff4444; border-color:#ff444411; }
         .cmd-title.blue  { color:#4488ff; border-color:#4488ff11; }
-        .field-row { display:flex; gap:6px; margin-bottom:7px; align-items:center; }
+        .field-row { display:flex; gap:6px; margin-bottom:8px; align-items:center; }
         .field-row input, .field-row select {
             flex:1; background:#040407; border:1px solid #00ff8818; color:#ddd;
-            font-family:'Courier New',monospace; font-size:11px; padding:6px 8px;
+            font-family:'Courier New',monospace; font-size:12px; padding:6px 8px;
             border-radius:2px; outline:none; transition:border-color .15s;
         }
         .field-row input:focus, .field-row select:focus { border-color:#00ff8844; }
-        .field-row label { font-size:10px; color:#444; white-space:nowrap; letter-spacing:1px; }
+        .field-row label { font-size:11px; color:#444; white-space:nowrap; letter-spacing:1px; }
         .btn {
-            width:100%; padding:7px 10px; background:#040407; border:1px solid #1a1a2e;
-            color:#888; font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+            width:100%; padding:8px 12px; background:#040407; border:1px solid #1a1a2e;
+            color:#888; font-family:'Courier New',monospace; font-size:11px; letter-spacing:1px;
             cursor:pointer; border-radius:2px; text-align:left; margin-bottom:5px; transition:all .15s;
         }
         .btn:hover    { background:#0a0a14; }
@@ -262,15 +266,15 @@
         .cconfirm {
             display:none; align-items:center; gap:6px;
             background:#0d0505; border:1px solid #ff444422; border-radius:2px;
-            padding:5px 8px; margin-bottom:5px; font-size:9px; color:#ff6666; letter-spacing:1px;
+            padding:6px 10px; margin-bottom:5px; font-size:11px; color:#ff6666; letter-spacing:1px;
         }
         .cconfirm.show { display:flex; }
         .cconfirm span { flex:1; }
-        .cy { background:#1a0505; border:1px solid #ff444433; color:#ff4444; font-family:'Courier New',monospace; font-size:9px; padding:2px 8px; border-radius:2px; cursor:pointer; }
-        .cn { background:transparent; border:1px solid #1a1a2e; color:#333; font-family:'Courier New',monospace; font-size:9px; padding:2px 8px; border-radius:2px; cursor:pointer; }
+        .cy { background:#1a0505; border:1px solid #ff444433; color:#ff4444; font-family:'Courier New',monospace; font-size:10px; padding:3px 10px; border-radius:2px; cursor:pointer; }
+        .cn { background:transparent; border:1px solid #1a1a2e; color:#444; font-family:'Courier New',monospace; font-size:10px; padding:3px 10px; border-radius:2px; cursor:pointer; }
         .coord-hint {
             background:#0a1a0a; border:1px solid #004422; border-radius:3px;
-            padding:5px 10px; font-size:9px; color:#3a7a3a; letter-spacing:1px; margin-bottom:7px;
+            padding:5px 10px; font-size:11px; color:#3a7a3a; letter-spacing:1px; margin-bottom:8px;
         }
 
         /* ── Order modal ── */
@@ -283,9 +287,9 @@
             z-index:1001; box-shadow:0 0 40px #00ff8811,0 0 80px #00000088;
         }
         #order-modal.show { display:block; }
-        .modal-title { color:#00ff88; font-size:11px; letter-spacing:3px; margin-bottom:16px; text-shadow:0 0 8px #00ff8855; }
+        .modal-title { color:#00ff88; font-size:12px; letter-spacing:3px; margin-bottom:16px; text-shadow:0 0 8px #00ff8855; }
         .modal-field { margin-bottom:12px; }
-        .modal-field label { display:block; font-size:9px; color:#444; letter-spacing:1px; margin-bottom:4px; }
+        .modal-field label { display:block; font-size:10px; color:#444; letter-spacing:1px; margin-bottom:4px; }
         .modal-coord-row { display:flex; gap:6px; }
         .modal-coord-row input, .modal-field input {
             flex:1; min-width:0; width:0;
@@ -297,7 +301,7 @@
         .om-search-wrap { position:relative; }
         #om-search {
             width:100%; background:#050508; border:1px solid #00ff8818; color:#ddd;
-            font-family:'Courier New',monospace; font-size:11px; padding:7px 8px;
+            font-family:'Courier New',monospace; font-size:12px; padding:7px 8px;
             border-radius:2px; outline:none; box-sizing:border-box;
         }
         #om-search:focus { border-color:#00ff8844; }
@@ -306,33 +310,33 @@
             background:#0a0a12; border:1px solid #00ff8822; border-top:none;
             max-height:160px; overflow-y:auto; border-radius:0 0 3px 3px;
         }
-        .om-result { display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:10px; border-bottom:1px solid #050508; transition:background .1s; }
+        .om-result { display:flex; align-items:center; gap:8px; padding:7px 8px; cursor:pointer; font-size:11px; border-bottom:1px solid #050508; transition:background .1s; }
         .om-result:hover { background:#10101e; }
         .om-result-name { flex:1; color:#ccc; }
-        .om-result-amt.ok    { color:#00ff8888; font-size:9px; }
-        .om-result-amt.low   { color:#ffaa44;   font-size:9px; }
-        .om-result-amt.craft { color:#4488ff;   font-size:9px; }
-        .om-result-amt.zero  { color:#333;       font-size:9px; }
-        .cart-list { display:flex; flex-direction:column; gap:5px; min-height:32px; }
-        .cart-empty { color:#2a2a4a; font-size:10px; letter-spacing:1px; padding:8px 0; }
-        .cart-item { display:grid; grid-template-columns:1fr 22px 52px 22px 16px; align-items:center; gap:5px; }
-        .ci-name  { color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
-        .ci-craft { font-size:9px; color:#4488ff; letter-spacing:1px; }
+        .om-result-amt.ok    { color:#00ff8888; font-size:10px; }
+        .om-result-amt.low   { color:#ffaa44;   font-size:10px; }
+        .om-result-amt.craft { color:#4488ff;   font-size:10px; }
+        .om-result-amt.zero  { color:#333;       font-size:10px; }
+        .cart-list { display:flex; flex-direction:column; gap:6px; min-height:32px; }
+        .cart-empty { color:#2a2a4a; font-size:11px; letter-spacing:1px; padding:8px 0; }
+        .cart-item { display:grid; grid-template-columns:1fr 24px 56px 24px 18px; align-items:center; gap:5px; }
+        .ci-name  { color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+        .ci-craft { font-size:10px; color:#4488ff; letter-spacing:1px; }
         .ci-step  {
             background:transparent; border:1px solid #1e1e3e; color:#555;
-            font-family:'Courier New',monospace; font-size:13px;
-            width:22px; height:22px; cursor:pointer; line-height:20px;
+            font-family:'Courier New',monospace; font-size:14px;
+            width:24px; height:24px; cursor:pointer; line-height:22px;
             text-align:center; border-radius:2px; padding:0; transition:all .15s;
         }
         .ci-step:hover { border-color:#00ff8833; color:#00ff88; }
         .ci-qty {
-            width:100%; height:22px; background:#050508; border:1px solid #1e1e3e; color:#ddd;
-            font-family:'Courier New',monospace; font-size:11px; padding:2px 4px;
+            width:100%; height:24px; background:#050508; border:1px solid #1e1e3e; color:#ddd;
+            font-family:'Courier New',monospace; font-size:12px; padding:2px 4px;
             border-radius:2px; outline:none; text-align:center; box-sizing:border-box;
         }
         .ci-qty:focus { border-color:#00ff8844; }
         .ci-qty.craft { border-color:#4488ff; background:#00082a; color:#88aaff; }
-        .ci-del { background:transparent; border:none; color:#333; cursor:pointer; font-size:14px; padding:0; line-height:1; transition:color .15s; }
+        .ci-del { background:transparent; border:none; color:#333; cursor:pointer; font-size:15px; padding:0; line-height:1; transition:color .15s; }
         .ci-del:hover { color:#ff4444; }
         .modal-actions { display:flex; gap:8px; margin-top:16px; }
         .modal-actions .btn { margin:0; flex:1; text-align:center; }
@@ -340,7 +344,7 @@
         /* ── Toast ── */
         #toast {
             position:fixed; bottom:20px; right:20px; background:#0a0a12;
-            border:1px solid #00ff8866; color:#00ff88; font-size:11px; letter-spacing:1px;
+            border:1px solid #00ff8866; color:#00ff88; font-size:12px; letter-spacing:1px;
             padding:8px 16px; border-radius:3px; z-index:2000; opacity:0;
             transition:opacity 0.3s; pointer-events:none;
         }
@@ -571,24 +575,15 @@ function computeDeliveryRoute(t, dest) {
 function routeETA(turtle, route) {
     const p = { x:Math.round(turtle.x||0), y:Math.round(turtle.y||DEPOT.FLOOR_Y), z:Math.round(turtle.z||0) };
     let best=Infinity, bi=0;
-    route.forEach((wp,i)=>{
-        const d=Math.abs(wp.x-p.x)+Math.abs(wp.y-p.y)+Math.abs(wp.z-p.z);
-        if(d<best){best=d;bi=i;}
-    });
+    route.forEach((wp,i)=>{ const d=Math.abs(wp.x-p.x)+Math.abs(wp.y-p.y)+Math.abs(wp.z-p.z); if(d<best){best=d;bi=i;} });
     let blocks=best;
-    for(let i=bi;i<route.length-1;i++){
-        const a=route[i],b=route[i+1];
-        blocks+=Math.abs(b.x-a.x)+Math.abs(b.y-a.y)+Math.abs(b.z-a.z);
-    }
+    for(let i=bi;i<route.length-1;i++){const a=route[i],b=route[i+1];blocks+=Math.abs(b.x-a.x)+Math.abs(b.y-a.y)+Math.abs(b.z-a.z);}
     const s=Math.round(blocks*0.4);
     return s<60?`${s}s`:`${Math.floor(s/60)}m ${s%60}s`;
 }
 
 function clearSelectedRoute() {
-    for(const id of Object.keys(routePolylines)){
-        try{routePolylines[id].remove();}catch(e){}
-        delete routePolylines[id];
-    }
+    for(const id of Object.keys(routePolylines)){try{routePolylines[id].remove();}catch(e){}delete routePolylines[id];}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -596,28 +591,17 @@ function clearSelectedRoute() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function dynmapEventToMC(dw,e){
-    const dm=dw.dynmap;
-    if(!dm||!dm.map)return null;
-    const cont=dm.map.getContainer();
-    const rect=cont.getBoundingClientRect();
+    const dm=dw.dynmap;if(!dm||!dm.map)return null;
+    const cont=dm.map.getContainer(),rect=cont.getBoundingClientRect();
     const latlng=dm.map.containerPointToLatLng(dw.L.point(e.clientX-rect.left,e.clientY-rect.top));
     return latLngToMC(dm,latlng);
 }
 function latLngToMC(dm,latlng){
-    try{
-        const proj=dm.getProjection?dm.getProjection():null;
-        if(proj&&proj.fromLatLngToLocation){
-            const loc=proj.fromLatLngToLocation(latlng,64);
-            return{x:Math.round(loc.x),z:Math.round(loc.z)};
-        }
-    }catch(e){}
+    try{const proj=dm.getProjection?dm.getProjection():null;if(proj&&proj.fromLatLngToLocation){const loc=proj.fromLatLngToLocation(latlng,64);return{x:Math.round(loc.x),z:Math.round(loc.z)};}}catch(e){}
     return{x:Math.round(latlng.lng),z:Math.round(-latlng.lat)};
 }
 function mcToLatLng(dw,dm,t){
-    try{
-        const proj=dm.getProjection?dm.getProjection():null;
-        if(proj&&proj.fromLocationToLatLng)return proj.fromLocationToLatLng({x:t.x,y:t.y||64,z:t.z});
-    }catch(e){}
+    try{const proj=dm.getProjection?dm.getProjection():null;if(proj&&proj.fromLocationToLatLng)return proj.fromLocationToLatLng({x:t.x,y:t.y||64,z:t.z});}catch(e){}
     return dw.L.latLng(-t.z,t.x);
 }
 
@@ -627,10 +611,7 @@ function mcToLatLng(dw,dm,t){
 
 function waitForDynmap(callback,attempts){
     attempts=attempts||0;
-    try{
-        const dw=frame.contentWindow;
-        if(dw&&dw.dynmap&&dw.dynmap.map){callback(dw);return;}
-    }catch(e){}
+    try{const dw=frame.contentWindow;if(dw&&dw.dynmap&&dw.dynmap.map){callback(dw);return;}}catch(e){}
     if(attempts<40)setTimeout(()=>waitForDynmap(callback,attempts+1),300);
     else console.warn('[Dynmap] Map object never became ready.');
 }
@@ -642,35 +623,25 @@ frame.addEventListener('load',()=>{
 });
 
 function setupDynmapInjection(dw){
-    const doc=frame.contentDocument;
-    const dm=dw.dynmap;
+    const doc=frame.contentDocument,dm=dw.dynmap;
     const style=doc.createElement('style');
     style.textContent=`
         #mcmap,.leaflet-container,.leaflet-grab,.leaflet-dragging{cursor:crosshair!important;}
-        .cc-tip{background:transparent!important;border:none!important;box-shadow:none!important;padding:0!important;
-            font-family:'Courier New',monospace!important;font-size:10px!important;font-weight:bold!important;
-            letter-spacing:1px!important;color:#00ff88!important;white-space:nowrap!important;text-shadow:0 0 4px #000!important;}
-        .cc-tip::before{display:none!important;}
-        .cc-tip.support{color:#4488ff!important;}
-        .cc-route-tip{background:#1a73e8!important;border:none!important;color:#fff!important;
-            font-family:'Courier New',monospace!important;font-size:11px!important;letter-spacing:2px!important;
-            padding:5px 12px!important;border-radius:3px!important;box-shadow:0 2px 8px rgba(0,0,0,0.5)!important;}
+        .cc-tip{background:transparent!important;border:none!important;box-shadow:none!important;padding:0!important;font-family:'Courier New',monospace!important;font-size:10px!important;font-weight:bold!important;letter-spacing:1px!important;color:#00ff88!important;white-space:nowrap!important;text-shadow:0 0 4px #000!important;}
+        .cc-tip::before{display:none!important;}.cc-tip.support{color:#4488ff!important;}
+        .cc-route-tip{background:#1a73e8!important;border:none!important;color:#fff!important;font-family:'Courier New',monospace!important;font-size:11px!important;letter-spacing:2px!important;padding:5px 12px!important;border-radius:3px!important;box-shadow:0 2px 8px rgba(0,0,0,0.5)!important;}
         .cc-route-tip::before{display:none!important;}
     `;
     doc.head.appendChild(style);
     doc.addEventListener('mousemove',(e)=>{
-        const mc=dynmapEventToMC(dw,e);
-        if(!mc)return;
-        coordBox.style.left=(e.clientX+18)+'px';
-        coordBox.style.top=(e.clientY-32)+'px';
-        coordBox.style.display='block';
-        coordBox.textContent=`X ${mc.x}   Z ${mc.z}`;
+        const mc=dynmapEventToMC(dw,e);if(!mc)return;
+        coordBox.style.left=(e.clientX+18)+'px';coordBox.style.top=(e.clientY-32)+'px';
+        coordBox.style.display='block';coordBox.textContent=`X ${mc.x}   Z ${mc.z}`;
     });
     doc.addEventListener('mouseleave',()=>{coordBox.style.display='none';});
     dm.map.on('click',()=>{clearSelectedRoute();selectedTurtleId=null;});
     doc.addEventListener('contextmenu',(e)=>{
-        e.preventDefault();
-        const mc=dynmapEventToMC(dw,e);
+        e.preventDefault();const mc=dynmapEventToMC(dw,e);
         openOrderModal(mc?mc.x:null,mc?mc.z:null);
     });
     updateInjectedMarkers(lastState.turtles||{});
@@ -679,10 +650,7 @@ function setupDynmapInjection(dw){
         const sets=dm.namedmarkersets||dm.markersets||{};
         if(sets['turtles']&&dm.map.hasLayer(sets['turtles']))dm.map.removeLayer(sets['turtles']);
         const overlayLabels=doc.querySelectorAll('.leaflet-control-layers-overlays label,.dynmap-layercontrol label');
-        for(const lbl of overlayLabels){
-            const name=lbl.textContent.trim().toLowerCase();
-            if(name==='players'||name==='turtles'){const cb=lbl.querySelector('input');if(cb&&cb.checked)cb.click();}
-        }
+        for(const lbl of overlayLabels){const name=lbl.textContent.trim().toLowerCase();if(name==='players'||name==='turtles'){const cb=lbl.querySelector('input');if(cb&&cb.checked)cb.click();}}
     }catch(e){console.warn('[Dynmap] Layer hide failed:',e.message);}
     try{
         const W='MODPACK',M='flat';
@@ -692,11 +660,7 @@ function setupDynmapInjection(dw){
             else if(typeof dm.map.selectWorld==='function'){dm.map.selectWorld(W,M);}
             else{
                 const wDef=dm.worlds&&(dm.worlds[W]||(Array.isArray(dm.worlds)?dm.worlds.find(x=>x.name===W):null));
-                if(wDef){
-                    const mDef=wDef.maps&&(wDef.maps[M]||(Array.isArray(wDef.maps)?wDef.maps.find(x=>x.name===M):null));
-                    if(typeof dm.map.setWorld==='function')dm.map.setWorld(wDef,mDef);
-                    else if(typeof dm.map.loadMap==='function')dm.map.loadMap(wDef,mDef);
-                }
+                if(wDef){const mDef=wDef.maps&&(wDef.maps[M]||(Array.isArray(wDef.maps)?wDef.maps.find(x=>x.name===M):null));if(typeof dm.map.setWorld==='function')dm.map.setWorld(wDef,mDef);else if(typeof dm.map.loadMap==='function')dm.map.loadMap(wDef,mDef);}
             }
         }
     }catch(e){console.warn('[Dynmap] world force failed:',e.message);}
@@ -705,17 +669,13 @@ function setupDynmapInjection(dw){
 
 function updateInjectedMarkers(turtles){
     try{
-        const dw=frame.contentWindow;
-        const dm=dw&&dw.dynmap;
+        const dw=frame.contentWindow,dm=dw&&dw.dynmap;
         if(!dm||!dm.map||!dw.L)return;
         const jobsArr=Array.isArray(lastState.jobs)?lastState.jobs:Object.values(lastState.jobs||{});
         for(const[id,t]of Object.entries(turtles)){
             if(t.x==null)continue;
-            const latlng=mcToLatLng(dw,dm,t);
-            const color=turtleColor(t);
-            const r=t.role==='SUPPORT'?5:7;
-            const tc='cc-tip'+(t.role==='SUPPORT'?' support':'');
-            const sel=id===selectedTurtleId;
+            const latlng=mcToLatLng(dw,dm,t),color=turtleColor(t);
+            const r=t.role==='SUPPORT'?5:7,tc='cc-tip'+(t.role==='SUPPORT'?' support':''),sel=id===selectedTurtleId;
             if(injectedMarkers[id]){
                 injectedMarkers[id].setLatLng(latlng);
                 injectedMarkers[id].setStyle({color:sel?'#ffffff':color,fillColor:color,weight:sel?3:2});
@@ -723,11 +683,7 @@ function updateInjectedMarkers(turtles){
             }else{
                 const m=dw.L.circleMarker(latlng,{radius:r,color,fillColor:color,fillOpacity:0.9,weight:2})
                     .bindTooltip(id,{permanent:true,direction:'top',offset:[0,-10],className:tc})
-                    .on('click',(e)=>{
-                        dw.L.DomEvent.stopPropagation(e);
-                        if(selectedTurtleId===id){clearSelectedRoute();selectedTurtleId=null;}
-                        else{clearSelectedRoute();selectedTurtleId=id;}
-                    })
+                    .on('click',(e)=>{dw.L.DomEvent.stopPropagation(e);if(selectedTurtleId===id){clearSelectedRoute();selectedTurtleId=null;}else{clearSelectedRoute();selectedTurtleId=id;}})
                     .addTo(dm.map);
                 injectedMarkers[id]=m;
             }
@@ -735,28 +691,15 @@ function updateInjectedMarkers(turtles){
         if(selectedTurtleId){
             const t=turtles[selectedTurtleId];
             if(t&&t.jobId&&t.online&&t.x!=null){
-                const job=jobsArr.find(j=>j.id===t.jobId);
-                const dest=job&&job.destination;
+                const job=jobsArr.find(j=>j.id===t.jobId),dest=job&&job.destination;
                 if(dest&&dest.x!=null){
-                    const route=computeDeliveryRoute(t,dest);
-                    const latlngs=route.map(wp=>mcToLatLng(dw,dm,wp));
-                    const tip=`ETA  ${routeETA(t,route)}`;
-                    if(routePolylines[selectedTurtleId]){
-                        routePolylines[selectedTurtleId].setLatLngs(latlngs);
-                        routePolylines[selectedTurtleId].setTooltipContent(tip);
-                    }else{
-                        routePolylines[selectedTurtleId]=dw.L.polyline(latlngs,{color:'#1a73e8',weight:5,opacity:0.85,lineJoin:'round',lineCap:'round'})
-                            .bindTooltip(tip,{sticky:true,className:'cc-route-tip'}).addTo(dm.map);
-                    }
+                    const route=computeDeliveryRoute(t,dest),latlngs=route.map(wp=>mcToLatLng(dw,dm,wp)),tip=`ETA  ${routeETA(t,route)}`;
+                    if(routePolylines[selectedTurtleId]){routePolylines[selectedTurtleId].setLatLngs(latlngs);routePolylines[selectedTurtleId].setTooltipContent(tip);}
+                    else{routePolylines[selectedTurtleId]=dw.L.polyline(latlngs,{color:'#1a73e8',weight:5,opacity:0.85,lineJoin:'round',lineCap:'round'}).bindTooltip(tip,{sticky:true,className:'cc-route-tip'}).addTo(dm.map);}
                 }
             }else if(t&&!t.jobId){clearSelectedRoute();selectedTurtleId=null;}
         }
-        for(const id of Object.keys(injectedMarkers)){
-            if(!turtles[id]){
-                injectedMarkers[id].remove();delete injectedMarkers[id];
-                if(id===selectedTurtleId){clearSelectedRoute();selectedTurtleId=null;}
-            }
-        }
+        for(const id of Object.keys(injectedMarkers)){if(!turtles[id]){injectedMarkers[id].remove();delete injectedMarkers[id];if(id===selectedTurtleId){clearSelectedRoute();selectedTurtleId=null;}}}
     }catch(e){}
 }
 
@@ -765,13 +708,7 @@ function updateInjectedMarkers(turtles){
 // ═══════════════════════════════════════════════════════════════════════════
 
 function dynmapGoTo(x,y,z){
-    try{
-        const dw=frame.contentWindow;
-        const cur=dw.location.hash||'';
-        const pts=cur.replace(/^#;?/,'').split(';');
-        const map=(pts.length>8&&pts[8])?pts[8]:'flat';
-        dw.location.hash=`#;${Math.round(x)};${Math.round(y)};${Math.round(z)};0;0;0;0;0;${map}`;
-    }catch(e){}
+    try{const dw=frame.contentWindow,cur=dw.location.hash||'',pts=cur.replace(/^#;?/,'').split(';'),map=(pts.length>8&&pts[8])?pts[8]:'flat';dw.location.hash=`#;${Math.round(x)};${Math.round(y)};${Math.round(z)};0;0;0;0;0;${map}`;}catch(e){}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -786,22 +723,33 @@ function switchTab(name){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RESIZABLE DIVIDER
+// RESIZABLE DIVIDER — disables iframe pointer events while dragging so the
+// iframe doesn't steal mousemove/mouseup events
 // ═══════════════════════════════════════════════════════════════════════════
 
 (function(){
     const div=document.getElementById('divider');
     const panel=document.getElementById('side-panel');
     let dragging=false;
-    div.addEventListener('mousedown',(e)=>{dragging=true;div.classList.add('dragging');e.preventDefault();});
+    div.addEventListener('mousedown',(e)=>{
+        dragging=true;
+        div.classList.add('dragging');
+        frame.style.pointerEvents='none';   // stop iframe swallowing events
+        e.preventDefault();
+    });
     document.addEventListener('mousemove',(e)=>{
         if(!dragging)return;
         const main=document.getElementById('main');
         const rect=main.getBoundingClientRect();
-        const w=Math.max(300,Math.min(720,rect.right-e.clientX-3));
+        const w=Math.max(320,Math.min(720,rect.right-e.clientX-4));
         panel.style.width=w+'px';
     });
-    document.addEventListener('mouseup',()=>{dragging=false;div.classList.remove('dragging');});
+    document.addEventListener('mouseup',()=>{
+        if(!dragging)return;
+        dragging=false;
+        div.classList.remove('dragging');
+        frame.style.pointerEvents='';       // restore
+    });
 })();
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -810,15 +758,13 @@ function switchTab(name){
 
 async function poll(){
     try{
-        const r=await fetch('/state');
-        const d=await r.json();
+        const r=await fetch('/state'),d=await r.json();
         lastState=d;
         document.getElementById('status-dot').className='';
-        const ageSeconds=d.updatedAt?Math.round((Date.now()-d.updatedAt)/1000):null;
-        const stale=ageSeconds!==null&&ageSeconds>30;
-        const ago=ageSeconds!==null?ageSeconds:'?';
+        const age=d.updatedAt?Math.round((Date.now()-d.updatedAt)/1000):null;
+        const stale=age!==null&&age>30;
         const el=document.getElementById('last-update');
-        el.textContent=stale?`synced ${ago}s ago — CC OFFLINE?`:`synced ${ago}s ago`;
+        el.textContent=stale?`synced ${age}s ago — CC OFFLINE?`:`synced ${age??'?'}s ago`;
         el.style.color=stale?'#f87171':'';
         if(d.version)document.getElementById('cc-version').textContent=`v${d.version}`;
         try{renderAll(d);}catch(re){console.error('[render error]',re);}
@@ -827,8 +773,7 @@ async function poll(){
         document.getElementById('last-update').textContent='server offline';
     }
 }
-setInterval(poll,2000);
-poll();
+setInterval(poll,2000);poll();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RENDER
@@ -840,7 +785,6 @@ function renderAll(d){
     const tarr=Object.values(turtles);
     const activeCount=tarr.filter(t=>t.online&&t.status!=='IDLE').length;
     const jobsActive=jobs.filter(j=>j.status!=='COMPLETE'&&j.status!=='FAILED'&&j.status!=='CANCELLED').length;
-    const jobsDone=jobs.filter(j=>j.status==='COMPLETE').length;
     document.getElementById('s-online').textContent=tarr.filter(t=>t.online).length;
     document.getElementById('s-active').textContent=activeCount;
     document.getElementById('s-jobs').textContent=jobsActive;
@@ -848,142 +792,65 @@ function renderAll(d){
     document.getElementById('sb-turtles').textContent=tarr.length;
     document.getElementById('sb-active').textContent=activeCount;
     document.getElementById('sb-jobs').textContent=jobsActive;
-    document.getElementById('sb-done').textContent=jobsDone;
+    document.getElementById('sb-done').textContent=jobs.filter(j=>j.status==='COMPLETE').length;
     updateInjectedMarkers(turtles);
-    renderFleet(turtles,jobs);
+    renderFleet(turtles);
     renderJobs(jobs,turtles);
     renderStorage(d.storage||[]);
     refreshTurtleSel(turtles);
 }
 
 function fuelClass(pct){
-    if(pct<0.05)return'crit';
-    if(pct<0.2)return'low';
-    if(pct<0.4)return'med';
-    return'ok';
+    if(pct<0.05)return'crit';if(pct<0.2)return'low';if(pct<0.4)return'med';return'ok';
 }
 
-// ── Fleet paired cards ────────────────────────────────────────────────────
+// ── Fleet: simple turtle list ─────────────────────────────────────────────
 
-function buildPairs(turtles){
-    const del=Object.entries(turtles).filter(([,t])=>t.role==='DELIVERY').sort((a,b)=>a[0].localeCompare(b[0]));
-    const sup=Object.entries(turtles).filter(([,t])=>t.role==='SUPPORT').sort((a,b)=>a[0].localeCompare(b[0]));
-    const other=Object.entries(turtles).filter(([,t])=>t.role!=='DELIVERY'&&t.role!=='SUPPORT');
-    const pairs=[];
-    const usedSup=new Set();
-    for(const[did,dt]of del){
-        let partner=null;
-        if(dt.jobId){
-            const m=sup.find(([sid,st])=>!usedSup.has(sid)&&st.jobId===dt.jobId);
-            if(m){usedSup.add(m[0]);partner=m;}
-        }
-        if(!partner&&!dt.jobId){
-            const m=sup.find(([sid,st])=>!usedSup.has(sid)&&!st.jobId);
-            if(m){usedSup.add(m[0]);partner=m;}
-        }
-        pairs.push({d:[did,dt],s:partner});
-    }
-    for(const[sid,st]of sup){if(!usedSup.has(sid))pairs.push({d:null,s:[sid,st]});}
-    for(const t of other)pairs.push({d:t,s:null});
-    return pairs;
-}
-
-function renderSide(id,t,role,cls){
-    if(!id||!t){
-        return `<div class="pside${role==='DELIVERY'?' left':''}">
-            <div class="pside-role" style="color:#2a2a3a;">${role}</div>
-            <div class="pside-name dim">—</div>
-            <div class="pside-info" style="color:#0d0d1a;">no partner</div>
-        </div>`;
-    }
-    const fuel=t.fuel||0, max=t.fuelMax||100000;
-    const pct=Math.min(1,fuel/max);
-    const fc=fuelClass(pct);
-    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
-    const eid=escapeHtml(id);
-    const offCls=!t.online?' off':'';
-    return `<div class="pside${role==='DELIVERY'?' left':''}">
-        <div class="pside-role" style="color:${role==='DELIVERY'?'#00ff8844':'#4488ff44'};">${role}</div>
-        <div class="pside-name ${cls}${offCls}">${eid}</div>
-        <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${Math.round(pct*100)}%"></div></div>
-        <div class="pside-info">${Math.round(pct*100)}% · ${pos}${!t.online?' · OFFLINE':''}</div>
-    </div>`;
-}
-
-function renderFleet(turtles,jobs){
+function renderFleet(turtles){
     const el=document.getElementById('tab-fleet');
-    if(!Object.keys(turtles).length){el.innerHTML='<div class="empty">NO TURTLES REGISTERED</div>';return;}
-    const pairs=buildPairs(turtles);
-    el.innerHTML=pairs.map(({d,s})=>{
-        const dt=d?d[1]:null;
-        const did=d?d[0]:null;
-        const st=s?s[1]:null;
-        const sid=s?s[0]:null;
-        // Determine primary turtle for status/ETA (delivery, else support)
-        const primary=dt||st;
-        const primaryId=did||sid;
-        const status=primary?((primary.online===false)?'OFFLINE':(primary.status||'UNKNOWN')):'UNKNOWN';
-        // Job info from delivery turtle's jobId
-        const jobId=(dt&&dt.jobId)||(st&&st.jobId);
-        const job=jobId?jobs.find(j=>j.id===jobId):null;
-        let itemsStr='No active job';
-        let destStr='standing by';
-        if(job){
-            const items=(job.items||[]);
-            itemsStr=items.length
-                ?items.slice(0,3).map(i=>`${escapeHtml(i.displayName||i.name||'?')} ×${i.count}`).join(' · ')
-                    +(items.length>3?` +${items.length-3} more`:'')
-                :'No items';
-            const dest=job.destination;
-            if(dest&&dest.x!=null)destStr=`→ ${dest.x}, ${dest.y||67}, ${dest.z}`;
-            if(job.id)destStr+=` · ${escapeHtml(job.id)}`;
-        }
-        // ETA
-        let etaHtml='<span class="peta i">READY</span>';
-        if(dt&&dt.jobId&&dt.online&&dt.x!=null&&job&&job.destination&&job.destination.x!=null){
-            const route=computeDeliveryRoute(dt,job.destination);
-            const eta=routeETA(dt,route);
-            etaHtml=`<span class="peta a">⏱ ETA ~${eta}</span>`;
-        }else if(primary&&primary.status==='LOADING'){
-            etaHtml='<span class="peta" style="color:#ff8844;">◉ LOADING</span>';
-        }
-        const eid=escapeHtml(primaryId||'');
-        const edid=escapeHtml(did||'');
-        const esid=escapeHtml(sid||'');
-        const idleBtn=dt&&dt.status!=='IDLE'
-            ?`<button class="pbtn amber" onclick="setTurtleIdle('${edid}')">IDLE</button>`:
-            (st&&st.status!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${esid}')">IDLE</button>`:'');
-        const locateBtn=dt
-            ?`<button class="pbtn" onclick="focusTurtle('${edid}')">LOCATE</button>`
-            :`<button class="pbtn" onclick="focusTurtle('${esid}')">LOCATE</button>`;
-        const bayBtn=dt?`<button class="pbtn blue" onclick="reassignBay('${edid}')">BAY</button>`:'';
-        const delBtn=dt
-            ?`<button class="pbtn red" onclick="deleteTurtle('${edid}')">DEL</button>`
-            :`<button class="pbtn red" onclick="deleteTurtle('${esid}')">DEL</button>`;
-        const dimStyle=!job?'opacity:.38;':'';
-        return `<div class="pcard" style="${dimStyle}">
-            <div class="pcard-hdr">
-                <div class="pcard-job">
-                    <div class="pcard-items">${itemsStr}</div>
-                    <div class="pcard-dest">${escapeHtml(destStr)}</div>
+    const arr=Object.entries(turtles).sort((a,b)=>{
+        if(a[1].role!==b[1].role)return a[1].role==='DELIVERY'?-1:1;
+        return a[0].localeCompare(b[0]);
+    });
+    if(!arr.length){el.innerHTML='<div class="empty">NO TURTLES REGISTERED</div>';return;}
+    const sysVer=lastState.version||'';
+    el.innerHTML=arr.map(([id,t])=>{
+        const fuel=t.fuel||0,max=t.fuelMax||100000,pct=Math.min(1,fuel/max);
+        const fc=fuelClass(pct);
+        const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+        const st=t.status||'UNKNOWN';
+        const eid=escapeHtml(id),erole=escapeHtml(t.role||'?'),est=escapeHtml(st);
+        const tVer=t.version||'?';
+        const verOutdated=tVer!=='?'&&sysVer&&tVer!==sysVer;
+        const roleCls=t.role==='DELIVERY'?'d':'s';
+        const offlineCls=!t.online?' offline':'';
+        const idleBtn=st!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${eid}')">IDLE</button>`:'';
+        return `<div class="tcard${offlineCls}">
+            <div class="tcard-top">
+                <div>
+                    <div class="tcard-name ${roleCls}">${eid}</div>
+                    <div class="tcard-sub">${erole} · ${escapeHtml(t.dock||'?')}${!t.online?' · OFFLINE':''}</div>
                 </div>
-                <span class="sbadge ${escapeHtml(status)}">${escapeHtml(status)}</span>
+                <span class="sbadge ${est}">${est}</span>
             </div>
-            <div class="pcard-turtles">
-                ${renderSide(did,dt,'DELIVERY','d')}
-                ${renderSide(sid,st,'SUPPORT','s')}
+            <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${Math.round(pct*100)}%"></div></div>
+            <div class="tcard-row">
+                <span>FUEL <span class="v">${Math.round(pct*100)}%</span></span>
+                <span>POS <span class="v">${pos}</span></span>
+                ${t.jobId?`<span>JOB <span class="v" style="color:#4488ff88;">${escapeHtml(t.jobId)}</span></span>`:''}
+                ${verOutdated?`<span style="color:#ff4444">v${escapeHtml(tVer)} !</span>`:''}
             </div>
-            <div class="pcard-foot">
-                ${etaHtml}
-                <div class="pbtns ml">
-                    ${locateBtn}${idleBtn}${bayBtn}${delBtn}
-                </div>
+            <div class="tcard-btns">
+                <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
+                ${idleBtn}
+                <button class="pbtn blue" onclick="reassignBay('${eid}')">BAY</button>
+                <button class="pbtn red" onclick="deleteTurtle('${eid}')">DEL</button>
             </div>
         </div>`;
     }).join('');
 }
 
-// ── Job cards with stepper ────────────────────────────────────────────────
+// ── Jobs: stepper + paired turtle section ────────────────────────────────
 
 const JOB_STEPS=['QUEUE','LOAD','TRAVEL','DELIVER','RETURN'];
 
@@ -992,15 +859,34 @@ function getJobStep(job,turtles){
     if(job.status==='COMPLETE')return 5;
     if(job.status==='FAILED'||job.status==='CANCELLED')return-1;
     if(job.status==='PENDING')return 0;
-    // IN_PROGRESS — find the delivery turtle's status
-    const tarr=Object.values(turtles||{});
-    const t=tarr.find(x=>x.jobId===job.id&&x.role==='DELIVERY');
+    const t=Object.values(turtles||{}).find(x=>x.jobId===job.id&&x.role==='DELIVERY');
     if(!t)return 1;
     if(t.status==='LOADING')return 1;
     if(t.status==='TRAVELLING')return 2;
     if(t.status==='WORKING')return 3;
     if(t.status==='RETURNING')return 4;
     return 2;
+}
+
+function renderJobTurtle(id,t,role){
+    const roleCls=role==='DELIVERY'?'d':'s';
+    const roleColor=role==='DELIVERY'?'#00ff8833':'#4488ff33';
+    if(!t){
+        return `<div class="jtside">
+            <div class="jtside-role" style="color:#1a1a2e;">${role}</div>
+            <div class="jtside-name dim">—</div>
+        </div>`;
+    }
+    const pct=Math.min(100,Math.round((t.fuel||0)/(t.fuelMax||100000)*100));
+    const fc=fuelClass(pct/100);
+    const est=escapeHtml(t.status||'?');
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+    return `<div class="jtside">
+        <div class="jtside-role" style="color:${roleColor};">${role}</div>
+        <div class="jtside-name ${roleCls}">${escapeHtml(id)}</div>
+        <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${pct}%"></div></div>
+        <div class="jtside-info">${pct}% · ${est} · ${pos}</div>
+    </div>`;
 }
 
 function renderJobs(jobs,turtles){
@@ -1010,49 +896,47 @@ function renderJobs(jobs,turtles){
     const all=[...active,...recent];
     if(!all.length){el.innerHTML='<div class="empty">NO ACTIVE JOBS</div>';return;}
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const turtleEntries=Object.entries(turtles||{});
     el.innerHTML=all.map(j=>{
         const canCancel=!terminal.has(j.status);
-        const ejid=escapeHtml(j.id);
-        const ejstat=escapeHtml(j.status);
+        const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
         const curStep=getJobStep(j,turtles);
         const stepHtml=JOB_STEPS.map((lbl,i)=>{
             let cls='';
             if(curStep===5)cls='done';
             else if(i<curStep)cls='done';
             else if(i===curStep)cls='cur';
-            const elbl=escapeHtml(lbl);
-            return `<div class="jstep"><div class="jstep-bar ${cls}"></div><div class="jstep-lbl">${elbl}</div></div>`;
+            return `<div class="jstep"><div class="jstep-bar ${cls}"></div><div class="jstep-lbl">${escapeHtml(lbl)}</div></div>`;
         }).join('');
         const items=(j.items||[]);
         const itemsHtml=items.length
-            ?items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')
-            :'';
+            ?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
         const dest=j.destination;
         const destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
-        const tarr=Object.values(turtles||{});
-        const assignedT=tarr.find(t=>t.jobId===j.id&&t.role==='DELIVERY');
-        const assignedStr=assignedT?`→ ${escapeHtml(assignedT.id||'')} `:
-            (j.assignedTo?`→ ${escapeHtml(j.assignedTo)} `:'');
-        const cancelBtn=canCancel
-            ?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:
-            '';
+        // Find paired turtles
+        const delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
+        const supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
+        const turtlesHtml=`<div class="jturtles">
+            ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
+            ${renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT')}
+        </div>`;
+        const cancelBtn=canCancel?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:'';
         return `<div class="job-card ${ejstat}">
             <div class="jc-top">
                 <span class="jc-id">${ejid}</span>
-                <span class="jc-turtle">${assignedStr}</span>
                 <span class="jbadge ${ejstat}">${ejstat}</span>
                 ${cancelBtn}
             </div>
             <div class="jprog">${stepHtml}</div>
-            ${itemsHtml?`<div class="jitems">${itemsHtml}</div>`:''}
+            ${itemsHtml}
             <div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>
+            ${turtlesHtml}
         </div>`;
     }).join('');
 }
 
 function refreshTurtleSel(turtles){
-    const sel=document.getElementById('turtle-sel');
-    const cur=sel.value;
+    const sel=document.getElementById('turtle-sel'),cur=sel.value;
     sel.innerHTML='<option value="">— Select turtle —</option>'+
         Object.keys(turtles).sort().map(id=>
             `<option value="${escapeHtml(id)}"${id===cur?' selected':''}>${escapeHtml(id)} [${escapeHtml(turtles[id].status)||'?'}]</option>`
@@ -1062,8 +946,7 @@ function refreshTurtleSel(turtles){
 function focusTurtle(id){
     const t=lastState.turtles?lastState.turtles[id]:null;
     if(!t||t.x==null){toast('No position data for '+id,true);return;}
-    dynmapGoTo(t.x,t.y||67,t.z);
-    toast('Locating '+id);
+    dynmapGoTo(t.x,t.y||67,t.z);toast('Locating '+id);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1093,9 +976,7 @@ function sortItems(items){
 function renderStorage(items){
     storageData=items;
     const query=(document.getElementById('store-search').value||'').toLowerCase();
-    const filtered=items.filter(it=>
-        !query||(it.displayName||it.name).toLowerCase().includes(query)||it.name.toLowerCase().includes(query)
-    );
+    const filtered=items.filter(it=>!query||(it.displayName||it.name).toLowerCase().includes(query)||it.name.toLowerCase().includes(query));
     const list=sortItems(filtered);
     const el=document.getElementById('storage-list');
     if(!items.length){el.innerHTML='<div class="empty">NO RS DATA</div>';return;}
@@ -1103,14 +984,12 @@ function renderStorage(items){
     const savedScroll=el.scrollTop;
     el.innerHTML=list.map(item=>{
         const{text,cls}=fmtAmt(item);
-        const dn=escapeHtml(item.displayName||item.name);
-        const nm=escapeHtml(JSON.stringify(item.name));
+        const dn=escapeHtml(item.displayName||item.name),nm=escapeHtml(JSON.stringify(item.name));
         const barPct=item.craftable&&item.amount===0?0:Math.min(100,Math.round((item.amount/64)*100));
         const barColor=cls==='ok'?'linear-gradient(90deg,#00ff88,#00ccaa)':cls==='low'?'#ffaa44':'transparent';
-        const barBoxShadow=cls==='ok'?'0 0 3px #00ff8833':'none';
         return `<div class="sr">
             <span class="sr-name" title="${escapeHtml(item.name)}">${dn}</span>
-            <div class="sr-bar"><div class="sr-bar-f" style="width:${barPct}%;background:${barColor};box-shadow:${barBoxShadow};"></div></div>
+            <div class="sr-bar"><div class="sr-bar-f" style="width:${barPct}%;background:${barColor};"></div></div>
             <span class="sr-amt ${cls}">${escapeHtml(text)}</span>
             <button class="sr-add" onclick="cartAdd(${nm})">+</button>
         </div>`;
@@ -1121,87 +1000,55 @@ function renderStorage(items){
 function filterStorage(){renderStorage(storageData);}
 
 function cartAdd(name){
-    const item=storageData.find(i=>i.name===name);
-    if(!item)return;
-    if(!orderCart[name]){
-        const maxAvail=item.craftable?9999:item.amount;
-        orderCart[name]={count:1,displayName:item.displayName||name,craftable:item.craftable,maxAvail};
-    }else{
-        orderCart[name].count=Math.min(orderCart[name].count+1,orderCart[name].maxAvail||9999);
-    }
+    const item=storageData.find(i=>i.name===name);if(!item)return;
+    if(!orderCart[name]){const maxAvail=item.craftable?9999:item.amount;orderCart[name]={count:1,displayName:item.displayName||name,craftable:item.craftable,maxAvail};}
+    else{orderCart[name].count=Math.min(orderCart[name].count+1,orderCart[name].maxAvail||9999);}
     renderOrderCart();updateOrderBtn();
 }
-
 function cartRemove(name){delete orderCart[name];renderOrderCart();updateOrderBtn();}
-
 function cartSetQty(name,val){
-    const n=parseInt(val);
-    if(!orderCart[name])return;
+    const n=parseInt(val);if(!orderCart[name])return;
     if(isNaN(n)||n<=0){cartRemove(name);return;}
-    orderCart[name].count=Math.min(n,orderCart[name].maxAvail||9999);
-    updateOrderBtn();
+    orderCart[name].count=Math.min(n,orderCart[name].maxAvail||9999);updateOrderBtn();
 }
-
 function cartStep(name,delta){
     if(!orderCart[name])return;
-    const next=Math.max(1,(orderCart[name].count||1)+delta);
-    orderCart[name].count=Math.min(next,orderCart[name].maxAvail||9999);
+    orderCart[name].count=Math.min(Math.max(1,(orderCart[name].count||1)+delta),orderCart[name].maxAvail||9999);
     renderOrderCart();updateOrderBtn();
 }
-
 function renderOrderCart(){
-    const el=document.getElementById('om-cart');
-    const keys=Object.keys(orderCart);
+    const el=document.getElementById('om-cart'),keys=Object.keys(orderCart);
     if(!keys.length){el.innerHTML='<div class="cart-empty">No items added — search above</div>';return;}
     el.innerHTML=keys.map(name=>{
-        const it=orderCart[name];
-        const dn=escapeHtml(it.displayName||name);
-        const nm=escapeHtml(JSON.stringify(name));
-        const qcls=it.craftable?' craft':'';
+        const it=orderCart[name],dn=escapeHtml(it.displayName||name),nm=escapeHtml(JSON.stringify(name)),qcls=it.craftable?' craft':'';
         return `<div class="cart-item">
             <span class="ci-name" title="${escapeHtml(name)}">${dn}</span>
             ${it.craftable?'<span class="ci-craft">CRAFT</span>':''}
             <button class="ci-step" onclick="cartStep(${nm},1)">+</button>
-            <input class="ci-qty${qcls}" type="text" inputmode="numeric" value="${it.count}"
-                onchange="cartSetQty(${nm},this.value)" oninput="cartSetQty(${nm},this.value)">
+            <input class="ci-qty${qcls}" type="text" inputmode="numeric" value="${it.count}" onchange="cartSetQty(${nm},this.value)" oninput="cartSetQty(${nm},this.value)">
             <button class="ci-step" onclick="cartStep(${nm},-1)">−</button>
             <button class="ci-del" onclick="cartRemove(${nm})">×</button>
         </div>`;
     }).join('');
 }
-
 function updateOrderBtn(){
-    const n=Object.keys(orderCart).length;
-    const el=document.getElementById('order-btn');
-    el.textContent=`ORDER (${n})`;
-    el.classList.toggle('dim',n===0);
+    const n=Object.keys(orderCart).length,el=document.getElementById('order-btn');
+    el.textContent=`ORDER (${n})`;el.classList.toggle('dim',n===0);
 }
 updateOrderBtn();
 
 function updateOrderSearch(){
-    const q=(document.getElementById('om-search').value||'').toLowerCase();
-    const res=document.getElementById('om-results');
+    const q=(document.getElementById('om-search').value||'').toLowerCase(),res=document.getElementById('om-results');
     if(!q){res.style.display='none';return;}
-    const matches=storageData.filter(it=>
-        (it.displayName||it.name).toLowerCase().includes(q)||it.name.toLowerCase().includes(q)
-    ).slice(0,20);
+    const matches=storageData.filter(it=>(it.displayName||it.name).toLowerCase().includes(q)||it.name.toLowerCase().includes(q)).slice(0,20);
     if(!matches.length){res.style.display='none';return;}
     res.innerHTML=matches.map(item=>{
-        const{text,cls}=fmtAmt(item);
-        const dn=escapeHtml(item.displayName||item.name);
-        return `<div class="om-result" onclick="cartAddFromModal(${escapeHtml(JSON.stringify(item.name))})">
-            <span class="om-result-name">${dn}</span>
-            <span class="om-result-amt ${cls}">${escapeHtml(text)}</span>
-        </div>`;
+        const{text,cls}=fmtAmt(item),dn=escapeHtml(item.displayName||item.name);
+        return `<div class="om-result" onclick="cartAddFromModal(${escapeHtml(JSON.stringify(item.name))})"><span class="om-result-name">${dn}</span><span class="om-result-amt ${cls}">${escapeHtml(text)}</span></div>`;
     }).join('');
     res.style.display='block';
 }
-
-function cartAddFromModal(name){
-    cartAdd(name);
-    document.getElementById('om-search').value='';
-    document.getElementById('om-results').style.display='none';
-}
+function cartAddFromModal(name){cartAdd(name);document.getElementById('om-search').value='';document.getElementById('om-results').style.display='none';}
 
 function openOrderModal(x,z){
     if(x!=null)document.getElementById('om-x').value=x;
@@ -1212,7 +1059,6 @@ function openOrderModal(x,z){
     document.getElementById('order-modal').classList.add('show');
     document.getElementById('om-search').focus();
 }
-
 function closeOrderModal(){
     document.getElementById('dynmap-frame').style.visibility='visible';
     document.getElementById('map-overlay').classList.remove('show');
@@ -1220,7 +1066,6 @@ function closeOrderModal(){
     document.getElementById('order-modal').classList.remove('show');
     document.getElementById('om-results').style.display='none';
 }
-
 document.addEventListener('keydown',(e)=>{if(e.key==='Escape')closeOrderModal();});
 
 function openModalFromCmd(){
@@ -1231,18 +1076,12 @@ function openModalFromCmd(){
 }
 
 async function submitOrder(){
-    const x=parseInt(document.getElementById('om-x').value);
-    const yRaw=parseInt(document.getElementById('om-y').value);
-    const y=isNaN(yRaw)?67:yRaw;
-    const z=parseInt(document.getElementById('om-z').value);
+    const x=parseInt(document.getElementById('om-x').value),yRaw=parseInt(document.getElementById('om-y').value),y=isNaN(yRaw)?67:yRaw,z=parseInt(document.getElementById('om-z').value);
     if(isNaN(x)||isNaN(z)){toast('Enter valid X and Z coordinates',true);return;}
-    const keys=Object.keys(orderCart);
-    if(!keys.length){toast('Add at least one item',true);return;}
+    const keys=Object.keys(orderCart);if(!keys.length){toast('Add at least one item',true);return;}
     const items=keys.map(name=>({name,count:orderCart[name].count,craft:orderCart[name].craftable}));
     await sendCmd('ORDER_DELIVERY',{destination:{x,y,z},items,priority:5});
-    orderCart={};renderOrderCart();updateOrderBtn();
-    closeOrderModal();toast('Order dispatched!');
-    switchTab('jobs');
+    orderCart={};renderOrderCart();updateOrderBtn();closeOrderModal();toast('Order dispatched!');switchTab('jobs');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1250,7 +1089,6 @@ async function submitOrder(){
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _activeConfirm=null;
-
 function showConfirm(id){
     if(_activeConfirm)hideConfirm(_activeConfirm);
     document.getElementById('btn-'+id).style.display='none';
@@ -1268,76 +1106,35 @@ function hideConfirm(id){
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function cmdRecall(){
-    const id=document.getElementById('turtle-sel').value;
-    if(!id){toast('Select a turtle first',true);return;}
-    await sendCmd('RECALL',{turtleId:id,reason:'admin_recall'});
-    toast(`Recall sent → ${id}`);
+    const id=document.getElementById('turtle-sel').value;if(!id){toast('Select a turtle first',true);return;}
+    await sendCmd('RECALL',{turtleId:id,reason:'admin_recall'});toast(`Recall sent → ${id}`);
 }
-async function doRecallAll(){
-    hideConfirm('recall-all');
-    await sendCmd('RECALL_ALL',{reason:'admin_recall'});
-    toast('Recall all sent');
-}
-async function cancelJob(jobId){
-    if(!confirm(`Cancel job ${jobId}?`))return;
-    await sendCmd('CANCEL_JOB',{jobId});
-    toast(`Cancelled ${jobId}`);
-}
-async function setTurtleIdle(id){
-    if(!confirm('Set '+id+' to IDLE?'))return;
-    await sendCmd('SET_IDLE',{turtleId:id});
-    toast(`${id} → IDLE`);
-}
-async function deleteTurtle(id){
-    if(!confirm(`Remove ${id} from fleet?\nThis releases its dock slot. Only use for destroyed turtles.`))return;
-    await sendCmd('REMOVE_TURTLE',{turtleId:id});
-    toast(`${id} removed from fleet`);
-}
+async function doRecallAll(){hideConfirm('recall-all');await sendCmd('RECALL_ALL',{reason:'admin_recall'});toast('Recall all sent');}
+async function cancelJob(jobId){if(!confirm(`Cancel job ${jobId}?`))return;await sendCmd('CANCEL_JOB',{jobId});toast(`Cancelled ${jobId}`);}
+async function setTurtleIdle(id){if(!confirm('Set '+id+' to IDLE?'))return;await sendCmd('SET_IDLE',{turtleId:id});toast(`${id} → IDLE`);}
+async function deleteTurtle(id){if(!confirm(`Remove ${id} from fleet?\nThis releases its dock slot.`))return;await sendCmd('REMOVE_TURTLE',{turtleId:id});toast(`${id} removed`);}
 async function reassignBay(id){
-    const bay=prompt(`Reassign ${id} to bay number:\n(enter the numeric bay, e.g. 2)`);
-    if(bay===null)return;
-    const n=parseInt(bay);
-    if(isNaN(n)||n<1){toast('Invalid bay number',true);return;}
-    await sendCmd('REASSIGN_BAY',{turtleId:id,bay:n});
-    toast(`${id} → bay ${n} requested`);
+    const bay=prompt(`Reassign ${id} to bay number:`);if(bay===null)return;
+    const n=parseInt(bay);if(isNaN(n)||n<1){toast('Invalid bay number',true);return;}
+    await sendCmd('REASSIGN_BAY',{turtleId:id,bay:n});toast(`${id} → bay ${n} requested`);
 }
-async function doResetStatus(){
-    hideConfirm('reset-status');
-    await sendCmd('RESET_STATUS',{});
-    toast('All statuses reset to IDLE');
-}
-async function doClearJobs(){
-    hideConfirm('clear-jobs');
-    await sendCmd('CLEAR_JOBS',{});
-    toast('All jobs cleared');
-}
+async function doResetStatus(){hideConfirm('reset-status');await sendCmd('RESET_STATUS',{});toast('All statuses reset to IDLE');}
+async function doClearJobs(){hideConfirm('clear-jobs');await sendCmd('CLEAR_JOBS',{});toast('All jobs cleared');}
 async function cmdUpdateSystem(){
-    if(!confirm('Update the WHOLE system?\n\n• git pull on the server\n• OTA update all CC computers\n• Dashboard will restart in ~5 seconds'))return;
-    try{
-        const r=await fetch('/self-update',{method:'POST'});
-        const d=await r.json();
-        toast('System update started — dashboard restarting in 5s');
-        console.log('[self-update] git output:',d.output);
-        setTimeout(()=>location.reload(),7000);
-    }catch(e){toast('Update request failed: '+e.message,true);}
+    if(!confirm('Update the WHOLE system?\n\n• git pull on the server\n• OTA update all CC computers\n• Dashboard restarts in ~5s'))return;
+    try{const r=await fetch('/self-update',{method:'POST'}),d=await r.json();toast('System update started — restarting in 5s');console.log('[self-update]',d.output);setTimeout(()=>location.reload(),7000);}
+    catch(e){toast('Update request failed: '+e.message,true);}
 }
-async function cmdUpdateAll(){
-    if(!confirm('OTA update all CC computers? They will reboot.'))return;
-    await sendCmd('UPDATE_ALL',{});
-    toast('OTA update sent to all CC computers');
-}
+async function cmdUpdateAll(){if(!confirm('OTA update all CC computers? They will reboot.'))return;await sendCmd('UPDATE_ALL',{});toast('OTA update sent');}
 async function sendCmd(type,params){
-    try{
-        await fetch('/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,params})});
-    }catch(e){toast('Command failed',true);}
+    try{await fetch('/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,params})});}
+    catch(e){toast('Command failed',true);}
 }
 
 let _toastTimer;
 function toast(msg,err){
-    const el=document.getElementById('toast');
-    el.textContent=msg;el.className='show'+(err?' err':'');
-    clearTimeout(_toastTimer);
-    _toastTimer=setTimeout(()=>el.className='',3000);
+    const el=document.getElementById('toast');el.textContent=msg;el.className='show'+(err?' err':'');
+    clearTimeout(_toastTimer);_toastTimer=setTimeout(()=>el.className='',3000);
 }
 </script>
 </body>
