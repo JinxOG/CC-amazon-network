@@ -341,7 +341,7 @@
         .cart-empty { color:#2a2a4a; font-size:11px; letter-spacing:1px; padding:8px 0; }
         .cart-item { display:grid; grid-template-columns:1fr 24px 56px 24px 18px; align-items:center; gap:5px; }
         .ci-name  { color:#ddd; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-        .ci-craft { font-size:10px; color:#4488ff; letter-spacing:1px; }
+        .ci-craft { font-size:9px; color:#4488ff88; letter-spacing:1px; margin-left:4px; }
         .ci-step  {
             background:transparent; border:1px solid #1e1e3e; color:#555;
             font-family:'Courier New',monospace; font-size:14px;
@@ -350,12 +350,13 @@
         }
         .ci-step:hover { border-color:#00ff8833; color:#00ff88; }
         .ci-qty {
-            width:100%; height:24px; background:#050508; border:1px solid #1e1e3e; color:#ddd;
+            width:100%; height:24px; background:#0d0d1a; border:1px solid #2a2a4e; color:#ccc;
             font-family:'Courier New',monospace; font-size:12px; padding:2px 4px;
             border-radius:2px; outline:none; text-align:center; box-sizing:border-box;
+            color-scheme:dark; -webkit-text-fill-color:#ccc; appearance:none; -webkit-appearance:none;
         }
         .ci-qty:focus { border-color:#00ff8844; }
-        .ci-qty.craft { border-color:#4488ff; background:#00082a; color:#88aaff; }
+        .ci-qty.craft { border-color:#4488ff; background:#00082a; color:#88aaff; -webkit-text-fill-color:#88aaff; }
         .ci-del { background:transparent; border:none; color:#333; cursor:pointer; font-size:15px; padding:0; line-height:1; transition:color .15s; }
         .ci-del:hover { color:#ff4444; }
         .modal-actions { display:flex; gap:8px; margin-top:16px; }
@@ -747,9 +748,24 @@ function updateInjectedMarkers(turtles){
             const latlng=mcToLatLng(dw,dm,t),color=turtleColor(t);
             const r=t.role==='SUPPORT'?5:7,tc='cc-tip'+(t.role==='SUPPORT'?' support':''),sel=id===selectedTurtleId;
             if(injectedMarkers[id]){
-                injectedMarkers[id].setLatLng(latlng);
-                injectedMarkers[id].setStyle({color:sel?'#ffffff':color,fillColor:color,weight:sel?3:2});
-                injectedMarkers[id].setRadius(sel?r+3:r);
+                const m=injectedMarkers[id],path=m._path;
+                const hasPt=path&&m._point;
+                const fromX=hasPt?m._point.x:null,fromY=hasPt?m._point.y:null;
+                // Freeze visual at current position so Leaflet's setLatLng doesn't jump
+                if(hasPt){path.style.transition='none';path.style.cx=fromX+'px';path.style.cy=fromY+'px';}
+                m.setLatLng(latlng);
+                m.setStyle({color:sel?'#ffffff':color,fillColor:color,weight:sel?3:2});
+                m.setRadius(sel?r+3:r);
+                if(hasPt){
+                    const toX=m._point.x,toY=m._point.y;
+                    if(Math.abs(fromX-toX)>0.5||Math.abs(fromY-toY)>0.5){
+                        void path.getBBox(); // force reflow
+                        path.style.transition='cx 1.8s linear,cy 1.8s linear';
+                        path.style.cx=toX+'px';path.style.cy=toY+'px';
+                        const done=()=>{path.style.removeProperty('cx');path.style.removeProperty('cy');path.style.removeProperty('transition');path.removeEventListener('transitionend',done);};
+                        path.addEventListener('transitionend',done);
+                    }else{path.style.removeProperty('cx');path.style.removeProperty('cy');path.style.removeProperty('transition');}
+                }
             }else{
                 const m=dw.L.circleMarker(latlng,{radius:r,color,fillColor:color,fillOpacity:0.9,weight:2})
                     .bindTooltip(id,{permanent:true,direction:'top',offset:[0,-10],className:tc})
@@ -1229,8 +1245,7 @@ function renderOrderCart(){
     el.innerHTML=keys.map(name=>{
         const it=orderCart[name],dn=escapeHtml(it.displayName||name),nm=escapeHtml(JSON.stringify(name)),qcls=it.craftable?' craft':'';
         return `<div class="cart-item">
-            <span class="ci-name" title="${escapeHtml(name)}">${dn}</span>
-            ${it.craftable?'<span class="ci-craft">CRAFT</span>':''}
+            <span class="ci-name" title="${escapeHtml(name)}">${dn}${it.craftable?'<span class="ci-craft">CRAFT</span>':''}</span>
             <button class="ci-step" onclick="cartStep(${nm},1)">+</button>
             <input class="ci-qty${qcls}" type="text" inputmode="numeric" value="${it.count}" onchange="cartSetQty(${nm},this.value)" oninput="cartSetQty(${nm},this.value)">
             <button class="ci-step" onclick="cartStep(${nm},-1)">−</button>
