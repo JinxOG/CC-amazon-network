@@ -110,8 +110,8 @@
         .tcard {
             background:#08080e; border:1px solid #00ff8818;
             border-radius:3px; padding:11px; flex-shrink:0;
-            animation:cardIn .2s ease forwards;
         }
+        .tcard.is-new { animation:cardIn .2s ease forwards; }
         .tcard.offline { opacity:.45; }
         .tcard-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
         .tcard-name { font-size:14px; letter-spacing:1px; margin-bottom:2px; }
@@ -171,12 +171,10 @@
         .job-card {
             background:#08080e; border:1px solid #00ff8818;
             border-left:3px solid #333; border-radius:3px; padding:11px; flex-shrink:0;
-            animation:cardIn .22s ease forwards;
         }
-        .job-card.IN_PROGRESS {
-            border-left-color:#4488ff;
-            animation:cardIn .22s ease forwards, jobActivePulse 3s ease-in-out infinite;
-        }
+        .job-card.is-new { animation:cardIn .22s ease forwards; }
+        .job-card.IN_PROGRESS { border-left-color:#4488ff; animation:jobActivePulse 3s ease-in-out infinite; }
+        .job-card.IN_PROGRESS.is-new { animation:cardIn .22s ease forwards, jobActivePulse 3s ease-in-out 0.22s infinite; }
         .job-card.PENDING     { border-left-color:#ffaa00; box-shadow:-2px 0 8px #ffaa0014; }
         .job-card.COMPLETE    { border-left-color:#00ff88; opacity:.45; }
         .job-card.FAILED      { border-left-color:#ff4444; }
@@ -877,13 +875,15 @@ function fuelClass(pct){
 
 // ── Fleet: simple turtle list ─────────────────────────────────────────────
 
+let _prevTurtleIds=new Set();
+
 function renderFleet(turtles){
     const el=document.getElementById('tab-fleet');
     const arr=Object.entries(turtles).sort((a,b)=>{
         if(a[1].role!==b[1].role)return a[1].role==='DELIVERY'?-1:1;
         return a[0].localeCompare(b[0]);
     });
-    if(!arr.length){el.innerHTML='<div class="empty">NO TURTLES REGISTERED</div>';return;}
+    if(!arr.length){el.innerHTML='<div class="empty">NO TURTLES REGISTERED</div>';_prevTurtleIds=new Set();return;}
     const sysVer=lastState.version||'';
     el.innerHTML=arr.map(([id,t])=>{
         const fuel=t.fuel||0,max=t.fuelMax||100000,pct=Math.min(1,fuel/max);
@@ -895,8 +895,9 @@ function renderFleet(turtles){
         const verOutdated=tVer!=='?'&&sysVer&&tVer!==sysVer;
         const roleCls=t.role==='DELIVERY'?'d':'s';
         const offlineCls=!t.online?' offline':'';
+        const newCls=!_prevTurtleIds.has(id)?' is-new':'';
         const idleBtn=st!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${eid}')">IDLE</button>`:'';
-        return `<div class="tcard${offlineCls}">
+        return `<div class="tcard${offlineCls}${newCls}">
             <div class="tcard-top">
                 <div>
                     <div class="tcard-name ${roleCls}">${eid}</div>
@@ -919,6 +920,7 @@ function renderFleet(turtles){
             </div>
         </div>`;
     }).join('');
+    _prevTurtleIds=new Set(arr.map(([id])=>id));
 }
 
 // ── Jobs: filter + stepper + paired turtle section ───────────────────────
@@ -968,11 +970,28 @@ function renderJobTurtle(id,t,role){
     </div>`;
 }
 
-function findJobTurtles(j, turtles, turtleEntries){
-    // Primary: turtle's jobId still matches (active jobs)
+function findJobTurtles(j, turtles, turtleEntries, allJobs){
+    // Primary: turtle's live jobId matches this delivery job
     let delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
     let supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
-    // Fallback: job object stores turtle IDs (covers completed jobs after jobId is cleared)
+
+    // Support turtles run a separate SUPPORT_FOLLOW job — find it via masterJobId or partnerId
+    if(!supEntry && allJobs){
+        const supportJob=allJobs.find(sj=>{
+            const jt=sj.jobType||sj.type;
+            if(jt!=='SUPPORT_FOLLOW')return false;
+            const p=sj.params||{};
+            return p.masterJobId===j.id||(delEntry&&p.partnerId===delEntry[0]);
+        });
+        if(supportJob){
+            supEntry=turtleEntries.find(([,t])=>t.jobId===supportJob.id&&t.role==='SUPPORT');
+            if(!supEntry&&supportJob.turtleId&&turtles[supportJob.turtleId]){
+                supEntry=[supportJob.turtleId,turtles[supportJob.turtleId]];
+            }
+        }
+    }
+
+    // Fallback: job object stores turtle IDs (covers completed jobs)
     if(!delEntry){
         const did=j.turtleId||j.deliveryTurtleId||j.deliveryId;
         if(did&&turtles[did])delEntry=[did,turtles[did]];
@@ -984,27 +1003,32 @@ function findJobTurtles(j, turtles, turtleEntries){
     return{delEntry,supEntry};
 }
 
+let _prevJobIds=new Set();
+
 function renderJobs(jobs,turtles){
     const el=document.getElementById('jobs-list');
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const isFollowJob=j=>(j.jobType||j.type)==='SUPPORT_FOLLOW';
 
-    // Apply filter
+    // Apply filter, always hiding SUPPORT_FOLLOW (folded into delivery card)
     let filtered;
     if(jobFilter==='done'){
-        filtered=[...jobs].filter(j=>j.status==='COMPLETE').reverse();
+        filtered=[...jobs].filter(j=>j.status==='COMPLETE'&&!isFollowJob(j)).reverse();
     }else if(jobFilter==='active'){
-        filtered=[...jobs].filter(j=>!terminal.has(j.status));
+        filtered=[...jobs].filter(j=>!terminal.has(j.status)&&!isFollowJob(j));
     }else{
-        filtered=[...jobs].reverse();
+        filtered=[...jobs].filter(j=>!isFollowJob(j)).reverse();
     }
 
     if(!filtered.length){
         el.innerHTML=`<div class="empty">${jobFilter==='done'?'NO COMPLETED JOBS':'NO ACTIVE JOBS'}</div>`;
+        _prevJobIds=new Set();
         return;
     }
 
     const turtleEntries=Object.entries(turtles||{});
-    el.innerHTML=filtered.map(j=>{
+    const html=filtered.map(j=>{
+        const isNew=!_prevJobIds.has(j.id);
         const canCancel=!terminal.has(j.status);
         const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
         const curStep=getJobStep(j,turtles);
@@ -1020,13 +1044,14 @@ function renderJobs(jobs,turtles){
             ?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
         const dest=j.destination;
         const destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
-        const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries);
+        const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,jobs);
         const turtlesHtml=`<div class="jturtles">
             ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
             ${renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT')}
         </div>`;
         const cancelBtn=canCancel?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:'';
-        return `<div class="job-card ${ejstat}">
+        const newCls=isNew?' is-new':'';
+        return `<div class="job-card ${ejstat}${newCls}">
             <div class="jc-top">
                 <span class="jc-id">${ejid}</span>
                 <span class="jbadge ${ejstat}">${ejstat}</span>
@@ -1038,6 +1063,9 @@ function renderJobs(jobs,turtles){
             ${turtlesHtml}
         </div>`;
     }).join('');
+
+    el.innerHTML=html;
+    _prevJobIds=new Set(filtered.map(j=>j.id));
 }
 
 function refreshTurtleSel(turtles){
