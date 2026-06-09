@@ -925,8 +925,6 @@ function renderFleet(turtles){
 
 const JOB_STEPS=['QUEUE','LOAD','TRAVEL','DELIVER','RETURN'];
 
-let jobFilter='active';
-
 function setJobFilter(f){
     jobFilter=f;
     document.querySelectorAll('.jfbtn').forEach(b=>b.classList.remove('active'));
