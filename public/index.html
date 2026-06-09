@@ -311,13 +311,13 @@
         .modal-field { margin-bottom:12px; }
         .modal-field label { display:block; font-size:10px; color:#444; letter-spacing:1px; margin-bottom:4px; }
         .modal-coord-row { display:flex; gap:6px; }
-        .modal-coord-row input, .modal-field input {
+        .modal-coord-row input, .modal-field input:not(.ci-qty) {
             flex:1; min-width:0; width:0;
             background:#050508; border:1px solid #00ff8818; color:#ddd;
             font-family:'Courier New',monospace; font-size:12px; padding:7px 8px;
             border-radius:2px; outline:none; transition:border-color .15s;
         }
-        .modal-coord-row input:focus, .modal-field input:focus { border-color:#00ff8844; }
+        .modal-coord-row input:focus, .modal-field input:not(.ci-qty):focus { border-color:#00ff8844; }
         .om-search-wrap { position:relative; }
         #om-search {
             width:100%; background:#050508; border:1px solid #00ff8818; color:#ddd;
@@ -350,7 +350,7 @@
         }
         .ci-step:hover { border-color:#00ff8833; color:#00ff88; }
         .ci-qty {
-            width:100%; height:24px;
+            width:100% !important; height:24px;
             background:#1a1a2e !important; border:1px solid #3a3a5e; color:#e0e0ff !important;
             -webkit-text-fill-color:#e0e0ff !important;
             font-family:'Courier New',monospace; font-size:12px; padding:2px 4px;
@@ -749,23 +749,22 @@ function updateInjectedMarkers(turtles){
             const latlng=mcToLatLng(dw,dm,t),color=turtleColor(t);
             const r=t.role==='SUPPORT'?5:7,tc='cc-tip'+(t.role==='SUPPORT'?' support':''),sel=id===selectedTurtleId;
             if(injectedMarkers[id]){
-                const m=injectedMarkers[id],path=m._path;
-                const hasPt=path&&m._point;
-                const fromX=hasPt?m._point.x:null,fromY=hasPt?m._point.y:null;
-                // Freeze visual at current position so Leaflet's setLatLng doesn't jump
-                if(hasPt){path.style.transition='none';path.style.cx=fromX+'px';path.style.cy=fromY+'px';}
-                m.setLatLng(latlng);
+                const m=injectedMarkers[id];
+                if(m._tweenId)cancelAnimationFrame(m._tweenId);
                 m.setStyle({color:sel?'#ffffff':color,fillColor:color,weight:sel?3:2});
                 m.setRadius(sel?r+3:r);
-                if(hasPt){
-                    const toX=m._point.x,toY=m._point.y;
-                    if(Math.abs(fromX-toX)>0.5||Math.abs(fromY-toY)>0.5){
-                        void path.getBBox(); // force reflow
-                        path.style.transition='cx 1.8s linear,cy 1.8s linear';
-                        path.style.cx=toX+'px';path.style.cy=toY+'px';
-                        const done=()=>{path.style.removeProperty('cx');path.style.removeProperty('cy');path.style.removeProperty('transition');path.removeEventListener('transitionend',done);};
-                        path.addEventListener('transitionend',done);
-                    }else{path.style.removeProperty('cx');path.style.removeProperty('cy');path.style.removeProperty('transition');}
+                const ll=m._latlng;
+                if(ll&&(Math.abs(ll.lat-latlng.lat)>1e-6||Math.abs(ll.lng-latlng.lng)>1e-6)){
+                    const fromLat=ll.lat,fromLng=ll.lng,toLat=latlng.lat,toLng=latlng.lng;
+                    const start=performance.now(),dur=1800;
+                    m._tweenId=requestAnimationFrame(function step(now){
+                        const t=Math.min(1,(now-start)/dur);
+                        try{m._latlng={lat:fromLat+(toLat-fromLat)*t,lng:fromLng+(toLng-fromLng)*t};m._project();m._updatePath();}catch(_){}
+                        if(t<1)m._tweenId=requestAnimationFrame(step);
+                        else{try{m.setLatLng(latlng);}catch(_){}delete m._tweenId;}
+                    });
+                }else{
+                    m.setLatLng(latlng);
                 }
             }else{
                 const m=dw.L.circleMarker(latlng,{radius:r,color,fillColor:color,fillOpacity:0.9,weight:2})
