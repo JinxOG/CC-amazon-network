@@ -935,14 +935,44 @@ function _patchTcard(card,t,sysVer){
     const{pct,fc}=_fuel(t),st=t.status||'UNKNOWN';
     const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
     const fill=card.querySelector('.fuel-fill');
-    if(fill){fill.style.width=pct+'%';fill.className='fuel-fill '+fc;}
+    if(fill){
+        fill.style.width=pct+'%';
+        const wfc='fuel-fill '+fc;if(fill.className!==wfc)fill.className=wfc;
+    }
     const badge=card.querySelector('.sbadge');
-    if(badge){badge.textContent=st;badge.className='sbadge '+st;}
-    const posEl=card.querySelector('.tc-pos');if(posEl)posEl.textContent=pos;
-    const pctEl=card.querySelector('.tc-pct');if(pctEl)pctEl.textContent=pct+'%';
+    if(badge){
+        if(badge.textContent!==st)badge.textContent=st;
+        const wbc='sbadge '+st;if(badge.className!==wbc)badge.className=wbc;
+    }
+    const posEl=card.querySelector('.tc-pos');if(posEl&&posEl.textContent!==pos)posEl.textContent=pos;
+    const pctEl=card.querySelector('.tc-pct');const ps=pct+'%';if(pctEl&&pctEl.textContent!==ps)pctEl.textContent=ps;
     const jobEl=card.querySelector('.tc-job');
-    if(jobEl)jobEl.innerHTML=t.jobId?`JOB <span style="color:#4488ff88;">${escapeHtml(t.jobId)}</span>`:'';
+    if(jobEl){
+        const nj=t.jobId||'';
+        if((jobEl.dataset.jid||'')!==nj){
+            jobEl.dataset.jid=nj;
+            jobEl.innerHTML=nj?`JOB <span style="color:#4488ff88;">${escapeHtml(nj)}</span>`:'';
+        }
+    }
     card.classList.toggle('offline',!t.online);
+    // Sub line: role · dock · OFFLINE — update only when changed
+    const sub=card.querySelector('.tcard-sub');
+    if(sub){
+        const ns=`${escapeHtml(t.role||'?')} · ${escapeHtml(t.dock||'?')}${!t.online?' · OFFLINE':''}`;
+        if(sub.textContent!==ns)sub.textContent=ns;
+    }
+    // IDLE button: show when not idle, hide when idle
+    const btns=card.querySelector('.tcard-btns');
+    if(btns){
+        const existIdle=btns.querySelector('.pbtn.amber');
+        if(st!=='IDLE'&&!existIdle){
+            const btn=document.createElement('button');
+            btn.className='pbtn amber';btn.textContent='IDLE';
+            btn.onclick=()=>setTurtleIdle(card.dataset.id);
+            const locateBtn=btns.querySelector('.pbtn');
+            btns.insertBefore(btn,locateBtn?locateBtn.nextSibling:btns.firstChild);
+        }else if(st==='IDLE'&&existIdle){existIdle.remove();}
+    }
     card.classList.remove('is-new');
 }
 
@@ -1045,15 +1075,33 @@ function _buildJobCard(j,turtles,turtleEntries,allJobs){
 
 function _patchJobCard(card,j,turtles,turtleEntries,allJobs){
     card.classList.remove('is-new');
-    // Status classes (for border colour + glow animation)
-    card.className=`job-card ${j.status}`;
-    // Progress bars
-    const prog=card.querySelector('.jprog');
-    if(prog)prog.innerHTML=_buildSteps(getJobStep(j,turtles));
-    // Badge
+    // Status class — guard to avoid restarting CSS animations on unchanged status
+    const wantCls=`job-card ${j.status}`;
+    if(card.className!==wantCls)card.className=wantCls;
+    // Progress bars — only rebuild when step index actually changes
+    const curStep=getJobStep(j,turtles);
+    if(card.dataset.step!==String(curStep)){
+        card.dataset.step=String(curStep);
+        const prog=card.querySelector('.jprog');
+        if(prog)prog.innerHTML=_buildSteps(curStep);
+    }
+    // Badge — guard class to avoid animation restarts
     const badge=card.querySelector('.jbadge');
-    if(badge){badge.textContent=j.status;badge.className='jbadge '+j.status;}
-    // Turtle pair section — small, safe to replace
+    if(badge){
+        if(badge.textContent!==j.status)badge.textContent=j.status;
+        const wbc='jbadge '+j.status;if(badge.className!==wbc)badge.className=wbc;
+    }
+    // Cancel button — add/remove as job transitions to/from terminal
+    const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const top=card.querySelector('.jc-top');
+    const existCancel=card.querySelector('.jc-cancel');
+    if(!terminal.has(j.status)&&!existCancel&&top){
+        const btn=document.createElement('button');
+        btn.className='jc-cancel';btn.textContent='CANCEL';
+        btn.onclick=()=>cancelJob(j.id);
+        top.appendChild(btn);
+    }else if(terminal.has(j.status)&&existCancel){existCancel.remove();}
+    // Turtle pair section
     const tt=card.querySelector('.jturtles');
     if(tt){
         const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,allJobs);
