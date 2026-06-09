@@ -873,9 +873,7 @@ function fuelClass(pct){
     if(pct<0.05)return'crit';if(pct<0.2)return'low';if(pct<0.4)return'med';return'ok';
 }
 
-// ── Fleet: simple turtle list ─────────────────────────────────────────────
-
-let _prevTurtleIds=new Set();
+// ── Fleet: keyed DOM updates ──────────────────────────────────────────────
 
 function renderFleet(turtles){
     const el=document.getElementById('tab-fleet');
@@ -883,47 +881,77 @@ function renderFleet(turtles){
         if(a[1].role!==b[1].role)return a[1].role==='DELIVERY'?-1:1;
         return a[0].localeCompare(b[0]);
     });
-    if(!arr.length){el.innerHTML='<div class="empty">NO TURTLES REGISTERED</div>';_prevTurtleIds=new Set();return;}
+    if(!arr.length){el.innerHTML='<div class="empty">NO TURTLES REGISTERED</div>';return;}
+    const empty=el.querySelector('.empty');if(empty)empty.remove();
     const sysVer=lastState.version||'';
-    el.innerHTML=arr.map(([id,t])=>{
-        const fuel=t.fuel||0,max=t.fuelMax||100000,pct=Math.min(1,fuel/max);
-        const fc=fuelClass(pct);
-        const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
-        const st=t.status||'UNKNOWN';
-        const eid=escapeHtml(id),erole=escapeHtml(t.role||'?'),est=escapeHtml(st);
-        const tVer=t.version||'?';
-        const verOutdated=tVer!=='?'&&sysVer&&tVer!==sysVer;
-        const roleCls=t.role==='DELIVERY'?'d':'s';
-        const offlineCls=!t.online?' offline':'';
-        const newCls=!_prevTurtleIds.has(id)?' is-new':'';
-        const idleBtn=st!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${eid}')">IDLE</button>`:'';
-        return `<div class="tcard${offlineCls}${newCls}">
-            <div class="tcard-top">
-                <div>
-                    <div class="tcard-name ${roleCls}">${eid}</div>
-                    <div class="tcard-sub">${erole} · ${escapeHtml(t.dock||'?')}${!t.online?' · OFFLINE':''}</div>
-                </div>
-                <span class="sbadge ${est}">${est}</span>
-            </div>
-            <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${Math.round(pct*100)}%"></div></div>
-            <div class="tcard-row">
-                <span>FUEL <span class="v">${Math.round(pct*100)}%</span></span>
-                <span>POS <span class="v">${pos}</span></span>
-                ${t.jobId?`<span>JOB <span class="v" style="color:#4488ff88;">${escapeHtml(t.jobId)}</span></span>`:''}
-                ${verOutdated?`<span style="color:#ff4444">v${escapeHtml(tVer)} !</span>`:''}
-            </div>
-            <div class="tcard-btns">
-                <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
-                ${idleBtn}
-                <button class="pbtn blue" onclick="reassignBay('${eid}')">BAY</button>
-                <button class="pbtn red" onclick="deleteTurtle('${eid}')">DEL</button>
-            </div>
-        </div>`;
-    }).join('');
-    _prevTurtleIds=new Set(arr.map(([id])=>id));
+    const seen=new Set();
+    arr.forEach(([id,t])=>{
+        seen.add(id);
+        let card=el.querySelector(`.tcard[data-id="${id}"]`);
+        if(!card){
+            const w=document.createElement('div');
+            w.innerHTML=_buildTcard(id,t,sysVer);
+            card=w.firstElementChild;
+            el.appendChild(card);
+        }else{
+            _patchTcard(card,t,sysVer);
+        }
+    });
+    el.querySelectorAll('.tcard').forEach(c=>{if(!seen.has(c.dataset.id))c.remove();});
 }
 
-// ── Jobs: filter + stepper + paired turtle section ───────────────────────
+function _buildTcard(id,t,sysVer){
+    const{pct,fc}=_fuel(t);
+    const st=t.status||'UNKNOWN',eid=escapeHtml(id),erole=escapeHtml(t.role||'?');
+    const tVer=t.version||'?',verOld=tVer!=='?'&&sysVer&&tVer!==sysVer;
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+    const roleCls=t.role==='DELIVERY'?'d':'s';
+    const idleBtn=st!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${eid}')">IDLE</button>`:'';
+    return `<div class="tcard is-new${!t.online?' offline':''}" data-id="${eid}">
+        <div class="tcard-top">
+            <div>
+                <div class="tcard-name ${roleCls}">${eid}</div>
+                <div class="tcard-sub">${erole} · ${escapeHtml(t.dock||'?')}${!t.online?' · OFFLINE':''}</div>
+            </div>
+            <span class="sbadge ${escapeHtml(st)}">${escapeHtml(st)}</span>
+        </div>
+        <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${pct}%"></div></div>
+        <div class="tcard-row">
+            <span>FUEL <span class="v tc-pct">${pct}%</span></span>
+            <span>POS <span class="v tc-pos">${pos}</span></span>
+            <span class="tc-job">${t.jobId?`JOB <span style="color:#4488ff88;">${escapeHtml(t.jobId)}</span>`:''}</span>
+            ${verOld?`<span style="color:#ff4444">v${escapeHtml(tVer)} !</span>`:''}
+        </div>
+        <div class="tcard-btns">
+            <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
+            ${idleBtn}
+            <button class="pbtn blue" onclick="reassignBay('${eid}')">BAY</button>
+            <button class="pbtn red" onclick="deleteTurtle('${eid}')">DEL</button>
+        </div>
+    </div>`;
+}
+
+function _patchTcard(card,t,sysVer){
+    const{pct,fc}=_fuel(t),st=t.status||'UNKNOWN';
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+    const fill=card.querySelector('.fuel-fill');
+    if(fill){fill.style.width=pct+'%';fill.className='fuel-fill '+fc;}
+    const badge=card.querySelector('.sbadge');
+    if(badge){badge.textContent=st;badge.className='sbadge '+st;}
+    const posEl=card.querySelector('.tc-pos');if(posEl)posEl.textContent=pos;
+    const pctEl=card.querySelector('.tc-pct');if(pctEl)pctEl.textContent=pct+'%';
+    const jobEl=card.querySelector('.tc-job');
+    if(jobEl)jobEl.innerHTML=t.jobId?`JOB <span style="color:#4488ff88;">${escapeHtml(t.jobId)}</span>`:'';
+    card.classList.toggle('offline',!t.online);
+    card.classList.remove('is-new');
+}
+
+function _fuel(t){
+    const pct=Math.min(100,Math.round((t.fuel||0)/(t.fuelMax||100000)*100));
+    return{pct,fc:fuelClass(pct/100)};
+}
+
+// ── Jobs: keyed DOM updates ───────────────────────────────────────────────
 
 const JOB_STEPS=['QUEUE','LOAD','TRAVEL','DELIVER','RETURN'];
 
@@ -949,133 +977,121 @@ function getJobStep(job,turtles){
     return 2;
 }
 
+function _buildSteps(curStep){
+    return JOB_STEPS.map((lbl,i)=>{
+        const cls=curStep===5?'done':i<curStep?'done':i===curStep?'cur':'';
+        return `<div class="jstep"><div class="jstep-bar ${cls}"></div><div class="jstep-lbl">${escapeHtml(lbl)}</div></div>`;
+    }).join('');
+}
+
 function renderJobTurtle(id,t,role){
     const roleCls=role==='DELIVERY'?'d':'s';
     const roleColor=role==='DELIVERY'?'#00ff8833':'#4488ff33';
-    if(!id||!t){
-        return `<div class="jtside">
-            <div class="jtside-role" style="color:#1a1a2e;">${role}</div>
-            <div class="jtside-name dim">—</div>
-        </div>`;
-    }
-    const pct=Math.min(100,Math.round((t.fuel||0)/(t.fuelMax||100000)*100));
-    const fc=fuelClass(pct/100);
-    const est=escapeHtml(t.status||'?');
-    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+    if(!id||!t)return `<div class="jtside"><div class="jtside-role" style="color:#1a1a2e;">${role}</div><div class="jtside-name dim">—</div></div>`;
+    const{pct,fc}=_fuel(t);
     return `<div class="jtside">
         <div class="jtside-role" style="color:${roleColor};">${role}</div>
         <div class="jtside-name ${roleCls}">${escapeHtml(id)}</div>
         <div class="fuel-track"><div class="fuel-fill ${fc}" style="width:${pct}%"></div></div>
-        <div class="jtside-info">${pct}% · ${est} · ${pos}</div>
+        <div class="jtside-info">${pct}% · ${escapeHtml(t.status||'?')} · ${t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—'}</div>
     </div>`;
 }
 
-function findJobTurtles(j, turtles, turtleEntries, allJobs){
-    // Primary: turtle's live jobId matches this delivery job
+function findJobTurtles(j,turtles,turtleEntries,allJobs){
     let delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
     let supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
-
-    // Use j.linkedJob — server stores the paired support job ID directly on the delivery job
     if(!supEntry&&j.linkedJob){
         supEntry=turtleEntries.find(([,t])=>t.jobId===j.linkedJob);
         if(!supEntry&&allJobs){
-            const supJob=allJobs.find(sj=>sj.id===j.linkedJob);
-            if(supJob&&supJob.assignedTo&&turtles[supJob.assignedTo]){
-                supEntry=[supJob.assignedTo,turtles[supJob.assignedTo]];
-            }
+            const sj=allJobs.find(s=>s.id===j.linkedJob);
+            if(sj&&sj.assignedTo&&turtles[sj.assignedTo])supEntry=[sj.assignedTo,turtles[sj.assignedTo]];
         }
     }
-
-    // Broader fallback: search SUPPORT_FOLLOW jobs by params
     if(!supEntry&&allJobs){
-        const supportJob=allJobs.find(sj=>{
-            if(sj.type!=='SUPPORT_FOLLOW')return false;
-            const p=sj.params||{};
+        const sj=allJobs.find(s=>{
+            if(s.type!=='SUPPORT_FOLLOW')return false;
+            const p=s.params||{};
             return p.masterJobId===j.id||(delEntry&&p.partnerId===delEntry[0]);
         });
-        if(supportJob){
-            supEntry=turtleEntries.find(([,t])=>t.jobId===supportJob.id);
-            if(!supEntry&&supportJob.assignedTo&&turtles[supportJob.assignedTo]){
-                supEntry=[supportJob.assignedTo,turtles[supportJob.assignedTo]];
-            }
+        if(sj){
+            supEntry=turtleEntries.find(([,t])=>t.jobId===sj.id);
+            if(!supEntry&&sj.assignedTo&&turtles[sj.assignedTo])supEntry=[sj.assignedTo,turtles[sj.assignedTo]];
         }
     }
-
-    // Fallback for completed jobs where turtles have cleared their jobId
-    if(!delEntry){
-        const did=j.assignedTo||j.turtleId||j.deliveryTurtleId;
-        if(did&&turtles[did])delEntry=[did,turtles[did]];
-    }
-    if(!supEntry){
-        const sid=j.supportTurtleId||j.supportId||j.partnerId;
-        if(sid&&turtles[sid])supEntry=[sid,turtles[sid]];
-    }
+    if(!delEntry){const d=j.assignedTo||j.turtleId;if(d&&turtles[d])delEntry=[d,turtles[d]];}
+    if(!supEntry){const s=j.supportTurtleId||j.supportId;if(s&&turtles[s])supEntry=[s,turtles[s]];}
     return{delEntry,supEntry};
 }
 
-let _prevJobIds=new Set();
+function _buildJobCard(j,turtles,turtleEntries,allJobs){
+    const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
+    const dest=j.destination,destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
+    const items=j.items||[];
+    const itemsHtml=items.length?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
+    const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,allJobs);
+    const cancelBtn=!terminal.has(j.status)?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:'';
+    return `<div class="job-card ${ejstat} is-new" data-id="${ejid}">
+        <div class="jc-top"><span class="jc-id">${ejid}</span><span class="jbadge ${ejstat}">${ejstat}</span>${cancelBtn}</div>
+        <div class="jprog">${_buildSteps(getJobStep(j,turtles))}</div>
+        ${itemsHtml}
+        <div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>
+        <div class="jturtles">
+            ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
+            ${renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT')}
+        </div>
+    </div>`;
+}
+
+function _patchJobCard(card,j,turtles,turtleEntries,allJobs){
+    card.classList.remove('is-new');
+    // Status classes (for border colour + glow animation)
+    card.className=`job-card ${j.status}`;
+    // Progress bars
+    const prog=card.querySelector('.jprog');
+    if(prog)prog.innerHTML=_buildSteps(getJobStep(j,turtles));
+    // Badge
+    const badge=card.querySelector('.jbadge');
+    if(badge){badge.textContent=j.status;badge.className='jbadge '+j.status;}
+    // Turtle pair section — small, safe to replace
+    const tt=card.querySelector('.jturtles');
+    if(tt){
+        const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,allJobs);
+        tt.innerHTML=
+            renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')+
+            renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT');
+    }
+}
 
 function renderJobs(jobs,turtles){
     const el=document.getElementById('jobs-list');
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
     const isFollowJob=j=>j.type==='SUPPORT_FOLLOW';
-
-    // Apply filter, always hiding SUPPORT_FOLLOW (folded into delivery card)
     let filtered;
-    if(jobFilter==='done'){
-        filtered=[...jobs].filter(j=>j.status==='COMPLETE'&&!isFollowJob(j)).reverse();
-    }else if(jobFilter==='active'){
-        filtered=[...jobs].filter(j=>!terminal.has(j.status)&&!isFollowJob(j));
-    }else{
-        filtered=[...jobs].filter(j=>!isFollowJob(j)).reverse();
-    }
+    if(jobFilter==='done')     filtered=[...jobs].filter(j=>j.status==='COMPLETE'&&!isFollowJob(j)).reverse();
+    else if(jobFilter==='active') filtered=[...jobs].filter(j=>!terminal.has(j.status)&&!isFollowJob(j));
+    else                          filtered=[...jobs].filter(j=>!isFollowJob(j)).reverse();
 
     if(!filtered.length){
         el.innerHTML=`<div class="empty">${jobFilter==='done'?'NO COMPLETED JOBS':'NO ACTIVE JOBS'}</div>`;
-        _prevJobIds=new Set();
         return;
     }
-
+    const empty=el.querySelector('.empty');if(empty)empty.remove();
     const turtleEntries=Object.entries(turtles||{});
-    const html=filtered.map(j=>{
-        const isNew=!_prevJobIds.has(j.id);
-        const canCancel=!terminal.has(j.status);
-        const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
-        const curStep=getJobStep(j,turtles);
-        const stepHtml=JOB_STEPS.map((lbl,i)=>{
-            let cls='';
-            if(curStep===5)cls='done';
-            else if(i<curStep)cls='done';
-            else if(i===curStep)cls='cur';
-            return `<div class="jstep"><div class="jstep-bar ${cls}"></div><div class="jstep-lbl">${escapeHtml(lbl)}</div></div>`;
-        }).join('');
-        const items=(j.items||[]);
-        const itemsHtml=items.length
-            ?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
-        const dest=j.destination;
-        const destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
-        const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,jobs);
-        const turtlesHtml=`<div class="jturtles">
-            ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
-            ${renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT')}
-        </div>`;
-        const cancelBtn=canCancel?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:'';
-        const newCls=isNew?' is-new':'';
-        return `<div class="job-card ${ejstat}${newCls}">
-            <div class="jc-top">
-                <span class="jc-id">${ejid}</span>
-                <span class="jbadge ${ejstat}">${ejstat}</span>
-                ${cancelBtn}
-            </div>
-            <div class="jprog">${stepHtml}</div>
-            ${itemsHtml}
-            <div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>
-            ${turtlesHtml}
-        </div>`;
-    }).join('');
-
-    el.innerHTML=html;
-    _prevJobIds=new Set(filtered.map(j=>j.id));
+    const seen=new Set();
+    filtered.forEach(j=>{
+        seen.add(j.id);
+        let card=el.querySelector(`.job-card[data-id="${j.id}"]`);
+        if(!card){
+            const w=document.createElement('div');
+            w.innerHTML=_buildJobCard(j,turtles,turtleEntries,jobs);
+            card=w.firstElementChild;
+            el.appendChild(card);
+        }else{
+            _patchJobCard(card,j,turtles,turtleEntries,jobs);
+        }
+    });
+    el.querySelectorAll('.job-card').forEach(c=>{if(!seen.has(c.dataset.id))c.remove();});
 }
 
 function refreshTurtleSel(turtles){
