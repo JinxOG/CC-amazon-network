@@ -5,8 +5,8 @@
 -- Inventory layout:
 --   Slot  1   advancedperipherals:geo_scanner  (placed, used, picked back up)
 --   Slots 2-13  mining output  → dumped to ore E-chest after each sector
---   Slot 14   coal reserve     (support drops coal here; miner refuels from here)
---   Slot 15   fuel ender chest (backup fuel)
+--   Slot 14   coal reserve     (slot-14 top-up before EC refuel)
+--   Slot 15   fuel ender chest (self-refuel coal source)
 --   Slot 16   ore ender chest  (→ RS storage)
 
 local base  = require("turtle_base")
@@ -21,7 +21,7 @@ local PROTECTED = { [S_SCANNER]=true, [S_COAL]=true, [S_FUEL_EC]=true, [S_ORE_EC
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
-local FUEL_WARN    = 800   -- signal partner when fuel drops below this
+local FUEL_WARN    = 800   -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
 
@@ -46,7 +46,7 @@ local function waitMsg(types, secs)
             if not _servingFuel
                     and msg.type == proto.MSG.FUEL_LOW
                     and msg.from == base.getPartnerId() then
-                serveSupportFuel(msg.payload and msg.payload.jobId)
+                serveSupportFuel(msg.payload)
             elseif set[msg.type] then
                 return msg
             end
@@ -81,9 +81,7 @@ local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Pause support so it doesn't occupy the block below when EC is placed
-    base.signalPartner(proto.MSG.ASCENDING, {})
-    sleep(0.6)
+    -- Draw coal from on-board fuel EC (support is at Y=100, never near miner)
     turtle.select(S_FUEL_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -92,7 +90,6 @@ local function checkFuel(jobId)
     turtle.refuel()
     turtle.select(S_FUEL_EC)
     turtle.digDown()
-    base.signalPartner(proto.MSG.DESCENDED, {})
 end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
@@ -112,9 +109,6 @@ end
 
 local function dumpOres()
     sweepCoalToSlot14()
-    -- Pause support so it doesn't occupy the block below when EC is placed
-    base.signalPartner(proto.MSG.ASCENDING, {})
-    sleep(0.6)
     turtle.select(S_ORE_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -126,7 +120,6 @@ local function dumpOres()
     end
     turtle.select(S_ORE_EC)
     turtle.digDown()
-    base.signalPartner(proto.MSG.DESCENDED, {})
 end
 
 local function inventoryFull()
@@ -138,17 +131,34 @@ local function inventoryFull()
 end
 
 -- ── Support field refuel ──────────────────────────────────────────────────────
+--
+-- Support stays at Y=100 tracking miner X,Z. When support is low on fuel it
+-- sends FUEL_LOW with its position. Miner saves its position, dumps ores,
+-- ascends to 1 block below support, loads coal from EC into slots 2-13,
+-- signals FUEL_READY. Support sucks down from above. Miner then returns
+-- to its saved mining position and resumes.
 
--- Called when support signals FUEL_LOW. Miner dumps ores, fills slots 2-13
--- with coal from its fuel EC, signals FUEL_READY so support can suck directly,
--- then waits for FUEL_FILLED before sweeping leftovers to slot 14 and resuming.
-serveSupportFuel = function(jobId)
+serveSupportFuel = function(payload)
     if _servingFuel then return end
     _servingFuel = true
-    print("[MINER] Support fuel low — preparing coal")
+    local jobId     = payload and payload.jobId
+    local supportPos = payload and payload.pos
+    print("[MINER] Support fuel low — ascending for refuel")
 
-    -- Clear non-protected slots and load them with coal
+    -- Save mining position to return to after refuel
+    local miningPos = base.getPos()
+
+    -- Dump ores before ascending
     dumpOres()
+
+    -- Ascend to 1 block below support so it can suckDown
+    if supportPos then
+        print(string.format("[MINER] Ascending to support at %d,%d,%d",
+            supportPos.x, supportPos.y, supportPos.z))
+        base.move.to(supportPos.x, supportPos.y - 1, supportPos.z)
+    end
+
+    -- Fill slots 2-13 with coal from fuel EC
     turtle.select(S_FUEL_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -159,9 +169,10 @@ serveSupportFuel = function(jobId)
     turtle.select(S_FUEL_EC)
     turtle.digDown()
 
-    -- Signal support to suck (uses direct receive to avoid re-entrant waitMsg)
+    -- Signal support to suck coal down from miner
     base.signalPartner(proto.MSG.FUEL_READY, { jobId = jobId })
-    local deadline = os.epoch("utc") / 1000 + 20
+    print("[MINER] Coal ready — waiting for support to refuel")
+    local deadline = os.epoch("utc") / 1000 + 30
     while os.epoch("utc") / 1000 < deadline do
         local msg = proto.receive(base.getSelfId(), 3)
         if msg and msg.type == proto.MSG.FUEL_FILLED
@@ -171,15 +182,17 @@ serveSupportFuel = function(jobId)
     end
 
     sweepCoalToSlot14()
+
+    -- Return to saved mining position
+    print("[MINER] Refuel done — descending back to mining position")
+    base.move.to(miningPos.x, miningPos.y, miningPos.z)
+
     _servingFuel = false
-    print("[MINER] Support refuel done")
+    print("[MINER] Resumed mining")
 end
 
 -- ── Geo Scanner ──────────────────────────────────────────────────────────────
 
--- Place scanner below, scan, pick up. Returns list of absolute ore positions.
--- Scanner is placed at (turtle.x, turtle.y-1, turtle.z), so relative coords
--- are offset: abs = (turtle.x + rel.x, (turtle.y-1) + rel.y, turtle.z + rel.z)
 local function scanSector()
     local item = turtle.getItemDetail(S_SCANNER)
     if not item or item.name ~= SCANNER_NAME then
@@ -233,16 +246,11 @@ end
 
 -- ── Mining ───────────────────────────────────────────────────────────────────
 
--- Navigate to an ore block: travel horizontally at current Y first to avoid
--- punching long diagonal tunnels, then descend. move.to digs all obstacles
--- including the ore block itself, mining it as part of travel.
 local function navToOre(ore, jobId)
     checkFuel(jobId)
     local p = base.getPos()
-    -- Horizontal leg at current Y
     base.move.to(ore.x, p.y, ore.z)
     checkFuel(jobId)
-    -- Vertical leg to ore Y (digs the ore block)
     base.move.to(ore.x, ore.y, ore.z)
 end
 
@@ -285,14 +293,14 @@ local function mineJob(job)
         return
     end
 
-    -- Support is 1 block above in the hole — signal hold, step sideways to clear
-    -- the column, then ascend so support isn't blocking the path up
-    base.signalPartner(proto.MSG.ASCENDING, {})
+    -- Support is 1 block above in the hole after descending together.
+    -- Step sideways 1 block to clear the hole column, then ascend to sky.
+    -- Support independently rises to Y=100 from the hole — different column.
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(p.x + 1, p.y, p.z)   -- step out of hole column
+    base.move.to(p.x + 1, p.y, p.z)
     checkFuel(jobId)
-    base.move.to(p.x + 1, SKY_Y, p.z) -- ascend to sky
+    base.move.to(p.x + 1, SKY_Y, p.z)
 
     -- ── Sector loop ──────────────────────────────────────────────────────────
     while true do
@@ -301,7 +309,6 @@ local function mineJob(job)
             return
         end
 
-        -- Request next sector from server
         base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
         local msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
 
@@ -314,7 +321,6 @@ local function mineJob(job)
             break
         end
 
-        -- Travel to sector center at sky level, then descend to scan Y
         local sx = msg.payload.sectorX
         local sz = msg.payload.sectorZ
         local sy = msg.payload.scanY or 56
@@ -323,17 +329,13 @@ local function mineJob(job)
         base.sendProgress(string.format("Travelling to sector %d,%d", sx, sz))
         checkFuel(jobId)
         base.move.to(sx, SKY_Y, sz)
-        -- Tell support to resume following as miner descends into the sector
-        base.signalPartner(proto.MSG.DESCENDED, {})
         checkFuel(jobId)
         base.move.to(sx, sy, sz)
 
-        -- Scan sector
         base.setStatus(proto.STATUS.WORKING, jobId)
         base.sendProgress(string.format("Scanning sector %d,%d at Y=%d", sx, sz, sy))
         local ores = scanSector()
 
-        -- Mine all found ores
         local count = 0
         if #ores > 0 then
             base.sendProgress(string.format("Found %d ore blocks — mining", #ores))
@@ -342,12 +344,9 @@ local function mineJob(job)
             dumpOres()
         end
 
-        -- Hold support while miner rises back to sky for inter-sector travel
-        base.signalPartner(proto.MSG.ASCENDING, {})
         checkFuel(jobId)
         base.move.to(base.getPos().x, SKY_Y, base.getPos().z)
 
-        -- Report sector complete
         base.sendToServer(proto.MSG.SECTOR_DONE,
             proto.payloadSectorDone(jobId, sx, sz, count))
     end

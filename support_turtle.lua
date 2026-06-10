@@ -29,6 +29,7 @@ base.run(function(job)
     -- Support sucks coal forward from miner, refuels, signals FUEL_FILLED.
     if params.fuelManage then
         local SUPPORT_FUEL_WARN = 800
+        local FOLLOW_Y          = 100   -- altitude support hovers at while tracking miner
 
         base.fuel.dockRefuel()
         if base.fuel.isCritical() then
@@ -40,8 +41,8 @@ base.run(function(job)
         base.sendProgress("Waiting for HOLE_READY from miner " .. partnerId)
         print("[SUPPORT] Waiting for HOLE_READY from " .. partnerId .. "...")
         local signalReceived = false
-        local deadline = os.epoch("utc") / 1000 + 180
-        while os.epoch("utc") / 1000 < deadline do
+        local holeDeadline = os.epoch("utc") / 1000 + 180
+        while os.epoch("utc") / 1000 < holeDeadline do
             if base.isRecalled() then
                 return base.sendFailed("recalled", false)
             end
@@ -63,11 +64,16 @@ base.run(function(job)
             return base.sendFailed("departure_failed: " .. (err or "?"), true)
         end
 
-        base.setStatus(proto.STATUS.TRAVELLING, job.id)
-        base.sendProgress("Following miner " .. partnerId)
-        print("[SUPPORT] Mining follow mode — tracking " .. partnerId)
+        -- ── Rise to follow altitude ───────────────────────────────────────────
+        -- Support stays at FOLLOW_Y (Y=100) and tracks only the miner's X,Z.
+        -- It never goes underground — no blocking, no EC collisions.
+        local sp = base.getPos()
+        print(string.format("[SUPPORT] Rising to Y=%d from %d,%d,%d", FOLLOW_Y, sp.x, sp.y, sp.z))
+        base.move.to(sp.x, FOLLOW_Y, sp.z)
 
-        local ascending = false   -- true while miner is at sky level; hold position
+        base.setStatus(proto.STATUS.TRAVELLING, job.id)
+        base.sendProgress(string.format("Tracking miner at Y=%d", FOLLOW_Y))
+        print(string.format("[SUPPORT] Hovering at Y=%d — tracking %s X,Z", FOLLOW_Y, partnerId))
 
         while true do
             if base.isRecalled() then
@@ -75,13 +81,19 @@ base.run(function(job)
                 break
             end
 
-            -- ── Field fuel check (only while underground with miner) ──────────
-            if not ascending and turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
-                print("[SUPPORT] Fuel low — requesting coal from miner")
-                base.signalPartner(proto.MSG.FUEL_LOW, { jobId = job.id })
-                local deadline = os.epoch("utc") / 1000 + 60
+            -- ── Field fuel check ─────────────────────────────────────────────
+            -- Miner will ascend to 1 block below support to deliver coal.
+            if turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
+                print("[SUPPORT] Fuel low — signalling miner to ascend for refuel")
+                local myPos = base.getPos()
+                base.signalPartner(proto.MSG.FUEL_LOW, {
+                    jobId = job.id,
+                    pos   = { x = myPos.x, y = myPos.y, z = myPos.z },
+                })
+                -- Wait for miner to ascend and load coal (needs travel time)
+                local fuelDeadline = os.epoch("utc") / 1000 + 120
                 local ready = false
-                while os.epoch("utc") / 1000 < deadline do
+                while os.epoch("utc") / 1000 < fuelDeadline do
                     local m = proto.receive(base.getSelfId(), 5)
                     if m and m.from == partnerId
                             and m.type == proto.MSG.FUEL_READY then
@@ -89,13 +101,16 @@ base.run(function(job)
                     end
                 end
                 if ready then
+                    -- Miner is directly below at FOLLOW_Y-1; suck coal down from it
                     turtle.select(1)
                     while turtle.getFuelLevel() < SUPPORT_FUEL_WARN + 400 do
-                        if not turtle.suck(64) then break end
+                        if not turtle.suckDown(64) then break end
                         turtle.refuel()
                     end
                     base.signalPartner(proto.MSG.FUEL_FILLED, { jobId = job.id })
                     print("[SUPPORT] Refueled to " .. turtle.getFuelLevel())
+                else
+                    print("[SUPPORT] Refuel timeout — miner did not arrive")
                 end
             end
 
@@ -113,20 +128,11 @@ base.run(function(job)
                 end
 
             elseif msg.from == partnerId then
-                if msg.type == proto.MSG.ASCENDING then
-                    ascending = true
-                    print("[SUPPORT] Miner ascending — holding position")
-
-                elseif msg.type == proto.MSG.DESCENDED then
-                    ascending = false
-                    print("[SUPPORT] Miner descended — resuming follow")
-
-                elseif msg.type == proto.MSG.POSITION_UPDATE then
-                    if not ascending then
-                        local prev = msg.payload.prev
-                        if prev and type(prev.x) == "number" then
-                            base.move.to(prev.x, prev.y, prev.z)
-                        end
+                if msg.type == proto.MSG.POSITION_UPDATE then
+                    -- Track miner X,Z only — stay at FOLLOW_Y
+                    local prev = msg.payload.prev
+                    if prev and type(prev.x) == "number" then
+                        base.move.to(prev.x, FOLLOW_Y, prev.z)
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
