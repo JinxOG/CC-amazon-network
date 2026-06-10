@@ -31,6 +31,7 @@ local state = {
     jobCounter      = 0,
     modem           = nil,
     lastDispatchTime = 0,   -- epoch ms of last successful pair dispatch
+    miningZones     = {},   -- [jobId] = { pending={sectors}, total=n, done=n, scanY=n }
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -276,7 +277,8 @@ local function loadJobs()
             logInfo(string.format("Restored job %s [%s] assignedTo=%s — waiting for turtle to reconnect",
                 id, job.type, job.assignedTo))
         elseif job.type ~= proto.JOB.SUPPORT_FOLLOW
-            and job.type ~= proto.JOB.PATROL then
+            and job.type ~= proto.JOB.PATROL
+            and job.type ~= proto.JOB.MINE then  -- MINE re-queued fresh (zone rebuilt on dispatch)
             -- Job was queued but not yet assigned — dispatch fresh
             job.status = "PENDING"
             state.jobs[id] = job
@@ -458,6 +460,53 @@ function jobQueue.checkAckTimeouts()
     end
 end
 
+-- ─── Mining Zone Manager ─────────────────────────────────────────────────────
+
+local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors don't overlap
+
+-- Build a flat list of {x,z} sector centres covering a circle of `radius` around centre.
+local function buildSectorGrid(centerX, centerZ, radius)
+    local sectors = {}
+    local steps   = math.ceil(radius / SECTOR_STEP)
+    for dx = -steps, steps do
+        for dz = -steps, steps do
+            if math.abs(dx * SECTOR_STEP) <= radius and math.abs(dz * SECTOR_STEP) <= radius then
+                table.insert(sectors, {
+                    x = centerX + dx * SECTOR_STEP,
+                    z = centerZ + dz * SECTOR_STEP,
+                })
+            end
+        end
+    end
+    return sectors
+end
+
+-- Initialise a zone for a freshly dispatched MINE job (idempotent).
+local function ensureMineZone(jobId, params)
+    if state.miningZones[jobId] then return end
+    local sectors = buildSectorGrid(params.centerX, params.centerZ, params.radius)
+    -- Shuffle so multiple miners don't all converge on the same corner first.
+    for i = #sectors, 2, -1 do
+        local j = math.random(1, i)
+        sectors[i], sectors[j] = sectors[j], sectors[i]
+    end
+    state.miningZones[jobId] = {
+        pending = sectors,
+        total   = #sectors,
+        done    = 0,
+        scanY   = params.scanY or 56,
+    }
+    logInfo(string.format("Mine zone %s: %d sectors (r=%d scanY=%d)",
+        jobId, #sectors, params.radius, params.scanY or 56))
+end
+
+-- Pop the next unassigned sector for a turtle, or nil if all done.
+local function nextSector(jobId)
+    local zone = state.miningZones[jobId]
+    if not zone or #zone.pending == 0 then return nil end
+    return table.remove(zone.pending, 1)
+end
+
 -- ─── Role Map ────────────────────────────────────────────────────────────────
 
 local JOB_ROLE = {
@@ -465,6 +514,7 @@ local JOB_ROLE = {
     [proto.JOB.BUILD]          = proto.ROLE.BUILDER,
     [proto.JOB.SUPPORT_FOLLOW] = proto.ROLE.SUPPORT,
     [proto.JOB.PATROL]         = proto.ROLE.SUPPORT,
+    [proto.JOB.MINE]           = proto.ROLE.MINER,
 }
 
 -- ─── Dispatcher ──────────────────────────────────────────────────────────────
@@ -510,10 +560,12 @@ function dispatcher.tick()
     end
 
     for _, job in ipairs(workerJobs) do
-        -- Skip if another delivery is already active to this exact destination
-        if job.params and destinationBusy(job.params.destination) then
+        local isMine = job.type == proto.JOB.MINE
+
+        -- Delivery: skip if destination already has an active job
+        if not isMine and job.params and destinationBusy(job.params.destination) then
             logInfo(string.format("Skip %s — destination already has an active delivery", job.id))
-            -- continue loop; another pending job may have a different destination
+            -- continue to next pending job
         else
 
         local role     = JOB_ROLE[job.type]
@@ -524,48 +576,47 @@ function dispatcher.tick()
             local worker  = workers[1]
             local support = supports[1]
 
+            -- For MINE jobs: initialise the sector grid before dispatch
+            if isMine then
+                ensureMineZone(job.id, job.params)
+            end
+
+            -- Build worker params (copy job params + inject partnerId)
+            local workerParams = {}
+            for k, v in pairs(job.params) do workerParams[k] = v end
+            workerParams.partnerId = support.id
+
             -- Create the paired support job
-            local supportJobId = jobQueue.add(proto.JOB.SUPPORT_FOLLOW, {
+            -- MINE support gets fuelManage=true so it runs the coal-transfer loop
+            local supportParams = {
                 partnerId   = worker.id,
                 masterJobId = job.id,
-            }, job.priority)
+                fuelManage  = isMine,
+                destination = job.params.destination,  -- nil for MINE, that's fine
+            }
+            local supportJobId = jobQueue.add(proto.JOB.SUPPORT_FOLLOW, supportParams, job.priority)
 
             -- Link the two jobs
             job.linkedJob = supportJobId
 
             -- Assign worker
             jobQueue.assign(job.id, worker.id)
-            sendTo(worker.id, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(
-                job.id, job.type,
-                (function()
-                    local p = {}
-                    for k, v in pairs(job.params) do p[k] = v end
-                    p.partnerId = support.id
-                    return p
-                end)()
-            ))
+            sendTo(worker.id, proto.MSG.JOB_ASSIGN,
+                proto.payloadJobAssign(job.id, job.type, workerParams))
 
             -- Assign support
             jobQueue.assign(supportJobId, support.id)
-            sendTo(support.id, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(
-                supportJobId, proto.JOB.SUPPORT_FOLLOW, {
-                    partnerId   = worker.id,
-                    masterJobId = job.id,
-                    destination = job.params.destination,
-                }
-            ))
+            sendTo(support.id, proto.MSG.JOB_ASSIGN,
+                proto.payloadJobAssign(supportJobId, proto.JOB.SUPPORT_FOLLOW, supportParams))
 
-            logInfo(string.format("Dispatched %s->%s with support %s->%s",
-                job.id, worker.id, supportJobId, support.id))
+            logInfo(string.format("Dispatched %s [%s] -> %s  support %s -> %s",
+                job.id, job.type, worker.id, supportJobId, support.id))
 
-            -- Record dispatch time — stagger next pair
             state.lastDispatchTime = os.epoch("utc")
-
-            -- Only dispatch ONE pair per tick (stagger enforced above for subsequent ticks)
             return
         end
 
-        end -- destination-busy else
+        end -- destination-busy / mine else
     end
 end
 
@@ -625,6 +676,46 @@ handlers[proto.MSG.JOB_FAILED] = function(msg)
     jobQueue.fail(p.jobId, p.reason, p.recoverable)
     -- Job may have re-queued for retry — try to dispatch right away
     pcall(dispatcher.tick)
+end
+
+-- ── Mining sector handshake ───────────────────────────────────────────────────
+
+handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
+    local jobId = msg.payload.jobId
+    local zone  = state.miningZones[jobId]
+    if not zone then
+        -- Zone not initialised (e.g. server restarted mid-job) — send MINE_COMPLETE
+        -- so the turtle returns gracefully rather than looping forever.
+        logWarn(string.format("SECTOR_REQUEST from %s — zone %s unknown, sending MINE_COMPLETE",
+            msg.from, tostring(jobId)))
+        sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = jobId })
+        return
+    end
+
+    local sector = nextSector(jobId)
+    if not sector then
+        logInfo(string.format("Zone %s exhausted (%d/%d sectors) — sending MINE_COMPLETE to %s",
+            jobId, zone.done, zone.total, msg.from))
+        sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = jobId })
+    else
+        logInfo(string.format("Assigned sector (%d,%d) to %s [%s] (%d left)",
+            sector.x, sector.z, msg.from, jobId, #zone.pending))
+        sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
+            proto.payloadSectorAssign(jobId, sector.x, sector.z, zone.scanY))
+    end
+end
+
+handlers[proto.MSG.SECTOR_DONE] = function(msg)
+    local p    = msg.payload
+    local zone = state.miningZones[p.jobId]
+    if zone then
+        zone.done = zone.done + 1
+        logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
+            p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
+            p.jobId, zone.done, zone.total))
+    end
+    jobQueue.progress(p.jobId, proto.STATUS.WORKING,
+        string.format("sector (%d,%d) mined — %d ore", p.sectorX, p.sectorZ, p.oreCount or 0))
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
@@ -775,11 +866,25 @@ local function handleConsoleEnter()
 
     if cmd == "help" then
         print("Commands:")
-        print("  job <x> <y> <z>  queue one delivery job")
-        print("  stress           queue 8 test jobs (~90 blocks out)")
-        print("  fueltest         queue job ~80 blocks out to test refueling")
-        print("  recall           recall all turtles")
-        print("  jobs             show job counts")
+        print("  job <x> <y> <z>           queue one delivery job")
+        print("  mine <x> <z> <r> [scanY]  queue a mining operation")
+        print("  stress                    queue 8 test jobs (~90 blocks out)")
+        print("  fueltest                  queue job ~80 blocks out to test refueling")
+        print("  recall                    recall all turtles")
+        print("  jobs                      show job counts")
+
+    elseif cmd == "mine" then
+        local cx, cz, r = tonumber(parts[2]), tonumber(parts[3]), tonumber(parts[4])
+        local scanY     = tonumber(parts[5]) or 56
+        if not (cx and cz and r) then
+            print("Usage: mine <centerX> <centerZ> <radius> [scanY]")
+        else
+            local id = server.submitJob(proto.JOB.MINE, {
+                centerX = cx, centerZ = cz, radius = r, scanY = scanY,
+            }, 5)
+            print(string.format("Mine job %s queued: centre (%d,%d) radius=%d scanY=%d",
+                id, cx, cz, r, scanY))
+        end
 
     elseif cmd == "job" then
         local x, y, z = tonumber(parts[2]), tonumber(parts[3]), tonumber(parts[4])
