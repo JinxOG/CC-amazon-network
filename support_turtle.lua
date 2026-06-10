@@ -67,17 +67,18 @@ base.run(function(job)
         base.sendProgress("Following miner " .. partnerId)
         print("[SUPPORT] Mining follow mode — tracking " .. partnerId)
 
+        local ascending = false   -- true while miner is at sky level; hold position
+
         while true do
             if base.isRecalled() then
                 print("[SUPPORT] Recalled — returning to dock")
                 break
             end
 
-            -- ── Field fuel check ─────────────────────────────────────────────
-            if turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
+            -- ── Field fuel check (only while underground with miner) ──────────
+            if not ascending and turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
                 print("[SUPPORT] Fuel low — requesting coal from miner")
                 base.signalPartner(proto.MSG.FUEL_LOW, { jobId = job.id })
-                -- Wait for miner to prepare coal
                 local deadline = os.epoch("utc") / 1000 + 60
                 local ready = false
                 while os.epoch("utc") / 1000 < deadline do
@@ -88,7 +89,6 @@ base.run(function(job)
                     end
                 end
                 if ready then
-                    -- Miner (1 block ahead) has coal in slots 2-13; suck and refuel
                     turtle.select(1)
                     while turtle.getFuelLevel() < SUPPORT_FUEL_WARN + 400 do
                         if not turtle.suck(64) then break end
@@ -113,10 +113,20 @@ base.run(function(job)
                 end
 
             elseif msg.from == partnerId then
-                if msg.type == proto.MSG.POSITION_UPDATE then
-                    local prev = msg.payload.prev
-                    if prev and type(prev.x) == "number" then
-                        base.move.to(prev.x, prev.y, prev.z)
+                if msg.type == proto.MSG.ASCENDING then
+                    ascending = true
+                    print("[SUPPORT] Miner ascending — holding position")
+
+                elseif msg.type == proto.MSG.DESCENDED then
+                    ascending = false
+                    print("[SUPPORT] Miner descended — resuming follow")
+
+                elseif msg.type == proto.MSG.POSITION_UPDATE then
+                    if not ascending then
+                        local prev = msg.payload.prev
+                        if prev and type(prev.x) == "number" then
+                            base.move.to(prev.x, prev.y, prev.z)
+                        end
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then

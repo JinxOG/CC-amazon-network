@@ -273,10 +273,14 @@ local function mineJob(job)
         return
     end
 
-    -- Ascend to sky travel altitude from underground exit
+    -- Support is 1 block above in the hole — signal hold, step sideways to clear
+    -- the column, then ascend so support isn't blocking the path up
+    base.signalPartner(proto.MSG.ASCENDING, {})
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(p.x, SKY_Y, p.z)
+    base.move.to(p.x + 1, p.y, p.z)   -- step out of hole column
+    checkFuel(jobId)
+    base.move.to(p.x + 1, SKY_Y, p.z) -- ascend to sky
 
     -- ── Sector loop ──────────────────────────────────────────────────────────
     while true do
@@ -307,6 +311,8 @@ local function mineJob(job)
         base.sendProgress(string.format("Travelling to sector %d,%d", sx, sz))
         checkFuel(jobId)
         base.move.to(sx, SKY_Y, sz)
+        -- Tell support to resume following as miner descends into the sector
+        base.signalPartner(proto.MSG.DESCENDED, {})
         checkFuel(jobId)
         base.move.to(sx, sy, sz)
 
@@ -324,7 +330,8 @@ local function mineJob(job)
             dumpOres()
         end
 
-        -- Rise back to sky level before moving to next sector
+        -- Hold support while miner rises back to sky for inter-sector travel
+        base.signalPartner(proto.MSG.ASCENDING, {})
         checkFuel(jobId)
         base.move.to(base.getPos().x, SKY_Y, base.getPos().z)
 
