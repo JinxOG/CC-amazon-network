@@ -247,6 +247,7 @@ local function mineJob(job)
     local jobId   = job.id
     local totalOre = 0
 
+    base.setPartnerId(job.params.partnerId)
     base.setStatus(proto.STATUS.TRAVELLING, jobId)
     base.sendProgress("Departing for mining zone")
 

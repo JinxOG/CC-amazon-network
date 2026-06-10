@@ -36,6 +36,33 @@ base.run(function(job)
             return base.sendFailed("insufficient_fuel", false)
         end
 
+        -- ── Wait for miner to reach the hole ─────────────────────────────────
+        base.sendProgress("Waiting for HOLE_READY from miner " .. partnerId)
+        print("[SUPPORT] Waiting for HOLE_READY from " .. partnerId .. "...")
+        local signalReceived = false
+        local deadline = os.epoch("utc") / 1000 + 180
+        while os.epoch("utc") / 1000 < deadline do
+            if base.isRecalled() then
+                return base.sendFailed("recalled", false)
+            end
+            local msg = proto.receive(base.getSelfId(), 5)
+            if msg and msg.from == partnerId and msg.type == proto.MSG.HOLE_READY then
+                signalReceived = true
+                break
+            end
+        end
+
+        if not signalReceived then
+            base.returnToDock()
+            return base.sendFailed("no_hole_ready_from_miner", true)
+        end
+
+        -- ── Depart via dispatch hole (support side) ───────────────────────────
+        local ok, err = base.depart()
+        if not ok then
+            return base.sendFailed("departure_failed: " .. (err or "?"), true)
+        end
+
         base.setStatus(proto.STATUS.TRAVELLING, job.id)
         base.sendProgress("Following miner " .. partnerId)
         print("[SUPPORT] Mining follow mode — tracking " .. partnerId)
