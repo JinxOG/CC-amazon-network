@@ -175,23 +175,37 @@ end
 local function scanSector()
     local item = turtle.getItemDetail(S_SCANNER)
     if not item or item.name ~= SCANNER_NAME then
-        print("[MINER] geo scanner missing from slot 1 — skipping scan")
+        print("[SCAN] ERROR: geo scanner not in slot 1 (found: " .. tostring(item and item.name) .. ")")
         return {}
     end
 
     turtle.select(S_SCANNER)
     if turtle.detectDown() then turtle.digDown() end
-    if not turtle.placeDown() then return {} end
+    if not turtle.placeDown() then
+        print("[SCAN] ERROR: failed to place geo scanner below")
+        return {}
+    end
+    print("[SCAN] Scanner placed — wrapping peripheral...")
+
+    -- Give the peripheral a tick to register before wrapping
+    sleep(0.5)
 
     local sc = peripheral.wrap("bottom")
     if not sc then
+        print("[SCAN] ERROR: peripheral.wrap('bottom') returned nil — scanner not registering")
         turtle.select(S_SCANNER); turtle.digDown(); return {}
     end
+    print("[SCAN] Peripheral wrapped — scanning radius " .. SCAN_RADIUS .. "...")
 
     local raw = sc.scan(SCAN_RADIUS)
     turtle.select(S_SCANNER)
     turtle.digDown()
-    if not raw then return {} end
+
+    if not raw then
+        print("[SCAN] ERROR: sc.scan() returned nil")
+        return {}
+    end
+    print("[SCAN] Raw scan returned " .. #raw .. " blocks")
 
     local p    = base.getPos()
     local ores = {}
@@ -205,6 +219,7 @@ local function scanSector()
             })
         end
     end
+    print("[SCAN] Found " .. #ores .. " ore blocks in scan")
     return ores
 end
 
