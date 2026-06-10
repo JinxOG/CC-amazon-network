@@ -464,18 +464,16 @@ end
 
 local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors don't overlap
 
--- Build a flat list of {x,z} sector centres covering a circle of `radius` around centre.
-local function buildSectorGrid(centerX, centerZ, radius)
+-- Build a flat list of {x,z} sector centres covering the rectangle x1,z1 → x2,z2.
+local function buildSectorGrid(x1, z1, x2, z2)
     local sectors = {}
-    local steps   = math.ceil(radius / SECTOR_STEP)
-    for dx = -steps, steps do
-        for dz = -steps, steps do
-            if math.abs(dx * SECTOR_STEP) <= radius and math.abs(dz * SECTOR_STEP) <= radius then
-                table.insert(sectors, {
-                    x = centerX + dx * SECTOR_STEP,
-                    z = centerZ + dz * SECTOR_STEP,
-                })
-            end
+    local minX = math.floor(math.min(x1, x2) / SECTOR_STEP) * SECTOR_STEP
+    local maxX = math.floor(math.max(x1, x2) / SECTOR_STEP) * SECTOR_STEP
+    local minZ = math.floor(math.min(z1, z2) / SECTOR_STEP) * SECTOR_STEP
+    local maxZ = math.floor(math.max(z1, z2) / SECTOR_STEP) * SECTOR_STEP
+    for sx = minX, maxX, SECTOR_STEP do
+        for sz = minZ, maxZ, SECTOR_STEP do
+            table.insert(sectors, { x = sx, z = sz })
         end
     end
     return sectors
@@ -484,7 +482,7 @@ end
 -- Initialise a zone for a freshly dispatched MINE job (idempotent).
 local function ensureMineZone(jobId, params)
     if state.miningZones[jobId] then return end
-    local sectors = buildSectorGrid(params.centerX, params.centerZ, params.radius)
+    local sectors = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
     -- Shuffle so multiple miners don't all converge on the same corner first.
     for i = #sectors, 2, -1 do
         local j = math.random(1, i)
@@ -494,10 +492,9 @@ local function ensureMineZone(jobId, params)
         pending = sectors,
         total   = #sectors,
         done    = 0,
-        scanY   = params.scanY or 56,
     }
-    logInfo(string.format("Mine zone %s: %d sectors (r=%d scanY=%d)",
-        jobId, #sectors, params.radius, params.scanY or 56))
+    logInfo(string.format("Mine zone %s: %d sectors (%d,%d → %d,%d)",
+        jobId, #sectors, params.x1, params.z1, params.x2, params.z2))
 end
 
 -- Pop the next unassigned sector for a turtle, or nil if all done.
@@ -701,7 +698,7 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
         logInfo(string.format("Assigned sector (%d,%d) to %s [%s] (%d left)",
             sector.x, sector.z, msg.from, jobId, #zone.pending))
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
-            proto.payloadSectorAssign(jobId, sector.x, sector.z, zone.scanY))
+            proto.payloadSectorAssign(jobId, sector.x, sector.z))
     end
 end
 
@@ -1267,21 +1264,19 @@ function server.run()
                 id, dest.x, dest.y or 67, dest.z, #items))
 
         elseif t == "ORDER_MINE" then
-            local cx = p.centerX or p.centerX
-            local cz = p.centerZ
-            local r  = p.radius or 64
-            local sy = p.scanY  or 56
-            if not cx or not cz then
-                logWarn("ORDER_MINE: missing centerX or centerZ"); return
+            local x1 = p.x1
+            local z1 = p.z1
+            local x2 = p.x2
+            local z2 = p.z2
+            if not x1 or not z1 or not x2 or not z2 then
+                logWarn("ORDER_MINE: missing corner coordinates (need x1,z1,x2,z2)"); return
             end
             local id = server.submitJob(proto.JOB.MINE, {
-                centerX = math.floor(cx),
-                centerZ = math.floor(cz),
-                radius  = math.floor(r),
-                scanY   = math.floor(sy),
+                x1 = math.floor(x1), z1 = math.floor(z1),
+                x2 = math.floor(x2), z2 = math.floor(z2),
             }, 5)
-            logInfo(string.format("Dashboard mine %s → center %d,%d r=%d scanY=%d",
-                id, cx, cz, r, sy))
+            logInfo(string.format("Dashboard mine %s → (%d,%d) to (%d,%d)",
+                id, x1, z1, x2, z2))
 
         else
             logWarn("Unknown bridge command: " .. tostring(t))
