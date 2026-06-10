@@ -23,15 +23,19 @@ base.run(function(job)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
     -- ── Mining support mode (fuelManage=true) ────────────────────────────────
-    -- Slot 1: coal supply.
-    -- On FUEL_LOW: fly to 1 block above the miner and drop coal down as loose
-    -- items. No block placement or breaking needed — support has no pickaxe.
-    -- Miner steps down 1 to suck the coal up, then returns.
+    -- Mining support: follows 1 block behind the miner via POSITION_UPDATE,
+    -- holds still on FUEL_LOW so miner can turn around and suck coal directly.
+    -- Slot 1 = coal supply. No pickaxe needed; miner digs the path.
     if params.fuelManage then
-        local COAL_SLOT = 1
+        base.fuel.dockRefuel()
+        if base.fuel.isCritical() then
+            print("[SUPPORT] Insufficient fuel — aborting")
+            return base.sendFailed("insufficient_fuel", false)
+        end
 
-        base.sendProgress("Mining fuel-manager ready for " .. partnerId)
-        print("[SUPPORT] Mining mode — listening for FUEL_LOW from " .. partnerId)
+        base.setStatus(proto.STATUS.TRAVELLING, job.id)
+        base.sendProgress("Following miner " .. partnerId)
+        print("[SUPPORT] Mining follow mode — tracking " .. partnerId)
 
         while true do
             if base.isRecalled() then
@@ -39,32 +43,39 @@ base.run(function(job)
                 break
             end
 
-            local msg = proto.receive(base.getSelfId(), 10)
+            local msg = proto.receive(base.getSelfId(), 15)
 
             if not msg then
-                local info = base.queryTurtle(partnerId, 5)
-                if not info or not info.online or not info.jobId then
-                    print("[SUPPORT] Partner done or offline — returning to dock")
-                    break
+                if base.isServerDown() then
+                    sleep(2)
+                else
+                    local info = base.queryTurtle(partnerId, 5)
+                    if not info or not info.online or not info.jobId then
+                        print("[SUPPORT] Partner done or offline — returning to dock")
+                        break
+                    end
                 end
 
-            elseif msg.from == partnerId and msg.type == proto.MSG.FUEL_LOW then
-                print("[SUPPORT] FUEL_LOW — flying to miner to drop coal")
-                local info = base.queryTurtle(partnerId, 5)
-                if info and info.position then
-                    local mp = info.position
-                    -- Hover 1 block above miner and drop coal down.
-                    -- Items land at miner's Y; miner steps down to suck them up.
-                    base.move.to(mp.x, mp.y + 1, mp.z)
-                    turtle.select(COAL_SLOT)
-                    turtle.dropDown(16)
-                    print("[SUPPORT] Coal dropped — signalling FUEL_READY")
-                else
-                    print("[SUPPORT] Could not locate miner — signalling anyway")
+            elseif msg.from == partnerId then
+                if msg.type == proto.MSG.POSITION_UPDATE then
+                    local prev = msg.payload.prev
+                    if prev and type(prev.x) == "number" then
+                        base.move.to(prev.x, prev.y, prev.z)
+                    end
+
+                elseif msg.type == proto.MSG.FUEL_LOW then
+                    -- Miner turns around and sucks directly from us; just hold still
+                    print("[SUPPORT] FUEL_LOW — holding for direct suck")
+                    base.signalPartner(proto.MSG.FUEL_READY, { jobId = job.id })
+
+                elseif msg.type == proto.MSG.RETURN_TO_DOCK then
+                    print("[SUPPORT] Miner returning — returning to dock independently")
+                    break
+
+                elseif msg.type == proto.MSG.JOB_ABORT then
+                    print("[SUPPORT] JOB_ABORT — returning to dock")
+                    break
                 end
-                base.signalPartner(proto.MSG.FUEL_READY, { jobId = job.id })
-                base.returnToDock()
-                base.setStatus(proto.STATUS.WORKING, job.id)
             end
         end
 

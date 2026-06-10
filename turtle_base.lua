@@ -180,8 +180,8 @@ local function applyMove(dir)
         gpsSync()
     end
 
-    -- Delivery turtles broadcast their previous position so support can follow 1 block behind
-    if _self.partnerId and _self.role == proto.ROLE.DELIVERY and _self.modem then
+    -- Delivery and miner turtles broadcast their previous position so support can follow 1 block behind
+    if _self.partnerId and (_self.role == proto.ROLE.DELIVERY or _self.role == proto.ROLE.MINER) and _self.modem then
         local sig = proto.encode(proto.MSG.POSITION_UPDATE, _self.id, _self.partnerId, {
             prev = { x=prevX, y=prevY, z=prevZ },
         })

@@ -68,17 +68,15 @@ local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Ask support to hover above and drop coal
+    -- Support is 1 block behind. Signal it to hold still, turn around, suck
+    -- coal directly from its inventory, then face forward again.
     base.signalPartner(proto.MSG.FUEL_LOW, { jobId = jobId })
     local reply = waitMsg({ proto.MSG.FUEL_READY }, 30)
     if reply then
-        -- Support dropped coal from 1 block above; step down so the coal is
-        -- now 1 block above us, suck it up, then return to original position.
-        local p = base.getPos()
-        base.move.to(p.x, p.y - 1, p.z)
+        turtle.turnLeft();  turtle.turnLeft()   -- face toward support
         turtle.select(S_COAL)
-        turtle.suckUp()
-        base.move.to(p.x, p.y + 1, p.z)
+        turtle.suck(16)
+        turtle.turnLeft();  turtle.turnLeft()   -- face forward again
         tryRefuelSlot14()
         return
     end
@@ -276,6 +274,7 @@ local function mineJob(job)
 
     -- ── Return home ──────────────────────────────────────────────────────────
     base.sendProgress(string.format("All sectors done — %d ore mined. Returning.", totalOre))
+    base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
     base.returnToDock()
     base.sendComplete({ oreCount = totalOre })
 end
