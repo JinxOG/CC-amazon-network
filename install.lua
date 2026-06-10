@@ -12,6 +12,7 @@ local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/
 
 local FILES = {
     protocol        = "protocol.lua",
+    updater         = "updater.lua",
     central_server  = "central_server.lua",
     turtle_base     = "turtle_base.lua",
     waypoints       = "waypoints.lua",
@@ -27,33 +28,39 @@ local FILES = {
 local PROFILES = {
     server = {
         { src = FILES.protocol,       name = "protocol.lua"       },
+        { src = FILES.updater,        name = "updater.lua"        },
         { src = FILES.waypoints,      name = "waypoints.lua"      },
         { src = FILES.central_server, name = "central_server.lua" },
         { src = FILES.startup_server, name = "startup.lua"        },
     },
     admin = {
         { src = FILES.protocol, name = "protocol.lua" },
+        { src = FILES.updater,  name = "updater.lua"  },
         { src = FILES.admin_ui, name = "startup.lua"  },
     },
     warehouse = {
         { src = FILES.protocol,       name = "protocol.lua"        },
-        { src = FILES.warehouse,      name = "startup.lua"          },
-        { src = FILES.warehouse_test, name = "warehouse_test.lua"   },
+        { src = FILES.updater,        name = "updater.lua"         },
+        { src = FILES.warehouse,      name = "startup.lua"         },
+        { src = FILES.warehouse_test, name = "warehouse_test.lua"  },
     },
     delivery = {
         { src = FILES.protocol,        name = "protocol.lua"    },
+        { src = FILES.updater,         name = "updater.lua"     },
         { src = FILES.waypoints,       name = "waypoints.lua"   },
         { src = FILES.turtle_base,     name = "turtle_base.lua" },
         { src = FILES.delivery_turtle, name = "startup.lua"     },
     },
     support = {
         { src = FILES.protocol,       name = "protocol.lua"    },
+        { src = FILES.updater,        name = "updater.lua"     },
         { src = FILES.waypoints,      name = "waypoints.lua"   },
         { src = FILES.turtle_base,    name = "turtle_base.lua" },
         { src = FILES.support_turtle, name = "startup.lua"     },
     },
     miner = {
         { src = FILES.protocol,    name = "protocol.lua"    },
+        { src = FILES.updater,     name = "updater.lua"     },
         { src = FILES.waypoints,   name = "waypoints.lua"   },
         { src = FILES.turtle_base, name = "turtle_base.lua" },
         { src = FILES.ore_turtle,  name = "startup.lua"     },
