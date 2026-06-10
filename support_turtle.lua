@@ -23,11 +23,12 @@ base.run(function(job)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
     -- ── Mining support mode (fuelManage=true) ────────────────────────────────
-    -- Slot 1: coal supply. Slot 2: fuel transfer EC (paired with miner's slot 15).
-    -- Stays near dock; on FUEL_LOW loads coal into EC so miner can draw from it.
+    -- Slot 1: coal supply.
+    -- On FUEL_LOW: fly to 1 block above the miner and drop coal down as loose
+    -- items. No block placement or breaking needed — support has no pickaxe.
+    -- Miner steps down 1 to suck the coal up, then returns.
     if params.fuelManage then
-        local COAL_SLOT   = 1
-        local TRANSFER_EC = 2
+        local COAL_SLOT = 1
 
         base.sendProgress("Mining fuel-manager ready for " .. partnerId)
         print("[SUPPORT] Mining mode — listening for FUEL_LOW from " .. partnerId)
@@ -48,19 +49,22 @@ base.run(function(job)
                 end
 
             elseif msg.from == partnerId and msg.type == proto.MSG.FUEL_LOW then
-                print("[SUPPORT] FUEL_LOW — loading coal into transfer EC")
-                -- Place the transfer EC, drop coal in, pick it up.
-                -- Coal appears in miner's matching EC for it to suck out.
-                turtle.select(TRANSFER_EC)
-                if turtle.detectDown() then turtle.digDown() end
-                if turtle.placeDown() then
+                print("[SUPPORT] FUEL_LOW — flying to miner to drop coal")
+                local info = base.queryTurtle(partnerId, 5)
+                if info and info.position then
+                    local mp = info.position
+                    -- Hover 1 block above miner and drop coal down.
+                    -- Items land at miner's Y; miner steps down to suck them up.
+                    base.move.to(mp.x, mp.y + 1, mp.z)
                     turtle.select(COAL_SLOT)
                     turtle.dropDown(16)
-                    turtle.select(TRANSFER_EC)
-                    turtle.digDown()
+                    print("[SUPPORT] Coal dropped — signalling FUEL_READY")
+                else
+                    print("[SUPPORT] Could not locate miner — signalling anyway")
                 end
                 base.signalPartner(proto.MSG.FUEL_READY, { jobId = job.id })
-                print("[SUPPORT] Coal loaded into EC — FUEL_READY sent")
+                base.returnToDock()
+                base.setStatus(proto.STATUS.WORKING, job.id)
             end
         end
 

@@ -64,9 +64,25 @@ local function tryRefuelSlot14()
     end
 end
 
--- Place fuel EC below, suck coal into slot 14, pick EC back up.
--- Works whether support pre-loaded the EC or it already had coal.
-local function ecRefuel()
+local function checkFuel(jobId)
+    if turtle.getFuelLevel() >= FUEL_WARN then return end
+    tryRefuelSlot14()
+    if turtle.getFuelLevel() >= FUEL_WARN then return end
+    -- Ask support to hover above and drop coal
+    base.signalPartner(proto.MSG.FUEL_LOW, { jobId = jobId })
+    local reply = waitMsg({ proto.MSG.FUEL_READY }, 30)
+    if reply then
+        -- Support dropped coal from 1 block above; step down so the coal is
+        -- now 1 block above us, suck it up, then return to original position.
+        local p = base.getPos()
+        base.move.to(p.x, p.y - 1, p.z)
+        turtle.select(S_COAL)
+        turtle.suckUp()
+        base.move.to(p.x, p.y + 1, p.z)
+        tryRefuelSlot14()
+        return
+    end
+    -- No support reply — fall back to on-board fuel EC
     turtle.select(S_FUEL_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -75,16 +91,6 @@ local function ecRefuel()
     turtle.refuel()
     turtle.select(S_FUEL_EC)
     turtle.digDown()
-end
-
-local function checkFuel(jobId)
-    if turtle.getFuelLevel() >= FUEL_WARN then return end
-    tryRefuelSlot14()
-    if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Ask support to load coal into the shared fuel EC, then draw from it
-    base.signalPartner(proto.MSG.FUEL_LOW, { jobId = jobId })
-    waitMsg({ proto.MSG.FUEL_READY }, 30)  -- wait but act regardless of reply
-    ecRefuel()
 end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
