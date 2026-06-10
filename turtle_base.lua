@@ -1074,11 +1074,11 @@ end
 function base.init(role)
     _self.id   = proto.selfId()
     _self.role = role
-    -- Delivery turtles reserve slot 16 for the delivery ender chest,
-    -- so their fuel ender chest lives in slot 15 instead.
-    if role == proto.ROLE.DELIVERY then
+    -- Delivery and miner turtles reserve slot 16 for their own ender chest
+    -- (delivery EC / ore EC), so the fuel ender chest lives in slot 15.
+    if role == proto.ROLE.DELIVERY or role == proto.ROLE.MINER then
         CHEST_SLOT = 15
-        logInfo("Fuel ender chest slot set to 15 (delivery role)")
+        logInfo("Fuel ender chest slot set to 15 (" .. role .. " role)")
     end
     -- BURN_MAX = highest slot we'll ever suck coal into or burn from.
     -- Always cap at 14 so slots 15 and 16 are never touched by fuel ops.
