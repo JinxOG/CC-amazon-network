@@ -22,6 +22,53 @@ base.run(function(job)
     base.setPartnerId(partnerId)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
+    -- ── Mining support mode (fuelManage=true) ────────────────────────────────
+    -- Slot 1: coal supply. Slot 2: fuel transfer EC (paired with miner's slot 15).
+    -- Stays near dock; on FUEL_LOW loads coal into EC so miner can draw from it.
+    if params.fuelManage then
+        local COAL_SLOT   = 1
+        local TRANSFER_EC = 2
+
+        base.sendProgress("Mining fuel-manager ready for " .. partnerId)
+        print("[SUPPORT] Mining mode — listening for FUEL_LOW from " .. partnerId)
+
+        while true do
+            if base.isRecalled() then
+                print("[SUPPORT] Recalled — returning to dock")
+                break
+            end
+
+            local msg = proto.receive(base.getSelfId(), 10)
+
+            if not msg then
+                local info = base.queryTurtle(partnerId, 5)
+                if not info or not info.online or not info.jobId then
+                    print("[SUPPORT] Partner done or offline — returning to dock")
+                    break
+                end
+
+            elseif msg.from == partnerId and msg.type == proto.MSG.FUEL_LOW then
+                print("[SUPPORT] FUEL_LOW — loading coal into transfer EC")
+                -- Place the transfer EC, drop coal in, pick it up.
+                -- Coal appears in miner's matching EC for it to suck out.
+                turtle.select(TRANSFER_EC)
+                if turtle.detectDown() then turtle.digDown() end
+                if turtle.placeDown() then
+                    turtle.select(COAL_SLOT)
+                    turtle.dropDown(16)
+                    turtle.select(TRANSFER_EC)
+                    turtle.digDown()
+                end
+                base.signalPartner(proto.MSG.FUEL_READY, { jobId = job.id })
+                print("[SUPPORT] Coal loaded into EC — FUEL_READY sent")
+            end
+        end
+
+        base.returnToDock()
+        base.sendComplete()
+        return
+    end
+
     -- ── Step 1: Wait for HOLE_READY from delivery turtle ─────────────────────
     -- Delivery sends this when it reaches the dispatch hole entrance
 

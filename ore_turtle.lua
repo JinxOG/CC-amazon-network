@@ -64,19 +64,9 @@ local function tryRefuelSlot14()
     end
 end
 
-local function checkFuel(jobId)
-    if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Try coal already in slot 14
-    tryRefuelSlot14()
-    if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Ask support for coal
-    base.signalPartner(proto.MSG.FUEL_LOW, { jobId = jobId })
-    local reply = waitMsg({ proto.MSG.FUEL_READY }, 30)
-    if reply then
-        tryRefuelSlot14()
-        return
-    end
-    -- Last resort: fuel E-chest
+-- Place fuel EC below, suck coal into slot 14, pick EC back up.
+-- Works whether support pre-loaded the EC or it already had coal.
+local function ecRefuel()
     turtle.select(S_FUEL_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -85,6 +75,16 @@ local function checkFuel(jobId)
     turtle.refuel()
     turtle.select(S_FUEL_EC)
     turtle.digDown()
+end
+
+local function checkFuel(jobId)
+    if turtle.getFuelLevel() >= FUEL_WARN then return end
+    tryRefuelSlot14()
+    if turtle.getFuelLevel() >= FUEL_WARN then return end
+    -- Ask support to load coal into the shared fuel EC, then draw from it
+    base.signalPartner(proto.MSG.FUEL_LOW, { jobId = jobId })
+    waitMsg({ proto.MSG.FUEL_READY }, 30)  -- wait but act regardless of reply
+    ecRefuel()
 end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
