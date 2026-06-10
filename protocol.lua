@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.28"
+proto.VERSION = "1.6.29"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -74,6 +74,16 @@ proto.MSG = {
     BATCH_DONE        = "BATCH_DONE",        -- turtle → warehouse: batch pulled & distributed, send next
     ITEMS_DONE        = "ITEMS_DONE",        -- warehouse → turtle: all items sent, you're finished
     ITEM_COLLECTED    = "ITEM_COLLECTED",    -- turtle → warehouse: entangled chest clear, job done
+
+    -- Mining sector handshake (miner ↔ server)
+    SECTOR_REQUEST = "SECTOR_REQUEST",  -- miner → server: ready for next sector
+    SECTOR_ASSIGN  = "SECTOR_ASSIGN",   -- server → miner: here is your sector
+    SECTOR_DONE    = "SECTOR_DONE",     -- miner → server: sector fully scanned + mined
+    MINE_COMPLETE  = "MINE_COMPLETE",   -- server → miner: all sectors exhausted, return home
+
+    -- Mining fuel handshake (miner ↔ support, CH_LOCAL)
+    FUEL_LOW       = "FUEL_LOW",        -- miner → support: I need coal
+    FUEL_READY     = "FUEL_READY",      -- support → miner: coal dropped in slot 14, refuel now
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────
@@ -82,6 +92,7 @@ proto.ROLE = {
     DELIVERY = "DELIVERY",
     BUILDER  = "BUILDER",
     SUPPORT  = "SUPPORT",
+    MINER    = "MINER",
 }
 
 -- ─── Job Types ───────────────────────────────────────────────────────────────
@@ -91,6 +102,7 @@ proto.JOB = {
     BUILD          = "BUILD",           -- construct a structure from blueprint
     SUPPORT_FOLLOW = "SUPPORT_FOLLOW",  -- follow a partner turtle to keep it chunk loaded
     PATROL         = "PATROL",          -- chunk-load a static region
+    MINE           = "MINE",            -- scan sectors and mine ore veins
 }
 
 -- ─── Turtle Status ───────────────────────────────────────────────────────────
@@ -165,7 +177,8 @@ end
 -- params is job-specific. Always includes partnerId for the paired turtle.
 --   DELIVER:        { items={[name]=count}, destination={x,y,z}, partnerId="id" }
 --   BUILD:          { blueprint="name", origin={x,y,z}, facing=0, partnerId="id" }
---   SUPPORT_FOLLOW: { partnerId="id", masterJobId="job_id" }
+--   SUPPORT_FOLLOW: { partnerId="id", masterJobId="job_id", fuelManage=false }
+--   MINE:           { centerX=n, centerZ=n, radius=n, scanY=56, partnerId="id" }
 function proto.payloadJobAssign(jobId, jobType, params)
     return {
         jobId   = jobId,
@@ -227,6 +240,30 @@ function proto.payloadTurtleInfo(targetId, online, status, position, jobId, fuel
         position = position,
         jobId    = jobId,
         fuel     = fuel,
+    }
+end
+
+-- ─── Mining Payload Builders ─────────────────────────────────────────────────
+
+function proto.payloadSectorRequest(jobId)
+    return { jobId = jobId }
+end
+
+function proto.payloadSectorAssign(jobId, sectorX, sectorZ, scanY)
+    return {
+        jobId   = jobId,
+        sectorX = sectorX,
+        sectorZ = sectorZ,
+        scanY   = scanY or 56,
+    }
+end
+
+function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount)
+    return {
+        jobId    = jobId,
+        sectorX  = sectorX,
+        sectorZ  = sectorZ,
+        oreCount = oreCount or 0,
     }
 end
 
