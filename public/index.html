@@ -655,6 +655,14 @@
     <span style="font-size:10px;color:#666;letter-spacing:1px;">ESC to cancel</span>
 </div>
 
+<div id="mine-drag-hint" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0a0a12;border:1px solid #ff8800;border-radius:4px;padding:24px 36px;z-index:1002;
+    color:#ff8800;font-size:13px;letter-spacing:2px;text-align:center;
+    box-shadow:0 0 40px #ff880022;pointer-events:none;">
+    ⛏ CLICK AND DRAG TO SELECT MINE AREA<br>
+    <span style="font-size:10px;color:#666;letter-spacing:1px;">ESC to cancel</span>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -795,6 +803,47 @@ function setupDynmapInjection(dw){
         e.preventDefault();const mc=dynmapEventToMC(dw,e);
         openOpMenu(e,mc);
     });
+    // ── Mine drag selection ──────────────────────────────────────────────────
+    let _selRect=null,_dragAnchorPx=null;
+    function _ensureSelRect(){
+        if(_selRect)return _selRect;
+        _selRect=doc.createElement('div');
+        _selRect.style.cssText='position:fixed;pointer-events:none;z-index:9999;border:2px dashed #ff8800;background:rgba(255,136,0,0.12);display:none;box-sizing:border-box;';
+        doc.body.appendChild(_selRect);return _selRect;
+    }
+    doc.addEventListener('mousedown',(e)=>{
+        if(!_mineSelecting||e.button!==0)return;
+        e.preventDefault();e.stopPropagation();
+        _dragAnchorPx={x:e.clientX,y:e.clientY};
+        _mineDragStartMC=dynmapEventToMC(dw,e);
+        dw.dynmap.map.dragging.disable();
+        const r=_ensureSelRect();
+        r.style.left=e.clientX+'px';r.style.top=e.clientY+'px';
+        r.style.width='0';r.style.height='0';r.style.display='block';
+    },{capture:true});
+    doc.addEventListener('mousemove',(e)=>{
+        if(!_mineSelecting||!_dragAnchorPx)return;
+        const r=_ensureSelRect();
+        const x=Math.min(e.clientX,_dragAnchorPx.x),y=Math.min(e.clientY,_dragAnchorPx.y);
+        r.style.left=x+'px';r.style.top=y+'px';
+        r.style.width=Math.abs(e.clientX-_dragAnchorPx.x)+'px';
+        r.style.height=Math.abs(e.clientY-_dragAnchorPx.y)+'px';
+    });
+    doc.addEventListener('mouseup',(e)=>{
+        if(!_mineSelecting||!_dragAnchorPx||e.button!==0)return;
+        dw.dynmap.map.dragging.enable();
+        _ensureSelRect().style.display='none';
+        const mc2=dynmapEventToMC(dw,e);
+        const mc1=_mineDragStartMC;
+        _dragAnchorPx=null;_mineSelecting=false;
+        document.getElementById('mine-drag-hint').style.display='none';
+        if(mc1&&mc2){
+            openMineModal(mc1.x,mc1.z);
+            document.getElementById('mm-x2').value=mc2.x;
+            document.getElementById('mm-z2').value=mc2.z;
+            updateMineAreaInfo();
+        }
+    },{capture:true});
     updateInjectedMarkers(lastState.turtles||{});
     try{
         if(dm.playermarkers&&dm.map.hasLayer(dm.playermarkers))dm.map.removeLayer(dm.playermarkers);
@@ -1411,11 +1460,13 @@ function _closeOpMenuOutside(e){
 function selectOp(type){
     document.getElementById('op-menu').classList.remove('show');
     if(type==='deliver') openOrderModal(_opMenuCoords.x, _opMenuCoords.z);
-    else if(type==='mine') openMineModal(_opMenuCoords.x, _opMenuCoords.z);
+    else if(type==='mine') startMineDrag();
 }
 
 // ── Mine modal ───────────────────────────────────────────────────────────────
 let _awaitingMineCorner2 = false;
+let _mineSelecting = false;
+let _mineDragStartMC = null;
 function openMineModal(x,z){
     if(x!=null) document.getElementById('mm-x1').value=Math.round(x);
     if(z!=null) document.getElementById('mm-z1').value=Math.round(z);
@@ -1427,9 +1478,15 @@ function openMineModal(x,z){
     document.getElementById('backdrop').classList.add('show');
     document.getElementById('mine-modal').classList.add('show');
 }
+function startMineDrag(){
+    _mineSelecting=true;
+    document.getElementById('mine-drag-hint').style.display='';
+}
 function closeMineModal(){
     _awaitingMineCorner2=false;
+    _mineSelecting=false;
     document.getElementById('mine-c2-hint').style.display='none';
+    document.getElementById('mine-drag-hint').style.display='none';
     document.getElementById('dynmap-frame').style.visibility='visible';
     document.getElementById('map-overlay').classList.remove('show');
     document.getElementById('backdrop').classList.remove('show');
