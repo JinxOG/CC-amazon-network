@@ -250,7 +250,14 @@ local function mineJob(job)
     base.setStatus(proto.STATUS.TRAVELLING, jobId)
     base.sendProgress("Departing for mining zone")
 
-    -- Ascend to sky travel altitude
+    -- Depart via dispatch hole (same handshake as delivery)
+    local ok, err = base.depart()
+    if not ok then
+        base.sendFailed("departure_failed: " .. (err or "?"), true)
+        return
+    end
+
+    -- Ascend to sky travel altitude from underground exit
     checkFuel(jobId)
     local p = base.getPos()
     base.move.to(p.x, SKY_Y, p.z)

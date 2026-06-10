@@ -455,8 +455,8 @@ function base.depart()
     -- Face toward taxiway before departing — consistent starting orientation.
     move.face(W.dockFacing(_self.dock))
 
-    if _self.role == proto.ROLE.DELIVERY then
-        -- ── Delivery departure ────────────────────────────────────────────────
+    if _self.role == proto.ROLE.DELIVERY or _self.role == proto.ROLE.MINER then
+        -- ── Delivery / Miner departure ────────────────────────────────────────
         -- Navigate to hole entrance, signal support, wait for support to stage
         -- behind us, THEN descend so they go down together.
 
