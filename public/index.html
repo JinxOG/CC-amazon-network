@@ -390,11 +390,25 @@
         #mine-modal {
             display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
             background:#0a0a12; border:1px solid #ffaa4444; border-radius:4px;
-            padding:20px; width:340px; z-index:1001;
+            padding:24px; width:380px; z-index:1001;
             box-shadow:0 0 40px #ffaa4411,0 0 80px #00000088;
         }
         #mine-modal.show { display:block; animation:modalIn .18s ease forwards; }
         #mine-modal .modal-title { color:#ffaa44; text-shadow:0 0 8px #ffaa4455; }
+        /* standalone inputs inside mine modal collapse to w:0 from the shared rule — override */
+        #mine-modal .modal-field > input {
+            width:100%; box-sizing:border-box;
+            background:#050508; border:1px solid #ffaa4433; border-radius:2px;
+            color:#eee; font-family:inherit; font-size:14px;
+            padding:8px 10px; outline:none; transition:border-color .15s;
+        }
+        #mine-modal .modal-field > input:focus { border-color:#ffaa4488; }
+        #mine-modal .modal-coord-row input {
+            font-size:14px; padding:8px 10px; color:#eee;
+            border-color:#ffaa4433;
+        }
+        #mine-modal .modal-coord-row input:focus { border-color:#ffaa4488; }
+        #mine-modal .modal-field label { color:#aa8866; }
 
         /* ── Toast ── */
         #toast {
