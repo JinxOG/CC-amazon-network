@@ -403,6 +403,31 @@
         #mine-modal .modal-coord-row input:focus { border-color:#ffaa4488; }
         #mine-modal .modal-field label { color:#aa8866; }
 
+        /* ── Mine info panel ── */
+        #mine-info-panel {
+            display:none; position:fixed; z-index:10001;
+            background:#0a0a12; border:1px solid #ffaa4455; border-radius:4px;
+            padding:16px 18px; min-width:280px; max-width:380px;
+            box-shadow:0 4px 24px #00000099,0 0 30px #ffaa4411;
+        }
+        #mine-info-panel.show { display:block; animation:mipIn .15s ease forwards; }
+        @keyframes mipIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+        .mip-title { color:#ffaa44; font-size:11px; letter-spacing:2px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+        .mip-close { background:transparent; border:none; color:#8a8aaa; cursor:pointer; font-size:16px; line-height:1; padding:0; font-family:'Courier New',monospace; }
+        .mip-close:hover { color:#ff4444; }
+        .mip-row { display:flex; justify-content:space-between; font-size:11px; margin-bottom:5px; letter-spacing:1px; color:#8888aa; }
+        .mip-row .v { color:#ccc; }
+        .mip-prog { height:3px; background:#1a1a2e; border-radius:2px; margin:8px 0 12px; overflow:hidden; }
+        .mip-prog-fill { height:100%; border-radius:2px; background:linear-gradient(90deg,#ffaa44,#ff6600); transition:width .4s; }
+        .mip-ore-title { font-size:9px; letter-spacing:2px; color:#6a7a8a; margin-bottom:5px; padding-top:8px; border-top:1px solid #00ff8811; }
+        .mip-ore-row { display:grid; grid-template-columns:1fr 36px 36px 56px; align-items:center; gap:5px; font-size:10px; margin-bottom:3px; }
+        .mip-ore-name { color:#aaa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .mip-ore-found { color:#ffaa4488; text-align:right; }
+        .mip-ore-mined { color:#00ff88; text-align:right; }
+        .mip-ore-bar { height:3px; background:#1a1a2e; border-radius:2px; overflow:hidden; }
+        .mip-ore-bar-f { height:100%; border-radius:2px; background:#00ff88; }
+        .mip-hdr { display:grid; grid-template-columns:1fr 36px 36px 56px; gap:5px; font-size:9px; color:#5a6a7a; letter-spacing:1px; margin-bottom:4px; }
+
         /* ── Toast ── */
         #toast {
             position:fixed; bottom:20px; right:20px; background:#0a0a12;
@@ -663,6 +688,15 @@
     <span style="font-size:10px;color:#666;letter-spacing:1px;">ESC to cancel</span>
 </div>
 
+<div id="mine-info-panel">
+    <div class="mip-title">
+        <span>⛏ MINE ZONE</span>
+        <button class="mip-close" onclick="document.getElementById('mine-info-panel').classList.remove('show')">✕</button>
+    </div>
+    <div id="mip-stats"></div>
+    <div id="mip-ore-table"></div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -798,7 +832,7 @@ function setupDynmapInjection(dw){
         coordBox.style.display='block';coordBox.textContent=`X ${mc.x}   Z ${mc.z}`;
     });
     doc.addEventListener('mouseleave',()=>{coordBox.style.display='none';});
-    dm.map.on('click',()=>{clearSelectedRoute();selectedTurtleId=null;});
+    dm.map.on('click',()=>{clearSelectedRoute();selectedTurtleId=null;document.getElementById('mine-info-panel').classList.remove('show');});
     doc.addEventListener('contextmenu',(e)=>{
         e.preventDefault();const mc=dynmapEventToMC(dw,e);
         openOpMenu(e,mc);
@@ -844,7 +878,44 @@ function setupDynmapInjection(dw){
             updateMineAreaInfo();
         }
     },{capture:true});
+    // ── Mine zone Leaflet rectangles ─────────────────────────────────────────
+    const _mineRects={};
+    function _mineRectTooltip(z){
+        const eta=z.eta!=null?'  ETA '+_fmtEta(z.eta):'';
+        return (z.pct||0)+'% MINED  '+z.done+'/'+z.total+' sectors'+eta;
+    }
+    window._updateMineOverlays=function(mineZones){
+        try{
+            if(!dm||!dm.map||!dw.L)return;
+            const seen=new Set();
+            for(const[jid,z]of Object.entries(mineZones||{})){
+                seen.add(jid);
+                const b=z.bounds;if(!b)continue;
+                const sw=mcToLatLng(dw,dm,{x:Math.min(b.x1,b.x2),y:64,z:Math.max(b.z1,b.z2)});
+                const ne=mcToLatLng(dw,dm,{x:Math.max(b.x1,b.x2),y:64,z:Math.min(b.z1,b.z2)});
+                const lb=dw.L.latLngBounds(sw,ne);
+                const pct=z.pct||0;
+                const col=pct>=100?'#00ff88':'#ffaa44';
+                if(_mineRects[jid]){
+                    _mineRects[jid].r.setBounds(lb);
+                    _mineRects[jid].r.setStyle({color:col,fillColor:col});
+                    _mineRects[jid].r.setTooltipContent(_mineRectTooltip(z));
+                    _mineRects[jid].z=z;
+                }else{
+                    const r=dw.L.rectangle(lb,{color:col,weight:2,fillColor:col,fillOpacity:0.1,dashArray:'6 4',interactive:true})
+                        .bindTooltip(_mineRectTooltip(z),{sticky:true,className:'cc-route-tip'})
+                        .on('click',(e)=>{dw.L.DomEvent.stopPropagation(e);showMineInfoPanel(e.originalEvent||e,jid,_mineRects[jid].z);})
+                        .addTo(dm.map);
+                    _mineRects[jid]={r,z};
+                }
+            }
+            for(const jid of Object.keys(_mineRects)){
+                if(!seen.has(jid)){_mineRects[jid].r.remove();delete _mineRects[jid];}
+            }
+        }catch(ex){console.warn('[mineOverlay]',ex);}
+    };
     updateInjectedMarkers(lastState.turtles||{});
+    if(window._updateMineOverlays)window._updateMineOverlays(lastState.mineZones||{});
     try{
         if(dm.playermarkers&&dm.map.hasLayer(dm.playermarkers))dm.map.removeLayer(dm.playermarkers);
         const sets=dm.namedmarkersets||dm.markersets||{};
@@ -918,6 +989,74 @@ function updateInjectedMarkers(turtles){
         }
         for(const id of Object.keys(injectedMarkers)){if(!turtles[id]){injectedMarkers[id].remove();delete injectedMarkers[id];if(id===selectedTurtleId){clearSelectedRoute();selectedTurtleId=null;}}}
     }catch(e){}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MINE ZONE INFO PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+function _fmtEta(secs){
+    if(secs==null)return'—';
+    if(secs<60)return secs+'s';
+    if(secs<3600)return Math.floor(secs/60)+'m '+Math.floor(secs%60)+'s';
+    return Math.floor(secs/3600)+'h '+Math.floor((secs%3600)/60)+'m';
+}
+
+function _shortOreName(n){
+    const m=n.match(/^(?:[^:]+:)?(.+?)(?:_ore)?$/);
+    return m?m[1].replace(/_/g,' '):n;
+}
+
+function showMineInfoPanel(e,jid,z){
+    const panel=document.getElementById('mine-info-panel');
+    const stats=document.getElementById('mip-stats');
+    const oreTable=document.getElementById('mip-ore-table');
+
+    const pct=z.pct||0;
+    const etaStr=z.eta!=null?_fmtEta(z.eta):'—';
+    const b=z.bounds||{};
+    const w=b.x1!=null?Math.abs(b.x2-b.x1)+1:'?';
+    const h=b.z1!=null?Math.abs(b.z2-b.z1)+1:'?';
+
+    stats.innerHTML=
+        '<div class="mip-row"><span>JOB</span><span class="v">'+jid.slice(-8)+'</span></div>'+
+        '<div class="mip-row"><span>AREA</span><span class="v">'+w+' × '+h+'</span></div>'+
+        '<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'+
+        '<div class="mip-row"><span>PROGRESS</span><span class="v">'+pct+'%</span></div>'+
+        '<div class="mip-prog"><div class="mip-prog-fill" style="width:'+pct+'%"></div></div>'+
+        '<div class="mip-row"><span>ETA</span><span class="v">'+etaStr+'</span></div>';
+
+    // Build ore breakdown table
+    const found=z.oreFound||{};
+    const mined=z.oreMined||{};
+    const allNames=new Set([...Object.keys(found),...Object.keys(mined)]);
+    if(allNames.size===0){
+        oreTable.innerHTML='<div class="mip-ore-title">NO ORE DATA YET</div>';
+    }else{
+        const sorted=[...allNames].sort((a,b)=>(mined[b]||0)-(mined[a]||0));
+        let html='<div class="mip-ore-title">ORE BREAKDOWN</div>';
+        html+='<div class="mip-hdr"><span></span><span style="text-align:right">FOUND</span><span style="text-align:right">MINED</span><span></span></div>';
+        for(const name of sorted){
+            const f=found[name]||0,m=mined[name]||0;
+            const pctM=f>0?Math.round(m/f*100):0;
+            html+='<div class="mip-ore-row">'+
+                '<span class="mip-ore-name">'+_shortOreName(name)+'</span>'+
+                '<span class="mip-ore-found">'+f+'</span>'+
+                '<span class="mip-ore-mined">'+m+'</span>'+
+                '<div class="mip-ore-bar"><div class="mip-ore-bar-f" style="width:'+pctM+'%"></div></div>'+
+                '</div>';
+        }
+        oreTable.innerHTML=html;
+    }
+
+    // Position near click, clamped to viewport
+    const px=e.clientX||0,py=e.clientY||0;
+    const vw=window.innerWidth,vh=window.innerHeight;
+    panel.style.left='0px';panel.style.top='0px';
+    panel.classList.add('show');
+    const pw=panel.offsetWidth,ph=panel.offsetHeight;
+    panel.style.left=Math.min(px+12,vw-pw-10)+'px';
+    panel.style.top=Math.min(py+12,vh-ph-10)+'px';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1015,6 +1154,7 @@ function renderAll(d){
     document.getElementById('sb-jobs').textContent=jobsActive;
     document.getElementById('sb-done').textContent=jobs.filter(j=>j.status==='COMPLETE').length;
     updateInjectedMarkers(turtles);
+    if(window._updateMineOverlays)window._updateMineOverlays(d.mineZones||{});
     renderFleet(turtles);
     renderJobs(jobs,turtles);
     renderStorage(d.storage||[]);

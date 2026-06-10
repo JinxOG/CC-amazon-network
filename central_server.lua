@@ -489,9 +489,13 @@ local function ensureMineZone(jobId, params)
         sectors[i], sectors[j] = sectors[j], sectors[i]
     end
     state.miningZones[jobId] = {
-        pending = sectors,
-        total   = #sectors,
-        done    = 0,
+        pending    = sectors,
+        total      = #sectors,
+        done       = 0,
+        oreFound   = {},
+        oreMined   = {},
+        startTime  = os.epoch("utc"),
+        bounds     = { x1=params.x1, z1=params.z1, x2=params.x2, z2=params.z2 },
     }
     logInfo(string.format("Mine zone %s: %d sectors (%d,%d → %d,%d)",
         jobId, #sectors, params.x1, params.z1, params.x2, params.z2))
@@ -707,6 +711,16 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local zone = state.miningZones[p.jobId]
     if zone then
         zone.done = zone.done + 1
+        if type(p.foundOres) == "table" then
+            for name, n in pairs(p.foundOres) do
+                zone.oreFound[name] = (zone.oreFound[name] or 0) + n
+            end
+        end
+        if type(p.minedOres) == "table" then
+            for name, n in pairs(p.minedOres) do
+                zone.oreMined[name] = (zone.oreMined[name] or 0) + n
+            end
+        end
         logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
             p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
             p.jobId, zone.done, zone.total))
@@ -1319,11 +1333,31 @@ function server.run()
                 destination = j.params and j.params.destination or nil,
             })
         end
+        -- Build mineZones summary for the dashboard overlay
+        local mineZones = {}
+        for jid, z in pairs(state.miningZones) do
+            local pct = z.total > 0 and math.floor(z.done / z.total * 100) or 0
+            local eta = nil
+            if z.done > 0 and z.total > z.done then
+                local elapsed = (os.epoch("utc") - z.startTime) / 1000
+                eta = math.floor(elapsed / z.done * (z.total - z.done))
+            end
+            mineZones[jid] = {
+                bounds   = z.bounds,
+                total    = z.total,
+                done     = z.done,
+                pct      = pct,
+                eta      = eta,
+                oreFound = z.oreFound,
+                oreMined = z.oreMined,
+            }
+        end
         -- Use pre-serialised storageJSON so we never serialise 300+ items inside parallel
         local payload = '{"turtles":' .. textutils.serialiseJSON(turtles) ..
                         ',"jobs":'    .. textutils.serialiseJSON(jobs) ..
                         ',"version":' .. textutils.serialiseJSON(proto.VERSION) ..
-                        ',"storage":' .. storageJSON .. '}'
+                        ',"storage":' .. storageJSON ..
+                        ',"mineZones":' .. textutils.serialiseJSON(mineZones) .. '}'
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
             local status = resp.getResponseCode()

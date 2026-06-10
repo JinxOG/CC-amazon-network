@@ -245,6 +245,7 @@ local function mineOreList(ores, jobId)
     for _, o in ipairs(ores) do table.insert(remaining, o) end
 
     local mined = 0
+    local byType = {}
     while #remaining > 0 do
         local p = base.getPos()
         table.sort(remaining, function(a, b)
@@ -255,9 +256,10 @@ local function mineOreList(ores, jobId)
         local ore = table.remove(remaining, 1)
         if inventoryFull() then dumpOres() end
         navToOre(ore, jobId)
+        byType[ore.name] = (byType[ore.name] or 0) + 1
         mined = mined + 1
     end
-    return mined
+    return mined, byType
 end
 
 -- ── Job handler ──────────────────────────────────────────────────────────────
@@ -307,7 +309,9 @@ local function mineJob(job)
         base.move.to(sx, SKY_Y, sz)
 
         -- Scan and mine every depth level
-        local count = 0
+        local count       = 0
+        local sectorFound = {}   -- {[name]=count} from geo scan
+        local sectorMined = {}   -- {[name]=count} actually mined
         for i, sy in ipairs(SCAN_LEVELS) do
             checkFuel(jobId)
             base.move.to(sx, sy, sz)
@@ -315,9 +319,16 @@ local function mineJob(job)
             base.sendProgress(string.format("Scanning %d,%d depth %d/%d (Y=%d)",
                 sx, sz, i, #SCAN_LEVELS, sy))
             local ores = scanSector()
+            for _, o in ipairs(ores) do
+                sectorFound[o.name] = (sectorFound[o.name] or 0) + 1
+            end
             if #ores > 0 then
                 base.sendProgress(string.format("Mining %d ores at Y=%d", #ores, sy))
-                count = count + mineOreList(ores, jobId)
+                local c, byType = mineOreList(ores, jobId)
+                count = count + c
+                for name, n in pairs(byType) do
+                    sectorMined[name] = (sectorMined[name] or 0) + n
+                end
             end
         end
 
@@ -327,7 +338,7 @@ local function mineJob(job)
         -- Report done and request next sector immediately (miner is underground —
         -- only ascend to SKY_Y if another sector is actually assigned)
         base.sendToServer(proto.MSG.SECTOR_DONE,
-            proto.payloadSectorDone(jobId, sx, sz, count))
+            proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined))
 
         msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
         if not msg then
