@@ -5,6 +5,7 @@
 -- FIRST-TIME SETUP: create a role.txt on each computer with one line:
 --   DELIVERY   (delivery turtle)
 --   SUPPORT    (support/chunk-loader turtle)
+--   MINER      (ore mining turtle)
 --   WAREHOUSE  (warehouse computer)
 --   SERVER     (central server computer)
 --   ADMIN      (admin UI monitor computer)
@@ -29,6 +30,10 @@ local ROLE_FILES = {
     SUPPORT   = {
         "turtle_base.lua",
         { src = "support_turtle.lua", dst = "startup.lua" },
+    },
+    MINER     = {
+        "turtle_base.lua",
+        { src = "ore_turtle.lua", dst = "startup.lua" },
     },
     WAREHOUSE = {
         { src = "warehouse.lua", dst = "startup.lua" },
@@ -65,13 +70,13 @@ end
 if not role then
     print("ERROR: No role.txt found!")
     print("Usage: updater <ROLE>  or create role.txt manually")
-    print("Valid roles: DELIVERY SUPPORT WAREHOUSE SERVER ADMIN")
+    print("Valid roles: DELIVERY SUPPORT MINER WAREHOUSE SERVER ADMIN")
     return
 end
 
 if not ROLE_FILES[role] then
     print("ERROR: Unknown role '" .. tostring(role) .. "'")
-    print("Valid roles: DELIVERY SUPPORT WAREHOUSE SERVER ADMIN")
+    print("Valid roles: DELIVERY SUPPORT MINER WAREHOUSE SERVER ADMIN")
     return
 end
 
