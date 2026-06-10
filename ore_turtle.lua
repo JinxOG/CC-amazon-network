@@ -270,7 +270,7 @@ local function mineJob(job)
     base.setStatus(proto.STATUS.TRAVELLING, jobId)
     base.sendProgress("Departing for mining zone")
 
-    local ok, err = base.depart()
+    local ok, err = base.depart(true)  -- stay at floor level, ascend directly
     if not ok then
         base.sendFailed("departure_failed: " .. (err or "?"), true)
         return

@@ -428,7 +428,7 @@ base.move = move
 
 -- Navigate from current position (dock) to the world via the dispatch hole.
 -- Call this at the start of every job before heading to destination.
-function base.depart()
+function base.depart(noDescend)
     if not _self.dock then logWarn("No dock assigned, departing from current pos.") return true end
 
     -- Pre-departure fuel reserve check. A flat critical threshold isn't enough for a
@@ -487,11 +487,12 @@ function base.depart()
             end
         end
 
-        -- Descend through dispatch hole
-        logInfo("Descending dispatch hole...")
-        for _ = 1, 10 do
-            move.down()
-            if _self.pos.y <= W.WORLD_EXIT.y then break end
+        if not noDescend then
+            logInfo("Descending dispatch hole...")
+            for _ = 1, 10 do
+                move.down()
+                if _self.pos.y <= W.WORLD_EXIT.y then break end
+            end
         end
 
     else
@@ -515,10 +516,12 @@ function base.depart()
 
         -- Move to hole and descend
         move.to(W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.y, W.DISPATCH_HOLE.z)
-        logInfo("Descending dispatch hole...")
-        for _ = 1, 10 do
-            move.down()
-            if _self.pos.y <= W.WORLD_EXIT.y then break end
+        if not noDescend then
+            logInfo("Descending dispatch hole...")
+            for _ = 1, 10 do
+                move.down()
+                if _self.pos.y <= W.WORLD_EXIT.y then break end
+            end
         end
     end
 

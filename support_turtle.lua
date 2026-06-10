@@ -59,7 +59,7 @@ base.run(function(job)
         end
 
         -- ── Depart via dispatch hole (support side) ───────────────────────────
-        local ok, err = base.depart()
+        local ok, err = base.depart(true)  -- stay at floor level, ascend directly
         if not ok then
             return base.sendFailed("departure_failed: " .. (err or "?"), true)
         end
