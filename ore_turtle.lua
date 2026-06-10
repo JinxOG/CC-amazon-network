@@ -58,10 +58,11 @@ end
 -- ── Ore detection ────────────────────────────────────────────────────────────
 
 local function isOre(name, tags)
-    if name:find("_ore") then return true end
+    -- broad name match catches modded ores (create:zinc_ore, thermal:tin_ore, etc.)
+    if name:find("ore") then return true end
     if type(tags) == "table" then
         for k in pairs(tags) do
-            if type(k) == "string" and k:find("ores") then return true end
+            if type(k) == "string" and (k:find("ores") or k:find("ore")) then return true end
         end
     end
     return false
@@ -80,7 +81,9 @@ local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Draw coal directly from the on-board fuel EC (slot 15)
+    -- Pause support so it doesn't occupy the block below when EC is placed
+    base.signalPartner(proto.MSG.ASCENDING, {})
+    sleep(0.6)
     turtle.select(S_FUEL_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -89,6 +92,7 @@ local function checkFuel(jobId)
     turtle.refuel()
     turtle.select(S_FUEL_EC)
     turtle.digDown()
+    base.signalPartner(proto.MSG.DESCENDED, {})
 end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
@@ -108,6 +112,9 @@ end
 
 local function dumpOres()
     sweepCoalToSlot14()
+    -- Pause support so it doesn't occupy the block below when EC is placed
+    base.signalPartner(proto.MSG.ASCENDING, {})
+    sleep(0.6)
     turtle.select(S_ORE_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()
@@ -119,6 +126,7 @@ local function dumpOres()
     end
     turtle.select(S_ORE_EC)
     turtle.digDown()
+    base.signalPartner(proto.MSG.DESCENDED, {})
 end
 
 local function inventoryFull()
@@ -239,16 +247,20 @@ local function navToOre(ore, jobId)
 end
 
 local function mineOreList(ores, jobId)
-    -- Sort nearest-first to minimise travel distance
-    local p = base.getPos()
-    table.sort(ores, function(a, b)
-        local da = math.abs(a.x-p.x) + math.abs(a.y-p.y) + math.abs(a.z-p.z)
-        local db = math.abs(b.x-p.x) + math.abs(b.y-p.y) + math.abs(b.z-p.z)
-        return da < db
-    end)
+    -- Greedy nearest-neighbour: re-sort after every mine so the miner drains
+    -- one vein completely before jumping to a distant one
+    local remaining = {}
+    for _, o in ipairs(ores) do table.insert(remaining, o) end
 
     local mined = 0
-    for _, ore in ipairs(ores) do
+    while #remaining > 0 do
+        local p = base.getPos()
+        table.sort(remaining, function(a, b)
+            local da = math.abs(a.x-p.x) + math.abs(a.y-p.y) + math.abs(a.z-p.z)
+            local db = math.abs(b.x-p.x) + math.abs(b.y-p.y) + math.abs(b.z-p.z)
+            return da < db
+        end)
+        local ore = table.remove(remaining, 1)
         if inventoryFull() then dumpOres() end
         navToOre(ore, jobId)
         mined = mined + 1
