@@ -68,19 +68,7 @@ local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Support is 1 block behind. Signal it to hold still, turn around, suck
-    -- coal directly from its inventory, then face forward again.
-    base.signalPartner(proto.MSG.FUEL_LOW, { jobId = jobId })
-    local reply = waitMsg({ proto.MSG.FUEL_READY }, 30)
-    if reply then
-        turtle.turnLeft();  turtle.turnLeft()   -- face toward support
-        turtle.select(S_COAL)
-        turtle.suck(16)
-        turtle.turnLeft();  turtle.turnLeft()   -- face forward again
-        tryRefuelSlot14()
-        return
-    end
-    -- No support reply — fall back to on-board fuel EC
+    -- Draw coal directly from the on-board fuel EC (slot 15)
     turtle.select(S_FUEL_EC)
     if turtle.detectDown() then turtle.digDown() end
     turtle.placeDown()

@@ -23,9 +23,9 @@ base.run(function(job)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
     -- ── Mining support mode (fuelManage=true) ────────────────────────────────
-    -- Mining support: follows 1 block behind the miner via POSITION_UPDATE,
-    -- holds still on FUEL_LOW so miner can turn around and suck coal directly.
-    -- Slot 1 = coal supply. No pickaxe needed; miner digs the path.
+    -- Mining support: follows 1 block behind the miner via POSITION_UPDATE.
+    -- Miner self-fuels from its coal EC (slot 15) — no coal transfer needed.
+    -- No pickaxe needed; miner digs the path.
     if params.fuelManage then
         base.fuel.dockRefuel()
         if base.fuel.isCritical() then
@@ -62,11 +62,6 @@ base.run(function(job)
                     if prev and type(prev.x) == "number" then
                         base.move.to(prev.x, prev.y, prev.z)
                     end
-
-                elseif msg.type == proto.MSG.FUEL_LOW then
-                    -- Miner turns around and sucks directly from us; just hold still
-                    print("[SUPPORT] FUEL_LOW — holding for direct suck")
-                    base.signalPartner(proto.MSG.FUEL_READY, { jobId = job.id })
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
                     print("[SUPPORT] Miner returning — returning to dock independently")
