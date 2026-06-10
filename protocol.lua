@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.36"
+proto.VERSION = "1.6.37"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -81,9 +81,10 @@ proto.MSG = {
     SECTOR_DONE    = "SECTOR_DONE",     -- miner → server: sector fully scanned + mined
     MINE_COMPLETE  = "MINE_COMPLETE",   -- server → miner: all sectors exhausted, return home
 
-    -- Mining fuel handshake (miner ↔ support, CH_LOCAL)
-    FUEL_LOW       = "FUEL_LOW",        -- miner → support: I need coal
-    FUEL_READY     = "FUEL_READY",      -- support → miner: coal dropped in slot 14, refuel now
+    -- Mining fuel handshake (support ↔ miner, CH_LOCAL, field-only)
+    FUEL_LOW    = "FUEL_LOW",    -- support → miner: I need coal
+    FUEL_READY  = "FUEL_READY",  -- miner → support: inventory filled with coal, suck now
+    FUEL_FILLED = "FUEL_FILLED", -- support → miner: done sucking, continue
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

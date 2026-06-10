@@ -29,6 +29,9 @@ base.init(proto.ROLE.MINER)
 
 -- ── Messaging ────────────────────────────────────────────────────────────────
 
+local _servingFuel = false
+local serveSupportFuel   -- forward declaration; assigned after dumpOres is defined
+
 local function waitMsg(types, secs)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end
@@ -38,7 +41,16 @@ local function waitMsg(types, secs)
         local remain = deadline - os.epoch("utc") / 1000
         if remain <= 0 then break end
         local msg = proto.receive(base.getSelfId(), math.max(0.5, remain))
-        if msg and set[msg.type] then return msg end
+        if msg then
+            -- Handle support fuel requests inline during any wait
+            if not _servingFuel
+                    and msg.type == proto.MSG.FUEL_LOW
+                    and msg.from == base.getPartnerId() then
+                serveSupportFuel(msg.payload and msg.payload.jobId)
+            elseif set[msg.type] then
+                return msg
+            end
+        end
     end
     return nil
 end
@@ -115,6 +127,44 @@ local function inventoryFull()
         if turtle.getItemCount(s) == 0 then free = free + 1 end
     end
     return free < 2
+end
+
+-- ── Support field refuel ──────────────────────────────────────────────────────
+
+-- Called when support signals FUEL_LOW. Miner dumps ores, fills slots 2-13
+-- with coal from its fuel EC, signals FUEL_READY so support can suck directly,
+-- then waits for FUEL_FILLED before sweeping leftovers to slot 14 and resuming.
+serveSupportFuel = function(jobId)
+    if _servingFuel then return end
+    _servingFuel = true
+    print("[MINER] Support fuel low — preparing coal")
+
+    -- Clear non-protected slots and load them with coal
+    dumpOres()
+    turtle.select(S_FUEL_EC)
+    if turtle.detectDown() then turtle.digDown() end
+    turtle.placeDown()
+    for s = 2, 13 do
+        turtle.select(s)
+        turtle.suckDown(64)
+    end
+    turtle.select(S_FUEL_EC)
+    turtle.digDown()
+
+    -- Signal support to suck (uses direct receive to avoid re-entrant waitMsg)
+    base.signalPartner(proto.MSG.FUEL_READY, { jobId = jobId })
+    local deadline = os.epoch("utc") / 1000 + 20
+    while os.epoch("utc") / 1000 < deadline do
+        local msg = proto.receive(base.getSelfId(), 3)
+        if msg and msg.type == proto.MSG.FUEL_FILLED
+                and msg.from == base.getPartnerId() then
+            break
+        end
+    end
+
+    sweepCoalToSlot14()
+    _servingFuel = false
+    print("[MINER] Support refuel done")
 end
 
 -- ── Geo Scanner ──────────────────────────────────────────────────────────────

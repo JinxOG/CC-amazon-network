@@ -23,10 +23,13 @@ base.run(function(job)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
     -- ── Mining support mode (fuelManage=true) ────────────────────────────────
-    -- Mining support: follows 1 block behind the miner via POSITION_UPDATE.
-    -- Miner self-fuels from its coal EC (slot 15) — no coal transfer needed.
-    -- No pickaxe needed; miner digs the path.
+    -- Mining support: follows 1 block behind via POSITION_UPDATE.
+    -- When support fuel drops below threshold, signals miner to prepare coal.
+    -- Miner dumps ores, fills slots 2-13 with coal from its EC, signals FUEL_READY.
+    -- Support sucks coal forward from miner, refuels, signals FUEL_FILLED.
     if params.fuelManage then
+        local SUPPORT_FUEL_WARN = 800
+
         base.fuel.dockRefuel()
         if base.fuel.isCritical() then
             print("[SUPPORT] Insufficient fuel — aborting")
@@ -41,6 +44,32 @@ base.run(function(job)
             if base.isRecalled() then
                 print("[SUPPORT] Recalled — returning to dock")
                 break
+            end
+
+            -- ── Field fuel check ─────────────────────────────────────────────
+            if turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
+                print("[SUPPORT] Fuel low — requesting coal from miner")
+                base.signalPartner(proto.MSG.FUEL_LOW, { jobId = job.id })
+                -- Wait for miner to prepare coal
+                local deadline = os.epoch("utc") / 1000 + 60
+                local ready = false
+                while os.epoch("utc") / 1000 < deadline do
+                    local m = proto.receive(base.getSelfId(), 5)
+                    if m and m.from == partnerId
+                            and m.type == proto.MSG.FUEL_READY then
+                        ready = true; break
+                    end
+                end
+                if ready then
+                    -- Miner (1 block ahead) has coal in slots 2-13; suck and refuel
+                    turtle.select(1)
+                    while turtle.getFuelLevel() < SUPPORT_FUEL_WARN + 400 do
+                        if not turtle.suck(64) then break end
+                        turtle.refuel()
+                    end
+                    base.signalPartner(proto.MSG.FUEL_FILLED, { jobId = job.id })
+                    print("[SUPPORT] Refueled to " .. turtle.getFuelLevel())
+                end
             end
 
             local msg = proto.receive(base.getSelfId(), 15)
