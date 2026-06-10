@@ -64,13 +64,12 @@ base.run(function(job)
             return base.sendFailed("departure_failed: " .. (err or "?"), true)
         end
 
-        -- Rise to FOLLOW_Y so we're off the ground before tracking starts.
-        -- Once POSITION_UPDATEs arrive, the tracking loop will fly us to the
-        -- miner's actual altitude during sky travel, then clamp back to FOLLOW_Y
-        -- when the miner descends underground.
-        local sp = base.getPos()
-        print(string.format("[SUPPORT] Rising to Y=%d from %d,%d,%d", FOLLOW_Y, sp.x, sp.y, sp.z))
-        base.move.to(sp.x, FOLLOW_Y, sp.z)
+        -- No pre-ascent. POSITION_UPDATEs from the miner guide us in real time.
+        -- Phase 1 (following): track the miner's full X,Y,Z.
+        -- Phase 2 (mining): once miner dips below FOLLOW_Y after reaching sky,
+        --   lock to FOLLOW_Y and track X,Z only — miner is underground.
+        local _reachedSky = false   -- true after miner has been near SKY_Y
+        local _miningMode = false   -- true once miner first descends below FOLLOW_Y
 
         base.setStatus(proto.STATUS.TRAVELLING, job.id)
         base.sendProgress("Following miner")
@@ -130,11 +129,16 @@ base.run(function(job)
 
             elseif msg.from == partnerId then
                 if msg.type == proto.MSG.POSITION_UPDATE then
-                    -- Follow miner's X,Z. During sky travel (miner.y > FOLLOW_Y)
-                    -- also match the miner's altitude; clamp to FOLLOW_Y underground.
                     local prev = msg.payload.prev
                     if prev and type(prev.x) == "number" then
-                        local targetY = math.max(FOLLOW_Y, prev.y)
+                        if not _miningMode then
+                            if prev.y >= 190 then _reachedSky = true end
+                            if _reachedSky and prev.y < FOLLOW_Y then
+                                _miningMode = true
+                                print("[SUPPORT] Miner descended to mine — locking to Y=" .. FOLLOW_Y)
+                            end
+                        end
+                        local targetY = _miningMode and FOLLOW_Y or prev.y
                         base.move.to(prev.x, targetY, prev.z)
                     end
 

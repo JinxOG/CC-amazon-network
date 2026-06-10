@@ -276,18 +276,11 @@ local function mineJob(job)
         return
     end
 
-    -- Suppress POSITION_UPDATEs during departure ascent.
-    -- Every move would tell support to chase our column; support is independently
-    -- rising to Y=100 in a different column and must not intercept our path.
-    -- Mirror of how returnToDock silences broadcasts before ascending arrivals hole.
-    local savedPartner = base.getPartnerId()
-    base.setPartnerId(nil)
-
+    -- Ascend straight up — POSITION_UPDATEs fire on every step so support
+    -- can follow in real-time (prev is always the already-vacated block).
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(p.x, SKY_Y, p.z)  -- straight up from hole, no sideways step
-
-    base.setPartnerId(savedPartner)
+    base.move.to(p.x, SKY_Y, p.z)
 
     -- ── Sector loop ──────────────────────────────────────────────────────────
     -- Request first sector. Thereafter: mine → SECTOR_DONE → request next.
