@@ -64,16 +64,17 @@ base.run(function(job)
             return base.sendFailed("departure_failed: " .. (err or "?"), true)
         end
 
-        -- ── Rise to follow altitude ───────────────────────────────────────────
-        -- Support stays at FOLLOW_Y (Y=100) and tracks only the miner's X,Z.
-        -- It never goes underground — no blocking, no EC collisions.
+        -- Rise to FOLLOW_Y so we're off the ground before tracking starts.
+        -- Once POSITION_UPDATEs arrive, the tracking loop will fly us to the
+        -- miner's actual altitude during sky travel, then clamp back to FOLLOW_Y
+        -- when the miner descends underground.
         local sp = base.getPos()
         print(string.format("[SUPPORT] Rising to Y=%d from %d,%d,%d", FOLLOW_Y, sp.x, sp.y, sp.z))
         base.move.to(sp.x, FOLLOW_Y, sp.z)
 
         base.setStatus(proto.STATUS.TRAVELLING, job.id)
-        base.sendProgress(string.format("Tracking miner at Y=%d", FOLLOW_Y))
-        print(string.format("[SUPPORT] Hovering at Y=%d — tracking %s X,Z", FOLLOW_Y, partnerId))
+        base.sendProgress("Following miner")
+        print(string.format("[SUPPORT] Tracking %s", partnerId))
 
         while true do
             if base.isRecalled() then
@@ -129,10 +130,12 @@ base.run(function(job)
 
             elseif msg.from == partnerId then
                 if msg.type == proto.MSG.POSITION_UPDATE then
-                    -- Track miner X,Z only — stay at FOLLOW_Y
+                    -- Follow miner's X,Z. During sky travel (miner.y > FOLLOW_Y)
+                    -- also match the miner's altitude; clamp to FOLLOW_Y underground.
                     local prev = msg.payload.prev
                     if prev and type(prev.x) == "number" then
-                        base.move.to(prev.x, FOLLOW_Y, prev.z)
+                        local targetY = math.max(FOLLOW_Y, prev.y)
+                        base.move.to(prev.x, targetY, prev.z)
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then

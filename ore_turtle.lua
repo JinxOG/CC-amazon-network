@@ -285,9 +285,7 @@ local function mineJob(job)
 
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(p.x, p.y, p.z - 1)   -- one step forward (north, same dir as arrival)
-    checkFuel(jobId)
-    base.move.to(p.x, SKY_Y, p.z - 1) -- straight up
+    base.move.to(p.x, SKY_Y, p.z)  -- straight up from hole, no sideways step
 
     base.setPartnerId(savedPartner)
 
