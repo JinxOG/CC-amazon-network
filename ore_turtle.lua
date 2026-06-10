@@ -276,13 +276,20 @@ local function mineJob(job)
         return
     end
 
-    -- Step sideways out of the dispatch hole column; support rises to Y=100
-    -- in that column independently — different columns, no collision.
+    -- Suppress POSITION_UPDATEs during departure ascent.
+    -- Every move would tell support to chase our column; support is independently
+    -- rising to Y=100 in a different column and must not intercept our path.
+    -- Mirror of how returnToDock silences broadcasts before ascending arrivals hole.
+    local savedPartner = base.getPartnerId()
+    base.setPartnerId(nil)
+
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(p.x + 1, p.y, p.z)
+    base.move.to(p.x + 1, p.y, p.z)   -- step east (miner col = support col + 1)
     checkFuel(jobId)
-    base.move.to(p.x + 1, SKY_Y, p.z)
+    base.move.to(p.x + 1, SKY_Y, p.z) -- straight up
+
+    base.setPartnerId(savedPartner)
 
     -- ── Sector loop ──────────────────────────────────────────────────────────
     -- Request first sector. Thereafter: mine → SECTOR_DONE → request next.
