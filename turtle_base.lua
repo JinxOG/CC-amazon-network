@@ -1111,6 +1111,9 @@ function base.init(role)
             base.returnToDock()
         end
     end
+    -- Startup homing may have set status to RETURNING — reset to IDLE now we're docked.
+    _self.status = proto.STATUS.IDLE
+    _self.jobId  = nil
     -- Face toward taxiway so the turtle is oriented consistently at its dock on boot.
     if _self.dock then move.face(W.dockFacing(_self.dock)) end
     logInfo(string.format("Ready. Fuel:%d/%d  Pos:%d,%d,%d  Dock:%s",
@@ -1177,7 +1180,9 @@ function base.run(jobHandler)
                                 else
                                     base.returnToDock()
                                 end
-                                _self.busy = false
+                                _self.busy   = false
+                                _self.status = proto.STATUS.IDLE
+                                _self.jobId  = nil
                             end
 
                         elseif msg.type == proto.MSG.UPDATE_ALL then
