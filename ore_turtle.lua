@@ -285,9 +285,9 @@ local function mineJob(job)
 
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(p.x + 1, p.y, p.z)   -- step east (miner col = support col + 1)
+    base.move.to(p.x, p.y, p.z - 1)   -- one step forward (north, same dir as arrival)
     checkFuel(jobId)
-    base.move.to(p.x + 1, SKY_Y, p.z) -- straight up
+    base.move.to(p.x, SKY_Y, p.z - 1) -- straight up
 
     base.setPartnerId(savedPartner)
 
