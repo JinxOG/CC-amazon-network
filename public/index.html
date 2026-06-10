@@ -371,6 +371,31 @@
         .modal-actions { display:flex; gap:8px; margin-top:16px; }
         .modal-actions .btn { margin:0; flex:1; text-align:center; }
 
+        /* ── Op context menu ── */
+        #op-menu {
+            display:none; position:fixed; z-index:10000;
+            background:#0a0a16; border:1px solid #00ff8833; border-radius:4px;
+            padding:4px 0; min-width:200px;
+            box-shadow:0 4px 20px #00000088;
+        }
+        #op-menu.show { display:block; animation:modalIn .12s ease forwards; }
+        .op-menu-item {
+            padding:9px 16px; font-size:10px; letter-spacing:1.5px;
+            color:#8a9aaa; cursor:pointer; transition:background .1s,color .1s;
+        }
+        .op-menu-item:hover { background:#10101e; color:#00ff88; }
+        .op-menu-sep { height:1px; background:#00ff8818; margin:4px 0; }
+
+        /* ── Mine modal ── */
+        #mine-modal {
+            display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+            background:#0a0a12; border:1px solid #ffaa4444; border-radius:4px;
+            padding:20px; width:340px; z-index:1001;
+            box-shadow:0 0 40px #ffaa4411,0 0 80px #00000088;
+        }
+        #mine-modal.show { display:block; animation:modalIn .18s ease forwards; }
+        #mine-modal .modal-title { color:#ffaa44; text-shadow:0 0 8px #ffaa4455; }
+
         /* ── Toast ── */
         #toast {
             position:fixed; bottom:20px; right:20px; background:#0a0a12;
@@ -445,7 +470,7 @@
         <iframe id="dynmap-frame" src="/dynmap-frame#MODPACK;flat;154;64;-2803;6"></iframe>
         <div id="map-overlay"></div>
         <div id="coord-preview"></div>
-        <div id="map-hint">RIGHT-CLICK MAP → DISPATCH DELIVERY</div>
+        <div id="map-hint">RIGHT-CLICK MAP → DELIVERY / MINE</div>
     </div>
 
     <div id="divider"></div>
@@ -582,6 +607,35 @@
     <div class="modal-actions">
         <button class="btn re" onclick="closeOrderModal()">CANCEL</button>
         <button class="btn gr" onclick="submitOrder()">DISPATCH ORDER</button>
+    </div>
+</div>
+
+<div id="op-menu">
+    <div class="op-menu-item" onclick="selectOp('deliver')">▶ DISPATCH DELIVERY</div>
+    <div class="op-menu-sep"></div>
+    <div class="op-menu-item" onclick="selectOp('mine')">⛏ DISPATCH MINE</div>
+</div>
+
+<div id="mine-modal">
+    <div class="modal-title">⛏ DISPATCH MINE</div>
+    <div class="modal-field">
+        <label>CENTER COORDINATES</label>
+        <div class="modal-coord-row">
+            <input id="mm-x" type="number" placeholder="X">
+            <input id="mm-z" type="number" placeholder="Z">
+        </div>
+    </div>
+    <div class="modal-field">
+        <label>RADIUS (blocks)</label>
+        <input id="mm-r" type="number" placeholder="64" value="64">
+    </div>
+    <div class="modal-field">
+        <label>SCAN Y (optional)</label>
+        <input id="mm-sy" type="number" placeholder="56" value="56">
+    </div>
+    <div class="modal-actions">
+        <button class="btn re" onclick="closeMineModal()">CANCEL</button>
+        <button class="btn gr" onclick="submitMine()">DISPATCH MINE</button>
     </div>
 </div>
 
@@ -723,7 +777,7 @@ function setupDynmapInjection(dw){
     dm.map.on('click',()=>{clearSelectedRoute();selectedTurtleId=null;});
     doc.addEventListener('contextmenu',(e)=>{
         e.preventDefault();const mc=dynmapEventToMC(dw,e);
-        openOrderModal(mc?mc.x:null,mc?mc.z:null);
+        openOpMenu(e,mc);
     });
     updateInjectedMarkers(lastState.turtles||{});
     try{
@@ -1305,7 +1359,56 @@ function closeOrderModal(){
     document.getElementById('order-modal').classList.remove('show');
     document.getElementById('om-results').style.display='none';
 }
-document.addEventListener('keydown',(e)=>{if(e.key==='Escape')closeOrderModal();});
+document.addEventListener('keydown',(e)=>{if(e.key==='Escape'){closeOrderModal();closeMineModal();document.getElementById('op-menu').classList.remove('show');}});
+
+// ── Op context menu ──────────────────────────────────────────────────────────
+let _opMenuCoords = {x:null,z:null};
+function openOpMenu(e,mc){
+    _opMenuCoords = {x:mc?mc.x:null, z:mc?mc.z:null};
+    const rect = document.getElementById('dynmap-frame').getBoundingClientRect();
+    const menu = document.getElementById('op-menu');
+    let px = rect.left + e.clientX, py = rect.top + e.clientY;
+    // Keep menu on screen
+    menu.style.left = Math.min(px, window.innerWidth - 220) + 'px';
+    menu.style.top  = Math.min(py, window.innerHeight - 100) + 'px';
+    menu.classList.add('show');
+    document.addEventListener('mousedown', _closeOpMenuOutside, {once:true, capture:true});
+}
+function _closeOpMenuOutside(e){
+    if(!document.getElementById('op-menu').contains(e.target))
+        document.getElementById('op-menu').classList.remove('show');
+}
+function selectOp(type){
+    document.getElementById('op-menu').classList.remove('show');
+    if(type==='deliver') openOrderModal(_opMenuCoords.x, _opMenuCoords.z);
+    else if(type==='mine') openMineModal(_opMenuCoords.x, _opMenuCoords.z);
+}
+
+// ── Mine modal ───────────────────────────────────────────────────────────────
+function openMineModal(x,z){
+    if(x!=null) document.getElementById('mm-x').value=Math.round(x);
+    if(z!=null) document.getElementById('mm-z').value=Math.round(z);
+    document.getElementById('dynmap-frame').style.visibility='hidden';
+    document.getElementById('map-overlay').classList.add('show');
+    document.getElementById('backdrop').classList.add('show');
+    document.getElementById('mine-modal').classList.add('show');
+}
+function closeMineModal(){
+    document.getElementById('dynmap-frame').style.visibility='visible';
+    document.getElementById('map-overlay').classList.remove('show');
+    document.getElementById('backdrop').classList.remove('show');
+    document.getElementById('mine-modal').classList.remove('show');
+}
+async function submitMine(){
+    const x=parseInt(document.getElementById('mm-x').value);
+    const z=parseInt(document.getElementById('mm-z').value);
+    const r=parseInt(document.getElementById('mm-r').value)||64;
+    const sy=parseInt(document.getElementById('mm-sy').value)||56;
+    if(isNaN(x)||isNaN(z)){toast('Enter valid X and Z coordinates',true);return;}
+    if(r<8||r>512){toast('Radius must be between 8 and 512',true);return;}
+    await sendCmd('ORDER_MINE',{centerX:x,centerZ:z,radius:r,scanY:sy});
+    closeMineModal();toast(`Mine job dispatched — center ${x},${z} r=${r}`);switchTab('jobs');
+}
 
 function openModalFromCmd(){
     document.getElementById('om-x').value=document.getElementById('cx').value;

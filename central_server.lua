@@ -1266,6 +1266,23 @@ function server.run()
             logInfo(string.format("Dashboard order %s → %d,%d,%d (%d types)",
                 id, dest.x, dest.y or 67, dest.z, #items))
 
+        elseif t == "ORDER_MINE" then
+            local cx = p.centerX or p.centerX
+            local cz = p.centerZ
+            local r  = p.radius or 64
+            local sy = p.scanY  or 56
+            if not cx or not cz then
+                logWarn("ORDER_MINE: missing centerX or centerZ"); return
+            end
+            local id = server.submitJob(proto.JOB.MINE, {
+                centerX = math.floor(cx),
+                centerZ = math.floor(cz),
+                radius  = math.floor(r),
+                scanY   = math.floor(sy),
+            }, 5)
+            logInfo(string.format("Dashboard mine %s → center %d,%d r=%d scanY=%d",
+                id, cx, cz, r, sy))
+
         else
             logWarn("Unknown bridge command: " .. tostring(t))
         end
