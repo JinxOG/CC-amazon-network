@@ -3,9 +3,10 @@
 --   pastebin run <install_id> server
 --   pastebin run <install_id> delivery
 --   pastebin run <install_id> support
+--   pastebin run <install_id> miner
 --
 -- Or copy install.lua to the computer and run:
---   install server | install delivery | install support
+--   install server | install delivery | install support | install miner
 
 local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
 
@@ -17,6 +18,7 @@ local FILES = {
     startup_server  = "startup_server.lua",
     delivery_turtle = "delivery_turtle.lua",
     support_turtle  = "support_turtle.lua",
+    ore_turtle      = "ore_turtle.lua",
     admin_ui        = "admin_ui.lua",
     warehouse       = "warehouse.lua",
     warehouse_test  = "warehouse_test.lua",
@@ -50,6 +52,12 @@ local PROFILES = {
         { src = FILES.turtle_base,    name = "turtle_base.lua" },
         { src = FILES.support_turtle, name = "startup.lua"     },
     },
+    miner = {
+        { src = FILES.protocol,    name = "protocol.lua"    },
+        { src = FILES.waypoints,   name = "waypoints.lua"   },
+        { src = FILES.turtle_base, name = "turtle_base.lua" },
+        { src = FILES.ore_turtle,  name = "startup.lua"     },
+    },
 }
 
 -- ─── helpers ─────────────────────────────────────────────────────────────────
@@ -64,14 +72,14 @@ end
 
 local role = arg and arg[1]
 if not role then
-    io.write("Install as [server/delivery/support]: ")
+    io.write("Install as [server/delivery/support/miner]: ")
     role = io.read()
 end
 role = role:lower():gsub("%s+", "")
 
 local files = PROFILES[role]
 if not files then
-    print("Unknown role '" .. role .. "'. Use: server, delivery, or support")
+    print("Unknown role '" .. role .. "'. Use: server, delivery, support, or miner")
     return
 end
 
