@@ -100,9 +100,14 @@ print("")
 if failed then
     print("Some files failed. Check internet access or run again.")
 else
-    -- Save role so update.lua can re-install without asking
+    -- Save role for both update mechanisms:
+    --   .role   → used by update.lua (manual)
+    --   role.txt → used by updater.lua (OTA via UPDATE_ALL)
     local f = fs.open(".role", "w")
     f.write(role)
     f.close()
+    local f2 = fs.open("role.txt", "w")
+    f2.writeLine(role:upper())
+    f2.close()
     print("Done! Reboot to apply (Ctrl+R).")
 end
