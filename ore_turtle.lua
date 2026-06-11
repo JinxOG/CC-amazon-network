@@ -25,10 +25,10 @@ local SKY_Y        = 200   -- altitude for inter-sector sky travel
 local FUEL_WARN    = 800   -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
+local MIN_ORE_Y    = 5     -- don't mine ores below this Y; bedrock starts at Y≤4
 
 -- Y levels scanned per sector — each covers ±16 blocks vertically
--- Capped at Y=4 to avoid bedrock
-local SCAN_LEVELS = { 80, 48, 16, 4 }
+local SCAN_LEVELS = { 80, 48, 16, 8 }
 
 base.init(proto.ROLE.MINER)
 
@@ -241,9 +241,13 @@ end
 
 local function mineOreList(ores, jobId)
     -- Greedy nearest-neighbour: re-sort after every mine so the miner stays
-    -- in a vein until it's exhausted before jumping to a distant one
+    -- in a vein until it's exhausted before jumping to a distant one.
+    -- Skip ores below MIN_ORE_Y — the scanner at Y=8 can still detect them
+    -- but navigating there risks hitting indestructible bedrock.
     local remaining = {}
-    for _, o in ipairs(ores) do table.insert(remaining, o) end
+    for _, o in ipairs(ores) do
+        if o.y >= MIN_ORE_Y then table.insert(remaining, o) end
+    end
 
     local mined = 0
     local byType = {}

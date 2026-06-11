@@ -124,8 +124,13 @@ base.run(function(job)
                     sleep(2)
                 else
                     local info = base.queryTurtle(partnerId, 5)
-                    if not info or not info.online or not info.jobId then
-                        print("[SUPPORT] Partner done or offline — returning to dock")
+                    if not info or not info.online then
+                        print("[SUPPORT] Partner offline — returning to dock")
+                        break
+                    elseif not _miningMode and not info.jobId then
+                        -- In mining mode the server clears jobId on cancel before the
+                        -- miner can send MINE_RECALL — don't leave; wait for the signal.
+                        print("[SUPPORT] Partner job complete — returning to dock")
                         break
                     end
                 end
