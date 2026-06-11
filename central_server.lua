@@ -1355,14 +1355,18 @@ function server.run()
                 local elapsed = (os.epoch("utc") - z.startTime) / 1000
                 eta = math.floor(elapsed / z.done * (z.total - z.done))
             end
+            local minerId  = state.jobs[jid] and state.jobs[jid].assignedTo or nil
+            local minerSt  = minerId and state.registry[minerId] and state.registry[minerId].status or nil
             mineZones[jid] = {
-                bounds   = z.bounds,
-                total    = z.total,
-                done     = z.done,
-                pct      = pct,
-                eta      = eta,
-                oreFound = z.oreFound,
-                oreMined = z.oreMined,
+                bounds      = z.bounds,
+                total       = z.total,
+                done        = z.done,
+                pct         = pct,
+                eta         = eta,
+                oreFound    = z.oreFound,
+                oreMined    = z.oreMined,
+                minerId     = minerId,
+                minerStatus = minerSt,
             }
         end
         -- Use pre-serialised storageJSON so we never serialise 300+ items inside parallel

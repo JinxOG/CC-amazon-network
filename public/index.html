@@ -1055,8 +1055,14 @@ function showMineInfoPanel(e,jid,z){
     const w=b.x1!=null?Math.abs(b.x2-b.x1)+1:'?';
     const h=b.z1!=null?Math.abs(b.z2-b.z1)+1:'?';
 
+    const minerLine=z.minerId
+        ?'<div class="mip-row"><span>MINER</span><span class="v">'+escapeHtml(z.minerId)
+          +(z.minerStatus?' <span style="opacity:.6;font-size:.85em">'+escapeHtml(z.minerStatus)+'</span>':'')
+          +'</span></div>'
+        :'';
     stats.innerHTML=
         '<div class="mip-row"><span>JOB</span><span class="v">'+jid.slice(-8)+'</span></div>'+
+        minerLine+
         '<div class="mip-row"><span>AREA</span><span class="v">'+w+' × '+h+'</span></div>'+
         '<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'+
         '<div class="mip-row"><span>PROGRESS</span><span class="v">'+pct+'%</span></div>'+
@@ -1068,7 +1074,8 @@ function showMineInfoPanel(e,jid,z){
     const mined=z.oreMined||{};
     const allNames=new Set([...Object.keys(found),...Object.keys(mined)]);
     if(allNames.size===0){
-        oreTable.innerHTML='<div class="mip-ore-title">NO ORE DATA YET</div>';
+        const noDataMsg=z.done===0?'MINER IN TRANSIT — NO SECTORS COMPLETE YET':'NO ORE IN SCANNED SECTORS';
+        oreTable.innerHTML='<div class="mip-ore-title">'+noDataMsg+'</div>';
     }else{
         const sorted=[...allNames].sort((a,b)=>(mined[b]||0)-(mined[a]||0));
         let html='<div class="mip-ore-title">ORE BREAKDOWN</div>';
