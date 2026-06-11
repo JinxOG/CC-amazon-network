@@ -79,9 +79,18 @@ base.run(function(job)
 
         while true do
             if base.isRecalled() then
-                print("[SUPPORT] Recalled — " .. (_miningMode and "sky" or "underground") .. " return")
-                _skyReturn = _miningMode
-                break
+                if _miningMode or _recalling then
+                    -- Server RECALL arrives via cancelJob(linkedJob) while miner is
+                    -- underground. Don't return independently — treat it like MINE_RECALL
+                    -- and wait for the miner to lead us back via POSITION_UPDATE /
+                    -- RETURN_TO_DOCK.  The miner will send MINE_RECALL shortly.
+                    _skyReturn = true
+                    _recalling = true
+                else
+                    print("[SUPPORT] Recalled — returning to dock")
+                    _skyReturn = _miningMode
+                    break
+                end
             end
 
             -- ── Field fuel check ─────────────────────────────────────────────

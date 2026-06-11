@@ -218,6 +218,14 @@
         .jdest { font-size:12px; color:#8888aa; letter-spacing:1px; margin-bottom:9px; }
         .jdest span { color:#00ff8899; }
 
+        /* ── Mine zone stats inside mine job cards ── */
+        .jmine-stats { border-top:1px solid #ffaa4418; padding-top:8px; margin-bottom:8px; display:flex; flex-direction:column; gap:4px; }
+        .jmine-row { display:flex; justify-content:space-between; align-items:baseline; font-size:11px; }
+        .jmine-row>span:first-child { color:#8888aa; letter-spacing:1px; }
+        .jmine-row>span:last-child { color:#e0e0ff; text-align:right; max-width:65%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .jmine-bar { height:3px; background:#1a1a28; border-radius:2px; margin:2px 0 4px; }
+        .jmine-bar-fill { height:100%; background:#ffaa44; border-radius:2px; transition:width .4s ease; }
+
         /* ── Paired turtle section inside job cards ── */
         .jturtles { display:flex; gap:6px; border-top:1px solid #00ff8808; padding-top:9px; }
         .jtside { flex:1; background:#050508; border:1px solid #0d0d1a; border-radius:2px; padding:8px; }
@@ -1393,6 +1401,24 @@ function findJobTurtles(j,turtles,turtleEntries,allJobs){
     return{delEntry,supEntry};
 }
 
+function _buildMineStats(jid){
+    const z=(lastState.mineZones||{})[jid];
+    if(!z)return'';
+    const found=z.oreFound||{},mined=z.oreMined||{};
+    const tf=Object.values(found).reduce((a,b)=>a+b,0);
+    const tm=Object.values(mined).reduce((a,b)=>a+b,0);
+    const pct=z.pct||0;
+    const topFound=Object.entries(found).sort((a,b)=>b[1]-a[1]).slice(0,3)
+        .map(([n,c])=>`<span class="jtag" style="font-size:10px">${_shortOreName(n)} <span class="qty">×${c}</span></span>`).join(' ');
+    const etaStr=z.eta!=null?' · '+_fmtEta(z.eta):'';
+    return`<div class="jmine-stats">
+        <div class="jmine-row"><span>SECTORS</span><span>${z.done}/${z.total} (${pct}%${etaStr})</span></div>
+        <div class="jmine-bar"><div class="jmine-bar-fill" style="width:${pct}%"></div></div>
+        <div class="jmine-row"><span>FOUND</span><span>${tf>0?topFound:'scanning…'}</span></div>
+        <div class="jmine-row"><span>MINED</span><span>${tm>0?tm+' blocks':'—'}</span></div>
+    </div>`;
+}
+
 function _buildJobCard(j,turtles,turtleEntries,allJobs){
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
     const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
@@ -1401,10 +1427,12 @@ function _buildJobCard(j,turtles,turtleEntries,allJobs){
     const itemsHtml=items.length?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
     const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,allJobs);
     const cancelBtn=!terminal.has(j.status)?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:'';
+    const mineStats=j.type==='MINE'?_buildMineStats(j.id):'';
     return `<div class="job-card ${ejstat} is-new" data-id="${ejid}">
         <div class="jc-top"><span class="jc-id">${ejid}</span><span class="jbadge ${ejstat}">${ejstat}</span>${cancelBtn}</div>
         <div class="jprog">${_buildSteps(getJobStep(j,turtles))}</div>
         ${itemsHtml}
+        ${mineStats}
         <div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>
         <div class="jturtles">
             ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
@@ -1441,6 +1469,16 @@ function _patchJobCard(card,j,turtles,turtleEntries,allJobs){
         btn.onclick=()=>cancelJob(j.id);
         top.appendChild(btn);
     }else if(terminal.has(j.status)&&existCancel){existCancel.remove();}
+    // Mine stats section — rebuild every poll so ore counts update in real time
+    if(j.type==='MINE'){
+        const ms=card.querySelector('.jmine-stats');
+        const newStats=_buildMineStats(j.id);
+        if(ms){ms.outerHTML=newStats||'<div class="jmine-stats"></div>';}
+        else if(newStats){
+            const dest=card.querySelector('.jdest');
+            if(dest)dest.insertAdjacentHTML('beforebegin',newStats);
+        }
+    }
     // Turtle pair section
     const tt=card.querySelector('.jturtles');
     if(tt){
