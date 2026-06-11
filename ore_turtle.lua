@@ -25,9 +25,9 @@ local FUEL_WARN    = 800   -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
 
--- Y levels scanned per sector — spaced 32 blocks apart, radius 16 → full coverage
--- Each level covers ±16 blocks vertically around the scanner position (turtle.y-1)
-local SCAN_LEVELS = { 80, 48, 16, -16, -48 }
+-- Y levels scanned per sector — each covers ±16 blocks vertically
+-- Capped at Y=4 to avoid bedrock
+local SCAN_LEVELS = { 80, 48, 16, 4 }
 
 base.init(proto.ROLE.MINER)
 
