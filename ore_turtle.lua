@@ -239,7 +239,7 @@ local function navToOre(ore, jobId)
     base.move.to(ore.x, ore.y, ore.z)
 end
 
-local function mineOreList(ores, jobId)
+local function mineOreList(ores, jobId, sx, sz, sy)
     -- Greedy nearest-neighbour: re-sort after every mine so the miner stays
     -- in a vein until it's exhausted before jumping to a distant one.
     -- Skip ores below MIN_ORE_Y — the scanner at Y=8 can still detect them
@@ -264,6 +264,9 @@ local function mineOreList(ores, jobId)
         navToOre(ore, jobId)
         byType[ore.name] = (byType[ore.name] or 0) + 1
         mined = mined + 1
+        -- Immediate per-ore update so the dashboard reflects each mine in real time
+        base.sendToServer(proto.MSG.SECTOR_SCAN,
+            proto.payloadSectorScan(jobId, sx, sz, sy, {}, {[ore.name]=1}))
     end
     return mined, byType
 end
@@ -362,15 +365,11 @@ local function mineJob(job)
             end
             if #ores > 0 then
                 base.sendProgress(string.format("Mining %d ores at Y=%d", #ores, sy))
-                local c, byType = mineOreList(ores, jobId)
+                -- sx,sz,sy passed so mineOreList can send a live SECTOR_SCAN per ore
+                local c, byType = mineOreList(ores, jobId, sx, sz, sy)
                 count = count + c
                 for name, n in pairs(byType) do
                     sectorMined[name] = (sectorMined[name] or 0) + n
-                end
-                -- Report per-depth mined count so the MINED column updates in real time
-                if next(byType) then
-                    base.sendToServer(proto.MSG.SECTOR_SCAN,
-                        proto.payloadSectorScan(jobId, sx, sz, sy, {}, byType))
                 end
             end
             if base.isRecalled() then break end
