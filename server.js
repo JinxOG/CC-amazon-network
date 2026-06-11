@@ -44,10 +44,11 @@ const CFG = {
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let state = {
-    turtles:  {},   // { nodeId: { x, y, z, status, fuel, role, jobId, dock, online } }
-    jobs:     [],   // job queue from CC server
-    version:  null,
-    storage:  [],   // RS storage snapshot [{name, displayName, amount, craftable}]
+    turtles:   {},   // { nodeId: { x, y, z, status, fuel, role, jobId, dock, online } }
+    jobs:      [],   // job queue from CC server
+    version:   null,
+    storage:   [],   // RS storage snapshot [{name, displayName, amount, craftable}]
+    mineZones: {},   // { [jobId]: { bounds, total, done, pct, eta, oreFound, oreMined } }
     updatedAt: null,
 };
 
@@ -188,7 +189,7 @@ app.get('/dynmap-frame', (req, res) => {
 
 // CC central_server.lua pushes state here every 2s
 app.post('/update', async (req, res) => {
-    const { turtles, jobs, version, storage } = req.body || {};
+    const { turtles, jobs, version, storage, mineZones } = req.body || {};
     console.log(`[UPDATE] v=${version} turtles=${Object.keys(turtles||{}).length} storage=${Array.isArray(storage)?storage.length:'?'}`);
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
@@ -217,9 +218,10 @@ app.post('/update', async (req, res) => {
         }
     }
 
-    if (jobs)    state.jobs    = jobs;
-    if (version) state.version = version;
-    if (Array.isArray(storage)) state.storage = storage;
+    if (jobs)                   state.jobs      = jobs;
+    if (version)                state.version   = version;
+    if (Array.isArray(storage)) state.storage   = storage;
+    if (mineZones)              state.mineZones = mineZones;
     state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });
