@@ -22,6 +22,7 @@ local PROTECTED = { [S_SCANNER]=true, [S_COAL]=true, [S_FUEL_EC]=true, [S_ORE_EC
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
+local SURVEY_TRAVEL_Y = 95   -- 5 below support FOLLOW_Y=100; avoids vertical collision during survey
 local FUEL_WARN    = 800   -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
@@ -326,6 +327,8 @@ local function mineJob(job)
     base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
     local msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
 
+    local useSkyTravel = false  -- true after first mine sector; switches to SKY_Y=200
+
     while msg and msg.type == proto.MSG.SECTOR_ASSIGN do
         if base.isRecalled() then
             recallReturn()
@@ -340,9 +343,13 @@ local function mineJob(job)
         base.setStatus(proto.STATUS.TRAVELLING, jobId)
         base.sendProgress(string.format("%sTravelling to sector %d,%d", modeTag, sx, sz))
 
-        -- Fly to sector at sky level (miner may already be at SKY_Y on first sector)
+        -- Survey sectors and the first mine sector use SURVEY_TRAVEL_Y=95 so the
+        -- miner never ascends through FOLLOW_Y=100 where support hovers.
+        -- From mine sector 2 onwards, use SKY_Y=200 (full altitude).
         checkFuel(jobId)
-        base.move.to(sx, SKY_Y, sz)
+        local travelY = (surveyMode or not useSkyTravel) and SURVEY_TRAVEL_Y or SKY_Y
+        if not surveyMode then useSkyTravel = true end
+        base.move.to(sx, travelY, sz)
 
         -- Scan every depth level; only mine if not in survey mode
         local count       = 0
