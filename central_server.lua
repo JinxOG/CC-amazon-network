@@ -576,6 +576,18 @@ local function ensureMineZone(jobId, params)
         for k, v in pairs(pz.oreMined or {}) do oreMined[k] = v end
     end
 
+    -- Survey pass only for fresh zones; resumed zones (preDone>0) go straight to mine.
+    -- surveySectors is an independent copy so the mine pass still has its own order.
+    local phase        = preDone > 0 and "MINE" or "SURVEY"
+    local surveySectors = {}
+    if phase == "SURVEY" then
+        for _, s in ipairs(sectors) do table.insert(surveySectors, { x=s.x, z=s.z }) end
+        for i = #surveySectors, 2, -1 do
+            local j = math.random(1, i)
+            surveySectors[i], surveySectors[j] = surveySectors[j], surveySectors[i]
+        end
+    end
+
     state.miningZones[jobId] = {
         pending       = sectors,
         total         = total,
@@ -585,6 +597,11 @@ local function ensureMineZone(jobId, params)
         startTime     = os.epoch("utc"),
         bounds        = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
         persistentKey = key,
+        -- Survey phase
+        phase         = phase,
+        surveySectors = surveySectors,
+        surveyDone    = 0,
+        surveyTotal   = #surveySectors,
     }
 
     -- Create persistent zone entry if this is the first dispatch to these bounds
@@ -798,16 +815,26 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
         return
     end
 
-    local sector = nextSector(jobId)
+    -- Dispatch first sector (or after reconnect): check survey vs mine phase
+    local sector, isSurvey
+    if zone.phase == "SURVEY" and zone.surveySectors and #zone.surveySectors > 0 then
+        sector   = table.remove(zone.surveySectors, 1)
+        isSurvey = true
+    else
+        if zone.phase == "SURVEY" then zone.phase = "MINE" end
+        sector   = nextSector(jobId)
+        isSurvey = false
+    end
+
     if not sector then
         logInfo(string.format("Zone %s exhausted (%d/%d sectors) — sending MINE_COMPLETE to %s",
             jobId, zone.done, zone.total, msg.from))
         sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = jobId })
     else
-        logInfo(string.format("Assigned sector (%d,%d) to %s [%s] (%d left)",
-            sector.x, sector.z, msg.from, jobId, #zone.pending))
+        logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",
+            sector.x, sector.z, isSurvey and " [SURVEY]" or "", msg.from, jobId))
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
-            proto.payloadSectorAssign(jobId, sector.x, sector.z))
+            proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
     end
 end
 
@@ -833,13 +860,20 @@ handlers[proto.MSG.SECTOR_SCAN] = function(msg)
     end
 end
 
--- SECTOR_DONE: miner finished all depth levels for one sector — increment sector counter
--- and snapshot ore totals into the persistent zone store so progress survives restarts.
--- Ore accumulation is handled per-depth via SECTOR_SCAN to avoid double-counting.
+-- SECTOR_DONE: miner finished one sector (survey or mine).
+-- CRITICAL: also dispatches the next sector immediately — the turtle is waiting
+-- underground for SECTOR_ASSIGN or MINE_COMPLETE (it does NOT send a separate
+-- SECTOR_REQUEST after the first one; SECTOR_DONE IS the implicit request).
 handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
-    if zone then
+    if not zone then return end
+
+    if zone.phase == "SURVEY" then
+        zone.surveyDone = zone.surveyDone + 1
+        logInfo(string.format("Survey (%d,%d) done by %s [%s: %d/%d surveyed]",
+            p.sectorX, p.sectorZ, msg.from, p.jobId, zone.surveyDone, zone.surveyTotal))
+    else
         zone.done = zone.done + 1
         mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ)
         logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
@@ -847,7 +881,35 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             p.jobId, zone.done, zone.total))
     end
     jobQueue.progress(p.jobId, proto.STATUS.WORKING,
-        string.format("sector (%d,%d) mined — %d ore", p.sectorX, p.sectorZ, p.oreCount or 0))
+        string.format("sector (%d,%d) done — %d ore", p.sectorX, p.sectorZ, p.oreCount or 0))
+
+    -- Dispatch next sector so the turtle doesn't have to ask again
+    local nextSect, isNextSurvey
+    if zone.phase == "SURVEY" then
+        if #zone.surveySectors > 0 then
+            nextSect     = table.remove(zone.surveySectors, 1)
+            isNextSurvey = true
+        else
+            -- Survey exhausted — switch to mine phase and give first mine sector
+            zone.phase     = "MINE"
+            zone.startTime = os.epoch("utc")   -- reset ETA timer for mine pass
+            logInfo(string.format("Zone %s survey complete (%d sectors) — starting mine phase",
+                p.jobId, zone.surveyTotal))
+            nextSect     = nextSector(p.jobId)
+            isNextSurvey = false
+        end
+    else
+        nextSect     = nextSector(p.jobId)
+        isNextSurvey = false
+    end
+
+    if not nextSect then
+        logInfo(string.format("Zone %s exhausted — sending MINE_COMPLETE to %s", p.jobId, msg.from))
+        sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+    else
+        sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
+            proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
+    end
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
@@ -1486,6 +1548,9 @@ function server.run()
                 minerId     = minerId,
                 minerStatus = minerSt,
                 status      = "ACTIVE",
+                phase       = z.phase or "MINE",
+                surveyDone  = z.surveyDone or 0,
+                surveyTotal = z.surveyTotal or 0,
             }
             if z.persistentKey then activeKeys[z.persistentKey] = true end
         end

@@ -332,26 +332,28 @@ local function mineJob(job)
             return
         end
 
-        local sx = msg.payload.sectorX
-        local sz = msg.payload.sectorZ
+        local sx         = msg.payload.sectorX
+        local sz         = msg.payload.sectorZ
+        local surveyMode = msg.payload.surveyMode == true
+        local modeTag    = surveyMode and "[SURVEY] " or ""
 
         base.setStatus(proto.STATUS.TRAVELLING, jobId)
-        base.sendProgress(string.format("Travelling to sector %d,%d", sx, sz))
+        base.sendProgress(string.format("%sTravelling to sector %d,%d", modeTag, sx, sz))
 
         -- Fly to sector at sky level (miner may already be at SKY_Y on first sector)
         checkFuel(jobId)
         base.move.to(sx, SKY_Y, sz)
 
-        -- Scan and mine every depth level
+        -- Scan every depth level; only mine if not in survey mode
         local count       = 0
-        local sectorFound = {}   -- {[name]=count} from geo scan (sent via SECTOR_SCAN)
-        local sectorMined = {}   -- {[name]=count} actually mined
+        local sectorFound = {}   -- {[name]=count} from geo scan
+        local sectorMined = {}   -- {[name]=count} actually mined (0 during survey)
         for i, sy in ipairs(SCAN_LEVELS) do
             checkFuel(jobId)
             base.move.to(sx, sy, sz)
             base.setStatus(proto.STATUS.WORKING, jobId)
-            base.sendProgress(string.format("Scanning %d,%d depth %d/%d (Y=%d)",
-                sx, sz, i, #SCAN_LEVELS, sy))
+            base.sendProgress(string.format("%sScanning %d,%d depth %d/%d (Y=%d)",
+                modeTag, sx, sz, i, #SCAN_LEVELS, sy))
             local ores = scanSector()
             -- Report scan results immediately so the dashboard updates in real time.
             local scanFound = {}
@@ -363,9 +365,9 @@ local function mineJob(job)
                 base.sendToServer(proto.MSG.SECTOR_SCAN,
                     proto.payloadSectorScan(jobId, sx, sz, sy, scanFound))
             end
-            if #ores > 0 then
+            -- During survey: report ores found but do not mine them
+            if #ores > 0 and not surveyMode then
                 base.sendProgress(string.format("Mining %d ores at Y=%d", #ores, sy))
-                -- sx,sz,sy passed so mineOreList can send a live SECTOR_SCAN per ore
                 local c, byType = mineOreList(ores, jobId, sx, sz, sy)
                 count = count + c
                 for name, n in pairs(byType) do
@@ -378,8 +380,7 @@ local function mineJob(job)
         if count > 0 or inventoryFull() then dumpOres() end
         totalOre = totalOre + count
 
-        -- Report done and request next sector immediately (miner is underground —
-        -- only ascend to SKY_Y if another sector is actually assigned)
+        -- Report done; server immediately replies with next SECTOR_ASSIGN or MINE_COMPLETE
         base.sendToServer(proto.MSG.SECTOR_DONE,
             proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined))
 

@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.69"
+proto.VERSION = "1.6.70"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -254,12 +254,13 @@ function proto.payloadSectorRequest(jobId)
     return { jobId = jobId }
 end
 
-function proto.payloadSectorAssign(jobId, sectorX, sectorZ, scanY)
+function proto.payloadSectorAssign(jobId, sectorX, sectorZ, scanY, surveyMode)
     return {
-        jobId   = jobId,
-        sectorX = sectorX,
-        sectorZ = sectorZ,
-        scanY   = scanY or 56,
+        jobId      = jobId,
+        sectorX    = sectorX,
+        sectorZ    = sectorZ,
+        scanY      = scanY or 56,
+        surveyMode = surveyMode == true,
     }
 end
 

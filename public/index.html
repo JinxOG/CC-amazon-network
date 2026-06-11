@@ -910,9 +910,14 @@ function setupDynmapInjection(dw){
     };
     function _mineRectTooltip(z){
         const isHist=z.status==='HISTORICAL';
-        const prefix=isHist?'[HIST] ':'';
-        const eta=z.eta!=null?'  ETA '+_fmtEta(z.eta):'';
-        return prefix+(z.pct||0)+'% MINED  '+z.done+'/'+z.total+' sectors'+eta;
+        const isSurvey=z.phase==='SURVEY';
+        const prefix=isHist?'[HIST] ':(isSurvey?'[SURVEY] ':'');
+        const pctNum=isSurvey?(z.surveyTotal>0?Math.floor((z.surveyDone||0)/z.surveyTotal*100):0):(z.pct||0);
+        const doneNum=isSurvey?(z.surveyDone||0):z.done;
+        const totalNum=isSurvey?(z.surveyTotal||0):z.total;
+        const verb=isSurvey?'SURVEYED':'MINED';
+        const eta=(!isSurvey&&z.eta!=null)?'  ETA '+_fmtEta(z.eta):'';
+        return prefix+pctNum+'% '+verb+'  '+doneNum+'/'+totalNum+' sectors'+eta;
     }
     window._updateMineOverlays=function(mineZones){
         try{
@@ -927,10 +932,11 @@ function setupDynmapInjection(dw){
                 const lb=dw.L.latLngBounds(sw,ne);
                 const pct=z.pct||0;
                 const isHist=z.status==='HISTORICAL';
-                const col=isHist?'#5566bb':(pct>=100?'#00ff88':'#ffaa44');
+                const isSurvey=z.phase==='SURVEY';
+                const col=isHist?'#5566bb':(isSurvey?'#44aaff':(pct>=100?'#00ff88':'#ffaa44'));
                 const weight=isHist?1:2;
                 const fillOpacity=isHist?0.04:0.1;
-                const dash=isHist?'3 7':'6 4';
+                const dash=isHist?'3 7':(isSurvey?'4 4':'6 4');
                 if(_mineRects[jid]){
                     _mineRects[jid].r.setBounds(lb);
                     _mineRects[jid].r.setStyle({color:col,fillColor:col,weight,fillOpacity,dashArray:dash});
@@ -1069,29 +1075,38 @@ function showMineInfoPanel(e,jid,z){
     const w=b.x1!=null?Math.abs(b.x2-b.x1)+1:'?';
     const h=b.z1!=null?Math.abs(b.z2-b.z1)+1:'?';
     const isHist=z.status==='HISTORICAL';
+    const isSurvey=z.phase==='SURVEY';
 
     const idLabel=isHist?'ZONE':'JOB';
     const idVal=isHist?'historical':jid.slice(-8);
+    const phaseTag=isSurvey?'<span style="color:#44aaff;font-size:10px;letter-spacing:1px"> SURVEYING</span>':'';
     const minerLine=z.minerId
-        ?'<div class="mip-row"><span>MINER</span><span class="v">'+escapeHtml(z.minerId)
+        ?'<div class="mip-row"><span>MINER</span><span class="v">'+escapeHtml(z.minerId)+phaseTag
           +(z.minerStatus?' <span style="opacity:.6;font-size:.85em">'+escapeHtml(z.minerStatus)+'</span>':'')
           +'</span></div>'
         :(isHist?'<div class="mip-row"><span>STATUS</span><span class="v" style="color:#5566bb">NO ACTIVE JOB</span></div>':'');
+    // For survey phase: show survey progress; for mine phase: show mine progress
+    const progressSection=isSurvey
+        ?'<div class="mip-row"><span>SURVEYED</span><span class="v">'+(z.surveyDone||0)+' / '+(z.surveyTotal||0)+'</span></div>'
+         +'<div class="mip-row"><span>SURVEY %</span><span class="v">'+(z.surveyTotal>0?Math.floor((z.surveyDone||0)/z.surveyTotal*100):0)+'%</span></div>'
+         +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+(z.surveyTotal>0?Math.floor((z.surveyDone||0)/z.surveyTotal*100):0)+'%;background:#44aaff"></div></div>'
+         +'<div class="mip-row"><span>MINE START</span><span class="v" style="color:#8888aa">after survey</span></div>'
+        :'<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'
+         +'<div class="mip-row"><span>PROGRESS</span><span class="v">'+pct+'%</span></div>'
+         +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+pct+'%"></div></div>'
+         +'<div class="mip-row"><span>ETA</span><span class="v">'+etaStr+'</span></div>';
     stats.innerHTML=
         '<div class="mip-row"><span>'+idLabel+'</span><span class="v">'+idVal+'</span></div>'+
         minerLine+
         '<div class="mip-row"><span>AREA</span><span class="v">'+w+' × '+h+'</span></div>'+
-        '<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'+
-        '<div class="mip-row"><span>PROGRESS</span><span class="v">'+pct+'%</span></div>'+
-        '<div class="mip-prog"><div class="mip-prog-fill" style="width:'+pct+'%"></div></div>'+
-        '<div class="mip-row"><span>ETA</span><span class="v">'+etaStr+'</span></div>';
+        progressSection;
 
     // Build ore breakdown table
     const found=z.oreFound||{};
     const mined=z.oreMined||{};
     const allNames=new Set([...Object.keys(found),...Object.keys(mined)]);
     if(allNames.size===0){
-        const noDataMsg=isHist?'NO ORE DATA FOR THIS ZONE':(z.done===0?'MINER IN TRANSIT — NO SECTORS COMPLETE YET':'NO ORE IN SCANNED SECTORS');
+        const noDataMsg=isHist?'NO ORE DATA FOR THIS ZONE':(isSurvey?'SURVEY IN PROGRESS — SCANNING FOR ORES':(z.done===0?'MINER IN TRANSIT — NO SECTORS COMPLETE YET':'NO ORE IN SCANNED SECTORS'));
         oreTable.innerHTML='<div class="mip-ore-title">'+noDataMsg+'</div>';
     }else{
         const sorted=[...allNames].sort((a,b)=>(mined[b]||0)-(mined[a]||0));
@@ -1416,9 +1431,21 @@ function _buildMineStats(jid){
     const found=z.oreFound||{},mined=z.oreMined||{};
     const tf=Object.values(found).reduce((a,b)=>a+b,0);
     const tm=Object.values(mined).reduce((a,b)=>a+b,0);
-    const pct=z.pct||0;
     const topFound=Object.entries(found).sort((a,b)=>b[1]-a[1]).slice(0,3)
         .map(([n,c])=>`<span class="jtag" style="font-size:10px">${_shortOreName(n)} <span class="qty">×${c}</span></span>`).join(' ');
+
+    if(z.phase==='SURVEY'){
+        const st=z.surveyTotal||0;
+        const sd=z.surveyDone||0;
+        const sp=st>0?Math.floor(sd/st*100):0;
+        return`<div class="jmine-stats">
+            <div class="jmine-row"><span style="color:#44aaff">SURVEYING</span><span>${sd}/${st} (${sp}%)</span></div>
+            <div class="jmine-bar"><div class="jmine-bar-fill" style="width:${sp}%;background:#44aaff"></div></div>
+            <div class="jmine-row"><span>FOUND SO FAR</span><span>${tf>0?topFound:'scanning…'}</span></div>
+        </div>`;
+    }
+
+    const pct=z.pct||0;
     const etaStr=z.eta!=null?' · '+_fmtEta(z.eta):'';
     return`<div class="jmine-stats">
         <div class="jmine-row"><span>SECTORS</span><span>${z.done}/${z.total} (${pct}%${etaStr})</span></div>
