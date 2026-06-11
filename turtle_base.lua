@@ -623,6 +623,62 @@ function base.returnToDock()
     return true
 end
 
+-- Sky-path variant of returnToDock: ascend to Y=200, fly to arrivals hole at
+-- altitude, then descend through the hole and follow the normal return route.
+-- Use for mining recall where both turtles come back via the sky rather than
+-- navigating underground (which risks terrain collisions from deep scan depths).
+function base.returnToDockFromSky()
+    if not _self.dock then logWarn("No dock assigned, staying put.") return true end
+
+    base.setStatus(proto.STATUS.RETURNING)
+
+    local FLOOR_Y     = CFG.FLOOR_Y
+    local SKY_RETURN_Y = 200
+
+    -- 1. Ascend straight up to sky altitude from current position
+    logInfo("Ascending to sky Y=" .. SKY_RETURN_Y .. " for sky return...")
+    move.to(_self.pos.x, SKY_RETURN_Y, _self.pos.z)
+
+    -- 2. Fly at sky altitude to directly above arrivals hole (move.to is vertical-first,
+    --    so targeting the same Y means only X then Z movement happens here)
+    logInfo("Flying to arrivals hole at Y=" .. SKY_RETURN_Y .. "...")
+    move.to(W.ARRIVALS_HOLE.x, SKY_RETURN_Y, W.ARRIVALS_HOLE.z)
+
+    -- 3. Descend straight down through the arrivals hole to floor level
+    logInfo("Descending through arrivals hole...")
+    local ok, err = move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.ARRIVALS_HOLE.z)
+    if not ok then
+        base.setStatus(proto.STATUS.ERROR)
+        return false, "sky descent failed: " .. (err or "?")
+    end
+
+    gpsSync()
+
+    -- 4. Follow standard return route from arrivals hole to dock
+    local route = W.returnRoute(_self.dock)
+    ok, err = move.followRoute(route)
+    if not ok then
+        base.setStatus(proto.STATUS.ERROR)
+        return false, "sky return route failed: " .. (err or "?")
+    end
+
+    gpsSync()
+    if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
+        logWarn(string.format("Post-dock GPS mismatch: at %d,%d want %d,%d — correcting",
+            _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
+        move.to(_self.dock.x, FLOOR_Y, _self.dock.z)
+    end
+
+    move.face(W.dockFacing(_self.dock))
+    logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
+
+    if not _self.canDig then
+        base.fuel.dockRefuel()
+    end
+
+    return true
+end
+
 -- Navigate from anywhere inside the building back to dock.
 -- Uses an aisle route that moves Z first so the turtle never cuts
 -- through occupied dock rows.  Safe to call from any floor position.

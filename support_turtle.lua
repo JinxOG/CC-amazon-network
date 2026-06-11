@@ -70,6 +70,7 @@ base.run(function(job)
         --   lock to FOLLOW_Y and track X,Z only — miner is underground.
         local _reachedSky = false   -- true after miner has been near SKY_Y
         local _miningMode = false   -- true once miner first descends below FOLLOW_Y
+        local _skyReturn  = false   -- true when MINE_RECALL received; use sky return path
 
         base.setStatus(proto.STATUS.TRAVELLING, job.id)
         base.sendProgress("Following miner")
@@ -77,7 +78,8 @@ base.run(function(job)
 
         while true do
             if base.isRecalled() then
-                print("[SUPPORT] Recalled — returning to dock")
+                print("[SUPPORT] Recalled — " .. (_miningMode and "sky" or "underground") .. " return")
+                _skyReturn = _miningMode
                 break
             end
 
@@ -155,6 +157,10 @@ base.run(function(job)
                                     elseif nxt.type == proto.MSG.JOB_ABORT then
                                         print("[SUPPORT] JOB_ABORT (drain) — docking")
                                         goto mine_done
+                                    elseif nxt.type == proto.MSG.MINE_RECALL then
+                                        print("[SUPPORT] Mine recalled (drain) — sky return")
+                                        _skyReturn = true
+                                        goto mine_done
                                     end
                                 end
                             end
@@ -170,12 +176,21 @@ base.run(function(job)
                 elseif msg.type == proto.MSG.JOB_ABORT then
                     print("[SUPPORT] JOB_ABORT — returning to dock")
                     break
+
+                elseif msg.type == proto.MSG.MINE_RECALL then
+                    print("[SUPPORT] Mine recalled — sky return")
+                    _skyReturn = true
+                    break
                 end
             end
         end
         ::mine_done::
 
-        base.returnToDock()
+        if _skyReturn then
+            base.returnToDockFromSky()
+        else
+            base.returnToDock()
+        end
         base.sendComplete()
         return
     end

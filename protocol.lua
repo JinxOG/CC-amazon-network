@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.58"
+proto.VERSION = "1.6.59"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -85,6 +85,9 @@ proto.MSG = {
     FUEL_LOW    = "FUEL_LOW",    -- support → miner: I need coal
     FUEL_READY  = "FUEL_READY",  -- miner → support: inventory filled with coal, suck now
     FUEL_FILLED = "FUEL_FILLED", -- support → miner: done sucking, continue
+
+    -- Mining recall (miner → support, CH_LOCAL)
+    MINE_RECALL = "MINE_RECALL", -- miner → support: job recalled, ascend to sky and return home
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

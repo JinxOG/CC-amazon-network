@@ -268,6 +268,22 @@ local function mineJob(job)
     local jobId    = job.id
     local totalOre = 0
 
+    -- Coordinated recall: dump ores, signal support to use sky return, then
+    -- ascend to Y=100 (letting support drain the last POSITION_UPDATEs to that
+    -- position), clear partnerId, then ascend to sky and dock via sky path.
+    local function recallReturn()
+        dumpOres()
+        checkFuel(jobId)
+        base.signalPartner(proto.MSG.MINE_RECALL, {})
+        local p = base.getPos()
+        base.move.to(p.x, 100, p.z)   -- ascend to meeting altitude while POS_UPDATEs still fire
+        base.setPartnerId(nil)         -- stop broadcasts; support has already received MINE_RECALL
+        sleep(1)                       -- allow support to drain and break its tracking loop
+        base.move.to(p.x, SKY_Y, p.z) -- ascend to sky travel altitude
+        base.returnToDockFromSky()
+        base.sendFailed("recalled", true)
+    end
+
     base.setPartnerId(job.params.partnerId)
     base.setStatus(proto.STATUS.TRAVELLING, jobId)
     base.sendProgress("Departing for mining zone")
@@ -294,7 +310,7 @@ local function mineJob(job)
 
     while msg and msg.type == proto.MSG.SECTOR_ASSIGN do
         if base.isRecalled() then
-            base.sendFailed("recalled", true)
+            recallReturn()
             return
         end
 
@@ -342,7 +358,11 @@ local function mineJob(job)
 
         msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
         if not msg then
-            base.sendFailed("sector_request_timeout", true)
+            if base.isRecalled() then
+                recallReturn()
+            else
+                base.sendFailed("sector_request_timeout", true)
+            end
             return
         end
     end
