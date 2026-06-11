@@ -52,6 +52,7 @@ base.run(function(job)
             _miningMode = true
             _skyReturn  = true
             _recalling  = true
+            lastUpdateTime = os.epoch("utc") / 1000   -- reset so stale clock starts at loop entry, not block entry
         else
             base.fuel.dockRefuel()
             if base.fuel.isCritical() then
