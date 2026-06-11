@@ -843,12 +843,22 @@ function setupDynmapInjection(dw){
         openOpMenu(e,mc);
     });
     // ── Mine drag selection ──────────────────────────────────────────────────
-    let _selRect=null,_dragAnchorPx=null;
-    function _ensureSelRect(){
-        if(_selRect)return _selRect;
-        _selRect=doc.createElement('div');
-        _selRect.style.cssText='position:fixed;pointer-events:none;z-index:9999;border:2px dashed #ff8800;background:rgba(255,136,0,0.12);display:none;box-sizing:border-box;';
-        doc.body.appendChild(_selRect);return _selRect;
+    // Live-snapped Leaflet rectangle: as the user drags the preview rectangle
+    // snaps to the actual sector-grid + scan-radius bounds so they see the
+    // real mining footprint before submitting.
+    let _dragPreviewRect=null,_dragAnchorPx=null;
+    function _snapMineBounds(x1,z1,x2,z2){
+        const STEP=32,R=16;
+        const mnX=Math.floor(Math.min(x1,x2)/STEP)*STEP;
+        const mxX=Math.ceil( Math.max(x1,x2)/STEP)*STEP;
+        const mnZ=Math.floor(Math.min(z1,z2)/STEP)*STEP;
+        const mxZ=Math.ceil( Math.max(z1,z2)/STEP)*STEP;
+        return{x1:mnX-R,z1:mnZ-R,x2:mxX+R,z2:mxZ+R};
+    }
+    function _previewBoundsLatLng(b){
+        const sw=mcToLatLng(dw,dm,{x:b.x1,y:64,z:b.z2});
+        const ne=mcToLatLng(dw,dm,{x:b.x2,y:64,z:b.z1});
+        return dw.L.latLngBounds(sw,ne);
     }
     doc.addEventListener('mousedown',(e)=>{
         if(!_mineSelecting||e.button!==0)return;
@@ -856,22 +866,22 @@ function setupDynmapInjection(dw){
         _dragAnchorPx={x:e.clientX,y:e.clientY};
         _mineDragStartMC=dynmapEventToMC(dw,e);
         dw.dynmap.map.dragging.disable();
-        const r=_ensureSelRect();
-        r.style.left=e.clientX+'px';r.style.top=e.clientY+'px';
-        r.style.width='0';r.style.height='0';r.style.display='block';
+        if(!_mineDragStartMC)return;
+        const b=_snapMineBounds(_mineDragStartMC.x,_mineDragStartMC.z,_mineDragStartMC.x,_mineDragStartMC.z);
+        _dragPreviewRect=dw.L.rectangle(_previewBoundsLatLng(b),
+            {color:'#ff8800',weight:2,fillColor:'#ff8800',fillOpacity:0.15,dashArray:'6 4',interactive:false})
+            .addTo(dm.map);
     },{capture:true});
     doc.addEventListener('mousemove',(e)=>{
-        if(!_mineSelecting||!_dragAnchorPx)return;
-        const r=_ensureSelRect();
-        const x=Math.min(e.clientX,_dragAnchorPx.x),y=Math.min(e.clientY,_dragAnchorPx.y);
-        r.style.left=x+'px';r.style.top=y+'px';
-        r.style.width=Math.abs(e.clientX-_dragAnchorPx.x)+'px';
-        r.style.height=Math.abs(e.clientY-_dragAnchorPx.y)+'px';
+        if(!_mineSelecting||!_dragAnchorPx||!_mineDragStartMC||!_dragPreviewRect)return;
+        const mc2=dynmapEventToMC(dw,e);if(!mc2)return;
+        const b=_snapMineBounds(_mineDragStartMC.x,_mineDragStartMC.z,mc2.x,mc2.z);
+        _dragPreviewRect.setBounds(_previewBoundsLatLng(b));
     });
     doc.addEventListener('mouseup',(e)=>{
         if(!_mineSelecting||!_dragAnchorPx||e.button!==0)return;
         dw.dynmap.map.dragging.enable();
-        _ensureSelRect().style.display='none';
+        if(_dragPreviewRect){_dragPreviewRect.remove();_dragPreviewRect=null;}
         const mc2=dynmapEventToMC(dw,e);
         const mc1=_mineDragStartMC;
         _dragAnchorPx=null;_mineSelecting=false;
