@@ -31,51 +31,64 @@ base.run(function(job)
         local SUPPORT_FUEL_WARN = 800
         local FOLLOW_Y          = 100   -- altitude support hovers at while tracking miner
 
-        base.fuel.dockRefuel()
-        if base.fuel.isCritical() then
-            print("[SUPPORT] Insufficient fuel — aborting")
-            return base.sendFailed("insufficient_fuel", false)
-        end
-
-        -- ── Wait for miner to reach the hole ─────────────────────────────────
-        base.sendProgress("Waiting for HOLE_READY from miner " .. partnerId)
-        print("[SUPPORT] Waiting for HOLE_READY from " .. partnerId .. "...")
-        local signalReceived = false
-        local holeDeadline = os.epoch("utc") / 1000 + 180
-        while os.epoch("utc") / 1000 < holeDeadline do
-            if base.isRecalled() then
-                return base.sendFailed("recalled", false)
-            end
-            local msg = proto.receive(base.getSelfId(), 5)
-            if msg and msg.from == partnerId and msg.type == proto.MSG.HOLE_READY then
-                signalReceived = true
-                break
-            end
-        end
-
-        if not signalReceived then
-            base.returnToDock()
-            return base.sendFailed("no_hole_ready_from_miner", true)
-        end
-
-        -- ── Depart via dispatch hole (support side) ───────────────────────────
-        local ok, err = base.depart(true)  -- stay at floor level, ascend directly
-        if not ok then
-            return base.sendFailed("departure_failed: " .. (err or "?"), true)
-        end
-
         -- No pre-ascent. POSITION_UPDATEs from the miner guide us in real time.
         -- Phase 1 (following): track the miner's full X,Y,Z.
         -- Phase 2 (mining): once miner dips below FOLLOW_Y after reaching sky,
         --   lock to FOLLOW_Y and track X,Z only — miner is underground.
-        local _reachedSky = false   -- true after miner has been near SKY_Y
-        local _miningMode = false   -- true once miner first descends below FOLLOW_Y
-        local _skyReturn  = false   -- true when MINE_RECALL received; use sky return path
-        local _recalling  = false   -- true when MINE_RECALL received; stay at FOLLOW_Y until miner ascends
+        local _reachedSky    = false   -- true after miner has been near SKY_Y
+        local _miningMode    = false   -- true once miner first descends below FOLLOW_Y
+        local _skyReturn     = false   -- true when MINE_RECALL received; use sky return path
+        local _recalling     = false   -- true when MINE_RECALL received; stay at FOLLOW_Y until miner ascends
+        local lastUpdateTime = os.epoch("utc") / 1000
 
-        base.setStatus(proto.STATUS.TRAVELLING, job.id)
-        base.sendProgress("Following miner")
-        print(string.format("[SUPPORT] Tracking %s", partnerId))
+        local p = base.getPos()
+        if not base.isInsideBuilding(p) then
+            -- Rebooted mid-job outside the building. The miner will shortly
+            -- call recallReturn() which sends MINE_RECALL. Skip depart;
+            -- enter the follow loop already in recall mode.
+            base.setStatus(proto.STATUS.WORKING, job.id)
+            base.sendProgress("Rebooted mid-job — awaiting miner MINE_RECALL")
+            print("[SUPPORT] Rebooted outside building — entering recovery follow mode")
+            _miningMode = true
+            _skyReturn  = true
+            _recalling  = true
+        else
+            base.fuel.dockRefuel()
+            if base.fuel.isCritical() then
+                print("[SUPPORT] Insufficient fuel — aborting")
+                return base.sendFailed("insufficient_fuel", false)
+            end
+
+            -- Wait for miner to reach the hole
+            base.sendProgress("Waiting for HOLE_READY from miner " .. partnerId)
+            print("[SUPPORT] Waiting for HOLE_READY from " .. partnerId .. "...")
+            local signalReceived = false
+            local holeDeadline = os.epoch("utc") / 1000 + 180
+            while os.epoch("utc") / 1000 < holeDeadline do
+                if base.isRecalled() then
+                    return base.sendFailed("recalled", false)
+                end
+                local msg = proto.receive(base.getSelfId(), 5)
+                if msg and msg.from == partnerId and msg.type == proto.MSG.HOLE_READY then
+                    signalReceived = true
+                    break
+                end
+            end
+
+            if not signalReceived then
+                base.returnToDock()
+                return base.sendFailed("no_hole_ready_from_miner", true)
+            end
+
+            local ok, err = base.depart(true)
+            if not ok then
+                return base.sendFailed("departure_failed: " .. (err or "?"), true)
+            end
+
+            base.setStatus(proto.STATUS.TRAVELLING, job.id)
+            base.sendProgress("Following miner")
+            print(string.format("[SUPPORT] Tracking %s", partnerId))
+        end
 
         while true do
             if base.isRecalled() then
@@ -142,11 +155,18 @@ base.run(function(job)
                         print("[SUPPORT] Partner job complete — returning to dock")
                         break
                     end
+                    local staleSec = os.epoch("utc") / 1000 - lastUpdateTime
+                    if _miningMode and staleSec > 300 then
+                        print("[SUPPORT] No miner update for 5min in mining mode — returning")
+                        _skyReturn = true
+                        break
+                    end
                 end
 
             elseif msg.from == partnerId then
                 if msg.type == proto.MSG.POSITION_UPDATE then
                     local prev = msg.payload.prev
+                    lastUpdateTime = os.epoch("utc") / 1000
                     if prev and type(prev.x) == "number" then
                         if not _miningMode then
                             if prev.y >= 190 then _reachedSky = true end
@@ -166,6 +186,7 @@ base.run(function(job)
                                 if nxt.from == partnerId then
                                     if nxt.type == proto.MSG.POSITION_UPDATE then
                                         prev = nxt.payload.prev
+                                        lastUpdateTime = os.epoch("utc") / 1000
                                     elseif nxt.type == proto.MSG.RETURN_TO_DOCK then
                                         print("[SUPPORT] Miner returning (drain) — docking")
                                         goto mine_done
