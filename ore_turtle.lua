@@ -304,6 +304,12 @@ local function mineJob(job)
     end
 
     base.setPartnerId(job.params.partnerId)
+    local startPos = base.getPos()
+    if not base.isInsideBuilding(startPos) then
+        base.sendProgress("Rebooted mid-job — coordinated sky return")
+        recallReturn()
+        return
+    end
     base.setStatus(proto.STATUS.TRAVELLING, jobId)
     base.sendProgress("Departing for mining zone")
 
