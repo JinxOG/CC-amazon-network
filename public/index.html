@@ -415,6 +415,8 @@
         .mip-title { color:#ffaa44; font-size:11px; letter-spacing:2px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
         .mip-close { background:transparent; border:none; color:#8a8aaa; cursor:pointer; font-size:16px; line-height:1; padding:0; font-family:'Courier New',monospace; }
         .mip-close:hover { color:#ff4444; }
+        .mip-hide { background:transparent; border:1px solid #ffaa4455; border-radius:2px; color:#ffaa44; cursor:pointer; font-size:9px; letter-spacing:1px; padding:2px 6px; font-family:'Courier New',monospace; }
+        .mip-hide:hover { background:#ffaa4422; border-color:#ffaa44; }
         .mip-row { display:flex; justify-content:space-between; font-size:11px; margin-bottom:5px; letter-spacing:1px; color:#8888aa; }
         .mip-row .v { color:#ccc; }
         .mip-prog { height:3px; background:#1a1a2e; border-radius:2px; margin:8px 0 12px; overflow:hidden; }
@@ -691,7 +693,10 @@
 <div id="mine-info-panel">
     <div class="mip-title">
         <span>⛏ MINE ZONE</span>
-        <button class="mip-close" onclick="document.getElementById('mine-info-panel').classList.remove('show')">✕</button>
+        <span style="display:flex;gap:8px;align-items:center">
+            <button class="mip-hide" onclick="hideMineZonePanel()">HIDE</button>
+            <button class="mip-close" onclick="document.getElementById('mine-info-panel').classList.remove('show')">✕</button>
+        </span>
     </div>
     <div id="mip-stats"></div>
     <div id="mip-ore-table"></div>
@@ -880,6 +885,11 @@ function setupDynmapInjection(dw){
     },{capture:true});
     // ── Mine zone Leaflet rectangles ─────────────────────────────────────────
     const _mineRects={};
+    window._hiddenMineZones = window._hiddenMineZones || new Set();
+    window._hideMineRect=function(jid){
+        if(_mineRects[jid]){_mineRects[jid].r.remove();delete _mineRects[jid];}
+        window._hiddenMineZones.add(jid);
+    };
     function _mineRectTooltip(z){
         const eta=z.eta!=null?'  ETA '+_fmtEta(z.eta):'';
         return (z.pct||0)+'% MINED  '+z.done+'/'+z.total+' sectors'+eta;
@@ -889,6 +899,7 @@ function setupDynmapInjection(dw){
             if(!dm||!dm.map||!dw.L)return;
             const seen=new Set();
             for(const[jid,z]of Object.entries(mineZones||{})){
+                if(window._hiddenMineZones.has(jid))continue;
                 seen.add(jid);
                 const b=z.bounds;if(!b)continue;
                 const sw=mcToLatLng(dw,dm,{x:Math.min(b.x1,b.x2),y:64,z:Math.max(b.z1,b.z2)});
@@ -1007,8 +1018,16 @@ function _shortOreName(n){
     return m?m[1].replace(/_/g,' '):n;
 }
 
+function hideMineZonePanel(){
+    const panel=document.getElementById('mine-info-panel');
+    const jid=panel.dataset.jid;
+    if(jid&&window._hideMineRect)window._hideMineRect(jid);
+    panel.classList.remove('show');
+}
+
 function showMineInfoPanel(e,jid,z){
     const panel=document.getElementById('mine-info-panel');
+    panel.dataset.jid=jid;
     const stats=document.getElementById('mip-stats');
     const oreTable=document.getElementById('mip-ore-table');
 
