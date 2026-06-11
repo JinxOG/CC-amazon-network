@@ -730,6 +730,7 @@ function dispatcher.tick()
 
             -- Link the two jobs
             job.linkedJob = supportJobId
+            -- NOTE: support job intentionally has no linkedJob — prevents cancelJob() back-cycle
 
             -- Assign worker
             jobQueue.assign(job.id, worker.id)
@@ -1170,6 +1171,7 @@ end
 -- ─── Main Loop ───────────────────────────────────────────────────────────────
 
 local function checkStaleSupports()
+    local cancelled = false
     for _, job in pairs(state.jobs) do
         if (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS)
            and job.params and job.params.masterJobId then
@@ -1182,9 +1184,11 @@ local function checkStaleSupports()
                     "Stale support %s — master %s inactive, recalling",
                     job.id, job.params.masterJobId))
                 server.cancelJob(job.id)
+                cancelled = true
             end
         end
     end
+    if cancelled then saveJobs() end
 end
 
 function server.run()
