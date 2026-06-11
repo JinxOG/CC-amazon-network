@@ -138,6 +138,27 @@ base.run(function(job)
                                 print("[SUPPORT] Miner descended to mine — locking to Y=" .. FOLLOW_Y)
                             end
                         end
+                        -- In mining mode the miner fires hundreds of POSITION_UPDATEs
+                        -- during inter-sector flight. Drain all queued ones so support
+                        -- jumps to the miner's LATEST position instead of replaying
+                        -- every intermediate step (which causes severe lag/misalignment).
+                        if _miningMode then
+                            while true do
+                                local nxt = proto.receive(base.getSelfId(), 0.05)
+                                if not nxt then break end
+                                if nxt.from == partnerId then
+                                    if nxt.type == proto.MSG.POSITION_UPDATE then
+                                        prev = nxt.payload.prev
+                                    elseif nxt.type == proto.MSG.RETURN_TO_DOCK then
+                                        print("[SUPPORT] Miner returning (drain) — docking")
+                                        goto mine_done
+                                    elseif nxt.type == proto.MSG.JOB_ABORT then
+                                        print("[SUPPORT] JOB_ABORT (drain) — docking")
+                                        goto mine_done
+                                    end
+                                end
+                            end
+                        end
                         local targetY = _miningMode and FOLLOW_Y or prev.y
                         base.move.to(prev.x, targetY, prev.z)
                     end
@@ -152,6 +173,7 @@ base.run(function(job)
                 end
             end
         end
+        ::mine_done::
 
         base.returnToDock()
         base.sendComplete()

@@ -468,9 +468,9 @@ local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors 
 local function buildSectorGrid(x1, z1, x2, z2)
     local sectors = {}
     local minX = math.floor(math.min(x1, x2) / SECTOR_STEP) * SECTOR_STEP
-    local maxX = math.floor(math.max(x1, x2) / SECTOR_STEP) * SECTOR_STEP
+    local maxX = math.ceil( math.max(x1, x2) / SECTOR_STEP) * SECTOR_STEP
     local minZ = math.floor(math.min(z1, z2) / SECTOR_STEP) * SECTOR_STEP
-    local maxZ = math.floor(math.max(z1, z2) / SECTOR_STEP) * SECTOR_STEP
+    local maxZ = math.ceil( math.max(z1, z2) / SECTOR_STEP) * SECTOR_STEP
     for sx = minX, maxX, SECTOR_STEP do
         for sz = minZ, maxZ, SECTOR_STEP do
             table.insert(sectors, { x = sx, z = sz })

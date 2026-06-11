@@ -1648,8 +1648,9 @@ function updateMineAreaInfo(){
     const el=document.getElementById('mm-area-info');
     if(isNaN(x1)||isNaN(z1)||isNaN(x2)||isNaN(z2)){el.textContent='';return;}
     const dx=Math.abs(x2-x1)||1, dz=Math.abs(z2-z1)||1;
-    const sectors=Math.ceil(dx/32)*Math.ceil(dz/32);
-    el.textContent=`${dx}×${dz} blocks · ~${sectors} sectors`;
+    const nsX=(Math.ceil(Math.max(x1,x2)/32)*32-Math.floor(Math.min(x1,x2)/32)*32)/32+1;
+    const nsZ=(Math.ceil(Math.max(z1,z2)/32)*32-Math.floor(Math.min(z1,z2)/32)*32)/32+1;
+    el.textContent=`${dx}×${dz} blocks · ${nsX*nsZ} sectors`;
 }
 async function submitMine(){
     const x1=parseInt(document.getElementById('mm-x1').value);
