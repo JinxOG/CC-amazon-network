@@ -464,7 +464,11 @@ end
 
 local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors don't overlap
 
+local SCAN_RADIUS = 16  -- must match ore_turtle.lua SCAN_RADIUS
+
 -- Build a flat list of {x,z} sector centres covering the rectangle x1,z1 → x2,z2.
+-- Also returns the true covered bounds (sector centres snapped to grid ± scan radius)
+-- so the dashboard overlay exactly matches where the miner will work.
 local function buildSectorGrid(x1, z1, x2, z2)
     local sectors = {}
     local minX = math.floor(math.min(x1, x2) / SECTOR_STEP) * SECTOR_STEP
@@ -476,13 +480,14 @@ local function buildSectorGrid(x1, z1, x2, z2)
             table.insert(sectors, { x = sx, z = sz })
         end
     end
-    return sectors
+    -- Extend by scan radius so the overlay covers the full geo-scanned area
+    return sectors, minX - SCAN_RADIUS, minZ - SCAN_RADIUS, maxX + SCAN_RADIUS, maxZ + SCAN_RADIUS
 end
 
 -- Initialise a zone for a freshly dispatched MINE job (idempotent).
 local function ensureMineZone(jobId, params)
     if state.miningZones[jobId] then return end
-    local sectors = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
+    local sectors, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
     -- Shuffle so multiple miners don't all converge on the same corner first.
     for i = #sectors, 2, -1 do
         local j = math.random(1, i)
@@ -495,7 +500,7 @@ local function ensureMineZone(jobId, params)
         oreFound   = {},
         oreMined   = {},
         startTime  = os.epoch("utc"),
-        bounds     = { x1=params.x1, z1=params.z1, x2=params.x2, z2=params.z2 },
+        bounds     = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
     }
     logInfo(string.format("Mine zone %s: %d sectors (%d,%d → %d,%d)",
         jobId, #sectors, params.x1, params.z1, params.x2, params.z2))

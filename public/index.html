@@ -925,6 +925,14 @@ function setupDynmapInjection(dw){
             }
         }catch(ex){console.warn('[mineOverlay]',ex);}
     };
+    // Re-populate the open mine info panel with fresh data on every poll cycle.
+    window._refreshMinePanel=function(){
+        const panel=document.getElementById('mine-info-panel');
+        if(!panel||!panel.classList.contains('show'))return;
+        const jid=panel.dataset.jid;
+        if(!jid||!_mineRects[jid])return;
+        showMineInfoPanel(null,jid,_mineRects[jid].z);
+    };
     updateInjectedMarkers(lastState.turtles||{});
     if(window._updateMineOverlays)window._updateMineOverlays(lastState.mineZones||{});
     try{
@@ -1068,14 +1076,17 @@ function showMineInfoPanel(e,jid,z){
         oreTable.innerHTML=html;
     }
 
-    // Position near click, clamped to viewport
-    const px=e.clientX||0,py=e.clientY||0;
-    const vw=window.innerWidth,vh=window.innerHeight;
-    panel.style.left='0px';panel.style.top='0px';
-    panel.classList.add('show');
-    const pw=panel.offsetWidth,ph=panel.offsetHeight;
-    panel.style.left=Math.min(px+12,vw-pw-10)+'px';
-    panel.style.top=Math.min(py+12,vh-ph-10)+'px';
+    // On initial click: position near cursor and show. On auto-refresh (e=null): content
+    // only — keep existing position and visibility so the panel doesn't jump.
+    if(e){
+        const px=e.clientX||0,py=e.clientY||0;
+        const vw=window.innerWidth,vh=window.innerHeight;
+        panel.style.left='0px';panel.style.top='0px';
+        panel.classList.add('show');
+        const pw=panel.offsetWidth,ph=panel.offsetHeight;
+        panel.style.left=Math.min(px+12,vw-pw-10)+'px';
+        panel.style.top=Math.min(py+12,vh-ph-10)+'px';
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1174,6 +1185,7 @@ function renderAll(d){
     document.getElementById('sb-done').textContent=jobs.filter(j=>j.status==='COMPLETE').length;
     updateInjectedMarkers(turtles);
     if(window._updateMineOverlays)window._updateMineOverlays(d.mineZones||{});
+    if(window._refreshMinePanel)window._refreshMinePanel();
     renderFleet(turtles);
     renderJobs(jobs,turtles);
     renderStorage(d.storage||[]);
