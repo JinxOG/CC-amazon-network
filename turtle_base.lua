@@ -64,6 +64,12 @@ function base.setCanDig(val)     _self.canDig = val      end
 function base.isServerDown()     return _self.serverDown end
 function base.isRecalled()       return _self.recalled   end
 
+function base.isInsideBuilding(pos)
+    return pos.y >= CFG.FLOOR_Y
+        and pos.x >= BUILDING.minX and pos.x <= BUILDING.maxX
+        and pos.z >= BUILDING.minZ and pos.z <= BUILDING.maxZ
+end
+
 -- ─── Comms ───────────────────────────────────────────────────────────────────
 
 local comms = {}
@@ -1154,20 +1160,27 @@ function base.init(role)
     if _self.dock then
         gpsSync()
         local p = _self.pos
-        local insideBuilding = p.y >= CFG.FLOOR_Y
-            and p.x >= BUILDING.minX and p.x <= BUILDING.maxX
-            and p.z >= BUILDING.minZ and p.z <= BUILDING.maxZ
+        local insideBuilding = base.isInsideBuilding(p)
         local atDock = (p.x == _self.dock.x and p.z == _self.dock.z)
         if insideBuilding and not atDock then
             logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
                 _self.dock.x, _self.dock.z, p.x, p.z))
             base.returnToDockInternal()
         elseif not insideBuilding then
-            -- Rebooted outside the building (e.g. at a destination, or underground
-            -- mid-delivery). Use the full return route: descend → arrivals hole → dock.
-            logInfo(string.format("Rebooted outside building at %d,%d,%d — returning via arrivals hole",
-                p.x, p.y, p.z))
-            base.returnToDock()
+            if _self.role == proto.ROLE.MINER then
+                logInfo(string.format(
+                    "Miner rebooted outside building at %d,%d,%d — deferring return to job handler",
+                    p.x, p.y, p.z))
+            elseif _self.role == proto.ROLE.SUPPORT and p.y > CFG.FLOOR_Y + 20 then
+                logInfo(string.format(
+                    "Mining support rebooted at altitude %d,%d,%d — deferring return to job handler",
+                    p.x, p.y, p.z))
+            else
+                logInfo(string.format(
+                    "Rebooted outside building at %d,%d,%d — returning via arrivals hole",
+                    p.x, p.y, p.z))
+                base.returnToDock()
+            end
         end
     end
     -- Startup homing may have set status to RETURNING — reset to IDLE now we're docked.
