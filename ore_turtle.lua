@@ -11,6 +11,7 @@
 
 local base  = require("turtle_base")
 local proto = require("protocol")
+local W     = require("waypoints")
 
 -- ── Slots ────────────────────────────────────────────────────────────────────
 local S_SCANNER = 1
@@ -247,6 +248,7 @@ local function mineOreList(ores, jobId)
     local mined = 0
     local byType = {}
     while #remaining > 0 do
+        if base.isRecalled() then break end
         local p = base.getPos()
         table.sort(remaining, function(a, b)
             local da = math.abs(a.x-p.x) + math.abs(a.y-p.y) + math.abs(a.z-p.z)
@@ -274,14 +276,23 @@ local function mineJob(job)
     local function recallReturn()
         dumpOres()
         checkFuel(jobId)
+        -- Signal support to stop locking to FOLLOW_Y and wait for miner at meeting altitude.
+        -- partnerId is kept set so POSITION_UPDATEs keep firing and support can follow.
         base.signalPartner(proto.MSG.MINE_RECALL, {})
         local p = base.getPos()
-        base.move.to(p.x, 100, p.z)   -- ascend to meeting altitude while POS_UPDATEs still fire
-        base.setPartnerId(nil)         -- stop broadcasts; support has already received MINE_RECALL
-        sleep(1)                       -- allow support to drain and break its tracking loop
-        base.move.to(p.x, SKY_Y, p.z) -- ascend to sky travel altitude
+        -- Ascend to meeting altitude (FOLLOW_Y=100). Support is already at Y=100 locking
+        -- to that level, so it tracks our X,Z as we climb — they meet at the same altitude.
+        base.move.to(p.x, 100, p.z)
+        sleep(5)                          -- let support complete final X,Z alignment
+        -- Lead support up to sky altitude and across to arrivals hole, still broadcasting.
+        base.move.to(p.x, SKY_Y, p.z)
+        base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
+        -- Tell support to descend independently — it is at arrivals at SKY_Y now.
+        base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+        base.setPartnerId(nil)            -- stop broadcasting
+        -- We are already at arrivals at SKY_Y; returnToDockFromSky just descends.
         base.returnToDockFromSky()
-        base.sendFailed("recalled", true)
+        base.sendFailed("recalled", false)
     end
 
     base.setPartnerId(job.params.partnerId)
@@ -352,7 +363,13 @@ local function mineJob(job)
                 for name, n in pairs(byType) do
                     sectorMined[name] = (sectorMined[name] or 0) + n
                 end
+                -- Report per-depth mined count so the MINED column updates in real time
+                if next(byType) then
+                    base.sendToServer(proto.MSG.SECTOR_SCAN,
+                        proto.payloadSectorScan(jobId, sx, sz, sy, {}, byType))
+                end
             end
+            if base.isRecalled() then break end
         end
 
         if count > 0 or inventoryFull() then dumpOres() end

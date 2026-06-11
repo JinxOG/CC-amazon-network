@@ -71,6 +71,7 @@ base.run(function(job)
         local _reachedSky = false   -- true after miner has been near SKY_Y
         local _miningMode = false   -- true once miner first descends below FOLLOW_Y
         local _skyReturn  = false   -- true when MINE_RECALL received; use sky return path
+        local _recalling  = false   -- true when MINE_RECALL received; stay at FOLLOW_Y until miner ascends
 
         base.setStatus(proto.STATUS.TRAVELLING, job.id)
         base.sendProgress("Following miner")
@@ -158,12 +159,19 @@ base.run(function(job)
                                         print("[SUPPORT] JOB_ABORT (drain) — docking")
                                         goto mine_done
                                     elseif nxt.type == proto.MSG.MINE_RECALL then
-                                        print("[SUPPORT] Mine recalled (drain) — sky return")
-                                        _skyReturn = true
-                                        goto mine_done
+                                        print("[SUPPORT] Mine recalled (drain) — waiting at meeting altitude")
+                                        _skyReturn  = true
+                                        _recalling  = true
+                                        -- Break drain so main loop can handle the recall transition
+                                        break
                                     end
                                 end
                             end
+                        end
+                        -- When recalling: transition to real-Y follow once miner reaches FOLLOW_Y
+                        if _recalling and _miningMode and prev.y >= FOLLOW_Y then
+                            _miningMode = false
+                            print("[SUPPORT] Miner at meeting altitude — ascending together")
                         end
                         local targetY = _miningMode and FOLLOW_Y or prev.y
                         base.move.to(prev.x, targetY, prev.z)
@@ -178,9 +186,11 @@ base.run(function(job)
                     break
 
                 elseif msg.type == proto.MSG.MINE_RECALL then
-                    print("[SUPPORT] Mine recalled — sky return")
+                    print("[SUPPORT] Mine recalled — waiting at meeting altitude for miner")
                     _skyReturn = true
-                    break
+                    _recalling = true
+                    -- Don't break — keep receiving POSITION_UPDATEs so we track miner X,Z
+                    -- at FOLLOW_Y until miner ascends up to meet us, then follow real Y up
                 end
             end
         end

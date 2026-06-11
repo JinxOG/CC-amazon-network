@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.64"
+proto.VERSION = "1.6.65"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -263,13 +263,14 @@ function proto.payloadSectorAssign(jobId, sectorX, sectorZ, scanY)
     }
 end
 
-function proto.payloadSectorScan(jobId, sectorX, sectorZ, scanY, foundOres)
+function proto.payloadSectorScan(jobId, sectorX, sectorZ, scanY, foundOres, minedOres)
     return {
         jobId      = jobId,
         sectorX    = sectorX,
         sectorZ    = sectorZ,
         scanY      = scanY,
         foundOres  = foundOres or {},
+        minedOres  = minedOres or {},
     }
 end
 

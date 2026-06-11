@@ -711,32 +711,35 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
     end
 end
 
--- SECTOR_SCAN: miner finished one depth-level scan — accumulate found ores immediately
--- so the dashboard reflects scan results in real time without waiting for SECTOR_DONE.
+-- SECTOR_SCAN: miner finished one depth-level scan OR mine pass — accumulate
+-- foundOres and/or minedOres immediately so the dashboard updates in real time.
+-- Sent twice per depth level: once after scan (foundOres), once after mine (minedOres).
 handlers[proto.MSG.SECTOR_SCAN] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
-    if zone and type(p.foundOres) == "table" then
-        for name, n in pairs(p.foundOres) do
-            zone.oreFound[name] = (zone.oreFound[name] or 0) + n
-        end
-        logInfo(string.format("Sector (%d,%d) Y=%d scan by %s — %d ore types found [%s]",
-            p.sectorX, p.sectorZ, p.scanY or 0, msg.from, table.getn and table.getn(p.foundOres) or 0, p.jobId))
-    end
-end
-
--- SECTOR_DONE: miner finished all depth levels for one sector — accumulate mined ores.
--- foundOres is NOT re-accumulated here; SECTOR_SCAN already handled that in real time.
-handlers[proto.MSG.SECTOR_DONE] = function(msg)
-    local p    = msg.payload
-    local zone = state.miningZones[p.jobId]
     if zone then
-        zone.done = zone.done + 1
+        if type(p.foundOres) == "table" then
+            for name, n in pairs(p.foundOres) do
+                zone.oreFound[name] = (zone.oreFound[name] or 0) + n
+            end
+        end
         if type(p.minedOres) == "table" then
             for name, n in pairs(p.minedOres) do
                 zone.oreMined[name] = (zone.oreMined[name] or 0) + n
             end
         end
+        logInfo(string.format("Sector (%d,%d) Y=%d scan by %s [%s]",
+            p.sectorX, p.sectorZ, p.scanY or 0, msg.from, p.jobId))
+    end
+end
+
+-- SECTOR_DONE: miner finished all depth levels for one sector — increment sector counter.
+-- Ore accumulation is handled per-depth via SECTOR_SCAN to avoid double-counting.
+handlers[proto.MSG.SECTOR_DONE] = function(msg)
+    local p    = msg.payload
+    local zone = state.miningZones[p.jobId]
+    if zone then
+        zone.done = zone.done + 1
         logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
             p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
             p.jobId, zone.done, zone.total))
