@@ -281,7 +281,7 @@ local function mineJob(job)
     -- Coordinated recall: dump ores, signal support to use sky return, then
     -- ascend to Y=100 (letting support drain the last POSITION_UPDATEs to that
     -- position), clear partnerId, then ascend to sky and dock via sky path.
-    local function recallReturn()
+    local function recallReturn(failReason, failRecoverable)
         dumpOres()
         checkFuel(jobId)
         -- Signal support to stop locking to FOLLOW_Y and wait for miner at meeting altitude.
@@ -300,14 +300,14 @@ local function mineJob(job)
         base.setPartnerId(nil)            -- stop broadcasting
         -- We are already at arrivals at SKY_Y; returnToDockFromSky just descends.
         base.returnToDockFromSky()
-        base.sendFailed("recalled", false)
+        base.sendFailed(failReason or "recalled", failRecoverable ~= nil and failRecoverable or false)
     end
 
     base.setPartnerId(job.params.partnerId)
     local startPos = base.getPos()
     if not base.isInsideBuilding(startPos) then
         base.sendProgress("Rebooted mid-job — coordinated sky return")
-        recallReturn()
+        recallReturn("reboot_recovery", true)
         return
     end
     base.setStatus(proto.STATUS.TRAVELLING, jobId)

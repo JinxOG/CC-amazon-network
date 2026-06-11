@@ -1244,9 +1244,7 @@ function base.run(jobHandler)
                                 pendingJob = nil
                             else
                                 -- Idle turtle: navigate directly.
-                                local insideBuilding = _self.pos.y >= CFG.FLOOR_Y
-                                    and _self.pos.x >= BUILDING.minX and _self.pos.x <= BUILDING.maxX
-                                    and _self.pos.z >= BUILDING.minZ and _self.pos.z <= BUILDING.maxZ
+                                local insideBuilding = base.isInsideBuilding(_self.pos)
                                 if insideBuilding then
                                     base.returnToDockInternal()
                                 else
