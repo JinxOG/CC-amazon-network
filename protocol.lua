@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.63"
+proto.VERSION = "1.6.64"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -78,7 +78,8 @@ proto.MSG = {
     -- Mining sector handshake (miner ↔ server)
     SECTOR_REQUEST = "SECTOR_REQUEST",  -- miner → server: ready for next sector
     SECTOR_ASSIGN  = "SECTOR_ASSIGN",   -- server → miner: here is your sector
-    SECTOR_DONE    = "SECTOR_DONE",     -- miner → server: sector fully scanned + mined
+    SECTOR_SCAN    = "SECTOR_SCAN",     -- miner → server: one depth-level scan complete, here are found ores
+    SECTOR_DONE    = "SECTOR_DONE",     -- miner → server: sector fully mined, here are mined ores
     MINE_COMPLETE  = "MINE_COMPLETE",   -- server → miner: all sectors exhausted, return home
 
     -- Mining fuel handshake (support ↔ miner, CH_LOCAL, field-only)
@@ -259,6 +260,16 @@ function proto.payloadSectorAssign(jobId, sectorX, sectorZ, scanY)
         sectorX = sectorX,
         sectorZ = sectorZ,
         scanY   = scanY or 56,
+    }
+end
+
+function proto.payloadSectorScan(jobId, sectorX, sectorZ, scanY, foundOres)
+    return {
+        jobId      = jobId,
+        sectorX    = sectorX,
+        sectorZ    = sectorZ,
+        scanY      = scanY,
+        foundOres  = foundOres or {},
     }
 end
 

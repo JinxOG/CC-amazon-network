@@ -711,16 +711,27 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
     end
 end
 
+-- SECTOR_SCAN: miner finished one depth-level scan — accumulate found ores immediately
+-- so the dashboard reflects scan results in real time without waiting for SECTOR_DONE.
+handlers[proto.MSG.SECTOR_SCAN] = function(msg)
+    local p    = msg.payload
+    local zone = state.miningZones[p.jobId]
+    if zone and type(p.foundOres) == "table" then
+        for name, n in pairs(p.foundOres) do
+            zone.oreFound[name] = (zone.oreFound[name] or 0) + n
+        end
+        logInfo(string.format("Sector (%d,%d) Y=%d scan by %s — %d ore types found [%s]",
+            p.sectorX, p.sectorZ, p.scanY or 0, msg.from, table.getn and table.getn(p.foundOres) or 0, p.jobId))
+    end
+end
+
+-- SECTOR_DONE: miner finished all depth levels for one sector — accumulate mined ores.
+-- foundOres is NOT re-accumulated here; SECTOR_SCAN already handled that in real time.
 handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
     if zone then
         zone.done = zone.done + 1
-        if type(p.foundOres) == "table" then
-            for name, n in pairs(p.foundOres) do
-                zone.oreFound[name] = (zone.oreFound[name] or 0) + n
-            end
-        end
         if type(p.minedOres) == "table" then
             for name, n in pairs(p.minedOres) do
                 zone.oreMined[name] = (zone.oreMined[name] or 0) + n

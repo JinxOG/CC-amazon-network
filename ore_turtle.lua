@@ -326,7 +326,7 @@ local function mineJob(job)
 
         -- Scan and mine every depth level
         local count       = 0
-        local sectorFound = {}   -- {[name]=count} from geo scan
+        local sectorFound = {}   -- {[name]=count} from geo scan (sent via SECTOR_SCAN)
         local sectorMined = {}   -- {[name]=count} actually mined
         for i, sy in ipairs(SCAN_LEVELS) do
             checkFuel(jobId)
@@ -335,8 +335,15 @@ local function mineJob(job)
             base.sendProgress(string.format("Scanning %d,%d depth %d/%d (Y=%d)",
                 sx, sz, i, #SCAN_LEVELS, sy))
             local ores = scanSector()
+            -- Report scan results immediately so the dashboard updates in real time.
+            local scanFound = {}
             for _, o in ipairs(ores) do
+                scanFound[o.name]    = (scanFound[o.name]    or 0) + 1
                 sectorFound[o.name] = (sectorFound[o.name] or 0) + 1
+            end
+            if next(scanFound) then
+                base.sendToServer(proto.MSG.SECTOR_SCAN,
+                    proto.payloadSectorScan(jobId, sx, sz, sy, scanFound))
             end
             if #ores > 0 then
                 base.sendProgress(string.format("Mining %d ores at Y=%d", #ores, sy))
