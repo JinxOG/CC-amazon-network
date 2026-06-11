@@ -467,6 +467,15 @@ function jobQueue.fail(jobId, reason, recoverable)
         job.status = JOB_STATUS.FAILED
         logError("Job permanently failed: " .. jobId .. " (" .. (reason or "?") .. ")")
     end
+    if job.linkedJob then
+        local linked = state.jobs[job.linkedJob]
+        if linked
+           and linked.status ~= JOB_STATUS.COMPLETE
+           and linked.status ~= JOB_STATUS.CANCELLED
+           and linked.status ~= JOB_STATUS.FAILED then
+            server.cancelJob(job.linkedJob)
+        end
+    end
     saveJobs()
 end
 
@@ -1160,6 +1169,24 @@ end
 
 -- ─── Main Loop ───────────────────────────────────────────────────────────────
 
+local function checkStaleSupports()
+    for _, job in pairs(state.jobs) do
+        if (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS)
+           and job.params and job.params.masterJobId then
+            local master = state.jobs[job.params.masterJobId]
+            local masterActive = master
+                and (master.status == JOB_STATUS.ASSIGNED
+                  or master.status == JOB_STATUS.IN_PROGRESS)
+            if not masterActive then
+                logWarn(string.format(
+                    "Stale support %s — master %s inactive, recalling",
+                    job.id, job.params.masterJobId))
+                server.cancelJob(job.id)
+            end
+        end
+    end
+end
+
 function server.run()
     state.modem = peripheral.find("modem")
     if not state.modem then
@@ -1611,6 +1638,7 @@ function server.run()
     local dispatchTimer   = os.startTimer(CFG.DISPATCH_INTERVAL)
     local healthTimer     = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
     local bridgeTimer     = os.startTimer(CFG.BRIDGE_INTERVAL)
+    local staleTimer      = os.startTimer(30)
     -- Wall-clock timestamps for storage/craftable refresh; no separate timers
     -- because separate timers can be consumed by parallel.waitForAny in the
     -- bridgeTimer handler, causing them to silently stop firing.
@@ -1682,6 +1710,11 @@ function server.run()
                     sleep(3)
                     if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
                 end
+
+            elseif p1 == staleTimer then
+                local ok, err = pcall(checkStaleSupports)
+                if not ok then logError("Stale support check: " .. tostring(err)) end
+                staleTimer = os.startTimer(30)
 
             end
 
