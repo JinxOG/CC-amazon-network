@@ -1437,7 +1437,8 @@ function _patchJobCard(card,j,turtles,turtleEntries,allJobs){
 function renderJobs(jobs,turtles){
     const el=document.getElementById('jobs-list');
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
-    const isFollowJob=j=>j.type==='SUPPORT_FOLLOW';
+    const linkedIds=new Set(jobs.map(j=>j.linkedJob).filter(Boolean));
+    const isFollowJob=j=>j.type==='SUPPORT_FOLLOW'||linkedIds.has(j.id);
     let filtered;
     if(jobFilter==='done')     filtered=[...jobs].filter(j=>j.status==='COMPLETE'&&!isFollowJob(j)).reverse();
     else if(jobFilter==='active') filtered=[...jobs].filter(j=>!terminal.has(j.status)&&!isFollowJob(j));

@@ -1329,12 +1329,20 @@ function server.run()
         end
         local jobs = {}
         for id, j in pairs(state.jobs) do
+            -- Look up the support turtle's ID from the linked job's assignedTo.
+            -- This survives the cancel path (which clears registry jobId but not
+            -- job.assignedTo) AND the direct-cancel path where assignedTo stays set.
+            local supportId = nil
+            if j.linkedJob and state.jobs[j.linkedJob] then
+                supportId = state.jobs[j.linkedJob].assignedTo
+            end
             table.insert(jobs, {
                 id          = id,
                 status      = j.status,
                 assignedTo  = j.assignedTo,
                 type        = j.type,
                 linkedJob   = j.linkedJob,
+                supportId   = supportId,
                 destination = j.params and j.params.destination or nil,
             })
         end
