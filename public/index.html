@@ -909,8 +909,10 @@ function setupDynmapInjection(dw){
         window._hiddenMineZones.add(jid);
     };
     function _mineRectTooltip(z){
+        const isHist=z.status==='HISTORICAL';
+        const prefix=isHist?'[HIST] ':'';
         const eta=z.eta!=null?'  ETA '+_fmtEta(z.eta):'';
-        return (z.pct||0)+'% MINED  '+z.done+'/'+z.total+' sectors'+eta;
+        return prefix+(z.pct||0)+'% MINED  '+z.done+'/'+z.total+' sectors'+eta;
     }
     window._updateMineOverlays=function(mineZones){
         try{
@@ -924,14 +926,18 @@ function setupDynmapInjection(dw){
                 const ne=mcToLatLng(dw,dm,{x:Math.max(b.x1,b.x2),y:64,z:Math.min(b.z1,b.z2)});
                 const lb=dw.L.latLngBounds(sw,ne);
                 const pct=z.pct||0;
-                const col=pct>=100?'#00ff88':'#ffaa44';
+                const isHist=z.status==='HISTORICAL';
+                const col=isHist?'#5566bb':(pct>=100?'#00ff88':'#ffaa44');
+                const weight=isHist?1:2;
+                const fillOpacity=isHist?0.04:0.1;
+                const dash=isHist?'3 7':'6 4';
                 if(_mineRects[jid]){
                     _mineRects[jid].r.setBounds(lb);
-                    _mineRects[jid].r.setStyle({color:col,fillColor:col});
+                    _mineRects[jid].r.setStyle({color:col,fillColor:col,weight,fillOpacity,dashArray:dash});
                     _mineRects[jid].r.setTooltipContent(_mineRectTooltip(z));
                     _mineRects[jid].z=z;
                 }else{
-                    const r=dw.L.rectangle(lb,{color:col,weight:2,fillColor:col,fillOpacity:0.1,dashArray:'6 4',interactive:true})
+                    const r=dw.L.rectangle(lb,{color:col,weight,fillColor:col,fillOpacity,dashArray:dash,interactive:true})
                         .bindTooltip(_mineRectTooltip(z),{sticky:true,className:'cc-route-tip'})
                         .on('click',(e)=>{dw.L.DomEvent.stopPropagation(e);showMineInfoPanel(e.originalEvent||e,jid,_mineRects[jid].z);})
                         .addTo(dm.map);
@@ -1062,14 +1068,17 @@ function showMineInfoPanel(e,jid,z){
     const b=z.bounds||{};
     const w=b.x1!=null?Math.abs(b.x2-b.x1)+1:'?';
     const h=b.z1!=null?Math.abs(b.z2-b.z1)+1:'?';
+    const isHist=z.status==='HISTORICAL';
 
+    const idLabel=isHist?'ZONE':'JOB';
+    const idVal=isHist?'historical':jid.slice(-8);
     const minerLine=z.minerId
         ?'<div class="mip-row"><span>MINER</span><span class="v">'+escapeHtml(z.minerId)
           +(z.minerStatus?' <span style="opacity:.6;font-size:.85em">'+escapeHtml(z.minerStatus)+'</span>':'')
           +'</span></div>'
-        :'';
+        :(isHist?'<div class="mip-row"><span>STATUS</span><span class="v" style="color:#5566bb">NO ACTIVE JOB</span></div>':'');
     stats.innerHTML=
-        '<div class="mip-row"><span>JOB</span><span class="v">'+jid.slice(-8)+'</span></div>'+
+        '<div class="mip-row"><span>'+idLabel+'</span><span class="v">'+idVal+'</span></div>'+
         minerLine+
         '<div class="mip-row"><span>AREA</span><span class="v">'+w+' × '+h+'</span></div>'+
         '<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'+
@@ -1082,7 +1091,7 @@ function showMineInfoPanel(e,jid,z){
     const mined=z.oreMined||{};
     const allNames=new Set([...Object.keys(found),...Object.keys(mined)]);
     if(allNames.size===0){
-        const noDataMsg=z.done===0?'MINER IN TRANSIT — NO SECTORS COMPLETE YET':'NO ORE IN SCANNED SECTORS';
+        const noDataMsg=isHist?'NO ORE DATA FOR THIS ZONE':(z.done===0?'MINER IN TRANSIT — NO SECTORS COMPLETE YET':'NO ORE IN SCANNED SECTORS');
         oreTable.innerHTML='<div class="mip-ore-title">'+noDataMsg+'</div>';
     }else{
         const sorted=[...allNames].sort((a,b)=>(mined[b]||0)-(mined[a]||0));

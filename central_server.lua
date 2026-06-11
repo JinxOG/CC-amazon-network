@@ -32,6 +32,7 @@ local state = {
     modem           = nil,
     lastDispatchTime = 0,   -- epoch ms of last successful pair dispatch
     miningZones     = {},   -- [jobId] = { pending={sectors}, total=n, done=n, scanY=n }
+    persistentZones = {},   -- [zoneKey] = { bounds, total, doneSectors, oreFound, oreMined, … }
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -227,7 +228,8 @@ end
 
 -- ─── Persistence ─────────────────────────────────────────────────────────────
 
-local JOB_SAVE_FILE = "jobs.dat"
+local JOB_SAVE_FILE  = "jobs.dat"
+local ZONE_SAVE_FILE = "mine_zones.dat"
 
 local function saveJobs()
     -- Persist all active jobs (including SUPPORT_FOLLOW) so original turtles
@@ -289,6 +291,58 @@ local function loadJobs()
     if nRestored > 0 then
         logInfo(string.format("Loaded %d job(s) from disk", nRestored))
     end
+end
+
+-- ─── Persistent Mine Zone Store ──────────────────────────────────────────────
+-- Keyed by grid-snapped bounds string "bx1,bz1,bx2,bz2".
+-- Survives server restarts; re-dispatching the same physical area resumes from
+-- where it left off (skipping sectors that already completed).
+
+local function computeZoneKey(bx1, bz1, bx2, bz2)
+    return string.format("%d,%d,%d,%d", bx1, bz1, bx2, bz2)
+end
+
+local function savePersistentZones()
+    local ok, err = pcall(function()
+        local data = textutils.serialise(state.persistentZones)
+        local f = fs.open("zones.tmp", "w")
+        if not f then error("could not open zones.tmp for writing") end
+        f.write(data); f.close()
+        if fs.exists(ZONE_SAVE_FILE) then fs.delete(ZONE_SAVE_FILE) end
+        fs.move("zones.tmp", ZONE_SAVE_FILE)
+    end)
+    if not ok then logWarn("savePersistentZones failed: " .. tostring(err)) end
+end
+
+local function loadPersistentZones()
+    if not fs.exists(ZONE_SAVE_FILE) then return end
+    local f = fs.open(ZONE_SAVE_FILE, "r")
+    if not f then return end
+    local raw  = f.readAll(); f.close()
+    local data = textutils.unserialise(raw)
+    if type(data) ~= "table" then return end
+    state.persistentZones = data
+    local n = 0
+    for _ in pairs(data) do n = n + 1 end
+    if n > 0 then logInfo(string.format("Loaded %d persistent mine zone(s)", n)) end
+end
+
+-- Called after SECTOR_DONE: snapshot the runtime zone's accumulated ore totals
+-- and record which sector just finished, then save to disk.
+local function mergeToPersistentZone(jobId, sx, sz)
+    local zone = state.miningZones[jobId]
+    if not zone or not zone.persistentKey then return end
+    local pz = state.persistentZones[zone.persistentKey]
+    if not pz then return end
+    -- Record this sector as done
+    table.insert(pz.doneSectors, { x = sx, z = sz })
+    -- Snapshot the full accumulated ore totals (cumulative across all SECTOR_SCAN calls)
+    pz.oreFound = {}
+    for k, v in pairs(zone.oreFound) do pz.oreFound[k] = v end
+    pz.oreMined = {}
+    for k, v in pairs(zone.oreMined) do pz.oreMined[k] = v end
+    pz.lastActivity = os.epoch("utc")
+    savePersistentZones()
 end
 
 -- ─── Job Queue ───────────────────────────────────────────────────────────────
@@ -485,25 +539,71 @@ local function buildSectorGrid(x1, z1, x2, z2)
 end
 
 -- Initialise a zone for a freshly dispatched MINE job (idempotent).
+-- If a persistent zone with matching bounds exists, pre-populates ore data and
+-- removes already-completed sectors so the miner resumes from where it left off.
 local function ensureMineZone(jobId, params)
     if state.miningZones[jobId] then return end
     local sectors, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
-    -- Shuffle so multiple miners don't all converge on the same corner first.
+    local key = computeZoneKey(bx1, bz1, bx2, bz2)
+    local pz  = state.persistentZones[key]
+
+    -- Filter out sectors that already completed in a previous run
+    if pz and pz.doneSectors and #pz.doneSectors > 0 then
+        local doneSet = {}
+        for _, s in ipairs(pz.doneSectors) do
+            doneSet[s.x .. "," .. s.z] = true
+        end
+        local remaining = {}
+        for _, s in ipairs(sectors) do
+            if not doneSet[s.x .. "," .. s.z] then table.insert(remaining, s) end
+        end
+        sectors = remaining
+    end
+
+    -- Shuffle remaining sectors
     for i = #sectors, 2, -1 do
         local j = math.random(1, i)
         sectors[i], sectors[j] = sectors[j], sectors[i]
     end
+
+    local preDone = pz and pz.doneSectors and #pz.doneSectors or 0
+    local total   = (pz and pz.total) or (#sectors + preDone)
+
+    -- Inherit cumulative ore data from all previous runs on this zone
+    local oreFound, oreMined = {}, {}
+    if pz then
+        for k, v in pairs(pz.oreFound or {}) do oreFound[k] = v end
+        for k, v in pairs(pz.oreMined or {}) do oreMined[k] = v end
+    end
+
     state.miningZones[jobId] = {
-        pending    = sectors,
-        total      = #sectors,
-        done       = 0,
-        oreFound   = {},
-        oreMined   = {},
-        startTime  = os.epoch("utc"),
-        bounds     = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
+        pending       = sectors,
+        total         = total,
+        done          = preDone,
+        oreFound      = oreFound,
+        oreMined      = oreMined,
+        startTime     = os.epoch("utc"),
+        bounds        = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
+        persistentKey = key,
     }
-    logInfo(string.format("Mine zone %s: %d sectors (%d,%d → %d,%d)",
-        jobId, #sectors, params.x1, params.z1, params.x2, params.z2))
+
+    -- Create persistent zone entry if this is the first dispatch to these bounds
+    if not pz then
+        state.persistentZones[key] = {
+            key          = key,
+            bounds       = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
+            total        = total,
+            doneSectors  = {},
+            oreFound     = {},
+            oreMined     = {},
+            lastActivity = os.epoch("utc"),
+        }
+        savePersistentZones()
+    end
+
+    logInfo(string.format("Mine zone %s: %d/%d sectors remaining (%d,%d → %d,%d)%s",
+        jobId, #sectors, total, params.x1, params.z1, params.x2, params.z2,
+        preDone > 0 and string.format(" [resuming: %d already done]", preDone) or ""))
 end
 
 -- Pop the next unassigned sector for a turtle, or nil if all done.
@@ -733,13 +833,15 @@ handlers[proto.MSG.SECTOR_SCAN] = function(msg)
     end
 end
 
--- SECTOR_DONE: miner finished all depth levels for one sector — increment sector counter.
+-- SECTOR_DONE: miner finished all depth levels for one sector — increment sector counter
+-- and snapshot ore totals into the persistent zone store so progress survives restarts.
 -- Ore accumulation is handled per-depth via SECTOR_SCAN to avoid double-counting.
 handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
     if zone then
         zone.done = zone.done + 1
+        mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ)
         logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
             p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
             p.jobId, zone.done, zone.total))
@@ -1360,8 +1462,10 @@ function server.run()
                 destination = j.params and j.params.destination or nil,
             })
         end
-        -- Build mineZones summary for the dashboard overlay
+        -- Build mineZones summary for the dashboard overlay (active + historical)
         local mineZones = {}
+        -- Active zones — keyed by jobId
+        local activeKeys = {}
         for jid, z in pairs(state.miningZones) do
             local pct = z.total > 0 and math.floor(z.done / z.total * 100) or 0
             local eta = nil
@@ -1381,7 +1485,28 @@ function server.run()
                 oreMined    = z.oreMined,
                 minerId     = minerId,
                 minerStatus = minerSt,
+                status      = "ACTIVE",
             }
+            if z.persistentKey then activeKeys[z.persistentKey] = true end
+        end
+        -- Historical zones — persistent zones with no current active job
+        for key, pz in pairs(state.persistentZones) do
+            if not activeKeys[key] and pz.doneSectors and #pz.doneSectors > 0 then
+                local done = #pz.doneSectors
+                local pct  = pz.total > 0 and math.floor(done / pz.total * 100) or 0
+                mineZones["zone:" .. key] = {
+                    bounds      = pz.bounds,
+                    total       = pz.total,
+                    done        = done,
+                    pct         = pct,
+                    eta         = nil,
+                    oreFound    = pz.oreFound,
+                    oreMined    = pz.oreMined,
+                    minerId     = nil,
+                    minerStatus = nil,
+                    status      = "HISTORICAL",
+                }
+            end
         end
         -- Use pre-serialised storageJSON so we never serialise 300+ items inside parallel
         local payload = '{"turtles":' .. textutils.serialiseJSON(turtles) ..
@@ -1415,6 +1540,7 @@ function server.run()
     logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
     W.loadDockAssignments()
     loadJobs()
+    loadPersistentZones()
     print("Console ready. Type 'help' for commands.")
 
     local dispatchTimer   = os.startTimer(CFG.DISPATCH_INTERVAL)
