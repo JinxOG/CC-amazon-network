@@ -1601,12 +1601,22 @@ function server.run()
                 }
             end
         end
-        -- Use pre-serialised storageJSON so we never serialise 300+ items on the hot path
-        local payload = '{"turtles":' .. textutils.serialiseJSON(turtles) ..
-                        ',"jobs":'    .. textutils.serialiseJSON(jobs) ..
-                        ',"version":' .. textutils.serialiseJSON(proto.VERSION) ..
-                        ',"storage":' .. storageJSON ..
-                        ',"mineZones":' .. textutils.serialiseJSON(mineZones) .. '}'
+        -- Serialise each section independently.  If one field has a bad table
+        -- (mixed integer+string keys from corrupted on-disk data or peripheral quirk)
+        -- the push still succeeds with a safe fallback for that section.
+        local function js(val, fallback, label)
+            local ok, r = pcall(textutils.serialiseJSON, val)
+            if not ok then
+                logWarn("Bridge serialise[" .. label .. "] failed: " .. tostring(r))
+                return fallback
+            end
+            return r
+        end
+        local payload = '{"turtles":'  .. js(turtles,      "{}",  "turtles") ..
+                        ',"jobs":'     .. js(jobs,          "[]",  "jobs") ..
+                        ',"version":'  .. js(proto.VERSION, '"?"', "version") ..
+                        ',"storage":'  .. storageJSON ..
+                        ',"mineZones":' .. js(mineZones,   "{}",  "mineZones") .. '}'
         return payload
     end
 
