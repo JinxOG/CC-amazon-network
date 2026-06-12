@@ -1533,38 +1533,64 @@ function server.run()
                 z       = t.position and t.position.z or nil,
             }
         end
-        -- safeJSONVal: returns v if it serialises cleanly, nil otherwise (+ log).
-        local function safeJSONVal(v, label)
-            if type(v) ~= "table" then return v end
-            local ok = pcall(textutils.serialiseJSON, v)
-            if not ok then
-                logWarn("Bridge: dropping bad field [" .. tostring(label) .. "]")
-                return nil
+        -- Build each job entry then attempt full-array serialisation.
+        -- If it fails, rebuild per-entry: for any entry that still fails,
+        -- drop individual fields that have mixed-key tables and log them.
+        local function buildJobsJSON(jobMap)
+            local entries = {}
+            for id, j in pairs(jobMap) do
+                local supportId = nil
+                if j.linkedJob and jobMap[j.linkedJob] then
+                    supportId = jobMap[j.linkedJob].assignedTo
+                end
+                local dest = j.params and j.params.destination or nil
+                table.insert(entries, {
+                    id          = id,
+                    status      = j.status,
+                    assignedTo  = j.assignedTo,
+                    type        = j.type,
+                    linkedJob   = j.linkedJob,
+                    supportId   = supportId,
+                    destination = dest,
+                })
             end
-            return v
+
+            -- Fast path: whole array serialises cleanly
+            local ok_all, r_all = pcall(textutils.serialiseJSON, entries)
+            if ok_all then return r_all end
+
+            -- Slow path: per-entry rebuild
+            logWarn("Bridge: jobs array failed, rebuilding per-entry")
+            local parts = {}
+            for _, e in ipairs(entries) do
+                local ok_e, r_e = pcall(textutils.serialiseJSON, e)
+                if ok_e then
+                    table.insert(parts, r_e)
+                else
+                    -- Per-field sanitization: drop any field whose value is a
+                    -- non-serialisable table and record exactly which one it is
+                    local safe = {}
+                    for k, v in pairs(e) do
+                        if type(v) ~= "table" then
+                            safe[k] = v
+                        else
+                            local ok_v, _ = pcall(textutils.serialiseJSON, v)
+                            if ok_v then
+                                safe[k] = v
+                            else
+                                logWarn("Bridge: job[" .. tostring(e.id) .. "]." .. tostring(k) ..
+                                        " has mixed keys — dropped")
+                            end
+                        end
+                    end
+                    local ok_s, r_s = pcall(textutils.serialiseJSON, safe)
+                    if ok_s then table.insert(parts, r_s) end
+                end
+            end
+            return "[" .. table.concat(parts, ",") .. "]"
         end
 
-        local jobs = {}
-        for id, j in pairs(state.jobs) do
-            -- Look up the support turtle's ID from the linked job's assignedTo.
-            -- This survives the cancel path (which clears registry jobId but not
-            -- job.assignedTo) AND the direct-cancel path where assignedTo stays set.
-            local supportId = nil
-            if j.linkedJob and state.jobs[j.linkedJob] then
-                supportId = state.jobs[j.linkedJob].assignedTo
-            end
-            local dest = j.params and j.params.destination or nil
-            dest = safeJSONVal(dest, tostring(id) .. ".destination")
-            table.insert(jobs, {
-                id          = id,
-                status      = j.status,
-                assignedTo  = j.assignedTo,
-                type        = j.type,
-                linkedJob   = j.linkedJob,
-                supportId   = supportId,
-                destination = dest,
-            })
-        end
+        local jobs = buildJobsJSON(state.jobs)
         -- Build mineZones summary for the dashboard overlay (active + historical)
         local mineZones = {}
         -- Active zones — keyed by jobId
@@ -1626,7 +1652,7 @@ function server.run()
             return r
         end
         local payload = '{"turtles":'  .. js(turtles,      "{}",  "turtles") ..
-                        ',"jobs":'     .. js(jobs,          "[]",  "jobs") ..
+                        ',"jobs":'     .. jobs ..
                         ',"version":'  .. js(proto.VERSION, '"?"', "version") ..
                         ',"storage":'  .. storageJSON ..
                         ',"mineZones":' .. js(mineZones,   "{}",  "mineZones") .. '}'
