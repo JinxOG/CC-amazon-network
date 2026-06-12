@@ -1369,7 +1369,8 @@ function _fuel(t){
 
 // ── Jobs: keyed DOM updates ───────────────────────────────────────────────
 
-const JOB_STEPS=['QUEUE','LOAD','TRAVEL','DELIVER','RETURN'];
+const JOB_STEPS      =['QUEUE','LOAD','TRAVEL','DELIVER','RETURN'];
+const MINE_JOB_STEPS =['QUEUE','TRAVEL','SURVEY','MINE','RETURN'];
 
 function setJobFilter(f){
     jobFilter=f;
@@ -1393,16 +1394,34 @@ function getJobStep(job,turtles){
     return 2;
 }
 
-function _buildSteps(curStep){
-    return JOB_STEPS.map((lbl,i)=>{
+function getMineJobStep(job,turtles,mineZones){
+    if(!job)return-1;
+    if(job.status==='COMPLETE')return 5;
+    if(job.status==='FAILED'||job.status==='CANCELLED')return-1;
+    if(job.status==='PENDING')return 0;
+    const t=Object.values(turtles||{}).find(x=>x.jobId===job.id&&x.role==='MINER');
+    if(!t)return 1;
+    if(t.status==='TRAVELLING')return 1;
+    if(t.status==='WORKING'){
+        const z=(mineZones||{})[job.id];
+        return(z&&z.phase==='SURVEY')?2:3;
+    }
+    if(t.status==='RETURNING')return 4;
+    return 1;
+}
+
+function _buildSteps(curStep,steps){
+    const lbls=steps||JOB_STEPS;
+    return lbls.map((lbl,i)=>{
         const cls=curStep===5?'done':i<curStep?'done':i===curStep?'cur':'';
         return `<div class="jstep"><div class="jstep-bar ${cls}"></div><div class="jstep-lbl">${escapeHtml(lbl)}</div></div>`;
     }).join('');
 }
 
 function renderJobTurtle(id,t,role){
-    const roleCls=role==='DELIVERY'?'d':'s';
-    const roleColor=role==='DELIVERY'?'#00ff8833':'#4488ff33';
+    const isMain=role==='DELIVERY'||role==='MINER';
+    const roleCls=isMain?'d':'s';
+    const roleColor=isMain?'#00ff8833':'#4488ff33';
     if(!id||!t)return `<div class="jtside"><div class="jtside-role" style="color:#1a1a2e;">${role}</div><div class="jtside-name dim">—</div></div>`;
     const{pct,fc}=_fuel(t);
     return `<div class="jtside">
@@ -1414,7 +1433,8 @@ function renderJobTurtle(id,t,role){
 }
 
 function findJobTurtles(j,turtles,turtleEntries,allJobs){
-    let delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='DELIVERY');
+    const mainRole=j.type==='MINE'?'MINER':'DELIVERY';
+    let delEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role===mainRole);
     let supEntry=turtleEntries.find(([,t])=>t.jobId===j.id&&t.role==='SUPPORT');
     if(!supEntry&&j.linkedJob){
         supEntry=turtleEntries.find(([,t])=>t.jobId===j.linkedJob);
@@ -1472,20 +1492,33 @@ function _buildMineStats(jid){
 function _buildJobCard(j,turtles,turtleEntries,allJobs){
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
     const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
-    const dest=j.destination,destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
-    const items=j.items||[];
-    const itemsHtml=items.length?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
+    const isMine=j.type==='MINE';
     const{delEntry,supEntry}=findJobTurtles(j,turtles,turtleEntries,allJobs);
     const cancelBtn=!terminal.has(j.status)?`<button class="jc-cancel" onclick="cancelJob('${ejid}')">CANCEL</button>`:'';
-    const mineStats=j.type==='MINE'?_buildMineStats(j.id):'';
+    const mineStats=isMine?_buildMineStats(j.id):'';
+    let progHtml,destHtml,itemsHtml='';
+    if(isMine){
+        const step=getMineJobStep(j,turtles,lastState.mineZones);
+        progHtml=_buildSteps(step,MINE_JOB_STEPS);
+        const z=(lastState.mineZones||{})[j.id];
+        const rb=z&&z.rawBounds;
+        const areaStr=rb?`(${rb.x1},${rb.z1}) → (${rb.x2},${rb.z2})`:'?';
+        destHtml=`<div class="jdest">AREA <span>${escapeHtml(areaStr)}</span></div>`;
+    }else{
+        const dest=j.destination,destStr=dest&&dest.x!=null?`${dest.x}, ${dest.y||67}, ${dest.z}`:'?';
+        const items=j.items||[];
+        itemsHtml=items.length?`<div class="jitems">${items.map(it=>`<span class="jtag">${escapeHtml(it.displayName||it.name||'?')} <span class="qty">×${it.count}</span></span>`).join('')}</div>`:'';
+        progHtml=_buildSteps(getJobStep(j,turtles));
+        destHtml=`<div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>`;
+    }
     return `<div class="job-card ${ejstat} is-new" data-id="${ejid}">
         <div class="jc-top"><span class="jc-id">${ejid}</span><span class="jbadge ${ejstat}">${ejstat}</span>${cancelBtn}</div>
-        <div class="jprog">${_buildSteps(getJobStep(j,turtles))}</div>
+        <div class="jprog">${progHtml}</div>
         ${itemsHtml}
         ${mineStats}
-        <div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>
+        ${destHtml}
         <div class="jturtles">
-            ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,'DELIVERY')}
+            ${renderJobTurtle(delEntry?delEntry[0]:null,delEntry?delEntry[1]:null,isMine?'MINER':'DELIVERY')}
             ${renderJobTurtle(supEntry?supEntry[0]:null,supEntry?supEntry[1]:null,'SUPPORT')}
         </div>
     </div>`;
@@ -1497,11 +1530,12 @@ function _patchJobCard(card,j,turtles,turtleEntries,allJobs){
     const wantCls=`job-card ${j.status}`;
     if(card.className!==wantCls)card.className=wantCls;
     // Progress bars — only rebuild when step index actually changes
-    const curStep=getJobStep(j,turtles);
+    const isMine=j.type==='MINE';
+    const curStep=isMine?getMineJobStep(j,turtles,lastState.mineZones):getJobStep(j,turtles);
     if(card.dataset.step!==String(curStep)){
         card.dataset.step=String(curStep);
         const prog=card.querySelector('.jprog');
-        if(prog)prog.innerHTML=_buildSteps(curStep);
+        if(prog)prog.innerHTML=_buildSteps(curStep,isMine?MINE_JOB_STEPS:JOB_STEPS);
     }
     // Badge — guard class to avoid animation restarts
     const badge=card.querySelector('.jbadge');
