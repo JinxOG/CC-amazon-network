@@ -212,6 +212,14 @@
         .jstep-bar.done + .jstep-lbl { color:#4488ff88; }
         .jstep-bar.cur  + .jstep-lbl { color:#4488ffcc; }
 
+        /* Mine job: orange theme */
+        .job-card.mine.IN_PROGRESS { border-left-color:#ff8800; box-shadow:-2px 0 8px #ff880022; }
+        .job-card.mine .jstep-bar.done { background:#ff8800; box-shadow:0 0 5px #ff880055; }
+        .job-card.mine .jstep-bar.cur  { background:#ff880088; }
+        .job-card.mine .jstep-bar.done + .jstep-lbl { color:#ff880088; }
+        .job-card.mine .jstep-bar.cur  + .jstep-lbl { color:#ff8800cc; }
+        .job-card.mine .jdest span { color:#ff8800aa; }
+
         .jitems { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
         .jtag { background:#0a0a18; border:1px solid #2a2a4a; color:#bbb; font-size:12px; padding:2px 8px; border-radius:2px; }
         .jtag .qty { color:#4488ffaa; }
@@ -1444,7 +1452,7 @@ function _buildSteps(curStep,steps){
 function renderJobTurtle(id,t,role){
     const isMain=role==='DELIVERY'||role==='MINER';
     const roleCls=isMain?'d':'s';
-    const roleColor=isMain?'#00ff8833':'#4488ff33';
+    const roleColor=role==='MINER'?'#ff880055':isMain?'#00ff8833':'#4488ff33';
     if(!id||!t)return `<div class="jtside"><div class="jtside-role" style="color:#1a1a2e;">${role}</div><div class="jtside-name dim">—</div></div>`;
     const{pct,fc}=_fuel(t);
     return `<div class="jtside">
@@ -1534,7 +1542,7 @@ function _buildJobCard(j,turtles,turtleEntries,allJobs){
         progHtml=_buildSteps(getJobStep(j,turtles));
         destHtml=`<div class="jdest">DEST <span>${escapeHtml(destStr)}</span></div>`;
     }
-    return `<div class="job-card ${ejstat} is-new" data-id="${ejid}">
+    return `<div class="job-card ${ejstat}${isMine?' mine':''} is-new" data-id="${ejid}">
         <div class="jc-top"><span class="jc-id">${ejid}</span><span class="jbadge ${ejstat}">${ejstat}</span>${cancelBtn}</div>
         <div class="jprog">${progHtml}</div>
         ${itemsHtml}

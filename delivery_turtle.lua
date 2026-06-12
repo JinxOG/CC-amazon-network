@@ -289,10 +289,17 @@ base.run(function(job)
         base.signalPartnerDirect(proto.MSG.ASCENDING, savedPartnerId, {})
     end
 
+    -- After clearing partnerId for the ascent, all subsequent failure paths must
+    -- restore it before sendFailed so the support receives JOB_ABORT and returns.
+    local function failDelivery(reason, recoverable)
+        if savedPartnerId then base.setPartnerId(savedPartnerId) end
+        return base.sendFailed(reason, recoverable)
+    end
+
     base.sendProgress(string.format("Ascending to delivery point Y=%d", d.y))
     ok, err = base.move.to(d.x, d.y, d.z)
     if not ok then
-        return base.sendFailed("ascent failed: " .. (err or "?"), true)
+        return failDelivery("ascent failed: " .. (err or "?"), true)
     end
 
     -- ── Step 5: Entangled chest delivery ─────────────────────────────────────
@@ -303,7 +310,7 @@ base.run(function(job)
     -- ── CHECKPOINT 2: PRE-PLACE ──────────────────────────────────────────────
     -- Hard check — must have ender chest in slot 16 before placing it.
     if not checkEC("PRE-PLACE", true) then
-        return base.sendFailed("ec_missing_before_place", true)
+        return failDelivery("ec_missing_before_place", true)
     end
 
     -- Place entangled chest below
@@ -364,7 +371,7 @@ base.run(function(job)
             if base.isRecalled() then
                 print("[WH] Recalled while waiting for warehouse — aborting wait")
                 pickUpECAndVerify()
-                return base.sendFailed("recalled_while_waiting_for_warehouse", false)
+                return failDelivery("recalled_while_waiting_for_warehouse", false)
             end
             -- Re-ping warehouse (keeps DELIVERY_ARRIVED fresh in inbox;
             -- also re-queues us if our ITEM_REQUEST was never received)
@@ -400,7 +407,7 @@ base.run(function(job)
 
     if not chestsReady then
         pickUpECAndVerify()
-        return base.sendFailed("warehouse_chest_timeout", true)
+        return failDelivery("warehouse_chest_timeout", true)
     end
 
     print(string.format("Pulling %d regular chests from entangled chest", chestCount))
@@ -471,7 +478,7 @@ base.run(function(job)
                 print("[WH] Batch phase timed out — aborting delivery")
                 base.move.to(d.x, d.y, d.z)
                 pickUpECAndVerify()
-                return base.sendFailed("batch_phase_timeout", true)
+                return failDelivery("batch_phase_timeout", true)
             end
             -- Re-ping warehouse in case CHESTS_PLACED was missed
             sendChestsPlaced()
@@ -524,7 +531,7 @@ base.run(function(job)
         turtle.select(EC_SLOT)
         turtle.digDown()
         if not checkEC("PRE-RETURN-RETRY", true) then
-            return base.sendFailed("ec_not_recovered_after_delivery", true)
+            return failDelivery("ec_not_recovered_after_delivery", true)
         end
     end
 
