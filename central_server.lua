@@ -1212,12 +1212,12 @@ function server.run()
     -- cleared its queue, but a re-send could double-dispatch a command. Guard with
     -- a small cache keyed on the server-assigned timestamp + command type.
     -- Declared before handleBridgeCommand so the UPDATE_ALL branch can capture
-    -- it as an upvalue. Acted on in the main loop outside parallel.waitForAny.
+    -- it as an upvalue. Acted on in the http_success handler in the main loop.
     local pendingUpdate = false
 
     -- RS storage snapshot — refreshed every 5s, included in every bridge push.
     -- Craftable index is refreshed separately every 60s (listCraftableItems is slow).
-    -- storageJSON is pre-serialised here so pushToBridge never does it inside parallel.
+    -- storageJSON is pre-serialised so buildBridgePayload never serialises 300+ items inline.
     local storageItems  = {}
     local craftableMap  = {}
     local storageJSON   = "[]"
@@ -1320,9 +1320,8 @@ function server.run()
         elseif t == "UPDATE_ALL" then
             sendBroadcast(proto.MSG.UPDATE_ALL, {})
             logInfo("Dashboard: UPDATE_ALL broadcast sent")
-            -- Flag for self-update; handled in the main loop OUTSIDE the
-            -- parallel.waitForAny(pushToBridge, sleep(5)) timeout so the
-            -- updater is not killed mid-download.
+            -- Flag for self-update; acted on in the http_success handler
+            -- after the bridge response is fully processed.
             logWarn("UPDATE_ALL — self-update queued...")
             pendingUpdate = true
 
@@ -1511,13 +1510,11 @@ function server.run()
         end
     end
 
-    -- Set by UPDATE_ALL handler; acted on in the main loop outside the
-    -- parallel.waitForAny timeout so the updater is not killed mid-download.
-    -- ── Bridge push ───────────────────────────────────────────────────────────
-    -- Pushes state to the Node bridge every BRIDGE_INTERVAL seconds.
-    -- The bridge returns any dashboard commands queued since the last push
-    -- in the response body — we read and execute them here.
-    local function pushToBridge()
+    -- ── Bridge state builder ───────────────────────────────────────────────────
+    -- Serialises current server state to a JSON string.
+    -- HTTP is handled by startBridgePush (async) and the http_success /
+    -- http_failure event handlers in the main loop — no parallel.waitForAny.
+    local function buildBridgePayload()
         local turtles = {}
         for id, t in pairs(state.registry) do
             turtles[id] = {
@@ -1604,35 +1601,13 @@ function server.run()
                 }
             end
         end
-        -- Use pre-serialised storageJSON so we never serialise 300+ items inside parallel
+        -- Use pre-serialised storageJSON so we never serialise 300+ items on the hot path
         local payload = '{"turtles":' .. textutils.serialiseJSON(turtles) ..
                         ',"jobs":'    .. textutils.serialiseJSON(jobs) ..
                         ',"version":' .. textutils.serialiseJSON(proto.VERSION) ..
                         ',"storage":' .. storageJSON ..
                         ',"mineZones":' .. textutils.serialiseJSON(mineZones) .. '}'
-        local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
-        if resp then
-            local status = resp.getResponseCode()
-            local body = resp.readAll()
-            resp.close()
-            if status ~= 200 then
-                logWarn("Bridge HTTP " .. tostring(status) .. ": " .. body:sub(1, 60))
-                return nil
-            end
-            -- Return commands to be processed OUTSIDE parallel.waitForAny.
-            -- Handling them here (inside a parallel coroutine) lets the parallel
-            -- scheduler consume modem_message events — dropping SECTOR_REQUEST,
-            -- heartbeats, etc. — while handleBridgeCommand does disk I/O and
-            -- dispatcher work. Processing outside parallel is always safe.
-            local ok2, data = pcall(textutils.unserialiseJSON, body)
-            if ok2 and type(data) == "table" and type(data.commands) == "table" then
-                return data.commands
-            end
-            return nil
-        else
-            logWarn("Bridge push failed: " .. tostring(err))
-            return nil
-        end
+        return payload
     end
 
     logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
@@ -1645,13 +1620,45 @@ function server.run()
     local healthTimer     = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
     local bridgeTimer     = os.startTimer(CFG.BRIDGE_INTERVAL)
     local staleTimer      = os.startTimer(30)
-    -- Wall-clock timestamps for storage/craftable refresh; no separate timers
-    -- because separate timers can be consumed by parallel.waitForAny in the
-    -- bridgeTimer handler, causing them to silently stop firing.
     pcall(refreshStorage)
     pcall(refreshCraftable)
     local lastStorageRefresh   = os.epoch("utc")
     local lastCraftableRefresh = os.epoch("utc")
+
+    -- Async bridge push state.  A push is fire-and-forget: http.request returns
+    -- immediately, the response arrives as http_success / http_failure in the main
+    -- event loop.  No parallel.waitForAny means no event consumption side-effects.
+    local bridgePending   = false
+    local bridgeTimeoutId = nil
+
+    local function startBridgePush()
+        if bridgePending then return end
+        local now = os.epoch("utc")
+        if now - lastStorageRefresh >= 5000 then
+            local t0 = os.epoch("utc")
+            pcall(refreshStorage)
+            if os.epoch("utc") - t0 > 3000 then
+                logWarn("RS refresh took " .. tostring(os.epoch("utc") - t0) .. "ms")
+            end
+            lastStorageRefresh = os.epoch("utc")
+        end
+        if now - lastCraftableRefresh >= 60000 then
+            pcall(refreshCraftable)
+            lastCraftableRefresh = os.epoch("utc")
+        end
+        local ok, payload = pcall(buildBridgePayload)
+        if not ok then
+            logWarn("Bridge payload build error: " .. tostring(payload))
+            return
+        end
+        local started = http.request(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
+        if started then
+            bridgePending   = true
+            bridgeTimeoutId = os.startTimer(15)
+        else
+            logWarn("Bridge: http.request could not start")
+        end
+    end
 
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
@@ -1669,6 +1676,47 @@ function server.run()
                 end
             end
 
+        elseif event == "http_success" then
+            -- Async bridge response — process only if it's our push and we're waiting.
+            if p1 == CFG.BRIDGE_URL and bridgePending then
+                bridgePending = false
+                if bridgeTimeoutId then os.cancelTimer(bridgeTimeoutId); bridgeTimeoutId = nil end
+                local ok_r, code, body = pcall(function()
+                    local c = p2.getResponseCode()
+                    local b = p2.readAll()
+                    p2.close()
+                    return c, b
+                end)
+                if ok_r then
+                    if code ~= 200 then
+                        logWarn("Bridge HTTP " .. tostring(code) .. ": " .. (body or ""):sub(1, 60))
+                    else
+                        local ok2, data = pcall(textutils.unserialiseJSON, body)
+                        if ok2 and type(data) == "table" and type(data.commands) == "table" then
+                            for _, cmd in ipairs(data.commands) do
+                                pcall(handleBridgeCommand, cmd)
+                            end
+                        end
+                        if pendingUpdate then
+                            pendingUpdate = false
+                            logWarn("UPDATE_ALL — updating server in 3s...")
+                            sleep(3)
+                            if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
+                        end
+                    end
+                else
+                    logWarn("Bridge response read error: " .. tostring(code))
+                    pcall(function() p2.close() end)
+                end
+            end
+
+        elseif event == "http_failure" then
+            if p1 == CFG.BRIDGE_URL and bridgePending then
+                bridgePending = false
+                if bridgeTimeoutId then os.cancelTimer(bridgeTimeoutId); bridgeTimeoutId = nil end
+                logWarn("Bridge push failed: " .. tostring(p2))
+            end
+
         elseif event == "timer" then
             if p1 == dispatchTimer then
                 local ok, err = pcall(function()
@@ -1684,60 +1732,18 @@ function server.run()
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then
-                -- Refresh storage/craftable using wall-clock checks so events
-                -- cannot be consumed by the parallel.waitForAny below.
-                local now = os.epoch("utc")
-                if now - lastStorageRefresh >= 5000 then
-                    local t0 = os.epoch("utc")
-                    pcall(refreshStorage)
-                    local dt = os.epoch("utc") - t0
-                    if dt > 3000 then logWarn("RS refresh took " .. dt .. "ms") end
-                    lastStorageRefresh = os.epoch("utc")
-                end
-                if now - lastCraftableRefresh >= 60000 then
-                    pcall(refreshCraftable)
-                    lastCraftableRefresh = os.epoch("utc")
-                end
-                -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge
-                -- cannot stall the main event loop indefinitely.
-                -- BUG FIX: pushToBridge now RETURNS commands instead of handling
-                -- them inside the coroutine. The parallel scheduler would otherwise
-                -- consume modem_message events (SECTOR_REQUEST, heartbeats, etc.)
-                -- while handleBridgeCommand runs disk I/O and dispatches jobs.
-                local bridgeCommands = nil
-                local pushDone = false
-                parallel.waitForAny(
-                    function()
-                        local ok, cmds = pcall(pushToBridge)
-                        if ok then bridgeCommands = cmds end
-                        pushDone = true
-                    end,
-                    function() sleep(15) end   -- abandon push if it takes >15s
-                )
-                if not pushDone then logWarn("Bridge push timed out (>15s)") end
+                startBridgePush()
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
-
-                -- Process bridge commands here, safely outside the parallel context,
-                -- so no modem events can be lost during command handling.
-                if type(bridgeCommands) == "table" then
-                    for _, cmd in ipairs(bridgeCommands) do
-                        pcall(handleBridgeCommand, cmd)
-                    end
-                end
-
-                -- Run updater AFTER the parallel context exits so it is not
-                -- killed by the 5s timeout above.
-                if pendingUpdate then
-                    pendingUpdate = false
-                    logWarn("UPDATE_ALL — updating server in 3s...")
-                    sleep(3)
-                    if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
-                end
 
             elseif p1 == staleTimer then
                 local ok, err = pcall(checkStaleSupports)
                 if not ok then logError("Stale support check: " .. tostring(err)) end
                 staleTimer = os.startTimer(30)
+
+            elseif p1 == bridgeTimeoutId then
+                bridgePending   = false
+                bridgeTimeoutId = nil
+                logWarn("Bridge push timed out (>15s)")
 
             end
 
