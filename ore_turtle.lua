@@ -355,6 +355,14 @@ local function mineJob(job)
         checkFuel(jobId)
         local travelY = (surveyMode or not useSkyTravel) and SURVEY_TRAVEL_Y or SKY_Y
         if not surveyMode then useSkyTravel = true end
+        -- Fly lateral-then-vertical when descending: reach sector X,Z at current
+        -- altitude first so the support (1 block below in phase-1 follow) is
+        -- horizontally offset before we descend. Without this, the support blocks
+        -- the first descent from SKY_Y=200 to SURVEY_TRAVEL_Y=95.
+        local curPos = base.getPos()
+        if curPos.y > travelY then
+            base.move.to(sx, curPos.y, sz)
+        end
         base.move.to(sx, travelY, sz)
 
         -- Scan every depth level; only mine if not in survey mode
