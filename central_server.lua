@@ -1613,23 +1613,25 @@ function server.run()
         local resp, err = http.post(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if resp then
             local status = resp.getResponseCode()
-            -- Read the body BEFORE closing — the bridge sends pending dashboard
-            -- commands in the response (commands: [...]).  Previously we called
-            -- resp.close() immediately and silently discarded all of them.
             local body = resp.readAll()
             resp.close()
             if status ~= 200 then
                 logWarn("Bridge HTTP " .. tostring(status) .. ": " .. body:sub(1, 60))
-                return
+                return nil
             end
+            -- Return commands to be processed OUTSIDE parallel.waitForAny.
+            -- Handling them here (inside a parallel coroutine) lets the parallel
+            -- scheduler consume modem_message events — dropping SECTOR_REQUEST,
+            -- heartbeats, etc. — while handleBridgeCommand does disk I/O and
+            -- dispatcher work. Processing outside parallel is always safe.
             local ok2, data = pcall(textutils.unserialiseJSON, body)
             if ok2 and type(data) == "table" and type(data.commands) == "table" then
-                for _, cmd in ipairs(data.commands) do
-                    pcall(handleBridgeCommand, cmd)
-                end
+                return data.commands
             end
+            return nil
         else
             logWarn("Bridge push failed: " .. tostring(err))
+            return nil
         end
     end
 
@@ -1698,13 +1700,30 @@ function server.run()
                 end
                 -- PERF #55: wrap push in a parallel timeout so a slow/hung bridge
                 -- cannot stall the main event loop indefinitely.
+                -- BUG FIX: pushToBridge now RETURNS commands instead of handling
+                -- them inside the coroutine. The parallel scheduler would otherwise
+                -- consume modem_message events (SECTOR_REQUEST, heartbeats, etc.)
+                -- while handleBridgeCommand runs disk I/O and dispatches jobs.
+                local bridgeCommands = nil
                 local pushDone = false
                 parallel.waitForAny(
-                    function() pcall(pushToBridge); pushDone = true end,
+                    function()
+                        local ok, cmds = pcall(pushToBridge)
+                        if ok then bridgeCommands = cmds end
+                        pushDone = true
+                    end,
                     function() sleep(15) end   -- abandon push if it takes >15s
                 )
                 if not pushDone then logWarn("Bridge push timed out (>15s)") end
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
+
+                -- Process bridge commands here, safely outside the parallel context,
+                -- so no modem events can be lost during command handling.
+                if type(bridgeCommands) == "table" then
+                    for _, cmd in ipairs(bridgeCommands) do
+                        pcall(handleBridgeCommand, cmd)
+                    end
+                end
 
                 -- Run updater AFTER the parallel context exits so it is not
                 -- killed by the 5s timeout above.
