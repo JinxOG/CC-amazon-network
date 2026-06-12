@@ -313,6 +313,21 @@
             padding:5px 10px; font-size:11px; color:#5aaa5a; letter-spacing:1px; margin-bottom:8px;
         }
 
+        /* ── Saved locations in order modal ── */
+        .loc-list { display:flex; flex-direction:column; gap:3px; margin-bottom:6px; max-height:140px; overflow-y:auto; }
+        .loc-item { display:flex; align-items:center; gap:6px; background:#050510; border:1px solid #1a1a2e; border-radius:2px; padding:5px 8px; cursor:pointer; transition:border-color .15s; }
+        .loc-item:hover { border-color:#00ff8844; }
+        .loc-name { color:#00ff88cc; font-size:11px; letter-spacing:1px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .loc-coords { color:#5566aa; font-size:10px; font-family:'Courier New',monospace; white-space:nowrap; }
+        .loc-del { background:none; border:none; color:#ff444466; cursor:pointer; font-size:14px; line-height:1; padding:0 2px; flex-shrink:0; }
+        .loc-del:hover { color:#ff4444; }
+        .loc-save-row { display:flex; gap:4px; }
+        .loc-name-inp { flex:1; background:#050510; border:1px solid #1a1a2e; color:#ccc; font-family:'Courier New',monospace; font-size:11px; padding:5px 8px; border-radius:2px; outline:none; transition:border-color .15s; }
+        .loc-name-inp:focus { border-color:#00ff8855; }
+        .loc-save-btn { background:transparent; border:1px solid #00ff8844; color:#00ff8888; font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px; padding:5px 10px; border-radius:2px; cursor:pointer; white-space:nowrap; transition:all .15s; }
+        .loc-save-btn:hover { background:#00ff8814; border-color:#00ff88; color:#00ff88; }
+        .loc-empty { color:#444; font-size:10px; letter-spacing:1px; margin-bottom:6px; }
+
         /* ── Order modal ── */
         #backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.82); z-index:1000; }
         #backdrop.show { display:block; }
@@ -629,6 +644,14 @@
 <div id="backdrop" onclick="closeOrderModal()"></div>
 <div id="order-modal">
     <div class="modal-title">▶ PLACE ORDER</div>
+    <div class="modal-field">
+        <label>SAVED LOCATIONS</label>
+        <div id="loc-list-container"></div>
+        <div class="loc-save-row">
+            <input id="loc-name-inp" class="loc-name-inp" type="text" placeholder="Save current coords as…" maxlength="32">
+            <button class="loc-save-btn" onclick="saveCurrentLocation()">SAVE</button>
+        </div>
+    </div>
     <div class="modal-field">
         <label>DESTINATION</label>
         <div class="modal-coord-row">
@@ -1722,6 +1745,7 @@ function cartAddFromModal(name){cartAdd(name);document.getElementById('om-search
 function openOrderModal(x,z){
     if(x!=null)document.getElementById('om-x').value=x;
     if(z!=null)document.getElementById('om-z').value=z;
+    renderOrderLocations();
     document.getElementById('dynmap-frame').style.visibility='hidden';
     document.getElementById('map-overlay').classList.add('show');
     document.getElementById('backdrop').classList.add('show');
@@ -1899,6 +1923,50 @@ async function cmdUpdateSystem(){
     catch(e){toast('Update request failed: '+e.message,true);}
 }
 async function cmdUpdateAll(){if(!confirm('OTA update all CC computers? They will reboot.'))return;await sendCmd('UPDATE_ALL',{});toast('OTA update sent');}
+// ── Named locations ──────────────────────────────────────────────────────────
+
+function renderOrderLocations(){
+    const container=document.getElementById('loc-list-container');
+    if(!container)return;
+    const locs=Object.values(lastState.locations||{});
+    if(!locs.length){container.innerHTML='<div class="loc-empty">NO SAVED LOCATIONS</div>';return;}
+    container.innerHTML='<div class="loc-list">'+locs.map(l=>
+        `<div class="loc-item" onclick="applyLocation(${l.x},${l.y||67},${l.z})">
+            <span class="loc-name">${escapeHtml(l.name)}</span>
+            <span class="loc-coords">${l.x}, ${l.y||67}, ${l.z}</span>
+            <button class="loc-del" onclick="event.stopPropagation();deleteLocation('${escapeHtml(l.name).replace(/'/g,"\\'")}')" title="Remove">×</button>
+        </div>`
+    ).join('')+'</div>';
+}
+
+function applyLocation(x,y,z){
+    document.getElementById('om-x').value=x;
+    document.getElementById('om-y').value=y;
+    document.getElementById('om-z').value=z;
+}
+
+async function saveCurrentLocation(){
+    const name=document.getElementById('loc-name-inp').value.trim();
+    const x=parseInt(document.getElementById('om-x').value);
+    const y=parseInt(document.getElementById('om-y').value)||67;
+    const z=parseInt(document.getElementById('om-z').value);
+    if(!name){toast('Enter a location name',true);return;}
+    if(isNaN(x)||isNaN(z)){toast('Enter X and Z coordinates first',true);return;}
+    await sendCmd('ADD_LOCATION',{name,x,y,z});
+    document.getElementById('loc-name-inp').value='';
+    if(!lastState.locations)lastState.locations={};
+    lastState.locations[name]={name,x,y,z};
+    renderOrderLocations();
+    toast(`"${name}" saved`);
+}
+
+async function deleteLocation(name){
+    await sendCmd('REMOVE_LOCATION',{name});
+    if(lastState.locations)delete lastState.locations[name];
+    renderOrderLocations();
+    toast(`"${name}" removed`);
+}
+
 async function sendCmd(type,params){
     try{await fetch('/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,params})});}
     catch(e){toast('Command failed',true);}

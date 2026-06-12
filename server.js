@@ -3,6 +3,7 @@ const express = require('express');
 const { Rcon }  = require('rcon-client');
 const path      = require('path');
 const http      = require('http');
+const fs        = require('fs');
 const { exec }  = require('child_process');
 
 // Prevent unhandled rejections from crashing the process
@@ -43,12 +44,33 @@ const CFG = {
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
+// ─── Named Locations ─────────────────────────────────────────────────────────
+
+const LOCATIONS_FILE = path.join(__dirname, 'locations.json');
+let locations = {};
+try {
+    if (fs.existsSync(LOCATIONS_FILE)) {
+        locations = JSON.parse(fs.readFileSync(LOCATIONS_FILE, 'utf8'));
+        console.log(`[LOCATIONS] Loaded ${Object.keys(locations).length} saved locations`);
+    }
+} catch (e) {
+    console.error('[LOCATIONS] Failed to load:', e.message);
+}
+
+function saveLocations() {
+    try { fs.writeFileSync(LOCATIONS_FILE, JSON.stringify(locations, null, 2)); }
+    catch (e) { console.error('[LOCATIONS] Failed to save:', e.message); }
+}
+
+// ─── State ───────────────────────────────────────────────────────────────────
+
 let state = {
     turtles:   {},   // { nodeId: { x, y, z, status, fuel, role, jobId, dock, online } }
     jobs:      [],   // job queue from CC server
     version:   null,
     storage:   [],   // RS storage snapshot [{name, displayName, amount, craftable}]
     mineZones: {},   // { [jobId]: { bounds, total, done, pct, eta, oreFound, oreMined } }
+    locations,       // named delivery locations { [name]: { name, x, y, z } }
     updatedAt: null,
 };
 
@@ -236,6 +258,21 @@ app.get('/state', (req, res) => {
 app.post('/command', (req, res) => {
     const { type, params } = req.body;
     if (!type) return res.status(400).json({ error: 'missing type' });
+
+    // ADD_LOCATION / REMOVE_LOCATION: handled entirely in the bridge — not forwarded to CC.
+    if (type === 'ADD_LOCATION') {
+        const { name, x, y, z } = params || {};
+        if (!name || x == null || z == null) return res.status(400).json({ error: 'missing fields' });
+        locations[name] = { name, x: parseInt(x), y: parseInt(y) || 67, z: parseInt(z) };
+        saveLocations();
+        console.log(`[LOCATION] Saved: ${name} @ ${x},${y||67},${z}`);
+        return res.json({ ok: true });
+    }
+    if (type === 'REMOVE_LOCATION') {
+        const { name } = params || {};
+        if (name) { delete locations[name]; saveLocations(); console.log(`[LOCATION] Removed: ${name}`); }
+        return res.json({ ok: true });
+    }
 
     // REMOVE_TURTLE: immediately evict from bridge state so the turtle vanishes
     // from the dashboard and map without waiting for central_server to process it.
