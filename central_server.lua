@@ -1533,18 +1533,17 @@ function server.run()
                 z       = t.position and t.position.z or nil,
             }
         end
-        -- Build each job entry then attempt full-array serialisation.
-        -- If it fails, rebuild per-entry: for any entry that still fails,
-        -- drop individual fields that have mixed-key tables and log them.
+        -- Serialize jobs per-entry. If an individual entry fails, sanitize it
+        -- field-by-field, dropping any value that is a non-serialisable table.
         local function buildJobsJSON(jobMap)
-            local entries = {}
+            local parts = {}
             for id, j in pairs(jobMap) do
                 local supportId = nil
                 if j.linkedJob and jobMap[j.linkedJob] then
                     supportId = jobMap[j.linkedJob].assignedTo
                 end
                 local dest = j.params and j.params.destination or nil
-                table.insert(entries, {
+                local e = {
                     id          = id,
                     status      = j.status,
                     assignedTo  = j.assignedTo,
@@ -1552,17 +1551,7 @@ function server.run()
                     linkedJob   = j.linkedJob,
                     supportId   = supportId,
                     destination = dest,
-                })
-            end
-
-            -- Fast path: whole array serialises cleanly
-            local ok_all, r_all = pcall(textutils.serialiseJSON, entries)
-            if ok_all then return r_all end
-
-            -- Slow path: per-entry rebuild
-            logWarn("Bridge: jobs array failed, rebuilding per-entry")
-            local parts = {}
-            for _, e in ipairs(entries) do
+                }
                 local ok_e, r_e = pcall(textutils.serialiseJSON, e)
                 if ok_e then
                     table.insert(parts, r_e)
@@ -1578,7 +1567,7 @@ function server.run()
                             if ok_v then
                                 safe[k] = v
                             else
-                                logWarn("Bridge: job[" .. tostring(e.id) .. "]." .. tostring(k) ..
+                                logWarn("Bridge: job[" .. tostring(id) .. "]." .. tostring(k) ..
                                         " has mixed keys — dropped")
                             end
                         end
