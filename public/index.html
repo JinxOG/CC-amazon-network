@@ -1106,8 +1106,11 @@ function showMineInfoPanel(e,jid,z){
 
     const actionsEl=document.getElementById('mip-actions');
     if(isHist&&z.bounds&&z.bounds.x1!=null){
-        const b=z.bounds;
-        actionsEl.innerHTML=`<button class="mip-redeploy" onclick="redeployMineZone(${b.x1},${b.z1},${b.x2},${b.z2})">⛏ REDEPLOY MINERS HERE</button>`;
+        // Use rawBounds (sector-grid bounds without SCAN_RADIUS padding) so the server
+        // doesn't snap outward and grow the box on every redeploy.
+        // Fall back to bounds ± 16 for zones predating rawBounds.
+        const rb=z.rawBounds||(z.bounds.x1!=null?{x1:z.bounds.x1+16,z1:z.bounds.z1+16,x2:z.bounds.x2-16,z2:z.bounds.z2-16}:z.bounds);
+        actionsEl.innerHTML=`<button class="mip-redeploy" onclick="redeployMineZone(${rb.x1},${rb.z1},${rb.x2},${rb.z2})">⛏ REDEPLOY MINERS HERE</button>`;
     }else{
         actionsEl.innerHTML='';
     }

@@ -597,6 +597,11 @@ local function ensureMineZone(jobId, params)
         end
     end
 
+    -- rawBounds = sector-grid bounds without SCAN_RADIUS padding.
+    -- Stored so redeploy can pass them back without the bounds expanding each time.
+    local rawBounds = { x1 = bx1 + SCAN_RADIUS, z1 = bz1 + SCAN_RADIUS,
+                        x2 = bx2 - SCAN_RADIUS, z2 = bz2 - SCAN_RADIUS }
+
     state.miningZones[jobId] = {
         pending       = sectors,
         total         = total,
@@ -605,6 +610,7 @@ local function ensureMineZone(jobId, params)
         oreMined      = oreMined,
         startTime     = os.epoch("utc"),
         bounds        = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
+        rawBounds     = rawBounds,
         persistentKey = key,
         -- Survey phase
         phase         = phase,
@@ -618,12 +624,17 @@ local function ensureMineZone(jobId, params)
         state.persistentZones[key] = {
             key          = key,
             bounds       = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
+            rawBounds    = rawBounds,
             total        = total,
             doneSectors  = {},
             oreFound     = {},
             oreMined     = {},
             lastActivity = os.epoch("utc"),
         }
+        savePersistentZones()
+    elseif not pz.rawBounds then
+        -- Backward compat: patch older on-disk zones that predate rawBounds
+        pz.rawBounds = rawBounds
         savePersistentZones()
     end
 
@@ -1615,8 +1626,15 @@ function server.run()
             if not activeKeys[key] and pz.doneSectors and #pz.doneSectors > 0 then
                 local done = #pz.doneSectors
                 local pct  = pz.total > 0 and math.floor(done / pz.total * 100) or 0
+                -- rawBounds may be absent on old on-disk zones; compute from visual bounds as fallback
+                local rb = pz.rawBounds
+                if not rb and pz.bounds then
+                    rb = { x1 = pz.bounds.x1 + SCAN_RADIUS, z1 = pz.bounds.z1 + SCAN_RADIUS,
+                           x2 = pz.bounds.x2 - SCAN_RADIUS, z2 = pz.bounds.z2 - SCAN_RADIUS }
+                end
                 mineZones["zone:" .. key] = {
                     bounds      = pz.bounds,
+                    rawBounds   = rb,
                     total       = pz.total,
                     done        = done,
                     pct         = pct,
