@@ -278,28 +278,27 @@ local function mineJob(job)
     local jobId    = job.id
     local totalOre = 0
 
-    -- Coordinated recall: dump ores, signal support to use sky return, then
-    -- ascend to Y=100 (letting support drain the last POSITION_UPDATEs to that
-    -- position), clear partnerId, then ascend to sky and dock via sky path.
-    local function recallReturn(failReason, failRecoverable)
+    -- Shared coordinated sky return: keeps partnerId set (POSITION_UPDATEs
+    -- broadcasting) so the support chunk-loads the miner the entire way home.
+    -- Signals MINE_RECALL so support enters follow mode, leads it to Y=100,
+    -- waits for alignment, then ascends together to SKY_Y and arrivals hole.
+    -- Clears partnerId only once both turtles are at the hole.
+    local function coordinatedSkyReturn()
         dumpOres()
         checkFuel(jobId)
-        -- Signal support to stop locking to FOLLOW_Y and wait for miner at meeting altitude.
-        -- partnerId is kept set so POSITION_UPDATEs keep firing and support can follow.
         base.signalPartner(proto.MSG.MINE_RECALL, {})
         local p = base.getPos()
-        -- Ascend to meeting altitude (FOLLOW_Y=100). Support is already at Y=100 locking
-        -- to that level, so it tracks our X,Z as we climb — they meet at the same altitude.
         base.move.to(p.x, 100, p.z)
-        sleep(5)                          -- let support complete final X,Z alignment
-        -- Lead support up to sky altitude and across to arrivals hole, still broadcasting.
+        sleep(5)
         base.move.to(p.x, SKY_Y, p.z)
         base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
-        -- Tell support to descend independently — it is at arrivals at SKY_Y now.
         base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-        base.setPartnerId(nil)            -- stop broadcasting
-        -- We are already at arrivals at SKY_Y; returnToDockFromSky just descends.
+        base.setPartnerId(nil)
         base.returnToDockFromSky()
+    end
+
+    local function recallReturn(failReason, failRecoverable)
+        coordinatedSkyReturn()
         base.sendFailed(failReason or "recalled", failRecoverable ~= nil and failRecoverable or false)
     end
 
@@ -428,13 +427,8 @@ local function mineJob(job)
     end
 
     -- ── Return home ──────────────────────────────────────────────────────────
-    -- Use sky path: miner is deep underground and the terrain between the mine
-    -- zone and arrivals hole is unknown. returnToDock() navigates laterally at
-    -- Y=60 which risks getting stuck. Ascend straight up instead.
     base.sendProgress(string.format("All sectors done — %d ore mined. Returning.", totalOre))
-    base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-    base.setPartnerId(nil)
-    base.returnToDockFromSky()
+    coordinatedSkyReturn()
     base.sendComplete({ oreCount = totalOre })
 end
 
