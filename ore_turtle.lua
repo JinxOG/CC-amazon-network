@@ -428,11 +428,13 @@ local function mineJob(job)
     end
 
     -- ── Return home ──────────────────────────────────────────────────────────
-    -- Miner is at the last sector's deepest scan level — returnToDock navigates
-    -- from here directly (no wasteful ascent to SKY_Y first).
+    -- Use sky path: miner is deep underground and the terrain between the mine
+    -- zone and arrivals hole is unknown. returnToDock() navigates laterally at
+    -- Y=60 which risks getting stuck. Ascend straight up instead.
     base.sendProgress(string.format("All sectors done — %d ore mined. Returning.", totalOre))
     base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-    base.returnToDock()
+    base.setPartnerId(nil)
+    base.returnToDockFromSky()
     base.sendComplete({ oreCount = totalOre })
 end
 

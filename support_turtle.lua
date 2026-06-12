@@ -190,6 +190,7 @@ base.run(function(job)
                                         lastUpdateTime = os.epoch("utc") / 1000
                                     elseif nxt.type == proto.MSG.RETURN_TO_DOCK then
                                         print("[SUPPORT] Miner returning (drain) — docking")
+                                        _skyReturn = true
                                         goto mine_done
                                     elseif nxt.type == proto.MSG.JOB_ABORT then
                                         print("[SUPPORT] JOB_ABORT (drain) — docking")
@@ -214,7 +215,8 @@ base.run(function(job)
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
-                    print("[SUPPORT] Miner returning — returning to dock independently")
+                    print("[SUPPORT] Miner returning — returning via sky path")
+                    _skyReturn = true
                     break
 
                 elseif msg.type == proto.MSG.JOB_ABORT then
