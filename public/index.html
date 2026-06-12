@@ -425,6 +425,8 @@
         .mip-close:hover { color:#ff4444; }
         .mip-hide { background:transparent; border:1px solid #ffaa4455; border-radius:2px; color:#ffaa44; cursor:pointer; font-size:9px; letter-spacing:1px; padding:2px 6px; font-family:'Courier New',monospace; }
         .mip-hide:hover { background:#ffaa4422; border-color:#ffaa44; }
+        .mip-redeploy { display:block; width:100%; background:transparent; border:1px solid #00ff8855; border-radius:2px; color:#00ff88; cursor:pointer; font-size:10px; letter-spacing:2px; padding:6px 0; margin:10px 0 4px; font-family:'Courier New',monospace; transition:background .15s,border-color .15s; }
+        .mip-redeploy:hover { background:#00ff8818; border-color:#00ff88; }
         .mip-row { display:flex; justify-content:space-between; font-size:11px; margin-bottom:5px; letter-spacing:1px; color:#8888aa; }
         .mip-row .v { color:#ccc; }
         .mip-prog { height:3px; background:#1a1a2e; border-radius:2px; margin:8px 0 12px; overflow:hidden; }
@@ -707,6 +709,7 @@
         </span>
     </div>
     <div id="mip-stats"></div>
+    <div id="mip-actions"></div>
     <div id="mip-ore-table"></div>
 </div>
 
@@ -933,10 +936,10 @@ function setupDynmapInjection(dw){
                 const pct=z.pct||0;
                 const isHist=z.status==='HISTORICAL';
                 const isSurvey=z.phase==='SURVEY';
-                const col=isHist?'#5566bb':(isSurvey?'#44aaff':(pct>=100?'#00ff88':'#ffaa44'));
-                const weight=isHist?1:2;
-                const fillOpacity=isHist?0.04:0.1;
-                const dash=isHist?'3 7':(isSurvey?'4 4':'6 4');
+                const col=isHist?'#bb88ff':(isSurvey?'#44aaff':(pct>=100?'#00ff88':'#ffaa44'));
+                const weight=2;
+                const fillOpacity=isHist?0.12:0.1;
+                const dash=isHist?'5 5':(isSurvey?'4 4':'6 4');
                 if(_mineRects[jid]){
                     _mineRects[jid].r.setBounds(lb);
                     _mineRects[jid].r.setStyle({color:col,fillColor:col,weight,fillOpacity,dashArray:dash});
@@ -1100,6 +1103,14 @@ function showMineInfoPanel(e,jid,z){
         minerLine+
         '<div class="mip-row"><span>AREA</span><span class="v">'+w+' × '+h+'</span></div>'+
         progressSection;
+
+    const actionsEl=document.getElementById('mip-actions');
+    if(isHist&&z.bounds&&z.bounds.x1!=null){
+        const b=z.bounds;
+        actionsEl.innerHTML=`<button class="mip-redeploy" onclick="redeployMineZone(${b.x1},${b.z1},${b.x2},${b.z2})">⛏ REDEPLOY MINERS HERE</button>`;
+    }else{
+        actionsEl.innerHTML='';
+    }
 
     // Build ore breakdown table
     const found=z.oreFound||{};
@@ -1775,6 +1786,13 @@ function updateMineAreaInfo(){
     const nsZ=(Math.ceil(Math.max(z1,z2)/32)*32-Math.floor(Math.min(z1,z2)/32)*32)/32+1;
     el.textContent=`${dx}×${dz} blocks · ${nsX*nsZ} sectors`;
 }
+async function redeployMineZone(x1,z1,x2,z2){
+    await sendCmd('ORDER_MINE',{x1,z1,x2,z2});
+    document.getElementById('mine-info-panel').classList.remove('show');
+    toast(`Mine job dispatched — (${x1},${z1}) to (${x2},${z2})`);
+    switchTab('jobs');
+}
+
 async function submitMine(){
     const x1=parseInt(document.getElementById('mm-x1').value);
     const z1=parseInt(document.getElementById('mm-z1').value);
