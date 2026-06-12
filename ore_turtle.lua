@@ -365,23 +365,34 @@ local function mineJob(job)
         end
         base.move.to(sx, travelY, sz)
 
-        -- Scan every depth level; only mine if not in survey mode
+        -- Scan every depth level; only mine if not in survey mode.
+        -- seenOres deduplicates across depth levels: scan spheres overlap
+        -- (Y=16 covers Y 0-32, Y=8 covers Y -8 to 24 — 24-block overlap),
+        -- so the same ore block appears in multiple raw scan results.
         local count       = 0
-        local sectorFound = {}   -- {[name]=count} from geo scan
+        local sectorFound = {}   -- {[name]=count} from geo scan (deduplicated)
         local sectorMined = {}   -- {[name]=count} actually mined (0 during survey)
+        local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
         for i, sy in ipairs(SCAN_LEVELS) do
             checkFuel(jobId)
             base.move.to(sx, sy, sz)
             base.setStatus(proto.STATUS.WORKING, jobId)
             base.sendProgress(string.format("%sScanning %d,%d depth %d/%d (Y=%d)",
                 modeTag, sx, sz, i, #SCAN_LEVELS, sy))
-            local ores = scanSector()
-            -- Report scan results immediately so the dashboard updates in real time.
+            local rawOres = scanSector()
+            -- Deduplicate: only keep ore blocks not seen at a previous depth level.
+            local ores      = {}
             local scanFound = {}
-            for _, o in ipairs(ores) do
-                scanFound[o.name]    = (scanFound[o.name]    or 0) + 1
-                sectorFound[o.name] = (sectorFound[o.name] or 0) + 1
+            for _, o in ipairs(rawOres) do
+                local key = o.x .. "," .. o.y .. "," .. o.z
+                if not seenOres[key] then
+                    seenOres[key] = true
+                    table.insert(ores, o)
+                    scanFound[o.name]    = (scanFound[o.name]    or 0) + 1
+                    sectorFound[o.name] = (sectorFound[o.name] or 0) + 1
+                end
             end
+            -- Report scan results immediately so the dashboard updates in real time.
             if next(scanFound) then
                 base.sendToServer(proto.MSG.SECTOR_SCAN,
                     proto.payloadSectorScan(jobId, sx, sz, sy, scanFound))
