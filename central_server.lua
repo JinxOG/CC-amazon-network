@@ -1533,6 +1533,17 @@ function server.run()
                 z       = t.position and t.position.z or nil,
             }
         end
+        -- safeJSONVal: returns v if it serialises cleanly, nil otherwise (+ log).
+        local function safeJSONVal(v, label)
+            if type(v) ~= "table" then return v end
+            local ok = pcall(textutils.serialiseJSON, v)
+            if not ok then
+                logWarn("Bridge: dropping bad field [" .. tostring(label) .. "]")
+                return nil
+            end
+            return v
+        end
+
         local jobs = {}
         for id, j in pairs(state.jobs) do
             -- Look up the support turtle's ID from the linked job's assignedTo.
@@ -1542,6 +1553,8 @@ function server.run()
             if j.linkedJob and state.jobs[j.linkedJob] then
                 supportId = state.jobs[j.linkedJob].assignedTo
             end
+            local dest = j.params and j.params.destination or nil
+            dest = safeJSONVal(dest, tostring(id) .. ".destination")
             table.insert(jobs, {
                 id          = id,
                 status      = j.status,
@@ -1549,7 +1562,7 @@ function server.run()
                 type        = j.type,
                 linkedJob   = j.linkedJob,
                 supportId   = supportId,
-                destination = j.params and j.params.destination or nil,
+                destination = dest,
             })
         end
         -- Build mineZones summary for the dashboard overlay (active + historical)
