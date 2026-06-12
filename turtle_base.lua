@@ -1240,8 +1240,13 @@ function base.run(jobHandler)
                                 -- call returnToDock itself. Control loop must NOT also
                                 -- navigate or the two coroutines fight over movement.
                                 _self.recalled = true
-                                base.sendFailed("recalled", true)
                                 pendingJob = nil
+                                -- Miners coordinate via MINE_RECALL in recallReturn() —
+                                -- sendFailed here would fire JOB_ABORT to the support and
+                                -- clear partnerId before the coordinated return can happen.
+                                if _self.role ~= proto.ROLE.MINER then
+                                    base.sendFailed("recalled", true)
+                                end
                             else
                                 -- Idle turtle: navigate directly.
                                 local insideBuilding = base.isInsideBuilding(_self.pos)
