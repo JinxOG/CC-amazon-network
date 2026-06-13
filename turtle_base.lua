@@ -63,6 +63,7 @@ function base.setPartnerId(id)   _self.partnerId = id    end
 function base.setCanDig(val)     _self.canDig = val      end
 function base.isServerDown()     return _self.serverDown end
 function base.isRecalled()       return _self.recalled   end
+function base.setRecalled(v)     _self.recalled = v      end
 
 function base.isInsideBuilding(pos)
     return pos.y >= CFG.FLOOR_Y

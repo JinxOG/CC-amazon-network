@@ -52,6 +52,14 @@ local function waitMsg(types, secs)
                     and msg.type == proto.MSG.FUEL_LOW
                     and msg.from == base.getPartnerId() then
                 serveSupportFuel(msg.payload)
+            elseif msg.type == proto.MSG.JOB_ABORT
+                    and msg.from == base.getPartnerId() then
+                -- Support was recalled independently and signalled us.
+                -- Self-recall so existing isRecalled() checks fire recallReturn(),
+                -- which sends MINE_RECALL back to the waiting support.
+                print("[MINER] Support sent JOB_ABORT — self-recalling for coordinated return")
+                base.setRecalled(true)
+                return nil
             elseif set[msg.type] then
                 return msg
             end
