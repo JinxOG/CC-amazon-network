@@ -87,19 +87,62 @@ local function tryRefuelSlot14()
     if turtle.getItemCount() > 0 then turtle.refuel() end
 end
 
+-- Estimate fuel required to fly home from the current position.
+local function fuelToReturn()
+    local p  = base.getPos()
+    local ah = W.ARRIVALS_HOLE
+    local ascent  = math.max(0, SKY_Y - p.y)
+    local lateral = math.abs(p.x - ah.x) + math.abs(p.z - ah.z)
+    return math.ceil(ascent + lateral + 300)  -- 300 = descent + dock nav + margin
+end
+
 local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
+
+    -- Step 1: burn slot-14 coal reserve
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
-    -- Support is at Y=100, never near the miner underground — safe to place EC
-    turtle.select(S_FUEL_EC)
-    if turtle.detectDown() then turtle.digDown() end
-    turtle.placeDown()
-    turtle.select(S_COAL)
-    turtle.suckDown(32)
-    turtle.refuel()
-    turtle.select(S_FUEL_EC)
-    turtle.digDown()
+
+    -- Step 2: try the fuel EC in slot 15
+    local ecItem = turtle.getItemDetail(S_FUEL_EC)
+    if ecItem then
+        turtle.select(S_FUEL_EC)
+        if turtle.detectDown() then turtle.digDown() end
+        if turtle.placeDown() then
+            turtle.select(S_COAL)
+            local got = turtle.suckDown(32)
+            if got then
+                turtle.refuel()
+            else
+                print("[FUEL] EC chest is empty — no coal available")
+                base.sendProgress("FUEL WARNING: EC chest empty, fuel=" .. turtle.getFuelLevel())
+            end
+            turtle.select(S_FUEL_EC)
+            turtle.digDown()
+        else
+            print("[FUEL] Failed to place fuel EC")
+        end
+    else
+        print(string.format("[FUEL] EC missing from slot %d — cannot refuel from chest", S_FUEL_EC))
+        base.sendProgress("FUEL WARNING: EC missing from slot " .. S_FUEL_EC
+                .. ", fuel=" .. turtle.getFuelLevel())
+    end
+
+    -- Step 3: assess post-refuel fuel level
+    local fuel   = turtle.getFuelLevel()
+    if fuel >= FUEL_WARN then return end  -- successfully topped up
+
+    local needed = fuelToReturn()
+    if fuel < needed then
+        print(string.format("[FUEL] CRITICAL: %d fuel, need ~%d to return — aborting job", fuel, needed))
+        base.sendProgress("FUEL CRITICAL: " .. fuel .. " fuel (need ~" .. needed
+                .. " to return) — returning to base")
+        base.setRecalled(true)
+    else
+        -- Enough to get home, but too low to keep mining comfortably — warn and continue.
+        print(string.format("[FUEL] LOW: %d fuel (min %d to return) — continuing cautiously", fuel, needed))
+        base.sendProgress("FUEL LOW: " .. fuel .. " fuel (min ~" .. needed .. " to return)")
+    end
 end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
