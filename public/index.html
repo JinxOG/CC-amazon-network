@@ -157,6 +157,7 @@
         .pbtn.amber:hover { border-color:#ffaa4433; color:#ffaa44; }
         .pbtn.blue:hover  { border-color:#4488ff33; color:#4488ff; }
         .pbtn.fuel:hover  { border-color:#ffdd0033; color:#ffdd00; }
+        .pbtn.disabled    { opacity:.35; cursor:not-allowed; pointer-events:none; }
 
         /* ── Job filter bar ── */
         .jfilter-wrap { padding:0 !important; gap:0 !important; }
@@ -1343,7 +1344,7 @@ function _buildTcard(id,t,sysVer){
         <div class="tcard-btns">
             <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
             ${idleBtn}
-            <button class="pbtn fuel" onclick="forceRefuel('${eid}')">REFUEL</button>
+            <button class="pbtn fuel tc-refuel${st!=='IDLE'?' disabled':''}" onclick="forceRefuel('${eid}')"${st!=='IDLE'?' title="Turtle must be IDLE to refuel"':''}>REFUEL</button>
             <button class="pbtn blue" onclick="reassignBay('${eid}')">BAY</button>
             <button class="pbtn red" onclick="deleteTurtle('${eid}')">DEL</button>
         </div>
@@ -1391,6 +1392,9 @@ function _patchTcard(card,t,sysVer){
             const locateBtn=btns.querySelector('.pbtn');
             btns.insertBefore(btn,locateBtn?locateBtn.nextSibling:btns.firstChild);
         }else if(st==='IDLE'&&existIdle){existIdle.remove();}
+        // REFUEL button: greyed out when busy
+        const refuelBtn=btns.querySelector('.tc-refuel');
+        if(refuelBtn){refuelBtn.classList.toggle('disabled',st!=='IDLE');}
     }
     card.classList.remove('is-new');
 }
@@ -1923,10 +1927,10 @@ async function deleteTurtle(id){if(!confirm(`Remove ${id} from fleet?\nThis rele
 async function forceRefuel(id){
     const t=lastState.turtles&&lastState.turtles[id];
     const busy=t&&t.status&&t.status!=='IDLE';
-    const msg=busy?`${id} is ${t.status} — recall it to dock for refuelling?`:`Force refuel ${id} at dock now?`;
-    if(!confirm(msg))return;
+    if(busy){toast(`${id} is ${t.status} — recall it first, then refuel when idle`,true);return;}
+    if(!confirm(`Force refuel ${id} at dock now?`))return;
     await sendCmd('FORCE_REFUEL',{turtleId:id});
-    toast(busy?`${id} recalled for refuel`:`${id} refuelling now`);
+    toast(`${id} refuelling now`);
 }
 async function reassignBay(id){
     const bay=prompt(`Reassign ${id} to bay number:`);if(bay===null)return;
