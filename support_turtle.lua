@@ -228,11 +228,15 @@ base.run(function(job)
                     break
 
                 elseif msg.type == proto.MSG.MINE_RECALL then
-                    print("[SUPPORT] Mine recalled — waiting at meeting altitude for miner")
+                    print("[SUPPORT] Mine recalled — clearing miner column")
                     _skyReturn = true
                     _recalling = true
-                    -- Don't break — keep receiving POSITION_UPDATEs so we track miner X,Z
-                    -- at FOLLOW_Y until miner ascends up to meet us, then follow real Y up
+                    -- Step immediately east to vacate the miner's vertical column.
+                    -- If the miner is already at FOLLOW_Y-1 it is blocked and cannot
+                    -- send more POSITION_UPDATEs; we must move NOW rather than waiting
+                    -- for the next update to trigger the xOffset path.
+                    local p = base.getPos()
+                    base.move.to(p.x + 1, p.y, p.z)
                 end
             end
         end
