@@ -88,6 +88,8 @@ local function tryRefuelSlot14()
 end
 
 -- Refuel at dock: place EC above (bay layout), suck coal, pick it back up.
+-- Uses slot 2 for coal — slots 2-13 are always empty at dock (ores are dumped
+-- at job end), so there is no risk of overflow into slot 15 (the EC slot).
 local function minerDockRefuel()
     local ecItem = turtle.getItemDetail(S_FUEL_EC)
     if not ecItem then
@@ -97,7 +99,7 @@ local function minerDockRefuel()
     turtle.select(S_FUEL_EC)
     if turtle.detectUp() then turtle.digUp() end
     if turtle.placeUp() then
-        turtle.select(S_COAL)
+        turtle.select(2)
         turtle.suckUp(64)
         turtle.refuel()
         turtle.select(S_FUEL_EC)
