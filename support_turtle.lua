@@ -211,7 +211,11 @@ base.run(function(job)
                             print("[SUPPORT] Miner at meeting altitude — ascending together")
                         end
                         local targetY = _miningMode and FOLLOW_Y or prev.y
-                        base.move.to(prev.x, targetY, prev.z)
+                        -- During coordinated recall, offset 1 block in X so support
+                        -- is never in the miner's vertical column. Miner ascends
+                        -- through its own column; support follows in the adjacent one.
+                        local xOffset = _recalling and 1 or 0
+                        base.move.to(prev.x + xOffset, targetY, prev.z)
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
