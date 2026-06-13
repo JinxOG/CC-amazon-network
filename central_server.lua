@@ -1765,10 +1765,19 @@ function server.run()
             else
                 pct = orePct(z.oreFound, z.oreMined) or 0
             end
+            -- ETA: ore-based during MINE (matches the %-display); nil during SURVEY/RESCAN.
+            -- Falls back to sector-based if no ore collected yet (barren zone).
             local eta = nil
-            if z.done > 0 and z.total > z.done then
+            if z.phase == "MINE" then
+                local found, mined = 0, 0
+                for _, v in pairs(z.oreFound  or {}) do found = found + v end
+                for _, v in pairs(z.oreMined  or {}) do mined = mined + v end
                 local elapsed = (os.epoch("utc") - z.startTime) / 1000
-                eta = math.floor(elapsed / z.done * (z.total - z.done))
+                if mined > 0 and found > mined and elapsed > 0 then
+                    eta = math.floor((found - mined) / (mined / elapsed))
+                elseif z.done > 0 and z.total > z.done and elapsed > 0 then
+                    eta = math.floor(elapsed / z.done * (z.total - z.done))
+                end
             end
             local minerId  = state.jobs[jid] and state.jobs[jid].assignedTo or nil
             local minerSt  = minerId and state.registry[minerId] and state.registry[minerId].status or nil
