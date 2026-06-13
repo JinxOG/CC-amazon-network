@@ -183,10 +183,11 @@ base.run(function(job)
                                 print("[SUPPORT] Miner descended to mine — locking to Y=" .. FOLLOW_Y)
                             end
                         end
-                        -- Drain only during underground mining to skip sector-flight steps.
-                        -- During recall we follow step-by-step (1 move per POSITION_UPDATE)
-                        -- which keeps the CC event queue at depth 0-1 — no overflow.
-                        if _miningMode then
+                        -- Drain during mining AND during recall sky flight. The miner
+                        -- sends 300+ POSITION_UPDATEs across the horizontal sky leg;
+                        -- without draining, RETURN_TO_DOCK (sent last) gets pushed past
+                        -- the 256-event CC queue limit and is silently dropped.
+                        if _miningMode or _recalling then
                             while true do
                                 local nxt = proto.receive(base.getSelfId(), 0.05)
                                 if not nxt then break end
