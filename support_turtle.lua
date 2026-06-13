@@ -235,6 +235,11 @@ base.run(function(job)
         ::mine_done::
 
         if _skyReturn then
+            -- Miner cleared the arrivals hole right before sending RETURN_TO_DOCK.
+            -- Both turtles are at Y=200 above the hole simultaneously; support has
+            -- canDig=false so if miner is in the shaft it cannot push through.
+            -- Wait 20s to let the miner get ~40 blocks into the shaft first.
+            sleep(20)
             base.returnToDockFromSky()
         else
             base.returnToDock()
