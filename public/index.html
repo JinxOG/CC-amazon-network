@@ -452,6 +452,8 @@
         .mip-hide:hover { background:#ffaa4422; border-color:#ffaa44; }
         .mip-redeploy { display:block; width:100%; background:transparent; border:1px solid #00ff8855; border-radius:2px; color:#00ff88; cursor:pointer; font-size:10px; letter-spacing:2px; padding:6px 0; margin:10px 0 4px; font-family:'Courier New',monospace; transition:background .15s,border-color .15s; }
         .mip-redeploy:hover { background:#00ff8818; border-color:#00ff88; }
+        .mip-delete { display:block; width:100%; background:transparent; border:1px solid #ff444455; border-radius:2px; color:#ff6666; cursor:pointer; font-size:10px; letter-spacing:2px; padding:5px 0; margin:4px 0 4px; font-family:'Courier New',monospace; transition:background .15s,border-color .15s; }
+        .mip-delete:hover { background:#ff222218; border-color:#ff4444; }
         .mip-row { display:flex; justify-content:space-between; font-size:11px; margin-bottom:5px; letter-spacing:1px; color:#8888aa; }
         .mip-row .v { color:#ccc; }
         .mip-prog { height:3px; background:#1a1a2e; border-radius:2px; margin:8px 0 12px; overflow:hidden; }
@@ -1112,25 +1114,37 @@ function showMineInfoPanel(e,jid,z){
     const h=b.z1!=null?Math.abs(b.z2-b.z1)+1:'?';
     const isHist=z.status==='HISTORICAL';
     const isSurvey=z.phase==='SURVEY';
+    const isRescan=z.phase==='RESCAN';
 
     const idLabel=isHist?'ZONE':'JOB';
     const idVal=isHist?'historical':jid.slice(-8);
-    const phaseTag=isSurvey?'<span style="color:#44aaff;font-size:10px;letter-spacing:1px"> SURVEYING</span>':'';
+    const phaseTag=isSurvey?'<span style="color:#44aaff;font-size:10px;letter-spacing:1px"> SURVEYING</span>'
+        :isRescan?'<span style="color:#ffaa44;font-size:10px;letter-spacing:1px"> RESCANNING</span>':'';
     const minerLine=z.minerId
         ?'<div class="mip-row"><span>MINER</span><span class="v">'+escapeHtml(z.minerId)+phaseTag
           +(z.minerStatus?' <span style="opacity:.6;font-size:.85em">'+escapeHtml(z.minerStatus)+'</span>':'')
           +'</span></div>'
         :(isHist?'<div class="mip-row"><span>STATUS</span><span class="v" style="color:#5566bb">NO ACTIVE JOB</span></div>':'');
-    // For survey phase: show survey progress; for mine phase: show mine progress
-    const progressSection=isSurvey
-        ?'<div class="mip-row"><span>SURVEYED</span><span class="v">'+(z.surveyDone||0)+' / '+(z.surveyTotal||0)+'</span></div>'
-         +'<div class="mip-row"><span>SURVEY %</span><span class="v">'+(z.surveyTotal>0?Math.floor((z.surveyDone||0)/z.surveyTotal*100):0)+'%</span></div>'
-         +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+(z.surveyTotal>0?Math.floor((z.surveyDone||0)/z.surveyTotal*100):0)+'%;background:#44aaff"></div></div>'
-         +'<div class="mip-row"><span>MINE START</span><span class="v" style="color:#8888aa">after survey</span></div>'
-        :'<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'
-         +'<div class="mip-row"><span>PROGRESS</span><span class="v">'+pct+'%</span></div>'
-         +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+pct+'%"></div></div>'
-         +'<div class="mip-row"><span>ETA</span><span class="v">'+etaStr+'</span></div>';
+    // Progress section varies by phase
+    let progressSection;
+    if(isSurvey){
+        const sp=z.surveyTotal>0?Math.floor((z.surveyDone||0)/z.surveyTotal*100):0;
+        progressSection='<div class="mip-row"><span>SURVEYED</span><span class="v">'+(z.surveyDone||0)+' / '+(z.surveyTotal||0)+'</span></div>'
+            +'<div class="mip-row"><span>SURVEY %</span><span class="v">'+sp+'%</span></div>'
+            +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+sp+'%;background:#44aaff"></div></div>'
+            +'<div class="mip-row"><span>MINE START</span><span class="v" style="color:#8888aa">after survey</span></div>';
+    }else if(isRescan){
+        const rp=z.rescanTotal>0?Math.floor((z.rescanDone||0)/z.rescanTotal*100):0;
+        progressSection='<div class="mip-row"><span>RESCANNED</span><span class="v">'+(z.rescanDone||0)+' / '+(z.rescanTotal||0)+'</span></div>'
+            +'<div class="mip-row"><span>RESCAN %</span><span class="v">'+rp+'%</span></div>'
+            +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+rp+'%;background:#ffaa44"></div></div>'
+            +'<div class="mip-row"><span>ORE MINED</span><span class="v">'+pct+'%</span></div>';
+    }else{
+        progressSection='<div class="mip-row"><span>SECTORS</span><span class="v">'+z.done+' / '+z.total+'</span></div>'
+            +'<div class="mip-row"><span>ORE MINED</span><span class="v">'+pct+'%</span></div>'
+            +'<div class="mip-prog"><div class="mip-prog-fill" style="width:'+pct+'%"></div></div>'
+            +'<div class="mip-row"><span>ETA</span><span class="v">'+etaStr+'</span></div>';
+    }
     stats.innerHTML=
         '<div class="mip-row"><span>'+idLabel+'</span><span class="v">'+idVal+'</span></div>'+
         minerLine+
@@ -1143,7 +1157,9 @@ function showMineInfoPanel(e,jid,z){
         // doesn't snap outward and grow the box on every redeploy.
         // Fall back to bounds ± 16 for zones predating rawBounds.
         const rb=z.rawBounds||(z.bounds.x1!=null?{x1:z.bounds.x1+16,z1:z.bounds.z1+16,x2:z.bounds.x2-16,z2:z.bounds.z2-16}:z.bounds);
-        actionsEl.innerHTML=`<button class="mip-redeploy" onclick="redeployMineZone(${rb.x1},${rb.z1},${rb.x2},${rb.z2})">⛏ REDEPLOY MINERS HERE</button>`;
+        const zoneKey=jid.startsWith('zone:')?jid.slice(5):jid;
+        actionsEl.innerHTML=`<button class="mip-redeploy" onclick="redeployMineZone(${rb.x1},${rb.z1},${rb.x2},${rb.z2})">⛏ REDEPLOY MINERS HERE</button>`
+            +`<button class="mip-delete" onclick="deleteMineZone('${zoneKey}')">🗑 DELETE SITE</button>`;
     }else{
         actionsEl.innerHTML='';
     }
@@ -1860,6 +1876,12 @@ function updateMineAreaInfo(){
     const nsX=(Math.ceil(Math.max(x1,x2)/32)*32-Math.floor(Math.min(x1,x2)/32)*32)/32+1;
     const nsZ=(Math.ceil(Math.max(z1,z2)/32)*32-Math.floor(Math.min(z1,z2)/32)*32)/32+1;
     el.textContent=`${dx}×${dz} blocks · ${nsX*nsZ} sectors`;
+}
+async function deleteMineZone(zoneKey){
+    if(!confirm('Delete this mining site? All progress data will be lost and cannot be recovered.'))return;
+    await sendCmd('DELETE_MINE_ZONE',{key:zoneKey});
+    document.getElementById('mine-info-panel').classList.remove('show');
+    toast('Mining site deleted');
 }
 async function redeployMineZone(x1,z1,x2,z2){
     await sendCmd('ORDER_MINE',{x1,z1,x2,z2});

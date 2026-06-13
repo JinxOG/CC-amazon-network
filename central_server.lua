@@ -345,6 +345,14 @@ local function mergeToPersistentZone(jobId, sx, sz)
     savePersistentZones()
 end
 
+local function orePct(oreFound, oreMined)
+    local found, mined = 0, 0
+    for _, v in pairs(oreFound  or {}) do found = found + v end
+    for _, v in pairs(oreMined  or {}) do mined = mined + v end
+    if found == 0 then return nil end
+    return math.min(100, math.floor(mined / found * 100))
+end
+
 -- ─── Job Queue ───────────────────────────────────────────────────────────────
 
 local JOB_STATUS = {
@@ -567,18 +575,19 @@ end
 -- removes already-completed sectors so the miner resumes from where it left off.
 local function ensureMineZone(jobId, params)
     if state.miningZones[jobId] then return end
-    local sectors, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
+    local allSectors, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
     local key = computeZoneKey(bx1, bz1, bx2, bz2)
     local pz  = state.persistentZones[key]
 
     -- Filter out sectors that already completed in a previous run
+    local sectors = allSectors
     if pz and pz.doneSectors and #pz.doneSectors > 0 then
         local doneSet = {}
         for _, s in ipairs(pz.doneSectors) do
             doneSet[s.x .. "," .. s.z] = true
         end
         local remaining = {}
-        for _, s in ipairs(sectors) do
+        for _, s in ipairs(allSectors) do
             if not doneSet[s.x .. "," .. s.z] then table.insert(remaining, s) end
         end
         sectors = remaining
@@ -617,8 +626,13 @@ local function ensureMineZone(jobId, params)
     local rawBounds = { x1 = bx1 + SCAN_RADIUS, z1 = bz1 + SCAN_RADIUS,
                         x2 = bx2 - SCAN_RADIUS, z2 = bz2 - SCAN_RADIUS }
 
+    -- allSectors (full grid, never depleted) used to build rescan lists
+    local allSectorsCopy = {}
+    for _, s in ipairs(allSectors) do table.insert(allSectorsCopy, { x=s.x, z=s.z }) end
+
     state.miningZones[jobId] = {
         pending       = sectors,
+        allSectors    = allSectorsCopy,
         total         = total,
         done          = preDone,
         oreFound      = oreFound,
@@ -881,14 +895,16 @@ handlers[proto.MSG.SECTOR_SCAN] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
     if zone then
-        if type(p.foundOres) == "table" then
-            for name, n in pairs(p.foundOres) do
-                zone.oreFound[name] = (zone.oreFound[name] or 0) + n
+        if zone.phase ~= "RESCAN" then
+            if type(p.foundOres) == "table" then
+                for name, n in pairs(p.foundOres) do
+                    zone.oreFound[name] = (zone.oreFound[name] or 0) + n
+                end
             end
-        end
-        if type(p.minedOres) == "table" then
-            for name, n in pairs(p.minedOres) do
-                zone.oreMined[name] = (zone.oreMined[name] or 0) + n
+            if type(p.minedOres) == "table" then
+                for name, n in pairs(p.minedOres) do
+                    zone.oreMined[name] = (zone.oreMined[name] or 0) + n
+                end
             end
         end
         logInfo(string.format("Sector (%d,%d) Y=%d scan by %s [%s]",
@@ -909,9 +925,31 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         zone.surveyDone = zone.surveyDone + 1
         logInfo(string.format("Survey (%d,%d) done by %s [%s: %d/%d surveyed]",
             p.sectorX, p.sectorZ, msg.from, p.jobId, zone.surveyDone, zone.surveyTotal))
-    else
+
+    elseif zone.phase == "RESCAN" then
+        -- Accumulate per-sector rescan results (foundOres is deduplicated in ore_turtle)
+        zone.rescanFound = zone.rescanFound or {}
+        if type(p.foundOres) == "table" then
+            for name, n in pairs(p.foundOres) do
+                zone.rescanFound[name] = (zone.rescanFound[name] or 0) + n
+            end
+        end
+        local hasOre = type(p.foundOres) == "table" and next(p.foundOres) ~= nil
+        if hasOre then
+            zone.rescanPending = zone.rescanPending or {}
+            table.insert(zone.rescanPending, { x = p.sectorX, z = p.sectorZ })
+        end
+        zone.rescanDone = (zone.rescanDone or 0) + 1
+        logInfo(string.format("Rescan (%d,%d) done by %s — %s [%s: %d/%d]",
+            p.sectorX, p.sectorZ, msg.from, hasOre and "ore remains" or "clean",
+            p.jobId, zone.rescanDone, zone.rescanTotal or 0))
+
+    else  -- MINE phase
         zone.done = zone.done + 1
-        mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ)
+        local job = state.jobs[p.jobId]
+        if not job or job.status ~= JOB_STATUS.CANCELLED then
+            mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ)
+        end
         logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
             p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
             p.jobId, zone.done, zone.total))
@@ -919,8 +957,9 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     jobQueue.progress(p.jobId, proto.STATUS.WORKING,
         string.format("sector (%d,%d) done — %d ore", p.sectorX, p.sectorZ, p.oreCount or 0))
 
-    -- Dispatch next sector so the turtle doesn't have to ask again
+    -- ── Dispatch next sector ──────────────────────────────────────────────────
     local nextSect, isNextSurvey
+
     if zone.phase == "SURVEY" then
         if #zone.surveySectors > 0 then
             nextSect     = table.remove(zone.surveySectors, 1)
@@ -928,24 +967,88 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         else
             -- Survey exhausted — switch to mine phase and give first mine sector
             zone.phase     = "MINE"
-            zone.startTime = os.epoch("utc")   -- reset ETA timer for mine pass
+            zone.startTime = os.epoch("utc")
             logInfo(string.format("Zone %s survey complete (%d sectors) — starting mine phase",
                 p.jobId, zone.surveyTotal))
             nextSect     = nextSector(p.jobId)
             isNextSurvey = false
         end
-    else
+
+    elseif zone.phase == "RESCAN" then
+        if #(zone.rescanSectors or {}) > 0 then
+            nextSect     = table.remove(zone.rescanSectors, 1)
+            isNextSurvey = true
+        else
+            -- Rescan pass complete — update oreFound to reflect actual accessible ore:
+            -- oreFound = what was collected + what is still in the ground
+            local newOreFound = {}
+            for k, v in pairs(zone.oreMined)      do newOreFound[k] = v end
+            for k, v in pairs(zone.rescanFound or {}) do
+                newOreFound[k] = (newOreFound[k] or 0) + v
+            end
+            zone.oreFound = newOreFound
+            local pz = zone.persistentKey and state.persistentZones[zone.persistentKey]
+            if pz then
+                pz.oreFound = {}
+                for k, v in pairs(newOreFound) do pz.oreFound[k] = v end
+                savePersistentZones()
+            end
+
+            local remaining = zone.rescanPending or {}
+            if #remaining > 0 then
+                -- Re-mine sectors where ore was found
+                zone.pending    = remaining
+                zone.rescanPending = {}
+                zone.rescanFound   = {}
+                zone.phase         = "MINE"
+                logInfo(string.format("Zone %s rescan found ore in %d sector(s) — re-mining",
+                    p.jobId, #remaining))
+                nextSect     = nextSector(p.jobId)
+                isNextSurvey = false
+            else
+                logInfo(string.format("Zone %s rescan clean — MINE_COMPLETE", p.jobId))
+                sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+                return
+            end
+        end
+
+    else  -- MINE phase
         nextSect     = nextSector(p.jobId)
         isNextSurvey = false
     end
 
     if not nextSect then
-        logInfo(string.format("Zone %s exhausted — sending MINE_COMPLETE to %s", p.jobId, msg.from))
-        sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
-    else
-        sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
-            proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
+        -- Mine phase exhausted — build rescan list from the full sector grid
+        local rescanSectors = {}
+        for _, s in ipairs(zone.allSectors or {}) do
+            table.insert(rescanSectors, { x = s.x, z = s.z })
+        end
+        -- Shuffle
+        for i = #rescanSectors, 2, -1 do
+            local j = math.random(1, i)
+            rescanSectors[i], rescanSectors[j] = rescanSectors[j], rescanSectors[i]
+        end
+        if #rescanSectors == 0 then
+            logInfo(string.format("Zone %s exhausted — sending MINE_COMPLETE to %s", p.jobId, msg.from))
+            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+        else
+            zone.phase         = "RESCAN"
+            zone.rescanSectors = rescanSectors
+            zone.rescanDone    = 0
+            zone.rescanTotal   = #rescanSectors
+            zone.rescanPending = {}
+            zone.rescanFound   = {}
+            logInfo(string.format("Zone %s mine complete — starting rescan of %d sectors",
+                p.jobId, #rescanSectors))
+            local first = table.remove(zone.rescanSectors, 1)
+            sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
+                proto.payloadSectorAssign(p.jobId, first.x, first.z, nil, true))
+        end
+        return
     end
+
+    sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
+        proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
@@ -1423,6 +1526,27 @@ function server.run()
             saveJobs()
             logInfo(string.format("Dashboard: cleared %d job(s)", count))
 
+        elseif t == "DELETE_MINE_ZONE" then
+            local key = p.key
+            if not key then
+                logWarn("DELETE_MINE_ZONE: missing key")
+                return
+            end
+            -- Block deletion if a live job is currently using this zone
+            for jid, z in pairs(state.miningZones) do
+                if z.persistentKey == key then
+                    logWarn(string.format("DELETE_MINE_ZONE: zone %s has active job %s — blocked", key, jid))
+                    return
+                end
+            end
+            if state.persistentZones[key] then
+                state.persistentZones[key] = nil
+                savePersistentZones()
+                logInfo("Dashboard: deleted mine zone " .. key)
+            else
+                logWarn("DELETE_MINE_ZONE: zone not found: " .. key)
+            end
+
         elseif t == "REMOVE_TURTLE" then
             local tid = p.turtleId
             local tr  = state.registry[tid]
@@ -1627,7 +1751,14 @@ function server.run()
         -- Active zones — keyed by jobId
         local activeKeys = {}
         for jid, z in pairs(state.miningZones) do
-            local pct = z.total > 0 and math.floor(z.done / z.total * 100) or 0
+            -- Use ore-based pct during mine/rescan once oreFound is populated;
+            -- fall back to sector-based during survey (no ore data yet).
+            local pct
+            if z.phase == "SURVEY" or not next(z.oreFound or {}) then
+                pct = z.total > 0 and math.floor(z.done / z.total * 100) or 0
+            else
+                pct = orePct(z.oreFound, z.oreMined) or 0
+            end
             local eta = nil
             if z.done > 0 and z.total > z.done then
                 local elapsed = (os.epoch("utc") - z.startTime) / 1000
@@ -1649,6 +1780,8 @@ function server.run()
                 phase       = z.phase or "MINE",
                 surveyDone  = z.surveyDone or 0,
                 surveyTotal = z.surveyTotal or 0,
+                rescanDone  = z.rescanDone  or 0,
+                rescanTotal = z.rescanTotal or 0,
             }
             if z.persistentKey then activeKeys[z.persistentKey] = true end
         end
@@ -1656,7 +1789,9 @@ function server.run()
         for key, pz in pairs(state.persistentZones) do
             if not activeKeys[key] and pz.doneSectors and #pz.doneSectors > 0 then
                 local done = #pz.doneSectors
-                local pct  = pz.total > 0 and math.floor(done / pz.total * 100) or 0
+                -- Ore-based pct if data available; sector-based fallback for old zones
+                local pct = orePct(pz.oreFound, pz.oreMined)
+                           or (pz.total > 0 and math.floor(done / pz.total * 100) or 0)
                 -- rawBounds may be absent on old on-disk zones; compute from visual bounds as fallback
                 local rb = pz.rawBounds
                 if not rb and pz.bounds then

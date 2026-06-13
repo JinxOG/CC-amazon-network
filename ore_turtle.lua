@@ -471,6 +471,11 @@ local function mineJob(job)
         if count > 0 or inventoryFull() then dumpOres() end
         totalOre = totalOre + count
 
+        if base.isRecalled() then
+            recallReturn()
+            return
+        end
+
         -- Report done; server immediately replies with next SECTOR_ASSIGN or MINE_COMPLETE
         base.sendToServer(proto.MSG.SECTOR_DONE,
             proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined))
