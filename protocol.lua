@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.89"
+proto.VERSION = "1.6.90"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -89,6 +89,9 @@ proto.MSG = {
 
     -- Mining recall (miner → support, CH_LOCAL)
     MINE_RECALL = "MINE_RECALL", -- miner → support: job recalled, ascend to sky and return home
+
+    -- Admin commands (server → turtle)
+    FORCE_REFUEL = "FORCE_REFUEL", -- server → idle turtle: refuel at dock now
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

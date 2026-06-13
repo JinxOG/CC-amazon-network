@@ -1261,6 +1261,12 @@ function base.run(jobHandler)
                                 _self.jobId  = nil
                             end
 
+                        elseif msg.type == proto.MSG.FORCE_REFUEL then
+                            if not _self.busy then
+                                logInfo("FORCE_REFUEL received — refuelling at dock")
+                                fuel.dockRefuel()
+                            end
+
                         elseif msg.type == proto.MSG.UPDATE_ALL then
                             logWarn("UPDATE_ALL received — running updater then rebooting...")
                             if _self.busy and _self.jobId then

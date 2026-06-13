@@ -156,6 +156,7 @@
         .pbtn.red:hover   { border-color:#ff444433; color:#ff4444; }
         .pbtn.amber:hover { border-color:#ffaa4433; color:#ffaa44; }
         .pbtn.blue:hover  { border-color:#4488ff33; color:#4488ff; }
+        .pbtn.fuel:hover  { border-color:#ffdd0033; color:#ffdd00; }
 
         /* ── Job filter bar ── */
         .jfilter-wrap { padding:0 !important; gap:0 !important; }
@@ -1342,6 +1343,7 @@ function _buildTcard(id,t,sysVer){
         <div class="tcard-btns">
             <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
             ${idleBtn}
+            <button class="pbtn fuel" onclick="forceRefuel('${eid}')">REFUEL</button>
             <button class="pbtn blue" onclick="reassignBay('${eid}')">BAY</button>
             <button class="pbtn red" onclick="deleteTurtle('${eid}')">DEL</button>
         </div>
@@ -1918,6 +1920,14 @@ async function doRecallAll(){hideConfirm('recall-all');await sendCmd('RECALL_ALL
 async function cancelJob(jobId){if(!confirm(`Cancel job ${jobId}?`))return;await sendCmd('CANCEL_JOB',{jobId});toast(`Cancelled ${jobId}`);}
 async function setTurtleIdle(id){if(!confirm('Set '+id+' to IDLE?'))return;await sendCmd('SET_IDLE',{turtleId:id});toast(`${id} → IDLE`);}
 async function deleteTurtle(id){if(!confirm(`Remove ${id} from fleet?\nThis releases its dock slot.`))return;await sendCmd('REMOVE_TURTLE',{turtleId:id});toast(`${id} removed`);}
+async function forceRefuel(id){
+    const t=lastState.turtles&&lastState.turtles[id];
+    const busy=t&&t.status&&t.status!=='IDLE';
+    const msg=busy?`${id} is ${t.status} — recall it to dock for refuelling?`:`Force refuel ${id} at dock now?`;
+    if(!confirm(msg))return;
+    await sendCmd('FORCE_REFUEL',{turtleId:id});
+    toast(busy?`${id} recalled for refuel`:`${id} refuelling now`);
+}
 async function reassignBay(id){
     const bay=prompt(`Reassign ${id} to bay number:`);if(bay===null)return;
     const n=parseInt(bay);if(isNaN(n)||n<1){toast('Invalid bay number',true);return;}

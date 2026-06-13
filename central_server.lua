@@ -1357,6 +1357,22 @@ function server.run()
                 logWarn("SET_IDLE: turtle not found: " .. tostring(tid))
             end
 
+        elseif t == "FORCE_REFUEL" then
+            local tid = p.turtleId
+            local tr  = tid and state.registry[tid]
+            if tr then
+                if tr.status == proto.STATUS.IDLE then
+                    sendTo(tid, proto.MSG.FORCE_REFUEL, {})
+                    logInfo("FORCE_REFUEL sent to idle turtle: " .. tid)
+                else
+                    -- Busy turtle: recall it so it returns to dock and auto-refuels
+                    sendTo(tid, proto.MSG.RECALL, proto.payloadRecall("force_refuel"))
+                    logInfo("FORCE_REFUEL → RECALL sent to busy turtle: " .. tid)
+                end
+            else
+                logWarn("FORCE_REFUEL: turtle not found: " .. tostring(tid))
+            end
+
         elseif t == "RESET_STATUS" then
             local count = 0
             for _, tr in pairs(state.registry) do
