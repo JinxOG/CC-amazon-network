@@ -233,26 +233,29 @@ app.post('/update', async (req, res) => {
     }
 
     if (turtles) {
+        // Incoming snapshot is authoritative — replace entirely so turtles absent
+        // from the payload (e.g. after a CC server reboot) vanish immediately
+        // rather than lingering until a 10-minute prune.
+        const newTurtles = {};
         for (const [id, data] of Object.entries(turtles)) {
-            state.turtles[id] = { ...state.turtles[id], ...data, lastSeen: now };
+            newTurtles[id] = { ...state.turtles[id], ...data, lastSeen: now };
             if (data.online === false) {
                 if (markerExists[id]) {
                     rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
                     markerExists[id] = false;
                 }
             } else {
-                upsertMarker(id, state.turtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
+                upsertMarker(id, newTurtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
             }
         }
-
-        for (const [id, t] of Object.entries(state.turtles)) {
-            if (t.lastSeen && now - t.lastSeen > 10 * 60 * 1000) {
-                delete state.turtles[id];
-                delete markerExists[id];
+        // Remove dynmap markers for turtles that dropped off the snapshot
+        for (const id of Object.keys(state.turtles)) {
+            if (!newTurtles[id] && markerExists[id]) {
                 rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
-                console.log(`[STATE] Pruned stale turtle: ${id}`);
+                markerExists[id] = false;
             }
         }
+        state.turtles = newTurtles;
     }
 
     if (jobs)                   state.jobs      = jobs;

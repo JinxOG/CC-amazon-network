@@ -1732,6 +1732,10 @@ function server.run()
         end
     end
 
+    -- Push immediately on startup so bridge sees the freshly-reset registry
+    -- before any turtles re-register, flushing ghost entries from before reboot.
+    startBridgePush()
+
     while true do
         local event, p1, p2, p3, p4 = os.pullEvent()
 
