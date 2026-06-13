@@ -87,7 +87,7 @@ local function tryRefuelSlot14()
     if turtle.getItemCount() > 0 then turtle.refuel() end
 end
 
--- Refuel at dock using the slot 15 fuel EC — same as field refuel in checkFuel().
+-- Refuel at dock: place EC above (bay layout), suck coal, pick it back up.
 local function minerDockRefuel()
     local ecItem = turtle.getItemDetail(S_FUEL_EC)
     if not ecItem then
@@ -95,16 +95,16 @@ local function minerDockRefuel()
         return
     end
     turtle.select(S_FUEL_EC)
-    if turtle.detectDown() then turtle.digDown() end
-    if turtle.placeDown() then
+    if turtle.detectUp() then turtle.digUp() end
+    if turtle.placeUp() then
         turtle.select(S_COAL)
-        turtle.suckDown(64)
+        turtle.suckUp(64)
         turtle.refuel()
         turtle.select(S_FUEL_EC)
-        turtle.digDown()
+        turtle.digUp()
         print(string.format("[FUEL] EC refuel complete: %d fuel", turtle.getFuelLevel()))
     else
-        print("[FUEL] Failed to place fuel EC")
+        print("[FUEL] Failed to place fuel EC above")
     end
 end
 
