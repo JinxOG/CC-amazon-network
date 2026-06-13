@@ -153,7 +153,14 @@ base.run(function(job)
                     elseif not _miningMode and not info.jobId then
                         -- In mining mode the server clears jobId on cancel before the
                         -- miner can send MINE_RECALL — don't leave; wait for the signal.
-                        print("[SUPPORT] Partner job complete — returning to dock")
+                        if _recalling then
+                            -- RETURN_TO_DOCK may have been dropped (CC event queue overflow
+                            -- during long horizontal sky flight). Use sky path as fallback.
+                            print("[SUPPORT] Partner docked — missed RETURN_TO_DOCK, sky-returning")
+                            _skyReturn = true
+                        else
+                            print("[SUPPORT] Partner job complete — returning to dock")
+                        end
                         break
                     end
                     local staleSec = os.epoch("utc") / 1000 - lastUpdateTime
