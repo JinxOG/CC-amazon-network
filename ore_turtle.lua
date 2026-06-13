@@ -87,6 +87,33 @@ local function tryRefuelSlot14()
     if turtle.getItemCount() > 0 then turtle.refuel() end
 end
 
+-- Refuel at dock using the miner's own inventory (slot 14 coal + slot 15 fuel EC).
+-- Registered as the custom refuel fn so FORCE_REFUEL doesn't look for a dock chest.
+local function minerDockRefuel()
+    tryRefuelSlot14()
+    if turtle.getFuelLevel() >= FUEL_WARN then
+        print(string.format("[FUEL] Refuelled from slot 14: %d fuel", turtle.getFuelLevel()))
+        return
+    end
+    local ecItem = turtle.getItemDetail(S_FUEL_EC)
+    if not ecItem then
+        print(string.format("[FUEL] EC missing from slot %d — cannot refuel", S_FUEL_EC))
+        return
+    end
+    turtle.select(S_FUEL_EC)
+    if turtle.detectDown() then turtle.digDown() end
+    if turtle.placeDown() then
+        turtle.select(S_COAL)
+        turtle.suckDown(64)
+        turtle.refuel()
+        turtle.select(S_FUEL_EC)
+        turtle.digDown()
+    end
+    print(string.format("[FUEL] EC refuel complete: %d fuel", turtle.getFuelLevel()))
+end
+
+base.setRefuelFn(minerDockRefuel)
+
 -- Estimate fuel required to fly home from the current position.
 local function fuelToReturn()
     local p  = base.getPos()

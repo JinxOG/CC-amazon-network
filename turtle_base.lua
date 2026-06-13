@@ -65,6 +65,9 @@ function base.isServerDown()     return _self.serverDown end
 function base.isRecalled()       return _self.recalled   end
 function base.setRecalled(v)     _self.recalled = v      end
 
+local _customRefuelFn = nil
+function base.setRefuelFn(fn)    _customRefuelFn = fn    end
+
 function base.isInsideBuilding(pos)
     return pos.y >= CFG.FLOOR_Y
         and pos.x >= BUILDING.minX and pos.x <= BUILDING.maxX
@@ -1263,8 +1266,12 @@ function base.run(jobHandler)
 
                         elseif msg.type == proto.MSG.FORCE_REFUEL then
                             if not _self.busy then
-                                logInfo("FORCE_REFUEL received — refuelling at dock")
-                                fuel.dockRefuel()
+                                logInfo("FORCE_REFUEL received — refuelling")
+                                if _customRefuelFn then
+                                    _customRefuelFn()
+                                else
+                                    fuel.dockRefuel()
+                                end
                             end
 
                         elseif msg.type == proto.MSG.UPDATE_ALL then
