@@ -454,6 +454,7 @@ function jobQueue.complete(jobId)
             -- It will send its own JOB_COMPLETE message which will free it correctly.
         end
     end
+    state.miningZones[jobId] = nil
     saveJobs()
 end
 
@@ -484,6 +485,7 @@ function jobQueue.fail(jobId, reason, recoverable)
             server.cancelJob(job.linkedJob)
         end
     end
+    state.miningZones[jobId] = nil
     saveJobs()
 end
 
@@ -508,6 +510,9 @@ function jobQueue.reassign(jobId, fromId, reason)
     job.status     = JOB_STATUS.PENDING
     job.assignedTo = nil
     job.updatedAt  = os.epoch("utc")
+    -- Drop the runtime zone so it shows HISTORICAL while job waits for a new turtle.
+    -- ensureMineZone will rebuild cleanly from persistentZones on next dispatch.
+    state.miningZones[jobId] = nil
     jobQueue._hist(jobId, "reassign", string.format("from=%s reason=%s", fromId, reason or "?"))
     logWarn(string.format("Job %s back to queue (from %s: %s)", jobId, fromId, reason or "?"))
     saveJobs()
@@ -1149,6 +1154,7 @@ function server.cancelJob(jobId)
     jobQueue._hist(jobId, "cancelled", "")
     -- Cancel linked support job too
     if job.linkedJob then server.cancelJob(job.linkedJob) end
+    state.miningZones[jobId] = nil
     logInfo("Job cancelled: " .. jobId)
     return true
 end
