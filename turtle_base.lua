@@ -1265,8 +1265,9 @@ function base.run(jobHandler)
                             end
 
                         elseif msg.type == proto.MSG.FORCE_REFUEL then
-                            if not _self.busy then
-                                logInfo("FORCE_REFUEL received — refuelling")
+                            if not _self.busy and not _self.recalled
+                                    and base.isInsideBuilding(_self.pos) then
+                                logInfo("FORCE_REFUEL received — refuelling at dock")
                                 if _customRefuelFn then
                                     _customRefuelFn()
                                 else
@@ -1275,6 +1276,8 @@ function base.run(jobHandler)
                                 -- Push fresh fuel level so fleet panel updates immediately
                                 comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
                                     _self.status, fuel.level(), base.getPos(), _self.jobId))
+                            elseif not base.isInsideBuilding(_self.pos) then
+                                logWarn("FORCE_REFUEL ignored — turtle not at dock")
                             end
 
                         elseif msg.type == proto.MSG.UPDATE_ALL then
