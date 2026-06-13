@@ -176,11 +176,12 @@ base.run(function(job)
                                 print("[SUPPORT] Miner descended to mine — locking to Y=" .. FOLLOW_Y)
                             end
                         end
-                        -- In mining mode the miner fires hundreds of POSITION_UPDATEs
-                        -- during inter-sector flight. Drain all queued ones so support
-                        -- jumps to the miner's LATEST position instead of replaying
-                        -- every intermediate step (which causes severe lag/misalignment).
-                        if _miningMode then
+                        -- Drain in two cases:
+                        -- 1. _miningMode: avoid replaying hundreds of sector-flight steps.
+                        -- 2. _recalling: miner flies 200+ blocks back to arrivals hole;
+                        --    draining keeps the 256-event CC queue from overflowing so
+                        --    RETURN_TO_DOCK (sent last) is never silently dropped.
+                        if _miningMode or _recalling then
                             while true do
                                 local nxt = proto.receive(base.getSelfId(), 0.05)
                                 if not nxt then break end
