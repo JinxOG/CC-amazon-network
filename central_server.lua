@@ -482,6 +482,21 @@ end
 function jobQueue.reassign(jobId, fromId, reason)
     local job = state.jobs[jobId]
     if not job then return end
+    -- Reset the dead turtle's registry entry so it doesn't stay stuck at
+    -- TRAVELLING/RETURNING and get excluded from future idle-turtle selection.
+    local t = state.registry[fromId or ""]
+    if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
+    -- Cancel the linked support job so it doesn't orphan indefinitely.
+    -- Same guard as jobQueue.fail() — support jobs have no linkedJob so no recursion.
+    if job.linkedJob then
+        local linked = state.jobs[job.linkedJob]
+        if linked
+           and linked.status ~= JOB_STATUS.COMPLETE
+           and linked.status ~= JOB_STATUS.CANCELLED
+           and linked.status ~= JOB_STATUS.FAILED then
+            server.cancelJob(job.linkedJob)
+        end
+    end
     job.status     = JOB_STATUS.PENDING
     job.assignedTo = nil
     job.updatedAt  = os.epoch("utc")
