@@ -210,12 +210,27 @@ app.get('/dynmap-frame', (req, res) => {
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
 // CC central_server.lua pushes state here every 2s
+const CC_RESTART_GAP_MS = 20 * 1000;  // >20s between updates → CC server restarted
+
 app.post('/update', async (req, res) => {
     const { turtles, jobs, version, storage, mineZones } = req.body || {};
     console.log(`[UPDATE] v=${version} turtles=${Object.keys(turtles||{}).length} storage=${Array.isArray(storage)?storage.length:'?'}`);
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
     const now = Date.now();
+
+    // If the CC server was silent for >20s it almost certainly crashed and restarted.
+    // Clear all stale bridge state so the dashboard doesn't show ghost turtles/jobs
+    // from before the crash. The CC server will repopulate within a few seconds as
+    // turtles re-register.
+    if (state.updatedAt && (now - state.updatedAt) > CC_RESTART_GAP_MS) {
+        const gapSec = Math.round((now - state.updatedAt) / 1000);
+        console.log(`[UPDATE] CC server gap detected (${gapSec}s) — clearing stale state`);
+        state.turtles   = {};
+        state.jobs      = [];
+        state.mineZones = {};
+        markerExists    = {};
+    }
 
     if (turtles) {
         for (const [id, data] of Object.entries(turtles)) {
