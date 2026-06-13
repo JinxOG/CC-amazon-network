@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.6.109"
+proto.VERSION = "1.6.110"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -304,8 +304,8 @@ function proto.send(modem, channel, msg)
 end
 
 -- Receive one message addressed to selfId (or "broadcast"), with optional timeout.
--- OPT #60: renamed 'side' to 'evtArg2' — for modem_message it is the modem side,
--- for timer events it is the timer ID; the old name was misleading.
+-- evtArg2 holds the modem side for modem_message events and the timer ID
+-- for timer events; a single name avoids the misleading legacy 'side' alias.
 function proto.receive(selfId, timeout)
     local timer
     if timeout then timer = os.startTimer(timeout) end

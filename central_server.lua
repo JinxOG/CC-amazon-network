@@ -524,7 +524,7 @@ function jobQueue.checkAckTimeouts()
     for _, job in pairs(state.jobs) do
         if job.status == JOB_STATUS.ASSIGNED and job.ackBy and now > job.ackBy then
             logWarn(string.format("ACK timeout: job %s from %s", job.id, job.assignedTo))
-            -- BUG #13: Don't re-queue while the turtle may still be travelling —
+            -- Don't re-queue while the turtle may still be travelling —
             -- that would let a second pair target the same destination (destinationBusy
             -- only checks ASSIGNED/IN_PROGRESS jobs). Instead, RECALL the turtle and
             -- leave the job ASSIGNED. The turtle will return and send JOB_FAILED,
@@ -1233,7 +1233,7 @@ function server.run()
         logWarn("No RS Bridge found — attach one for storage features")
     end
 
-    -- ── Bridge command dedup (BUG #11) ────────────────────────────────────────
+    -- ── Bridge command dedup ──────────────────────────────────────────────────
     -- If the CC server's HTTP response is lost in transit, the bridge has already
     -- cleared its queue, but a re-send could double-dispatch a command. Guard with
     -- a small cache keyed on the server-assigned timestamp + command type.
@@ -1406,7 +1406,7 @@ function server.run()
                     sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("jobs_cleared"))
                     local tr = state.registry[job.assignedTo]
                     if tr then tr.status = proto.STATUS.IDLE; tr.jobId = nil end
-                    -- BUG #12: also recall the paired support turtle, otherwise it
+                    -- also recall the paired support turtle, otherwise it
                     -- keeps flying with no delivery partner.
                     if job.linkedJob then
                         local linked = state.jobs[job.linkedJob]
@@ -1839,12 +1839,12 @@ function server.run()
             end
 
         elseif event == "char" then
-            -- OPT #64: pcall so a throw from handleConsoleChar can't kill server.run
+            -- pcall so a throw from handleConsoleChar can't kill server.run
             pcall(handleConsoleChar, p1)
 
         elseif event == "key" then
             -- p1 = key code; 28 = Enter, 14 = Backspace
-            -- OPT #64: pcall so a throw from handleConsoleEnter can't kill server.run
+            -- pcall so a throw from handleConsoleEnter can't kill server.run
             if p1 == keys.enter then
                 pcall(handleConsoleEnter)
             elseif p1 == keys.backspace then
