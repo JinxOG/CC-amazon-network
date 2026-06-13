@@ -1272,6 +1272,9 @@ function base.run(jobHandler)
                                 else
                                     fuel.dockRefuel()
                                 end
+                                -- Push fresh fuel level so fleet panel updates immediately
+                                comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
+                                    _self.status, fuel.level(), base.getPos(), _self.jobId))
                             end
 
                         elseif msg.type == proto.MSG.UPDATE_ALL then

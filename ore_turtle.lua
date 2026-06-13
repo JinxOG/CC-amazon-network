@@ -87,30 +87,14 @@ local function tryRefuelSlot14()
     if turtle.getItemCount() > 0 then turtle.refuel() end
 end
 
--- Refuel at dock: place EC above (bay layout), suck coal, pick it back up.
--- Uses slot 2 for coal — slots 2-13 are always empty at dock (ores are dumped
--- at job end), so there is no risk of overflow into slot 15 (the EC slot).
-local function minerDockRefuel()
-    local ecItem = turtle.getItemDetail(S_FUEL_EC)
-    if not ecItem then
-        print(string.format("[FUEL] EC missing from slot %d — cannot refuel", S_FUEL_EC))
-        return
+-- Full refuel using the existing base.fuel.refuelFromChest() — already handles
+-- CHEST_SLOT=15, slot selection, direction finding, and chest recovery.
+base.setRefuelFn(function()
+    while turtle.getFuelLevel() < turtle.getFuelLimit() do
+        if not base.fuel.refuelFromChest() then break end  -- EC empty or missing
     end
-    turtle.select(S_FUEL_EC)
-    if turtle.detectUp() then turtle.digUp() end
-    if turtle.placeUp() then
-        turtle.select(2)
-        turtle.suckUp(64)
-        turtle.refuel()
-        turtle.select(S_FUEL_EC)
-        turtle.digUp()
-        print(string.format("[FUEL] EC refuel complete: %d fuel", turtle.getFuelLevel()))
-    else
-        print("[FUEL] Failed to place fuel EC above")
-    end
-end
-
-base.setRefuelFn(minerDockRefuel)
+    print(string.format("[FUEL] Full refuel complete: %d/%d", turtle.getFuelLevel(), turtle.getFuelLimit()))
+end)
 
 -- Estimate fuel required to fly home from the current position.
 local function fuelToReturn()

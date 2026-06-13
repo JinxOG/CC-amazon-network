@@ -16,31 +16,13 @@ local MAX_CHESTS = 6
 
 base.init(proto.ROLE.DELIVERY)
 
--- FORCE_REFUEL: scan slots 1-15 for the fuel ender chest (slot 16 is the delivery
--- EC and must never be placed for refueling). Place it, suck coal, refuel, pick up.
+-- Full refuel using base.fuel.refuelFromChest() — CHEST_SLOT=15 (fuel EC),
+-- handles direction, slot selection, and chest recovery automatically.
 base.setRefuelFn(function()
-    local function isEC(item)
-        if not item then return false end
-        local n = item.name:lower()
-        return n:find("ender") or n:find("entangled")
+    while turtle.getFuelLevel() < turtle.getFuelLimit() do
+        if not base.fuel.refuelFromChest() then break end  -- EC empty or missing
     end
-    for s = 1, EC_SLOT - 1 do
-        if isEC(turtle.getItemDetail(s)) then
-            turtle.select(s)
-            if turtle.detectDown() then turtle.digDown() end
-            if turtle.placeDown() then
-                turtle.select(1)
-                turtle.suckDown(64)
-                turtle.refuel()
-                turtle.select(s)
-                turtle.digDown()
-                print(string.format("[FUEL] EC refuel (slot %d): %d fuel", s, turtle.getFuelLevel()))
-            end
-            return
-        end
-    end
-    print("[FUEL] No fuel EC found in slots 1-15 — trying dock chest")
-    base.fuel.dockRefuel()
+    print(string.format("[FUEL] Full refuel complete: %d/%d", turtle.getFuelLevel(), turtle.getFuelLimit()))
 end)
 
 -- ─── Helpers ─────────────────────────────────────────────────────────────────
