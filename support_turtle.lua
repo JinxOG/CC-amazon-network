@@ -227,7 +227,12 @@ base.run(function(job)
                         --     Natural repositioning happens on the first Y=200 update as
                         --     support transitions from east-offset to directly behind.
                         --   Phase 3 — non-recall delivery follow: xOffset=0 (normal).
-                        local xOffset = (_recalling and not _miningMode and prev.y < 200) and 1 or 0
+                        -- xOffset=1 (east) while recalling and below sky altitude — keeps
+                        -- support clear of the miner's vertical column during both the
+                        -- underground ascent (_miningMode=true) and the vertical leg
+                        -- (_miningMode=false, prev.y < 200). At sky altitude (prev.y >= 200)
+                        -- switch to xOffset=0 so support trails 1 block directly behind.
+                        local xOffset = (_recalling and prev.y < 200) and 1 or 0
                         base.move.to(prev.x + xOffset, targetY, prev.z)
                     end
 
