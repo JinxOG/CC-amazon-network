@@ -183,12 +183,10 @@ base.run(function(job)
                                 print("[SUPPORT] Miner descended to mine — locking to Y=" .. FOLLOW_Y)
                             end
                         end
-                        -- Drain in two cases:
-                        -- 1. _miningMode: avoid replaying hundreds of sector-flight steps.
-                        -- 2. _recalling: miner flies 200+ blocks back to arrivals hole;
-                        --    draining keeps the 256-event CC queue from overflowing so
-                        --    RETURN_TO_DOCK (sent last) is never silently dropped.
-                        if _miningMode or _recalling then
+                        -- Drain only during underground mining to skip sector-flight steps.
+                        -- During recall we follow step-by-step (1 move per POSITION_UPDATE)
+                        -- which keeps the CC event queue at depth 0-1 — no overflow.
+                        if _miningMode then
                             while true do
                                 local nxt = proto.receive(base.getSelfId(), 0.05)
                                 if not nxt then break end
@@ -204,35 +202,33 @@ base.run(function(job)
                                         print("[SUPPORT] JOB_ABORT (drain) — docking")
                                         goto mine_done
                                     elseif nxt.type == proto.MSG.MINE_RECALL then
-                                        print("[SUPPORT] Mine recalled (drain) — waiting at meeting altitude")
+                                        print("[SUPPORT] Mine recalled (drain) — clearing column")
                                         _skyReturn  = true
                                         _recalling  = true
-                                        -- Break drain so main loop can handle the recall transition
                                         break
                                     end
                                 end
                             end
                         end
-                        -- When recalling: transition to real-Y follow once miner reaches FOLLOW_Y
+                        -- When recalling: transition to sky-follow once miner reaches FOLLOW_Y
                         if _recalling and _miningMode and prev.y >= FOLLOW_Y then
                             _miningMode = false
                             print("[SUPPORT] Miner at meeting altitude — ascending together")
                         end
                         local targetY = _miningMode and FOLLOW_Y or prev.y
-                        -- During coordinated recall, offset 1 block in X so support
-                        -- is never in the miner's vertical column. Miner ascends
-                        -- through its own column; support follows in the adjacent one.
-                        local xOffset = _recalling and 1 or 0
-                        -- Follow the miner during the vertical recall ascent (Y=100→200)
-                        -- so the column stays chunk-loaded, but stop at sky altitude.
-                        -- The horizontal flight back to arrivals hole sends 200-300+
-                        -- POSITION_UPDATEs; any base.move.to() during that leg causes
-                        -- event-queue overflow and silently drops RETURN_TO_DOCK.
-                        -- returnToDockFromSky() ascends to Y=200 first, so landing
-                        -- anywhere along the vertical leg is fine.
-                        if not (_recalling and not _miningMode and prev.y >= 200) then
-                            base.move.to(prev.x + xOffset, targetY, prev.z)
-                        end
+                        -- Three-phase recall follow:
+                        --   Phase 1 — underground + vertical (prev.y < 200):
+                        --     xOffset=1 (1 block east) keeps support clear of miner's column
+                        --     and chunk-loads the ascent path.
+                        --   Phase 2 — sky altitude (prev.y >= 200):
+                        --     xOffset=0 → support moves to miner's exact previous position
+                        --     = 1 block behind in the flight direction. Step-by-step 1:1
+                        --     follow means queue depth stays at 0-1 (no overflow).
+                        --     Natural repositioning happens on the first Y=200 update as
+                        --     support transitions from east-offset to directly behind.
+                        --   Phase 3 — non-recall delivery follow: xOffset=0 (normal).
+                        local xOffset = (_recalling and not _miningMode and prev.y < 200) and 1 or 0
+                        base.move.to(prev.x + xOffset, targetY, prev.z)
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
