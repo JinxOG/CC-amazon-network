@@ -223,7 +223,15 @@ base.run(function(job)
                         -- is never in the miner's vertical column. Miner ascends
                         -- through its own column; support follows in the adjacent one.
                         local xOffset = _recalling and 1 or 0
-                        base.move.to(prev.x + xOffset, targetY, prev.z)
+                        -- Once _miningMode is cleared (miner at FOLLOW_Y), stop following.
+                        -- The miner's sky flight back to arrivals hole sends 200-300+
+                        -- POSITION_UPDATEs; each base.move.to() call during that flight
+                        -- causes event-queue overflow and RETURN_TO_DOCK (sent last) is
+                        -- silently dropped.  returnToDockFromSky() handles the full trip
+                        -- home independently, so we don't need to physically follow.
+                        if not (_recalling and not _miningMode) then
+                            base.move.to(prev.x + xOffset, targetY, prev.z)
+                        end
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
