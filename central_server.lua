@@ -923,12 +923,21 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
     local jobId = msg.payload.jobId
     local zone  = state.miningZones[jobId]
     if not zone then
-        -- Zone not initialised (e.g. server restarted mid-job) — send MINE_COMPLETE
-        -- so the turtle returns gracefully rather than looping forever.
-        logWarn(string.format("SECTOR_REQUEST from %s — zone %s unknown, sending MINE_COMPLETE",
-            msg.from, tostring(jobId)))
-        sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = jobId })
-        return
+        -- miningZone is only in-memory; it is lost on server restart.
+        -- Recreate from the job's params + persistent zone so the miner can
+        -- resume from where it left off instead of returning with incomplete data.
+        local job = state.jobs[jobId]
+        if job and job.params and job.type == proto.JOB.MINE then
+            logWarn(string.format("Recreating lost miningZone for %s (SECTOR_REQUEST after restart)", jobId))
+            ensureMineZone(jobId, job.params)
+            zone = state.miningZones[jobId]
+        end
+        if not zone then
+            logWarn(string.format("SECTOR_REQUEST from %s — zone %s unknown, sending MINE_COMPLETE",
+                msg.from, tostring(jobId)))
+            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = jobId })
+            return
+        end
     end
 
     -- Dispatch first sector (or after reconnect): check survey vs mine phase
@@ -985,7 +994,17 @@ end
 handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
-    if not zone then return end
+    if not zone then
+        -- miningZone lost on restart — recreate so this sector is recorded and
+        -- the next sector can be dispatched without forcing a full recallReturn.
+        local job = state.jobs[p.jobId]
+        if job and job.params and job.type == proto.JOB.MINE then
+            logWarn(string.format("Recreating lost miningZone for %s (SECTOR_DONE after restart)", p.jobId))
+            ensureMineZone(p.jobId, job.params)
+            zone = state.miningZones[p.jobId]
+        end
+        if not zone then return end
+    end
 
     if zone.phase == "SURVEY" then
         zone.surveyDone = zone.surveyDone + 1
@@ -1861,9 +1880,11 @@ function server.run()
             }
             if z.persistentKey then activeKeys[z.persistentKey] = true end
         end
-        -- Historical zones — persistent zones with no current active job
+        -- Historical zones — persistent zones with no current active job.
+        -- Include zones with 0 completed mine sectors (crashed during survey) so
+        -- the user can see them and they are not silently re-dispatched from scratch.
         for key, pz in pairs(state.persistentZones) do
-            if not activeKeys[key] and pz.doneSectors and #pz.doneSectors > 0 then
+            if not activeKeys[key] and pz.doneSectors then
                 local done = #pz.doneSectors
                 -- Ore-based pct if data available; sector-based fallback for old zones
                 local pct = orePct(pz.oreFound, pz.oreMined)
