@@ -252,17 +252,31 @@ local function saveJobs()
         if not f then error("could not open jobs.tmp for writing") end
         f.write(data)
         f.close()
-        if fs.exists(JOB_SAVE_FILE) then fs.delete(JOB_SAVE_FILE) end
+        -- Keep a backup of the previous good file so a crash between delete and
+        -- move can't destroy both copies simultaneously.
+        if fs.exists(JOB_SAVE_FILE) then
+            if fs.exists(JOB_SAVE_FILE .. ".bak") then fs.delete(JOB_SAVE_FILE .. ".bak") end
+            fs.copy(JOB_SAVE_FILE, JOB_SAVE_FILE .. ".bak")
+            fs.delete(JOB_SAVE_FILE)
+        end
         fs.move("jobs.tmp", JOB_SAVE_FILE)
     end)
     if not ok then logWarn("saveJobs failed: " .. tostring(err)) end
 end
 
 local function loadJobs()
-    if not fs.exists(JOB_SAVE_FILE) then return end
-    local f = fs.open(JOB_SAVE_FILE, "r")
-    if not f then return end
-    local raw  = f.readAll(); f.close()
+    local raw = ""
+    if fs.exists(JOB_SAVE_FILE) then
+        local f = fs.open(JOB_SAVE_FILE, "r")
+        if f then raw = f.readAll(); f.close() end
+    elseif fs.exists(JOB_SAVE_FILE .. ".bak") then
+        logWarn("loadJobs: " .. JOB_SAVE_FILE .. " missing — loading from backup")
+        local f = fs.open(JOB_SAVE_FILE .. ".bak", "r")
+        if f then raw = f.readAll(); f.close() end
+    else
+        return
+    end
+    if raw == "" then return end
     local data = textutils.unserialise(raw)
     if type(data) ~= "table" then return end
 
@@ -308,17 +322,29 @@ local function savePersistentZones()
         local f = fs.open("zones.tmp", "w")
         if not f then error("could not open zones.tmp for writing") end
         f.write(data); f.close()
-        if fs.exists(ZONE_SAVE_FILE) then fs.delete(ZONE_SAVE_FILE) end
+        if fs.exists(ZONE_SAVE_FILE) then
+            if fs.exists(ZONE_SAVE_FILE .. ".bak") then fs.delete(ZONE_SAVE_FILE .. ".bak") end
+            fs.copy(ZONE_SAVE_FILE, ZONE_SAVE_FILE .. ".bak")
+            fs.delete(ZONE_SAVE_FILE)
+        end
         fs.move("zones.tmp", ZONE_SAVE_FILE)
     end)
     if not ok then logWarn("savePersistentZones failed: " .. tostring(err)) end
 end
 
 local function loadPersistentZones()
-    if not fs.exists(ZONE_SAVE_FILE) then return end
-    local f = fs.open(ZONE_SAVE_FILE, "r")
-    if not f then return end
-    local raw  = f.readAll(); f.close()
+    local raw = ""
+    if fs.exists(ZONE_SAVE_FILE) then
+        local f = fs.open(ZONE_SAVE_FILE, "r")
+        if f then raw = f.readAll(); f.close() end
+    elseif fs.exists(ZONE_SAVE_FILE .. ".bak") then
+        logWarn("loadPersistentZones: " .. ZONE_SAVE_FILE .. " missing — loading from backup")
+        local f = fs.open(ZONE_SAVE_FILE .. ".bak", "r")
+        if f then raw = f.readAll(); f.close() end
+    else
+        return
+    end
+    if raw == "" then return end
     local data = textutils.unserialise(raw)
     if type(data) ~= "table" then return end
     state.persistentZones = data
@@ -476,7 +502,12 @@ function jobQueue.fail(jobId, reason, recoverable)
         job.status = JOB_STATUS.FAILED
         logError("Job permanently failed: " .. jobId .. " (" .. (reason or "?") .. ")")
     end
-    if job.linkedJob then
+    -- Only cancel the partner job on permanent failure. On retry (status=PENDING)
+    -- each turtle handles its own recovery: the miner sends MINE_RECALL before
+    -- calling sendFailed, so the support is already returning. Cancelling here
+    -- would mark the miner's job CANCELLED right before it re-registers and tries
+    -- to reclaim its reSendJob — leaving it stranded at "Ready." with no work.
+    if job.status == JOB_STATUS.FAILED and job.linkedJob then
         local linked = state.jobs[job.linkedJob]
         if linked
            and linked.status ~= JOB_STATUS.COMPLETE

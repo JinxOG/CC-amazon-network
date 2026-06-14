@@ -6,7 +6,6 @@
 local base  = require("turtle_base")
 local proto = require("protocol")
 
--- OPT #63: removed unused UNDERGROUND_Y and POLL_INTERVAL locals
 
 base.setCanDig(false)
 base.init(proto.ROLE.SUPPORT)
@@ -49,7 +48,10 @@ base.run(function(job)
             base.setStatus(proto.STATUS.WORKING, job.id)
             base.sendProgress("Rebooted mid-job — awaiting miner MINE_RECALL")
             print("[SUPPORT] Rebooted outside building — entering recovery follow mode")
-            _miningMode = true
+            -- _miningMode stays false: the partner-complete check
+            -- (not _miningMode and not info.jobId) must be active so the support
+            -- returns home within 15s after the miner docks, instead of waiting
+            -- for the 5-minute _miningMode stale fallback.
             _skyReturn  = true
             _recalling  = true
             lastUpdateTime = os.epoch("utc") / 1000   -- reset so stale clock starts at loop entry, not block entry
@@ -164,8 +166,8 @@ base.run(function(job)
                         break
                     end
                     local staleSec = os.epoch("utc") / 1000 - lastUpdateTime
-                    if _miningMode and staleSec > 300 then
-                        print("[SUPPORT] No miner update for 5min in mining mode — returning")
+                    if (_miningMode or _recalling) and staleSec > 300 then
+                        print("[SUPPORT] No miner update for 5min — returning")
                         _skyReturn = true
                         break
                     end
