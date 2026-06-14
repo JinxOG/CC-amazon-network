@@ -485,7 +485,7 @@ local function mineJob(job)
             if base.isRecalled() then
                 recallReturn()
             else
-                base.sendFailed("sector_request_timeout", true)
+                recallReturn("sector_request_timeout", true)
             end
             return
         end
