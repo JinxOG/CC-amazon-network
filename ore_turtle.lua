@@ -44,6 +44,12 @@ local function waitMsg(types, secs)
     local deadline = os.epoch("utc") / 1000 + secs
     while os.epoch("utc") / 1000 < deadline do
         if base.isRecalled() then return nil end
+        if base.isServerDown() then
+            -- Freeze deadline while server is unreachable so a crash doesn't
+            -- trigger sector_request_timeout and dispatch a duplicate mining pair.
+            deadline = os.epoch("utc") / 1000 + secs
+            sleep(2)
+        end
         local remain = deadline - os.epoch("utc") / 1000
         if remain <= 0 then break end
         local msg = proto.receive(base.getSelfId(), math.max(0.5, remain))

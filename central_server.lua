@@ -330,6 +330,10 @@ local function loadJobs()
     end
     if nRestored > 0 then
         logInfo(string.format("Loaded %d job(s) from disk", nRestored))
+        -- Apply dispatch stagger on restart: prevents fresh pairs from going out
+        -- before turtles have had time to re-register and re-link to their jobs.
+        state.lastDispatchTime = os.epoch("utc")
+        logInfo(string.format("Startup stagger active — no new dispatch for %ds", CFG.DISPATCH_STAGGER))
     end
 end
 
