@@ -226,32 +226,6 @@ function registry.checkTimeouts()
     end
 end
 
--- Detect jobs that are IN_PROGRESS/ASSIGNED but whose turtle has moved on to a
--- different job (or is idle).  These are orphaned by crash-recovery cycles where
--- the server dispatched a fresh job before the old one was properly closed.
--- A 30-second grace window avoids false positives during normal job transitions.
-function jobQueue.checkGhosts()
-    local nowSec = os.epoch("utc") / 1000
-    for jobId, job in pairs(state.jobs) do
-        if (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS)
-           and job.assignedTo then
-            local t = state.registry[job.assignedTo]
-            local isGhost = t and t.online and t.jobId ~= jobId
-            if isGhost then
-                job.ghostSince = job.ghostSince or nowSec
-                if nowSec - job.ghostSince > 30 then
-                    logWarn(string.format(
-                        "Ghost job %s: assigned to %s but turtle is on %s — auto-cancelling",
-                        jobId, job.assignedTo, t.jobId or "nothing"))
-                    server.cancelJob(jobId)
-                end
-            else
-                job.ghostSince = nil
-            end
-        end
-    end
-end
-
 -- ─── Persistence ─────────────────────────────────────────────────────────────
 
 local JOB_SAVE_FILE  = "jobs.dat"
@@ -421,6 +395,32 @@ local JOB_STATUS = {
 }
 
 jobQueue = {}
+
+-- Detect jobs that are IN_PROGRESS/ASSIGNED but whose turtle has moved on to a
+-- different job (or is idle).  These are orphaned by crash-recovery cycles where
+-- the server dispatched a fresh job before the old one was properly closed.
+-- A 30-second grace window avoids false positives during normal job transitions.
+function jobQueue.checkGhosts()
+    local nowSec = os.epoch("utc") / 1000
+    for jobId, job in pairs(state.jobs) do
+        if (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS)
+           and job.assignedTo then
+            local t = state.registry[job.assignedTo]
+            local isGhost = t and t.online and t.jobId ~= jobId
+            if isGhost then
+                job.ghostSince = job.ghostSince or nowSec
+                if nowSec - job.ghostSince > 30 then
+                    logWarn(string.format(
+                        "Ghost job %s: assigned to %s but turtle is on %s — auto-cancelling",
+                        jobId, job.assignedTo, t.jobId or "nothing"))
+                    server.cancelJob(jobId)
+                end
+            else
+                job.ghostSince = nil
+            end
+        end
+    end
+end
 
 function jobQueue.add(jobType, params, priority)
     local id  = newJobId()
