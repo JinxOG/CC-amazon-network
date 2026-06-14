@@ -285,10 +285,13 @@ base.run(function(job)
 
     local signalReceived = false
     local aborted        = false
-    local deadline = os.epoch("utc") / 1000 + 180
+    -- Normal flow: 3 min. If rebooted mid-job (outside building), give delivery
+    -- 10 min to restart, re-register, and reach the hole before giving up.
+    local holeTimeout = base.isInsideBuilding(base.getPos()) and 180 or 600
+    local deadline = os.epoch("utc") / 1000 + holeTimeout
     while os.epoch("utc") / 1000 < deadline do
         if base.isServerDown() then
-            deadline = os.epoch("utc") / 1000 + 180   -- freeze while server unreachable
+            deadline = os.epoch("utc") / 1000 + holeTimeout   -- freeze while server unreachable
             sleep(2)
         end
         local msg = proto.receive(base.getSelfId(), 5)
