@@ -70,6 +70,7 @@ let state = {
     version:   null,
     storage:   [],   // RS storage snapshot [{name, displayName, amount, craftable}]
     mineZones: {},   // { [jobId]: { bounds, total, done, pct, eta, oreFound, oreMined } }
+    serverLog: [],   // last 100 log lines from CC server: [{ ts, level, msg }]
     locations,       // named delivery locations { [name]: { name, x, y, z } }
     updatedAt: null,
 };
@@ -258,10 +259,11 @@ app.post('/update', async (req, res) => {
         state.turtles = newTurtles;
     }
 
-    if (jobs)                   state.jobs      = jobs;
-    if (version)                state.version   = version;
-    if (Array.isArray(storage)) state.storage   = storage;
-    if (mineZones)              state.mineZones = mineZones;
+    if (jobs)                        state.jobs      = jobs;
+    if (version)                     state.version   = version;
+    if (Array.isArray(storage))      state.storage   = storage;
+    if (mineZones)                   state.mineZones = mineZones;
+    if (Array.isArray(req.body?.serverLog)) state.serverLog = req.body.serverLog;
     state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });

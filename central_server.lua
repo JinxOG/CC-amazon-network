@@ -1896,11 +1896,18 @@ function server.run()
             end
             return r
         end
-        local payload = '{"turtles":'  .. js(turtles,      "{}",  "turtles") ..
-                        ',"jobs":'     .. jobs ..
-                        ',"version":'  .. js(proto.VERSION, '"?"', "version") ..
-                        ',"storage":'  .. storageJSON ..
-                        ',"mineZones":' .. js(mineZones,   "{}",  "mineZones") .. '}'
+        -- Include last 100 log lines so the bridge can expose them for monitoring.
+        local logSlice = {}
+        local logStart = math.max(1, #state.log - 99)
+        for i = logStart, #state.log do
+            table.insert(logSlice, state.log[i])
+        end
+        local payload = '{"turtles":'   .. js(turtles,      "{}",  "turtles") ..
+                        ',"jobs":'      .. jobs ..
+                        ',"version":'   .. js(proto.VERSION, '"?"', "version") ..
+                        ',"storage":'   .. storageJSON ..
+                        ',"mineZones":' .. js(mineZones,    "{}",  "mineZones") ..
+                        ',"serverLog":' .. js(logSlice,     "[]",  "serverLog") .. '}'
         return payload
     end
 
