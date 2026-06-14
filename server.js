@@ -71,6 +71,7 @@ let state = {
     storage:   [],   // RS storage snapshot [{name, displayName, amount, craftable}]
     mineZones: {},   // { [jobId]: { bounds, total, done, pct, eta, oreFound, oreMined } }
     serverLog: [],   // last 100 log lines from CC server: [{ ts, level, msg }]
+    players:   [],   // online players from Dynmap: [{ name, x, y, z, health, world }]
     locations,       // named delivery locations { [name]: { name, x, y, z } }
     updatedAt: null,
 };
@@ -151,6 +152,33 @@ async function upsertMarker(id, t) {
         setTimeout(() => { delete markerExists[`_err_${id}`]; }, 30000);
     }
 }
+
+// ─── Player position polling ─────────────────────────────────────────────────
+// Dynmap's /up/world/<world>/0 returns player list with positions.
+
+function refreshPlayers() {
+    const url = `http://127.0.0.1:8123/up/world/${CFG.dynmap.world}/0`;
+    http.get(url, (res) => {
+        let raw = '';
+        res.on('data', d => raw += d);
+        res.on('end', () => {
+            try {
+                const data = JSON.parse(raw);
+                state.players = (data.players || []).map(p => ({
+                    name:   p.account,
+                    x:      Math.round(p.x),
+                    y:      Math.round(p.y),
+                    z:      Math.round(p.z),
+                    health: p.health,
+                    world:  p.world,
+                }));
+            } catch (e) { /* dynmap unavailable — keep last known */ }
+        });
+    }).on('error', () => { /* dynmap unavailable — keep last known */ });
+}
+
+setInterval(refreshPlayers, 5000);
+refreshPlayers();
 
 // ─── Dynmap proxy helpers ─────────────────────────────────────────────────────
 
