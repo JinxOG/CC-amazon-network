@@ -1138,6 +1138,25 @@ function base.queryTurtle(targetId, timeout)
     return nil
 end
 
+-- Wait for one of several message types, returning the message or nil on
+-- timeout / recall. Freezes the deadline while the server is unreachable.
+function base.waitForAny(types, seconds)
+    local set = {}
+    for _, t in ipairs(types) do set[t] = true end
+    local deadline = os.epoch("utc") / 1000 + seconds
+    while os.epoch("utc") / 1000 < deadline do
+        if base.isRecalled() then return nil end
+        if base.isServerDown() then
+            deadline = os.epoch("utc") / 1000 + seconds
+            sleep(2)
+        else
+            local msg = proto.receive(_self.id, math.max(1, deadline - os.epoch("utc") / 1000))
+            if msg and set[msg.type] then return msg end
+        end
+    end
+    return nil
+end
+
 -- ─── Init ────────────────────────────────────────────────────────────────────
 
 function base.init(role)
@@ -1256,6 +1275,10 @@ function base.run(jobHandler)
                                 local insideBuilding = base.isInsideBuilding(_self.pos)
                                 if insideBuilding then
                                     base.returnToDockInternal()
+                                elseif _self.pos.y >= 100 then
+                                    -- Turtle is at sky altitude (mine recall position) —
+                                    -- fly home at Y=200 via arrivals hole, not underground.
+                                    base.returnToDockFromSky()
                                 else
                                     base.returnToDock()
                                 end
