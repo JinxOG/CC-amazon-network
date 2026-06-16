@@ -1339,7 +1339,7 @@ function _buildTcard(id,t,sysVer){
     const{pct,fc}=_fuel(t);
     const st=t.status||'UNKNOWN',eid=escapeHtml(id),erole=escapeHtml(t.role||'?');
     const tVer=t.version||'?',verOld=tVer!=='?'&&sysVer&&tVer!==sysVer;
-    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.z)}`:'—';
     const roleCls=t.role==='DELIVERY'?'d':'s';
     const idleBtn=st!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${eid}')">IDLE</button>`:'';
     return `<div class="tcard is-new${!t.online?' offline':''}" data-id="${eid}">
@@ -1369,7 +1369,7 @@ function _buildTcard(id,t,sysVer){
 
 function _patchTcard(card,t,sysVer){
     const{pct,fc}=_fuel(t),st=t.status||'UNKNOWN';
-    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.z)}`:'—';
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.z)}`:'—';
     const fill=card.querySelector('.fuel-fill');
     if(fill){
         fill.style.width=pct+'%';
