@@ -185,11 +185,12 @@ base.run(function(job)
                                 print("[SUPPORT] Miner descended to mine — locking to Y=" .. FOLLOW_Y)
                             end
                         end
-                        -- Drain during mining AND during recall sky flight. The miner
-                        -- sends 300+ POSITION_UPDATEs across the horizontal sky leg;
-                        -- without draining, RETURN_TO_DOCK (sent last) gets pushed past
-                        -- the 256-event CC queue limit and is silently dropped.
-                        if _miningMode or _recalling then
+                        -- Drain after every POSITION_UPDATE. During sky flight the miner
+                        -- sends 300+ updates; draining prevents RETURN_TO_DOCK from being
+                        -- dropped past the 256-event CC queue limit. In survey mode,
+                        -- draining catches MINE_RECALL queued behind recent updates so
+                        -- support applies xOffset=1 before moving (prevents blocking miner).
+                        do
                             while true do
                                 local nxt = proto.receive(base.getSelfId(), 0.05)
                                 if not nxt then break end

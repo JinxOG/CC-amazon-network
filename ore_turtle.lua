@@ -353,6 +353,7 @@ local function mineJob(job)
         dumpOres()
         checkFuel(jobId)
         base.signalPartner(proto.MSG.MINE_RECALL, {})
+        sleep(2)   -- wait for support to receive MINE_RECALL and step east before ascending
         local p = base.getPos()
         base.move.to(p.x, 100, p.z)
         sleep(5)
