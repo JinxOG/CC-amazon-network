@@ -1290,6 +1290,7 @@ function server.cancelJob(jobId)
     -- Cancel linked support job too
     if job.linkedJob then server.cancelJob(job.linkedJob) end
     state.miningZones[jobId] = nil
+    saveJobs()
     logInfo("Job cancelled: " .. jobId)
     return true
 end
