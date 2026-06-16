@@ -118,7 +118,8 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
     -- midJob=false/nil: turtle actually rebooted — keep job active and flag it
     --   for re-dispatch, but do NOT call sendTo here.  The handler must send
     --   JOB_ASSIGN AFTER REGISTER_ACK so the turtle sets its dock first.
-    local reSendJob = nil
+    local reSendJob    = nil
+    local reSendSector = nil
     for _, job in pairs(state.jobs) do
         if job.assignedTo == id and
            (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
@@ -129,6 +130,16 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
                 state.registry[id].jobId  = job.id
                 logInfo(string.format("Re-linked %s to job %s at %d,%d,%d (server was down)",
                     id, job.id, position.x or 0, position.y or 0, position.z or 0))
+                -- If a MINE sector was in-flight, replay SECTOR_ASSIGN so the miner
+                -- doesn't time out waiting for it and needlessly return to surface.
+                if job.type == proto.JOB.MINE then
+                    local mz = state.miningZones[job.id]
+                    if mz and mz.lastAssigned then
+                        reSendSector = { jobId = job.id,
+                                         x = mz.lastAssigned.x, z = mz.lastAssigned.z,
+                                         isSurvey = mz.lastAssigned.isSurvey }
+                    end
+                end
             else
                 -- Turtle rebooted — keep job IN_PROGRESS so no new pair is dispatched
                 -- to the same destination.  Re-send JOB_ASSIGN after REGISTER_ACK.
@@ -142,7 +153,7 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
         end
     end
 
-    return dock, reSendJob
+    return dock, reSendJob, reSendSector
 end
 
 function registry.update(id, status, fuel, position, jobId, version)
@@ -364,7 +375,12 @@ local function mergeToPersistentZone(jobId, sx, sz)
     if not zone or not zone.persistentKey then return end
     local pz = state.persistentZones[zone.persistentKey]
     if not pz then return end
-    -- Record this sector as done
+    -- Record this sector as done (guard against double-insert from crash recovery replays)
+    local alreadyDone = false
+    for _, s in ipairs(pz.doneSectors) do
+        if s.x == sx and s.z == sz then alreadyDone = true; break end
+    end
+    if alreadyDone then return end
     table.insert(pz.doneSectors, { x = sx, z = sz })
     -- Snapshot the full accumulated ore totals (cumulative across all SECTOR_SCAN calls)
     pz.oreFound = {}
@@ -406,6 +422,7 @@ function jobQueue.checkGhosts()
         if (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS)
            and job.assignedTo then
             local t = state.registry[job.assignedTo]
+            -- Case 1: turtle moved on to a different job (classic ghost)
             local isGhost = t and t.online and t.jobId ~= jobId
             if isGhost then
                 job.ghostSince = job.ghostSince or nowSec
@@ -417,6 +434,26 @@ function jobQueue.checkGhosts()
                 end
             else
                 job.ghostSince = nil
+            end
+
+            -- Case 2: miner reports IDLE while server still has this MINE job active.
+            -- Means JOB_COMPLETE or JOB_FAILED was lost during a server crash.
+            -- Miners never report IDLE while actively mining, so IDLE = job truly done.
+            local isIdleStuck = not isGhost
+                and t and t.online
+                and t.status == proto.STATUS.IDLE
+                and t.jobId == jobId
+                and job.type == proto.JOB.MINE
+            if isIdleStuck then
+                job.idleSince = job.idleSince or nowSec
+                if nowSec - job.idleSince > 60 then
+                    logWarn(string.format(
+                        "Idle-stuck MINE job %s: %s is IDLE but job is %s — re-queuing",
+                        jobId, job.assignedTo, job.status))
+                    jobQueue.fail(jobId, "idle_stuck_after_crash", true)
+                end
+            else
+                job.idleSince = nil
             end
         end
     end
@@ -865,7 +902,7 @@ local handlers = {}
 
 handlers[proto.MSG.REGISTER] = function(msg)
     local p    = msg.payload
-    local dock, reSendJob = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob)
+    local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob)
     -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
         ok       = true,
@@ -877,6 +914,14 @@ handlers[proto.MSG.REGISTER] = function(msg)
         sendTo(msg.from, proto.MSG.JOB_ASSIGN,
             proto.payloadJobAssign(reSendJob.id, reSendJob.type, reSendJob.params))
         logInfo(string.format("Re-sent job %s to %s (after REGISTER_ACK)", reSendJob.id, msg.from))
+    end
+    -- Replay last SECTOR_ASSIGN to a mid-job miner so it doesn't time out waiting.
+    if reSendSector then
+        sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
+            proto.payloadSectorAssign(reSendSector.jobId,
+                reSendSector.x, reSendSector.z, nil, reSendSector.isSurvey))
+        logInfo(string.format("Re-sent SECTOR_ASSIGN (%d,%d) to %s after crash re-link",
+            reSendSector.x, reSendSector.z, msg.from))
     end
     pcall(dispatcher.tick)
 end
@@ -960,6 +1005,7 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
             sector.x, sector.z, isSurvey and " [SURVEY]" or "", msg.from, jobId))
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
             proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
+        zone.lastAssigned = { x = sector.x, z = sector.z, isSurvey = isSurvey }
     end
 end
 
@@ -1128,12 +1174,14 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             local first = table.remove(zone.rescanSectors, 1)
             sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
                 proto.payloadSectorAssign(p.jobId, first.x, first.z, nil, true))
+            zone.lastAssigned = { x = first.x, z = first.z, isSurvey = true }
         end
         return
     end
 
     sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
         proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
+    zone.lastAssigned = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey }
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
