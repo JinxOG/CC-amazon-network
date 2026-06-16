@@ -933,6 +933,13 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         registry.update(msg.from, p.status, p.fuel, p.position, p.jobId, p.version)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
+        -- Deliver any staged update now that the turtle is idle
+        local t = state.registry[msg.from]
+        if t and t.pendingUpdate and t.status == proto.STATUS.IDLE then
+            t.pendingUpdate = nil
+            sendTo(msg.from, proto.MSG.UPDATE_ALL, {})
+            logInfo("UPDATE_ALL: delivered to " .. msg.from .. " (now idle)")
+        end
     else
         -- Unknown turtle (server restarted) — no ACK means missed counter runs up → auto re-registers
         logWarn("Heartbeat from unknown turtle: " .. msg.from .. " (will re-register shortly)")
@@ -1581,8 +1588,23 @@ function server.run()
             server.recallAll(p.reason or "admin_recall")
 
         elseif t == "UPDATE_ALL" then
-            sendBroadcast(proto.MSG.UPDATE_ALL, {})
-            logInfo("Dashboard: UPDATE_ALL broadcast sent")
+            -- Staged update: send immediately to IDLE turtles only.
+            -- Busy turtles (miners underground, mid-delivery) are flagged and
+            -- will receive UPDATE_ALL the next time they heartbeat in as IDLE.
+            local nImmediate, nStaged = 0, 0
+            for _, tr in pairs(state.registry) do
+                if tr.online then
+                    if tr.status == proto.STATUS.IDLE then
+                        sendTo(tr.id, proto.MSG.UPDATE_ALL, {})
+                        nImmediate = nImmediate + 1
+                    else
+                        tr.pendingUpdate = true
+                        nStaged = nStaged + 1
+                    end
+                end
+            end
+            logInfo(string.format("UPDATE_ALL: sent to %d idle, queued for %d busy turtle(s)",
+                nImmediate, nStaged))
             -- Flag for self-update; acted on in the http_success handler
             -- after the bridge response is fully processed.
             logWarn("UPDATE_ALL — self-update queued...")
