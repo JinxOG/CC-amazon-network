@@ -23,7 +23,7 @@ local PROTECTED = { [S_SCANNER]=true, [S_COAL]=true, [S_FUEL_EC]=true, [S_ORE_EC
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
 local SURVEY_TRAVEL_Y = 95   -- 5 below support FOLLOW_Y=100; avoids vertical collision during survey
-local FUEL_WARN    = 800   -- self-refuel threshold
+local FUEL_WARN    = 3000  -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
 local MIN_ORE_Y    = 5     -- don't mine ores below this Y; bedrock starts at Y≤4
