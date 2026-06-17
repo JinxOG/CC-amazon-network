@@ -455,6 +455,22 @@
         #mine-modal .modal-coord-row input:focus { border-color:#ffaa4488; }
         #mine-modal .modal-field label { color:#aa8866; }
 
+        /* ── Survey modal ── */
+        #survey-modal {
+            display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+            background:#0a0a12; border:1px solid #44aaff44; border-radius:4px;
+            padding:24px; width:380px; z-index:1001;
+            box-shadow:0 0 40px #44aaff11,0 0 80px #00000088;
+        }
+        #survey-modal.show { display:block; animation:modalIn .18s ease forwards; }
+        #survey-modal .modal-title { color:#44aaff; text-shadow:0 0 8px #44aaff55; }
+        #survey-modal .modal-coord-row input {
+            font-size:14px; padding:8px 10px; color:#eee;
+            border-color:#44aaff33;
+        }
+        #survey-modal .modal-coord-row input:focus { border-color:#44aaff88; }
+        #survey-modal .modal-field label { color:#6688aa; }
+
         /* ── Mine info panel ── */
         #mine-info-panel {
             display:none; position:fixed; z-index:10001;
@@ -744,33 +760,26 @@
     </div>
 </div>
 
-<div id="survey-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-    background:#0a0a12;border:1px solid #44aaffaa;border-radius:4px;padding:24px 28px;
-    z-index:1002;min-width:340px;box-shadow:0 0 40px #44aaff22;font-family:'Courier New',monospace;">
-    <div class="modal-title" style="color:#44aaff;text-shadow:0 0 8px #44aaff55;margin-bottom:16px;
-        font-size:12px;letter-spacing:3px;">🔭 DISPATCH SURVEY</div>
+<div id="survey-modal">
+    <div class="modal-title">🔭 DISPATCH SURVEY</div>
     <div class="modal-field">
-        <label style="color:#5588aa;font-size:10px;letter-spacing:2px;">CORNER 1</label>
+        <label>CORNER 1</label>
         <div class="modal-coord-row">
-            <input id="sv-x1" type="number" placeholder="X" style="background:#0d0d1a;border:1px solid #2a2a4a;
-                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
-            <input id="sv-z1" type="number" placeholder="Z" style="background:#0d0d1a;border:1px solid #2a2a4a;
-                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
+            <input id="sv-x1" type="number" placeholder="X" oninput="updateSurveyAreaInfo()">
+            <input id="sv-z1" type="number" placeholder="Z" oninput="updateSurveyAreaInfo()">
         </div>
     </div>
-    <div class="modal-field" style="margin-top:10px;">
-        <label style="color:#5588aa;font-size:10px;letter-spacing:2px;">CORNER 2</label>
+    <div class="modal-field">
+        <label>CORNER 2</label>
         <div class="modal-coord-row">
-            <input id="sv-x2" type="number" placeholder="X" style="background:#0d0d1a;border:1px solid #2a2a4a;
-                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
-            <input id="sv-z2" type="number" placeholder="Z" style="background:#0d0d1a;border:1px solid #2a2a4a;
-                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
+            <input id="sv-x2" type="number" placeholder="X" oninput="updateSurveyAreaInfo()">
+            <input id="sv-z2" type="number" placeholder="Z" oninput="updateSurveyAreaInfo()">
         </div>
     </div>
-    <div class="modal-actions" style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+    <div id="sv-area-info" style="font-size:11px;color:#888;margin-bottom:10px;min-height:15px;letter-spacing:1px;"></div>
+    <div class="modal-actions" style="gap:6px;">
         <button class="btn re" onclick="closeSurveyModal()">CANCEL</button>
-        <button class="btn" style="background:#112233;color:#44aaff;border:1px solid #44aaff44;"
-            onclick="submitSurvey()">SURVEY AREA</button>
+        <button class="btn" style="background:#0d1a28;color:#44aaff;border:1px solid #44aaff33;" onclick="submitSurvey()">DISPATCH SURVEY</button>
     </div>
 </div>
 
@@ -1073,11 +1082,7 @@ function setupDynmapInjection(dw){
             _surveySelecting=false;
             document.getElementById('survey-drag-hint').style.display='none';
             if(mc1&&mc2){
-                document.getElementById('sv-x1').value=Math.round(mc1.x);
-                document.getElementById('sv-z1').value=Math.round(mc1.z);
-                document.getElementById('sv-x2').value=Math.round(mc2.x);
-                document.getElementById('sv-z2').value=Math.round(mc2.z);
-                document.getElementById('survey-modal').style.display='block';
+                openSurveyModal(Math.round(mc1.x),Math.round(mc1.z),Math.round(mc2.x),Math.round(mc2.z));
             }
         }
     },{capture:true});
@@ -2194,10 +2199,34 @@ async function submitMine(){
     closeMineModal();toast(`Mine job dispatched — (${x1},${z1}) to (${x2},${z2})`);switchTab('jobs');
 }
 
+function openSurveyModal(x1,z1,x2,z2){
+    if(x1!=null) document.getElementById('sv-x1').value=x1;
+    if(z1!=null) document.getElementById('sv-z1').value=z1;
+    if(x2!=null) document.getElementById('sv-x2').value=x2;
+    if(z2!=null) document.getElementById('sv-z2').value=z2;
+    updateSurveyAreaInfo();
+    document.getElementById('dynmap-frame').style.visibility='hidden';
+    document.getElementById('map-overlay').classList.add('show');
+    document.getElementById('backdrop').classList.add('show');
+    document.getElementById('survey-modal').classList.add('show');
+}
 function closeSurveyModal(){
     _surveySelecting=false;
     document.getElementById('survey-drag-hint').style.display='none';
-    document.getElementById('survey-modal').style.display='none';
+    document.getElementById('dynmap-frame').style.visibility='visible';
+    document.getElementById('map-overlay').classList.remove('show');
+    document.getElementById('backdrop').classList.remove('show');
+    document.getElementById('survey-modal').classList.remove('show');
+}
+function updateSurveyAreaInfo(){
+    const x1=parseInt(document.getElementById('sv-x1').value);
+    const z1=parseInt(document.getElementById('sv-z1').value);
+    const x2=parseInt(document.getElementById('sv-x2').value);
+    const z2=parseInt(document.getElementById('sv-z2').value);
+    const el=document.getElementById('sv-area-info');
+    if(isNaN(x1)||isNaN(z1)||isNaN(x2)||isNaN(z2)){el.textContent='';return;}
+    const dx=Math.abs(x2-x1)||1, dz=Math.abs(z2-z1)||1;
+    el.textContent=`${dx}×${dz} blocks`;
 }
 async function submitSurvey(){
     const x1=parseFloat(document.getElementById('sv-x1').value);
