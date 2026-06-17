@@ -159,6 +159,16 @@ end
 function registry.update(id, status, fuel, position, jobId, version)
     local t = state.registry[id]
     if not t then logWarn("Heartbeat from unknown turtle: " .. id) return end
+    -- Guard: if the server has an ASSIGNED/IN_PROGRESS job for this turtle, don't
+    -- let a stale IDLE heartbeat (sent before JOB_ASSIGN is received) overwrite
+    -- the server-side assignment and re-open the turtle for a second dispatch.
+    local activeJob = t.jobId and state.jobs[t.jobId]
+    local serverHasActive = activeJob and
+        (activeJob.status == JOB_STATUS.ASSIGNED or activeJob.status == JOB_STATUS.IN_PROGRESS)
+    if serverHasActive then
+        if status == proto.STATUS.IDLE then status = nil end  -- keep server status
+        if jobId  == nil              then jobId  = t.jobId end  -- keep server jobId
+    end
     t.status   = status   or t.status
     t.fuel     = fuel     or t.fuel
     t.position = position or t.position
