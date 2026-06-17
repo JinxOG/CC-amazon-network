@@ -799,7 +799,6 @@ local function ensureMineZone(jobId, params)
             surveyOnly      = false,
             targeted        = true,
             oreFilter       = oreFilter,
-            oreMinimum      = params.oreMinimum,
             surveySectors   = {},
             surveyDone      = 0,
             surveyTotal     = 0,
@@ -1664,6 +1663,23 @@ function server.run()
 
     -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
     local activeAutoMines = {}   -- [oreName] = jobId of the running auto-mine
+    -- Re-attach surviving auto-mine jobs after restart so the watchdog doesn't re-dispatch
+    for jobId, job in pairs(state.jobs) do
+        if job.type == proto.JOB.MINE and job.params and job.params.oreFilter then
+            local filter = job.params.oreFilter
+            if type(filter) == "table" and #filter == 1 then
+                local oreName = filter[1]
+                if oreThresholds[oreName] then
+                    local s = job.status or ""
+                    if s == "PENDING" or s == "ASSIGNED" or s == "IN_PROGRESS" then
+                        activeAutoMines[oreName] = jobId
+                        logInfo(string.format(
+                            "Restored active auto-mine %s → %s (post-restart)", oreName, jobId))
+                    end
+                end
+            end
+        end
+    end
 
     local function checkOreThresholds()
         if not next(oreThresholds) then return end
@@ -1713,7 +1729,6 @@ function server.run()
                                 x2            = rb.x2, z2 = rb.z2,
                                 sharedZoneKey = bestKey,
                                 oreFilter     = { oreName },
-                                oreMinimum    = { [oreName] = minimum },
                             }, 3)   -- priority 3 = higher than manual (5) = dispatched first
                             activeAutoMines[oreName] = id
                             logInfo(string.format(
@@ -2116,7 +2131,6 @@ function server.run()
                 x2            = rb.x2, z2 = rb.z2,
                 sharedZoneKey = zoneKey,
                 oreFilter     = oreFilter,
-                oreMinimum    = p.oreMinimum or nil,
             }, 5)
             logInfo(string.format("Dashboard targeted mine %s → zone %s [%s]",
                 id, zoneKey, table.concat(oreFilter, ",")))
