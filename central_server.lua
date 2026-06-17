@@ -629,6 +629,37 @@ function jobQueue.fail(jobId, reason, recoverable)
             server.cancelJob(job.linkedJob)
         end
     end
+    -- Auto-respawn: if this zone is now orphaned (no other pending/active MINE
+    -- jobs covering it) but still has sectors remaining, queue one replacement.
+    if job.status == JOB_STATUS.FAILED and zone and zone.persistentKey then
+        local remaining = zone.pending and #zone.pending or 0
+        if remaining > 0 then
+            local otherActive = 0
+            for jid2, j2 in pairs(state.jobs) do
+                if jid2 ~= jobId and j2.type == proto.JOB.MINE then
+                    local s = j2.status
+                    if s == JOB_STATUS.PENDING or s == JOB_STATUS.ASSIGNED or s == JOB_STATUS.IN_PROGRESS then
+                        local j2zone = state.miningZones[jid2]
+                        local j2key  = (j2.params and j2.params.sharedZoneKey)
+                                    or (j2zone and j2zone.persistentKey)
+                        if j2key == zone.persistentKey then
+                            otherActive = otherActive + 1
+                        end
+                    end
+                end
+            end
+            if otherActive == 0 then
+                local p = job.params or {}
+                local newId = server.submitJob(proto.JOB.MINE, {
+                    x1 = p.x1, z1 = p.z1, x2 = p.x2, z2 = p.z2,
+                    sharedZoneKey = zone.persistentKey,
+                }, job.priority or 5)
+                logInfo(string.format(
+                    "Auto-respawn: %s → zone %s (%d sectors remain, replaced %s)",
+                    newId, zone.persistentKey, remaining, jobId))
+            end
+        end
+    end
     state.miningZones[jobId] = nil
     saveJobs()
 end
