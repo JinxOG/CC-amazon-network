@@ -1885,7 +1885,7 @@ function renderJobs(jobs,turtles){
     const ungrouped=[];
     filtered.forEach(j=>{
         if(j.type==='MINE'){
-            const pkey=(mz[j.id]||{}).persistentKey;
+            const pkey=(mz[j.id]||{}).persistentKey||j.zoneKey;
             if(pkey){(zoneGroups[pkey]=zoneGroups[pkey]||[]).push(j);return;}
         }
         ungrouped.push(j);

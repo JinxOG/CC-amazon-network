@@ -2090,8 +2090,8 @@ function server.run()
                 local id = server.submitJob(proto.JOB.MINE, {
                     x1 = math.floor(x1), z1 = math.floor(z1),
                     x2 = math.floor(x2), z2 = math.floor(z2),
-                    -- First job creates the zone; subsequent jobs share it
-                    sharedZoneKey = i > 1 and zoneKey or nil,
+                    -- All jobs carry the key; first caller creates zone, rest join it
+                    sharedZoneKey = zoneKey,
                 }, 5)
                 logInfo(string.format(
                     "Dashboard mine %s [%d/%d] → (%d,%d)→(%d,%d) sectorCount=%d",
@@ -2205,6 +2205,7 @@ function server.run()
                     linkedJob   = j.linkedJob,
                     supportId   = supportId,
                     destination = dest,
+                    zoneKey     = j.params and j.params.sharedZoneKey or nil,
                 }
                 local ok_e, r_e = pcall(textutils.serialiseJSON, e)
                 if ok_e then
