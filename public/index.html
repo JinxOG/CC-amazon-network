@@ -236,6 +236,25 @@
         .jmine-bar { height:3px; background:#1a1a28; border-radius:2px; margin:2px 0 4px; }
         .jmine-bar-fill { height:100%; background:#ffaa44; border-radius:2px; transition:width .4s ease; }
 
+        /* ── Zone banner (multi-miner grouped view) ── */
+        .zone-banner { background:#08080e; border:1px solid #ff880033; border-left:3px solid #ff8800; border-radius:3px; padding:12px; margin-bottom:8px; }
+        .zone-banner.is-new { animation:cardIn .22s ease forwards; }
+        .zb-header { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+        .zb-icon { color:#ff8800; font-size:13px; }
+        .zb-area { font-size:12px; color:#ff880099; letter-spacing:1px; flex:1; }
+        .zb-count { font-size:10px; color:#ff880077; letter-spacing:2px; background:#1a0e00; border:1px solid #ff880033; padding:2px 6px; border-radius:2px; }
+        .zb-cancel { background:#1a0500; border:1px solid #ff440044; color:#ff6644; font-family:'Courier New',monospace; font-size:10px; padding:3px 8px; border-radius:2px; cursor:pointer; letter-spacing:1px; }
+        .zb-cancel:hover { background:#2a0800; border-color:#ff440088; }
+        .zb-miners { display:flex; flex-direction:column; gap:4px; border-top:1px solid #ff880018; padding-top:8px; margin-top:8px; }
+        .zb-miner { display:flex; align-items:center; gap:6px; padding:5px 7px; background:#050508; border:1px solid #0d0d1a; border-radius:2px; }
+        .zbm-name { font-size:12px; color:#ff8800cc; letter-spacing:1px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .zbm-name.dim { color:#5a5a7a; }
+        .zbm-fuel { flex:0 0 50px; margin:0; }
+        .zbm-pct { font-size:10px; color:#8888aa; min-width:28px; text-align:right; }
+        .zbm-pos { font-size:10px; color:#8888aa; letter-spacing:1px; min-width:60px; text-align:right; }
+        .zbm-cancel { background:#0a0400; border:1px solid #ff440022; color:#ff6644aa; font-family:'Courier New',monospace; font-size:10px; padding:2px 5px; border-radius:2px; cursor:pointer; }
+        .zbm-cancel:hover { color:#ff6644; border-color:#ff440055; }
+
         /* ── Paired turtle section inside job cards ── */
         .jturtles { display:flex; gap:6px; border-top:1px solid #00ff8808; padding-top:9px; }
         .jtside { flex:1; background:#050508; border:1px solid #0d0d1a; border-radius:2px; padding:8px; }
@@ -1720,6 +1739,91 @@ function _patchJobCard(card,j,turtles,turtleEntries,allJobs){
     }
 }
 
+async function cancelZone(pkey){
+    const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const mz=lastState.mineZones||{};
+    const toCancel=(lastState.jobs||[]).filter(j=>{
+        const z=mz[j.id];return z&&z.persistentKey===pkey&&!terminal.has(j.status);
+    });
+    if(!toCancel.length)return;
+    if(!confirm(`Cancel all ${toCancel.length} job(s) in this zone?`))return;
+    for(const j of toCancel)await sendCmd('CANCEL_JOB',{jobId:j.id});
+    toast(`Cancelled ${toCancel.length} zone job(s)`);
+}
+
+function _buildZoneMinerRow(j,turtles,turtleEntries,allJobs){
+    const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const ejid=escapeHtml(j.id),ejstat=escapeHtml(j.status);
+    const{delEntry}=findJobTurtles(j,turtles,turtleEntries,allJobs);
+    const minerId=delEntry?delEntry[0]:null,minerT=delEntry?delEntry[1]:null;
+    const nameCls=minerId?'zbm-name':'zbm-name dim';
+    const nameText=minerId?escapeHtml(minerId):'—';
+    let fuelHtml='';
+    if(minerT){const{pct,fc}=_fuel(minerT);fuelHtml=`<div class="fuel-track zbm-fuel"><div class="fuel-fill ${fc}" style="width:${pct}%"></div></div><span class="zbm-pct">${pct}%</span>`;}
+    const pos=minerT&&minerT.x!=null?`${Math.round(minerT.x)},${Math.round(minerT.z)}`:'—';
+    const cancelBtn=!terminal.has(j.status)?`<button class="zbm-cancel" onclick="cancelJob('${ejid}')">✕</button>`:'';
+    return `<div class="zb-miner" data-job-id="${ejid}">
+        <span class="jbadge ${ejstat}" style="font-size:9px;padding:1px 5px;">${ejstat}</span>
+        <span class="${nameCls}">${nameText}</span>
+        ${fuelHtml}
+        <span class="zbm-pos">${escapeHtml(pos)}</span>
+        ${cancelBtn}
+    </div>`;
+}
+
+function _buildZoneBanner(pkey,group,turtles,turtleEntries,allJobs){
+    const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const mz=lastState.mineZones||{};
+    const firstJob=group[0];
+    const z=mz[firstJob.id];
+    const rb=z&&z.rawBounds;
+    const areaStr=rb?`(${rb.x1},${rb.z1}) → (${rb.x2},${rb.z2})`:pkey;
+    const anyActive=group.some(j=>!terminal.has(j.status));
+    const cancelBtn=anyActive?`<button class="zb-cancel" onclick="cancelZone(${JSON.stringify(pkey)})">CANCEL ALL</button>`:'';
+    const statsHtml=_buildMineStats(firstJob.id)||'';
+    const minersHtml=group.map(j=>_buildZoneMinerRow(j,turtles,turtleEntries,allJobs)).join('');
+    return `<div class="zone-banner is-new" data-zone-key="${escapeHtml(pkey)}">
+        <div class="zb-header">
+            <span class="zb-icon">⛏</span>
+            <span class="zb-area">${escapeHtml(areaStr)}</span>
+            <span class="zb-count">${group.length} MINERS</span>
+            ${cancelBtn}
+        </div>
+        ${statsHtml}
+        <div class="zb-miners">${minersHtml}</div>
+    </div>`;
+}
+
+function _patchZoneBanner(banner,pkey,group,turtles,turtleEntries,allJobs){
+    banner.classList.remove('is-new');
+    const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
+    const anyActive=group.some(j=>!terminal.has(j.status));
+    const top=banner.querySelector('.zb-header');
+    const existCancel=banner.querySelector('.zb-cancel');
+    if(anyActive&&!existCancel&&top){
+        const btn=document.createElement('button');
+        btn.className='zb-cancel';btn.textContent='CANCEL ALL';
+        btn.onclick=()=>cancelZone(pkey);top.appendChild(btn);
+    }else if(!anyActive&&existCancel){existCancel.remove();}
+    const countEl=banner.querySelector('.zb-count');
+    if(countEl)countEl.textContent=`${group.length} MINERS`;
+    const newStats=_buildMineStats(group[0].id)||'';
+    const existStats=banner.querySelector('.jmine-stats');
+    if(existStats){existStats.outerHTML=newStats||'<span></span>';}
+    else if(newStats){banner.querySelector('.zb-miners').insertAdjacentHTML('beforebegin',newStats);}
+    const minersEl=banner.querySelector('.zb-miners');
+    if(minersEl){
+        const seenRows=new Set();
+        group.forEach(j=>{
+            seenRows.add(j.id);
+            const row=minersEl.querySelector(`.zb-miner[data-job-id="${j.id}"]`);
+            if(!row){minersEl.insertAdjacentHTML('beforeend',_buildZoneMinerRow(j,turtles,turtleEntries,allJobs));}
+            else{row.outerHTML=_buildZoneMinerRow(j,turtles,turtleEntries,allJobs);}
+        });
+        minersEl.querySelectorAll('.zb-miner').forEach(r=>{if(!seenRows.has(r.dataset.jobId))r.remove();});
+    }
+}
+
 function renderJobs(jobs,turtles){
     const el=document.getElementById('jobs-list');
     const terminal=new Set(['COMPLETE','FAILED','CANCELLED']);
@@ -1736,9 +1840,45 @@ function renderJobs(jobs,turtles){
     }
     const empty=el.querySelector('.empty');if(empty)empty.remove();
     const turtleEntries=Object.entries(turtles||{});
-    const seen=new Set();
+    const mz=lastState.mineZones||{};
+
+    // Group MINE jobs sharing a persistentKey; others stay individual
+    const zoneGroups={};  // pkey → [job, ...]
+    const ungrouped=[];
     filtered.forEach(j=>{
-        seen.add(j.id);
+        if(j.type==='MINE'){
+            const pkey=(mz[j.id]||{}).persistentKey;
+            if(pkey){(zoneGroups[pkey]=zoneGroups[pkey]||[]).push(j);return;}
+        }
+        ungrouped.push(j);
+    });
+    // Single-miner zones fall back to individual cards
+    Object.entries(zoneGroups).forEach(([pkey,group])=>{
+        if(group.length<2)ungrouped.push(group[0]);
+    });
+
+    const seenJobIds=new Set();
+    const seenZoneKeys=new Set();
+
+    // Render zone banners
+    Object.entries(zoneGroups).forEach(([pkey,group])=>{
+        if(group.length<2)return;
+        seenZoneKeys.add(pkey);
+        group.forEach(j=>seenJobIds.add(j.id));
+        let banner=Array.from(el.querySelectorAll('.zone-banner')).find(b=>b.dataset.zoneKey===pkey);
+        if(!banner){
+            const w=document.createElement('div');
+            w.innerHTML=_buildZoneBanner(pkey,group,turtles,turtleEntries,jobs);
+            banner=w.firstElementChild;
+            el.appendChild(banner);
+        }else{
+            _patchZoneBanner(banner,pkey,group,turtles,turtleEntries,jobs);
+        }
+    });
+
+    // Render individual cards
+    ungrouped.forEach(j=>{
+        seenJobIds.add(j.id);
         let card=el.querySelector(`.job-card[data-id="${j.id}"]`);
         if(!card){
             const w=document.createElement('div');
@@ -1749,7 +1889,9 @@ function renderJobs(jobs,turtles){
             _patchJobCard(card,j,turtles,turtleEntries,jobs);
         }
     });
-    el.querySelectorAll('.job-card').forEach(c=>{if(!seen.has(c.dataset.id))c.remove();});
+
+    el.querySelectorAll('.job-card').forEach(c=>{if(!seenJobIds.has(c.dataset.id))c.remove();});
+    el.querySelectorAll('.zone-banner').forEach(b=>{if(!seenZoneKeys.has(b.dataset.zoneKey))b.remove();});
 }
 
 function refreshTurtleSel(turtles){
