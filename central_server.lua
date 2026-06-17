@@ -774,7 +774,7 @@ local function ensureMineZone(jobId, params)
     for _, s in ipairs(allSectors) do table.insert(allSectorsCopy, { x=s.x, z=s.z }) end
 
     state.miningZones[jobId] = {
-        pending         = sectors,
+        pending         = params.surveyOnly and {} or sectors,
         allSectors      = allSectorsCopy,
         total           = total,
         done            = preDone,
@@ -788,6 +788,7 @@ local function ensureMineZone(jobId, params)
         surveySectors   = surveySectors,
         surveyDone      = 0,
         surveyTotal     = #surveySectors,
+        surveyOnly      = params.surveyOnly == true,
         lastAssignments = {},   -- [minerId] = {x, z, isSurvey}
     }
 
@@ -1143,8 +1144,18 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         if #zone.surveySectors > 0 then
             nextSect     = table.remove(zone.surveySectors, 1)
             isNextSurvey = true
+        elseif zone.surveyOnly then
+            -- Survey-only mode: persist surveyed status and complete
+            local pz = zone.persistentKey and state.persistentZones[zone.persistentKey]
+            if pz then
+                pz.surveyed = true
+                savePersistentZones()
+            end
+            logInfo(string.format("Zone %s survey complete (survey-only) — MINE_COMPLETE", p.jobId))
+            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            return
         else
-            -- Survey exhausted — switch to mine phase and give first mine sector
+            -- Normal: switch to mine phase
             zone.phase     = "MINE"
             zone.startTime = os.epoch("utc")
             logInfo(string.format("Zone %s survey complete (%d sectors) — starting mine phase",
@@ -1871,6 +1882,22 @@ function server.run()
             logInfo(string.format("Dashboard mine %s → (%d,%d) to (%d,%d)",
                 id, x1, z1, x2, z2))
 
+        elseif t == "ORDER_SURVEY" then
+            local x1 = tonumber(p.x1)
+            local z1 = tonumber(p.z1)
+            local x2 = tonumber(p.x2)
+            local z2 = tonumber(p.z2)
+            if not (x1 and z1 and x2 and z2) then
+                logWarn("ORDER_SURVEY: missing corner coordinates (need x1,z1,x2,z2)"); return
+            end
+            local id = server.submitJob(proto.JOB.MINE, {
+                x1 = math.floor(x1), z1 = math.floor(z1),
+                x2 = math.floor(x2), z2 = math.floor(z2),
+                surveyOnly = true,
+            }, 5)
+            logInfo(string.format("Dashboard survey %s → (%d,%d) to (%d,%d)",
+                id, x1, z1, x2, z2))
+
         else
             logWarn("Unknown bridge command: " .. tostring(t))
         end
@@ -2010,17 +2037,19 @@ function server.run()
                            x2 = pz.bounds.x2 - SCAN_RADIUS, z2 = pz.bounds.z2 - SCAN_RADIUS }
                 end
                 mineZones["zone:" .. key] = {
-                    bounds      = pz.bounds,
-                    rawBounds   = rb,
-                    total       = pz.total,
-                    done        = done,
-                    pct         = pct,
-                    eta         = nil,
-                    oreFound    = pz.oreFound,
-                    oreMined    = pz.oreMined,
-                    minerId     = nil,
-                    minerStatus = nil,
-                    status      = "HISTORICAL",
+                    bounds       = pz.bounds,
+                    rawBounds    = rb,
+                    total        = pz.total,
+                    done         = done,
+                    pct          = pct,
+                    eta          = nil,
+                    oreFound     = pz.oreFound,
+                    oreMined     = pz.oreMined,
+                    minerId      = nil,
+                    minerStatus  = nil,
+                    status       = "HISTORICAL",
+                    surveyed     = pz.surveyed or false,
+                    sectorOreMap = pz.sectorOreMap or {},
                 }
             end
         end
