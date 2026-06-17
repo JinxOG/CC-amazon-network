@@ -1249,7 +1249,7 @@ function showMineInfoPanel(e,jid,z){
         const redeployBtn=`<button class="mip-redeploy" onclick="redeployMineZone(${rb.x1},${rb.z1},${rb.x2},${rb.z2})">⛏ REDEPLOY</button>`;
         const targetBtn=z.surveyed
             ?`<button class="mip-redeploy" style="background:#1a0a2a;color:#aa44ff;border-color:#aa44ff44;"
-                onclick="openTargetedFromPanel('${zoneKey}')">🎯 TARGETED MINE</button>`
+                onclick="openTargetedFromPanel('${escapeHtml(zoneKey)}')">🎯 TARGETED MINE</button>`
             :'';
         actionsEl.innerHTML=surveyedBadge+redeployBtn+targetBtn
             +`<button class="mip-delete" onclick="deleteMineZone('${escapeHtml(zoneKey)}')">🗑 DELETE SITE</button>`;
