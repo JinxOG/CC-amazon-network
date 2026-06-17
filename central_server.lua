@@ -241,6 +241,28 @@ end
 
 local JOB_SAVE_FILE  = "jobs.dat"
 local ZONE_SAVE_FILE = "mine_zones.dat"
+local ORE_THRESHOLDS_FILE = "ore_thresholds.dat"
+local oreThresholds = {}  -- [name] = minimum_count
+
+local function loadOreThresholds()
+    if not fs.exists(ORE_THRESHOLDS_FILE) then return end
+    local f = fs.open(ORE_THRESHOLDS_FILE, "r")
+    if not f then return end
+    local raw = f.readAll(); f.close()
+    if raw == "" then return end
+    local data = textutils.unserialise(raw)
+    if type(data) == "table" then
+        oreThresholds = data
+        local n = 0; for _ in pairs(data) do n = n + 1 end
+        if n > 0 then logInfo(string.format("Loaded %d ore threshold(s)", n)) end
+    end
+end
+
+local function saveOreThresholds()
+    local f = fs.open(ORE_THRESHOLDS_FILE, "w")
+    if not f then logWarn("saveOreThresholds: could not open file"); return end
+    f.write(textutils.serialise(oreThresholds)); f.close()
+end
 
 local function saveJobs()
     -- Persist all active jobs (including SUPPORT_FOLLOW) so original turtles
@@ -1640,6 +1662,74 @@ function server.run()
     local craftableMap  = {}
     local storageJSON   = "[]"
 
+    -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
+    local activeAutoMines = {}   -- [oreName] = jobId of the running auto-mine
+
+    local function checkOreThresholds()
+        if not next(oreThresholds) then return end
+        -- Build fast stock lookup from latest RS snapshot
+        local stockMap = {}
+        for _, item in ipairs(storageItems) do
+            stockMap[item.name] = (stockMap[item.name] or 0) + item.amount
+        end
+        for oreName, minimum in pairs(oreThresholds) do
+            -- Clear completed/failed auto-mines so we can re-dispatch
+            local prevId = activeAutoMines[oreName]
+            if prevId then
+                local pj = state.jobs[prevId]
+                if not pj
+                   or pj.status == "COMPLETE" or pj.status == "FAILED"
+                   or pj.status == "CANCELLED" then
+                    activeAutoMines[oreName] = nil
+                    prevId = nil
+                end
+            end
+            if not prevId then
+                local current = stockMap[oreName] or 0
+                if current < minimum then
+                    -- Find the surveyed zone with the highest count of this ore
+                    local bestKey, bestCount = nil, 0
+                    for key, pz in pairs(state.persistentZones) do
+                        if pz.surveyed then
+                            local count = 0
+                            for _, oreMap in pairs(pz.sectorOreMap or {}) do
+                                count = count + (oreMap[oreName] or 0)
+                            end
+                            if count > bestCount then
+                                bestCount = count; bestKey = key
+                            end
+                        end
+                    end
+                    if bestKey then
+                        local pz = state.persistentZones[bestKey]
+                        local rb = pz.rawBounds
+                        if not rb and pz.bounds then
+                            rb = { x1=pz.bounds.x1+SCAN_RADIUS, z1=pz.bounds.z1+SCAN_RADIUS,
+                                   x2=pz.bounds.x2-SCAN_RADIUS, z2=pz.bounds.z2-SCAN_RADIUS }
+                        end
+                        if rb then
+                            local id = server.submitJob(proto.JOB.MINE, {
+                                x1            = rb.x1, z1 = rb.z1,
+                                x2            = rb.x2, z2 = rb.z2,
+                                sharedZoneKey = bestKey,
+                                oreFilter     = { oreName },
+                                oreMinimum    = { [oreName] = minimum },
+                            }, 3)   -- priority 3 = higher than manual (5) = dispatched first
+                            activeAutoMines[oreName] = id
+                            logInfo(string.format(
+                                "Auto-mine %s: %s=%d/%d — zone %s (~%d ore)",
+                                id, oreName, current, minimum, bestKey, bestCount))
+                        end
+                    else
+                        logWarn(string.format(
+                            "Ore threshold: %s at %d/%d but no surveyed zone has it — survey first",
+                            oreName, current, minimum))
+                    end
+                end
+            end
+        end
+    end
+
     local function refreshCraftable()
         if not rsBridge then return end
         local ok, craft = pcall(function() return rsBridge.listCraftableItems() end)
@@ -2031,6 +2121,23 @@ function server.run()
             logInfo(string.format("Dashboard targeted mine %s → zone %s [%s]",
                 id, zoneKey, table.concat(oreFilter, ",")))
 
+        elseif t == "SET_ORE_THRESHOLD" then
+            local name    = p.name
+            local minimum = tonumber(p.minimum)
+            if not name or not minimum or minimum <= 0 then
+                logWarn("SET_ORE_THRESHOLD: invalid name or minimum"); return
+            end
+            oreThresholds[name] = minimum
+            saveOreThresholds()
+            logInfo(string.format("Ore threshold set: %s → %d", name, minimum))
+
+        elseif t == "REMOVE_ORE_THRESHOLD" then
+            local name = p.name
+            if not name then logWarn("REMOVE_ORE_THRESHOLD: missing name"); return end
+            oreThresholds[name] = nil
+            saveOreThresholds()
+            logInfo("Ore threshold removed: " .. tostring(name))
+
         else
             logWarn("Unknown bridge command: " .. tostring(t))
         end
@@ -2203,12 +2310,13 @@ function server.run()
         for i = logStart, #state.log do
             table.insert(logSlice, state.log[i])
         end
-        local payload = '{"turtles":'   .. js(turtles,      "{}",  "turtles") ..
-                        ',"jobs":'      .. jobs ..
-                        ',"version":'   .. js(proto.VERSION, '"?"', "version") ..
-                        ',"storage":'   .. storageJSON ..
-                        ',"mineZones":' .. js(mineZones,    "{}",  "mineZones") ..
-                        ',"serverLog":' .. js(logSlice,     "[]",  "serverLog") .. '}'
+        local payload = '{"turtles":'      .. js(turtles,        "{}",  "turtles") ..
+                        ',"jobs":'         .. jobs ..
+                        ',"version":'      .. js(proto.VERSION,   '"?"', "version") ..
+                        ',"storage":'      .. storageJSON ..
+                        ',"mineZones":'    .. js(mineZones,       "{}",  "mineZones") ..
+                        ',"oreThresholds":' .. js(oreThresholds,  "{}",  "oreThresholds") ..
+                        ',"serverLog":'    .. js(logSlice,        "[]",  "serverLog") .. '}'
         return payload
     end
 
@@ -2216,12 +2324,14 @@ function server.run()
     W.loadDockAssignments()
     loadJobs()
     loadPersistentZones()
+    loadOreThresholds()
     print("Console ready. Type 'help' for commands.")
 
     local dispatchTimer   = os.startTimer(CFG.DISPATCH_INTERVAL)
     local healthTimer     = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
     local bridgeTimer     = os.startTimer(CFG.BRIDGE_INTERVAL)
     local staleTimer      = os.startTimer(30)
+    local oreWatchdogTimer = os.startTimer(60)
     pcall(refreshStorage)
     pcall(refreshCraftable)
     local lastStorageRefresh   = os.epoch("utc")
@@ -2347,6 +2457,11 @@ function server.run()
                 local ok, err = pcall(checkStaleSupports)
                 if not ok then logError("Stale support check: " .. tostring(err)) end
                 staleTimer = os.startTimer(30)
+
+            elseif p1 == oreWatchdogTimer then
+                local ok, err = pcall(checkOreThresholds)
+                if not ok then logError("Ore watchdog: " .. tostring(err)) end
+                oreWatchdogTimer = os.startTimer(60)
 
             elseif p1 == bridgeTimeoutId then
                 bridgePending   = false
