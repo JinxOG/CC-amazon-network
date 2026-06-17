@@ -702,6 +702,18 @@ end
 -- removes already-completed sectors so the miner resumes from where it left off.
 local function ensureMineZone(jobId, params)
     if state.miningZones[jobId] then return end
+    -- Multi-miner: secondary jobs share the zone object of the primary job.
+    -- Lua tables are references; both miners pop from the same atomic queue.
+    if params.sharedZoneKey then
+        for _, z in pairs(state.miningZones) do
+            if z.persistentKey == params.sharedZoneKey then
+                state.miningZones[jobId] = z
+                logInfo(string.format("Mine zone %s joined shared zone %s", jobId, params.sharedZoneKey))
+                return
+            end
+        end
+        -- First caller for this sharedZoneKey — fall through to create zone normally.
+    end
     local allSectors, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
     local key = computeZoneKey(bx1, bz1, bx2, bz2)
     local pz  = state.persistentZones[key]
@@ -1868,19 +1880,30 @@ function server.run()
                 id, dest.x, dest.y or 67, dest.z, #items))
 
         elseif t == "ORDER_MINE" then
-            local x1 = p.x1
-            local z1 = p.z1
-            local x2 = p.x2
-            local z2 = p.z2
-            if not x1 or not z1 or not x2 or not z2 then
+            local x1 = tonumber(p.x1)
+            local z1 = tonumber(p.z1)
+            local x2 = tonumber(p.x2)
+            local z2 = tonumber(p.z2)
+            if not (x1 and z1 and x2 and z2) then
                 logWarn("ORDER_MINE: missing corner coordinates (need x1,z1,x2,z2)"); return
             end
-            local id = server.submitJob(proto.JOB.MINE, {
-                x1 = math.floor(x1), z1 = math.floor(z1),
-                x2 = math.floor(x2), z2 = math.floor(z2),
-            }, 5)
-            logInfo(string.format("Dashboard mine %s → (%d,%d) to (%d,%d)",
-                id, x1, z1, x2, z2))
+            local allSectors, bx1, bz1, bx2, bz2 = buildSectorGrid(
+                math.floor(x1), math.floor(z1), math.floor(x2), math.floor(z2))
+            local sectorCount = #allSectors
+            local maxMiners   = math.max(1, tonumber(p.minerCount) or 4)
+            local minerCount  = math.max(1, math.min(math.floor(sectorCount / 4), maxMiners))
+            local zoneKey     = computeZoneKey(bx1, bz1, bx2, bz2)
+            for i = 1, minerCount do
+                local id = server.submitJob(proto.JOB.MINE, {
+                    x1 = math.floor(x1), z1 = math.floor(z1),
+                    x2 = math.floor(x2), z2 = math.floor(z2),
+                    -- First job creates the zone; subsequent jobs share it
+                    sharedZoneKey = i > 1 and zoneKey or nil,
+                }, 5)
+                logInfo(string.format(
+                    "Dashboard mine %s [%d/%d] → (%d,%d)→(%d,%d) sectorCount=%d",
+                    id, i, minerCount, x1, z1, x2, z2, sectorCount))
+            end
 
         elseif t == "ORDER_SURVEY" then
             local x1 = tonumber(p.x1)
