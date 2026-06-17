@@ -817,6 +817,14 @@
     <span style="font-size:10px;color:#666;letter-spacing:1px;">ESC to cancel</span>
 </div>
 
+<div id="survey-drag-hint" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0a0a12;border:1px solid #44aaff;border-radius:4px;padding:24px 36px;z-index:1002;
+    color:#44aaff;font-size:13px;letter-spacing:2px;text-align:center;
+    box-shadow:0 0 40px #44aaff22;pointer-events:none;">
+    🔭 CLICK AND DRAG TO SELECT SURVEY AREA<br>
+    <span style="font-size:10px;color:#666;letter-spacing:1px;">ESC to cancel</span>
+</div>
+
 <div id="mine-info-panel">
     <div class="mip-title">
         <span>⛏ MINE ZONE</span>
@@ -1011,36 +1019,66 @@ function setupDynmapInjection(dw){
         return dw.L.latLngBounds(sw,ne);
     }
     doc.addEventListener('mousedown',(e)=>{
-        if(!_mineSelecting||e.button!==0)return;
+        if((!_mineSelecting&&!_surveySelecting)||e.button!==0)return;
         e.preventDefault();e.stopPropagation();
         _dragAnchorPx={x:e.clientX,y:e.clientY};
-        _mineDragStartMC=dynmapEventToMC(dw,e);
         dw.dynmap.map.dragging.disable();
-        if(!_mineDragStartMC)return;
-        const b=_snapMineBounds(_mineDragStartMC.x,_mineDragStartMC.z,_mineDragStartMC.x,_mineDragStartMC.z);
-        _dragPreviewRect=dw.L.rectangle(_previewBoundsLatLng(b),
-            {color:'#ff8800',weight:2,fillColor:'#ff8800',fillOpacity:0.15,dashArray:'6 4',interactive:false})
-            .addTo(dm.map);
+        if(_mineSelecting){
+            _mineDragStartMC=dynmapEventToMC(dw,e);
+            if(!_mineDragStartMC)return;
+            const b=_snapMineBounds(_mineDragStartMC.x,_mineDragStartMC.z,_mineDragStartMC.x,_mineDragStartMC.z);
+            _dragPreviewRect=dw.L.rectangle(_previewBoundsLatLng(b),
+                {color:'#ff8800',weight:2,fillColor:'#ff8800',fillOpacity:0.15,dashArray:'6 4',interactive:false})
+                .addTo(dm.map);
+        }else{
+            _surveyDragStartMC=dynmapEventToMC(dw,e);
+            if(!_surveyDragStartMC)return;
+            const b=_snapMineBounds(_surveyDragStartMC.x,_surveyDragStartMC.z,_surveyDragStartMC.x,_surveyDragStartMC.z);
+            _dragPreviewRect=dw.L.rectangle(_previewBoundsLatLng(b),
+                {color:'#44aaff',weight:2,fillColor:'#44aaff',fillOpacity:0.12,dashArray:'6 4',interactive:false})
+                .addTo(dm.map);
+        }
     },{capture:true});
     doc.addEventListener('mousemove',(e)=>{
-        if(!_mineSelecting||!_dragAnchorPx||!_mineDragStartMC||!_dragPreviewRect)return;
-        const mc2=dynmapEventToMC(dw,e);if(!mc2)return;
-        const b=_snapMineBounds(_mineDragStartMC.x,_mineDragStartMC.z,mc2.x,mc2.z);
-        _dragPreviewRect.setBounds(_previewBoundsLatLng(b));
+        if(!_dragAnchorPx||!_dragPreviewRect)return;
+        if(_mineSelecting&&_mineDragStartMC){
+            const mc2=dynmapEventToMC(dw,e);if(!mc2)return;
+            const b=_snapMineBounds(_mineDragStartMC.x,_mineDragStartMC.z,mc2.x,mc2.z);
+            _dragPreviewRect.setBounds(_previewBoundsLatLng(b));
+        }else if(_surveySelecting&&_surveyDragStartMC){
+            const mc2=dynmapEventToMC(dw,e);if(!mc2)return;
+            const b=_snapMineBounds(_surveyDragStartMC.x,_surveyDragStartMC.z,mc2.x,mc2.z);
+            _dragPreviewRect.setBounds(_previewBoundsLatLng(b));
+        }
     });
     doc.addEventListener('mouseup',(e)=>{
-        if(!_mineSelecting||!_dragAnchorPx||e.button!==0)return;
+        if(!_dragAnchorPx||e.button!==0)return;
+        if(!_mineSelecting&&!_surveySelecting)return;
         dw.dynmap.map.dragging.enable();
         if(_dragPreviewRect){_dragPreviewRect.remove();_dragPreviewRect=null;}
         const mc2=dynmapEventToMC(dw,e);
-        const mc1=_mineDragStartMC;
-        _dragAnchorPx=null;_mineSelecting=false;
-        document.getElementById('mine-drag-hint').style.display='none';
-        if(mc1&&mc2){
-            openMineModal(mc1.x,mc1.z);
-            document.getElementById('mm-x2').value=mc2.x;
-            document.getElementById('mm-z2').value=mc2.z;
-            updateMineAreaInfo();
+        _dragAnchorPx=null;
+        if(_mineSelecting){
+            const mc1=_mineDragStartMC;
+            _mineSelecting=false;
+            document.getElementById('mine-drag-hint').style.display='none';
+            if(mc1&&mc2){
+                openMineModal(mc1.x,mc1.z);
+                document.getElementById('mm-x2').value=mc2.x;
+                document.getElementById('mm-z2').value=mc2.z;
+                updateMineAreaInfo();
+            }
+        }else{
+            const mc1=_surveyDragStartMC;
+            _surveySelecting=false;
+            document.getElementById('survey-drag-hint').style.display='none';
+            if(mc1&&mc2){
+                document.getElementById('sv-x1').value=Math.round(mc1.x);
+                document.getElementById('sv-z1').value=Math.round(mc1.z);
+                document.getElementById('sv-x2').value=Math.round(mc2.x);
+                document.getElementById('sv-z2').value=Math.round(mc2.z);
+                document.getElementById('survey-modal').style.display='block';
+            }
         }
     },{capture:true});
     // ── Mine zone Leaflet rectangles ─────────────────────────────────────────
@@ -2025,7 +2063,7 @@ function closeOrderModal(){
     document.getElementById('order-modal').classList.remove('show');
     document.getElementById('om-results').style.display='none';
 }
-document.addEventListener('keydown',(e)=>{if(e.key==='Escape'){closeOrderModal();closeMineModal();document.getElementById('op-menu').classList.remove('show');}});
+document.addEventListener('keydown',(e)=>{if(e.key==='Escape'){closeOrderModal();closeMineModal();closeSurveyModal();document.getElementById('op-menu').classList.remove('show');}});
 
 // ── Op context menu ──────────────────────────────────────────────────────────
 let _opMenuCoords = {x:null,z:null};
@@ -2062,15 +2100,15 @@ function selectOp(type){
     document.getElementById('op-menu').classList.remove('show');
     if(type==='deliver') openOrderModal(_opMenuCoords.x, _opMenuCoords.z);
     else if(type==='mine') startMineDrag();
-    else if(type==='survey'){
-        document.getElementById('survey-modal').style.display='block';
-    }
+    else if(type==='survey') startSurveyDrag();
 }
 
 // ── Mine modal ───────────────────────────────────────────────────────────────
 let _awaitingMineCorner2 = false;
 let _mineSelecting = false;
 let _mineDragStartMC = null;
+let _surveySelecting = false;
+let _surveyDragStartMC = null;
 function openMineModal(x,z){
     if(x!=null) document.getElementById('mm-x1').value=Math.round(x);
     if(z!=null) document.getElementById('mm-z1').value=Math.round(z);
@@ -2085,6 +2123,10 @@ function openMineModal(x,z){
 function startMineDrag(){
     _mineSelecting=true;
     document.getElementById('mine-drag-hint').style.display='';
+}
+function startSurveyDrag(){
+    _surveySelecting=true;
+    document.getElementById('survey-drag-hint').style.display='';
 }
 function closeMineModal(){
     _awaitingMineCorner2=false;
@@ -2152,7 +2194,11 @@ async function submitMine(){
     closeMineModal();toast(`Mine job dispatched — (${x1},${z1}) to (${x2},${z2})`);switchTab('jobs');
 }
 
-function closeSurveyModal(){ document.getElementById('survey-modal').style.display='none'; }
+function closeSurveyModal(){
+    _surveySelecting=false;
+    document.getElementById('survey-drag-hint').style.display='none';
+    document.getElementById('survey-modal').style.display='none';
+}
 async function submitSurvey(){
     const x1=parseFloat(document.getElementById('sv-x1').value);
     const z1=parseFloat(document.getElementById('sv-z1').value);
