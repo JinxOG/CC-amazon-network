@@ -601,10 +601,10 @@ function jobQueue.fail(jobId, reason, recoverable)
     if zone and zone.persistentKey and job.assignedTo then
         local la = zone.lastAssignments and zone.lastAssignments[job.assignedTo]
         if la then
-            local pz = state.persistentZones[zone.persistentKey]
+            local pz   = state.persistentZones[zone.persistentKey]
+            local sKey = la.x .. "," .. la.z
             if pz then
                 pz.sectorFailCount = pz.sectorFailCount or {}
-                local sKey = la.x .. "," .. la.z
                 pz.sectorFailCount[sKey] = (pz.sectorFailCount[sKey] or 0) + 1
                 if pz.sectorFailCount[sKey] >= 3 then
                     logWarn(string.format(
@@ -612,6 +612,20 @@ function jobQueue.fail(jobId, reason, recoverable)
                         la.x, la.z, pz.sectorFailCount[sKey]))
                 end
                 savePersistentZones()
+            end
+            -- Return the in-flight sector to pending so it isn't permanently lost.
+            -- Only skip if the sector is blacklisted (>=3 failures on this sector).
+            local failCount = (pz and pz.sectorFailCount and pz.sectorFailCount[sKey]) or 0
+            if failCount < 3 then
+                local alreadyPending = false
+                for _, s in ipairs(zone.pending or {}) do
+                    if s.x == la.x and s.z == la.z then alreadyPending = true; break end
+                end
+                if not alreadyPending then
+                    table.insert(zone.pending, 1, { x = la.x, z = la.z, isSurvey = la.isSurvey or false })
+                    logInfo(string.format("Sector (%d,%d) returned to pending after %s failure",
+                        la.x, la.z, jobId))
+                end
             end
         end
     end
