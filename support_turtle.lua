@@ -268,8 +268,8 @@ base.run(function(job)
             -- Miner cleared the arrivals hole right before sending RETURN_TO_DOCK.
             -- Both turtles are at Y=200 above the hole simultaneously; support has
             -- canDig=false so if miner is in the shaft it cannot push through.
-            -- Wait 20s to let the miner get ~40 blocks into the shaft first.
-            sleep(20)
+            -- 5s gives ~15 blocks of shaft clearance at 3 blocks/sec — plenty of margin.
+            sleep(5)
             base.returnToDockFromSky()
         else
             base.returnToDock()
