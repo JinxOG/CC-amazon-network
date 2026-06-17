@@ -20,6 +20,11 @@ local S_FUEL_EC = 15
 local S_ORE_EC  = 16
 local PROTECTED = { [S_SCANNER]=true, [S_COAL]=true, [S_FUEL_EC]=true, [S_ORE_EC]=true }
 
+-- Populated at startup: item name → home slot number.
+-- Used as a name-based safety net so protected items can't be dumped
+-- even if they're displaced out of their home slot.
+local protectedItemNames = {}
+
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
 local SURVEY_TRAVEL_Y = 95   -- 5 below support FOLLOW_Y=100; avoids vertical collision during survey
@@ -162,6 +167,37 @@ end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
 
+-- Record item names in slots 1, 15, 16 so they can never be dumped even if
+-- physically displaced into a mining slot (e.g. dug up during movement).
+local function initProtectedSlots()
+    for _, s in ipairs({ S_SCANNER, S_FUEL_EC, S_ORE_EC }) do
+        local item = turtle.getItemDetail(s)
+        if item then
+            protectedItemNames[item.name] = s
+            print(string.format("[INIT] Protected slot %d: %s", s, item.name))
+        else
+            print(string.format("[INIT] WARNING: slot %d is empty — expected protected item", s))
+        end
+    end
+end
+
+-- If a protected item was dug up and landed in a mining slot, move it home.
+local function rescueProtectedItems()
+    for s = 2, 13 do
+        local item = turtle.getItemDetail(s)
+        if item and protectedItemNames[item.name] then
+            local home = protectedItemNames[item.name]
+            if turtle.getItemCount(home) == 0 then
+                turtle.select(s)
+                turtle.transferTo(home)
+                print(string.format("[WARN] Rescued %s from slot %d → slot %d", item.name, s, home))
+            else
+                print(string.format("[WARN] %s in slot %d but home slot %d occupied", item.name, s, home))
+            end
+        end
+    end
+end
+
 local function sweepCoalToSlot14()
     for s = 2, 13 do
         local it = turtle.getItemDetail(s)
@@ -178,10 +214,16 @@ end
 local function dumpOres()
     sweepCoalToSlot14()
     turtle.select(S_ORE_EC)
-    if turtle.detectDown() then turtle.digDown() end
+    if turtle.detectDown() then
+        turtle.digDown()
+        rescueProtectedItems()  -- recover anything displaced into mining slots
+    end
     turtle.placeDown()
     for s = 1, 16 do
-        if not PROTECTED[s] and turtle.getItemCount(s) > 0 then
+        local item = turtle.getItemDetail(s)
+        if not PROTECTED[s]
+                and turtle.getItemCount(s) > 0
+                and not (item and protectedItemNames[item.name]) then
             turtle.select(s)
             turtle.dropDown()
         end
@@ -504,4 +546,5 @@ local function mineJob(job)
     base.sendComplete({ oreCount = totalOre })
 end
 
+initProtectedSlots()
 base.run(mineJob)
