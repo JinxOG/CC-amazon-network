@@ -2238,6 +2238,12 @@ function server.run()
         -- Build mineZones summary for the dashboard overlay (active + historical)
         local mineZones = {}
         -- Active zones — keyed by jobId
+        -- Shallow-copy a table so serialiseJSON sees distinct objects even when
+        -- multiple jobs share the same zone (Lua table reference semantics).
+        local function cp(t)
+            if type(t) ~= "table" then return t end
+            local c = {}; for k,v in pairs(t) do c[k] = v end; return c
+        end
         local activeKeys = {}
         for jid, z in pairs(state.miningZones) do
             -- Use ore-based pct during mine/rescan once oreFound is populated;
@@ -2265,14 +2271,14 @@ function server.run()
             local minerId  = state.jobs[jid] and state.jobs[jid].assignedTo or nil
             local minerSt  = minerId and state.registry[minerId] and state.registry[minerId].status or nil
             mineZones[jid] = {
-                bounds        = z.bounds,
-                rawBounds     = z.rawBounds,
+                bounds        = cp(z.bounds),
+                rawBounds     = cp(z.rawBounds),
                 total         = z.total,
                 done          = z.done,
                 pct           = pct,
                 eta           = eta,
-                oreFound      = z.oreFound,
-                oreMined      = z.oreMined,
+                oreFound      = cp(z.oreFound),
+                oreMined      = cp(z.oreMined),
                 minerId       = minerId,
                 minerStatus   = minerSt,
                 status        = "ACTIVE",
@@ -2301,19 +2307,19 @@ function server.run()
                            x2 = pz.bounds.x2 - SCAN_RADIUS, z2 = pz.bounds.z2 - SCAN_RADIUS }
                 end
                 mineZones["zone:" .. key] = {
-                    bounds       = pz.bounds,
-                    rawBounds    = rb,
+                    bounds       = cp(pz.bounds),
+                    rawBounds    = cp(rb),
                     total        = pz.total,
                     done         = done,
                     pct          = pct,
                     eta          = nil,
-                    oreFound     = pz.oreFound,
-                    oreMined     = pz.oreMined,
+                    oreFound     = cp(pz.oreFound),
+                    oreMined     = cp(pz.oreMined),
                     minerId      = nil,
                     minerStatus  = nil,
                     status       = "HISTORICAL",
                     surveyed     = pz.surveyed or false,
-                    sectorOreMap = pz.sectorOreMap or {},
+                    sectorOreMap = cp(pz.sectorOreMap),
                 }
             end
         end
