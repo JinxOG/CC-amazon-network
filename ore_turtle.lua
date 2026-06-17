@@ -380,6 +380,17 @@ local function mineOreList(ores, jobId, sx, sz, sy)
     return mined, byType
 end
 
+-- Wait for SECTOR_ASSIGN or MINE_COMPLETE. On timeout (server restart wiped
+-- the in-memory zone) retry once with a fresh SECTOR_REQUEST so the server
+-- can recreate the zone from on-disk persistentZones and respond correctly.
+local function waitSectorResponse(jobId)
+    local msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
+    if msg or base.isRecalled() then return msg end
+    base.sendProgress("sector response timeout — server restart? retrying SECTOR_REQUEST")
+    base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
+    return waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 30)
+end
+
 -- ── Job handler ──────────────────────────────────────────────────────────────
 
 local function mineJob(job)
@@ -439,7 +450,7 @@ local function mineJob(job)
     -- no wasteful sky climb on the final sector before returning home.
 
     base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
-    local msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
+    local msg = waitSectorResponse(jobId)
 
     local useSkyTravel = false  -- true after first mine sector; switches to SKY_Y=200
 
@@ -529,7 +540,7 @@ local function mineJob(job)
         base.sendToServer(proto.MSG.SECTOR_DONE,
             proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined))
 
-        msg = waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 20)
+        msg = waitSectorResponse(jobId)
         if not msg then
             if base.isRecalled() then
                 recallReturn()
