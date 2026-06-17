@@ -532,6 +532,11 @@
         <div class="stat">ONLINE <b id="s-online">0</b></div>
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
         <div class="stat">JOBS <b id="s-jobs">0</b></div>
+        <button id="threshold-btn" onclick="toggleThresholdPanel()"
+            style="font-size:10px;letter-spacing:1px;padding:2px 8px;
+            background:#0a0808;color:#ffaa44;border:1px solid #ffaa4422;border-radius:2px;cursor:pointer;">
+            ⚡ THRESHOLDS
+        </button>
         <a id="dynmap-link" href="http://192.168.86.35:8123" target="_blank">DYNMAP ↗</a>
     </div>
 </div>
@@ -693,6 +698,7 @@
     <div class="op-menu-item" onclick="selectOp('deliver')">▶ DISPATCH DELIVERY</div>
     <div class="op-menu-sep"></div>
     <div class="op-menu-item" onclick="selectOp('mine')">⛏ DISPATCH MINE</div>
+    <div class="op-menu-item" onclick="selectOp('survey')">🔭 DISPATCH SURVEY</div>
 </div>
 
 <div id="mine-modal">
@@ -716,6 +722,63 @@
         <button class="btn" style="background:#1a1a28;color:#ffaa44;border:1px solid #ffaa4433;" onclick="startPickCorner2()">PICK C2 FROM MAP</button>
         <button class="btn re" onclick="closeMineModal()">CANCEL</button>
         <button class="btn gr" onclick="submitMine()">DISPATCH MINE</button>
+    </div>
+</div>
+
+<div id="survey-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0a0a12;border:1px solid #44aaffaa;border-radius:4px;padding:24px 28px;
+    z-index:1002;min-width:340px;box-shadow:0 0 40px #44aaff22;font-family:'Courier New',monospace;">
+    <div class="modal-title" style="color:#44aaff;text-shadow:0 0 8px #44aaff55;margin-bottom:16px;
+        font-size:12px;letter-spacing:3px;">🔭 DISPATCH SURVEY</div>
+    <div class="modal-field">
+        <label style="color:#5588aa;font-size:10px;letter-spacing:2px;">CORNER 1</label>
+        <div class="modal-coord-row">
+            <input id="sv-x1" type="number" placeholder="X" style="background:#0d0d1a;border:1px solid #2a2a4a;
+                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
+            <input id="sv-z1" type="number" placeholder="Z" style="background:#0d0d1a;border:1px solid #2a2a4a;
+                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
+        </div>
+    </div>
+    <div class="modal-field" style="margin-top:10px;">
+        <label style="color:#5588aa;font-size:10px;letter-spacing:2px;">CORNER 2</label>
+        <div class="modal-coord-row">
+            <input id="sv-x2" type="number" placeholder="X" style="background:#0d0d1a;border:1px solid #2a2a4a;
+                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
+            <input id="sv-z2" type="number" placeholder="Z" style="background:#0d0d1a;border:1px solid #2a2a4a;
+                color:#eee;padding:8px;font-family:inherit;font-size:14px;width:80px;">
+        </div>
+    </div>
+    <div class="modal-actions" style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn re" onclick="closeSurveyModal()">CANCEL</button>
+        <button class="btn" style="background:#112233;color:#44aaff;border:1px solid #44aaff44;"
+            onclick="submitSurvey()">SURVEY AREA</button>
+    </div>
+</div>
+
+<div id="targeted-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0a0a12;border:1px solid #aa44ffaa;border-radius:4px;padding:24px 28px;
+    z-index:1002;min-width:380px;max-width:500px;box-shadow:0 0 40px #aa44ff22;
+    font-family:'Courier New',monospace;">
+    <div class="modal-title" style="color:#aa44ff;text-shadow:0 0 8px #aa44ff55;margin-bottom:16px;
+        font-size:12px;letter-spacing:3px;">🎯 TARGETED MINE</div>
+    <div class="modal-field" style="margin-bottom:10px;">
+        <label style="color:#8855aa;font-size:10px;letter-spacing:2px;">SURVEYED ZONE</label>
+        <select id="tm-zone" style="width:100%;background:#0d0d1a;border:1px solid #2a2a4a;
+            color:#eee;padding:6px;font-family:inherit;font-size:12px;margin-top:4px;">
+        </select>
+    </div>
+    <div class="modal-field" style="margin-bottom:10px;">
+        <label style="color:#8855aa;font-size:10px;letter-spacing:2px;">ORE FILTER (one per line)</label>
+        <textarea id="tm-ores" rows="4" placeholder="minecraft:diamond_ore&#10;create:zinc_ore"
+            style="width:100%;background:#0d0d1a;border:1px solid #2a2a4a;color:#eee;
+            padding:6px;font-family:inherit;font-size:11px;resize:vertical;margin-top:4px;"></textarea>
+    </div>
+    <div id="tm-ore-preview" style="font-size:10px;color:#8866aa;min-height:16px;margin-bottom:8px;
+        letter-spacing:1px;"></div>
+    <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn re" onclick="closeTargetedModal()">CANCEL</button>
+        <button class="btn" style="background:#1a0a2a;color:#aa44ff;border:1px solid #aa44ff44;"
+            onclick="submitTargetedMine()">DISPATCH TARGETED</button>
     </div>
 </div>
 
@@ -746,6 +809,28 @@
     <div id="mip-stats"></div>
     <div id="mip-actions"></div>
     <div id="mip-ore-table"></div>
+</div>
+
+<div id="threshold-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    background:#0a0a12;border:1px solid #ffaa4488;border-radius:4px;padding:24px 28px;
+    z-index:1002;min-width:400px;box-shadow:0 0 40px #ffaa4422;font-family:'Courier New',monospace;">
+    <div style="color:#ffaa44;font-size:12px;letter-spacing:3px;margin-bottom:16px;
+        display:flex;justify-content:space-between;align-items:center;">
+        <span>⚡ ORE THRESHOLDS</span>
+        <button onclick="document.getElementById('threshold-panel').style.display='none'"
+            style="background:none;border:none;color:#666;cursor:pointer;font-size:16px;">✕</button>
+    </div>
+    <div id="threshold-list" style="margin-bottom:16px;max-height:200px;overflow-y:auto;"></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input id="th-name" type="text" placeholder="minecraft:diamond_ore"
+            style="flex:2;background:#0d0d1a;border:1px solid #2a2a4a;color:#eee;
+            padding:6px;font-family:inherit;font-size:11px;">
+        <input id="th-min" type="number" placeholder="min" min="1"
+            style="width:80px;background:#0d0d1a;border:1px solid #2a2a4a;color:#eee;
+            padding:6px;font-family:inherit;font-size:11px;">
+        <button class="btn" style="background:#1a1208;color:#ffaa44;border:1px solid #ffaa4433;"
+            onclick="addThreshold()">ADD</button>
+    </div>
 </div>
 
 <div id="toast"></div>
@@ -1158,8 +1243,16 @@ function showMineInfoPanel(e,jid,z){
         // Fall back to bounds ± 16 for zones predating rawBounds.
         const rb=z.rawBounds||(z.bounds.x1!=null?{x1:z.bounds.x1+16,z1:z.bounds.z1+16,x2:z.bounds.x2-16,z2:z.bounds.z2-16}:z.bounds);
         const zoneKey=jid.startsWith('zone:')?jid.slice(5):jid;
-        actionsEl.innerHTML=`<button class="mip-redeploy" onclick="redeployMineZone(${rb.x1},${rb.z1},${rb.x2},${rb.z2})">⛏ REDEPLOY MINERS HERE</button>`
-            +`<button class="mip-delete" onclick="deleteMineZone('${zoneKey}')">🗑 DELETE SITE</button>`;
+        const surveyedBadge=z.surveyed
+            ?'<span style="color:#44aaff;font-size:10px;border:1px solid #44aaff44;padding:1px 6px;border-radius:2px;letter-spacing:1px;margin-left:4px">SURVEYED</span>'
+            :'';
+        const redeployBtn=`<button class="mip-redeploy" onclick="redeployMineZone(${rb.x1},${rb.z1},${rb.x2},${rb.z2})">⛏ REDEPLOY</button>`;
+        const targetBtn=z.surveyed
+            ?`<button class="mip-redeploy" style="background:#1a0a2a;color:#aa44ff;border-color:#aa44ff44;"
+                onclick="openTargetedFromPanel('${zoneKey}')">🎯 TARGETED MINE</button>`
+            :'';
+        actionsEl.innerHTML=surveyedBadge+redeployBtn+targetBtn
+            +`<button class="mip-delete" onclick="deleteMineZone('${escapeHtml(zoneKey)}')">🗑 DELETE SITE</button>`;
     }else{
         actionsEl.innerHTML='';
     }
@@ -1302,6 +1395,7 @@ function renderAll(d){
     renderJobs(jobs,turtles);
     renderStorage(d.storage||[]);
     refreshTurtleSel(turtles);
+    if(document.getElementById('threshold-panel').style.display!=='none') renderThresholdList();
 }
 
 function fuelClass(pct){
@@ -1826,6 +1920,9 @@ function selectOp(type){
     document.getElementById('op-menu').classList.remove('show');
     if(type==='deliver') openOrderModal(_opMenuCoords.x, _opMenuCoords.z);
     else if(type==='mine') startMineDrag();
+    else if(type==='survey'){
+        document.getElementById('survey-modal').style.display='block';
+    }
 }
 
 // ── Mine modal ───────────────────────────────────────────────────────────────
@@ -1890,6 +1987,18 @@ async function redeployMineZone(x1,z1,x2,z2){
     switchTab('jobs');
 }
 
+function openTargetedFromPanel(zoneKey){
+    hideMineZonePanel();
+    openTargetedModal();
+    // Pre-select the zone in the dropdown
+    setTimeout(()=>{
+        const sel=document.getElementById('tm-zone');
+        for(const opt of sel.options){
+            if(opt.value===zoneKey){ sel.value=zoneKey; break; }
+        }
+    },50);
+}
+
 async function submitMine(){
     const x1=parseInt(document.getElementById('mm-x1').value);
     const z1=parseInt(document.getElementById('mm-z1').value);
@@ -1899,6 +2008,104 @@ async function submitMine(){
     if(isNaN(x2)||isNaN(z2)){toast('Enter valid Corner 2 coordinates',true);return;}
     await sendCmd('ORDER_MINE',{x1,z1,x2,z2});
     closeMineModal();toast(`Mine job dispatched — (${x1},${z1}) to (${x2},${z2})`);switchTab('jobs');
+}
+
+function closeSurveyModal(){ document.getElementById('survey-modal').style.display='none'; }
+async function submitSurvey(){
+    const x1=parseFloat(document.getElementById('sv-x1').value);
+    const z1=parseFloat(document.getElementById('sv-z1').value);
+    const x2=parseFloat(document.getElementById('sv-x2').value);
+    const z2=parseFloat(document.getElementById('sv-z2').value);
+    if(isNaN(x1)||isNaN(z1)||isNaN(x2)||isNaN(z2)){
+        toast('Enter valid corner coordinates',true); return;
+    }
+    await sendCmd('ORDER_SURVEY',{x1,z1,x2,z2});
+    closeSurveyModal();
+    toast(`Survey job dispatched — (${x1},${z1}) to (${x2},${z2})`);
+    switchTab('jobs');
+}
+
+function openTargetedModal(){
+    // Populate zone dropdown with surveyed zones only
+    const sel=document.getElementById('tm-zone');
+    sel.innerHTML='<option value="">-- select surveyed zone --</option>';
+    const zones=lastState.mineZones||{};
+    for(const[jid,z] of Object.entries(zones)){
+        if(z.surveyed){
+            const key=jid.startsWith('zone:')?jid.slice(5):jid;
+            const b=z.rawBounds||z.bounds||{};
+            const label=`${key} (${b.x1||'?'},${b.z1||'?'})→(${b.x2||'?'},${b.z2||'?'})`;
+            sel.innerHTML+=`<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`;
+        }
+    }
+    document.getElementById('tm-ores').value='';
+    document.getElementById('tm-ore-preview').textContent='';
+    document.getElementById('targeted-modal').style.display='block';
+}
+function closeTargetedModal(){ document.getElementById('targeted-modal').style.display='none'; }
+async function submitTargetedMine(){
+    const zoneKey=document.getElementById('tm-zone').value.trim();
+    const rawOres=document.getElementById('tm-ores').value.trim();
+    if(!zoneKey){toast('Select a surveyed zone',true);return;}
+    const oreFilter=rawOres.split('\n').map(s=>s.trim()).filter(Boolean);
+    if(oreFilter.length===0){toast('Enter at least one ore name',true);return;}
+    await sendCmd('ORDER_TARGETED_MINE',{zoneKey, oreFilter});
+    closeTargetedModal();
+    toast(`Targeted mine dispatched — ${oreFilter.join(', ')}`);
+    switchTab('jobs');
+}
+
+function toggleThresholdPanel(){
+    const panel=document.getElementById('threshold-panel');
+    const visible=panel.style.display!=='none';
+    panel.style.display=visible?'none':'block';
+    if(!visible) renderThresholdList();
+}
+
+function renderThresholdList(){
+    const thresholds=lastState.oreThresholds||{};
+    const list=document.getElementById('threshold-list');
+    if(Object.keys(thresholds).length===0){
+        list.innerHTML='<div style="color:#666;font-size:10px;letter-spacing:1px">No thresholds set</div>';
+        return;
+    }
+    const stockMap={};
+    for(const item of (lastState.storage||[])){ stockMap[item.name]=(stockMap[item.name]||0)+item.amount; }
+    let html='';
+    for(const[name,minimum] of Object.entries(thresholds)){
+        const current=stockMap[name]||0;
+        const ok=current>=minimum;
+        const pct=minimum>0?Math.min(100,Math.round(current/minimum*100)):100;
+        html+=`<div style="margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:${ok?'#00ff88':'#ff8844'};letter-spacing:1px;">
+                <span>${escapeHtml(_shortOreName(name))}</span>
+                <span style="display:flex;gap:8px;align-items:center;">
+                    <span>${current} / ${minimum}</span>
+                    <button onclick="removeThreshold('${escapeHtml(name)}')"
+                        style="background:none;border:none;color:#555;cursor:pointer;font-size:12px;padding:0;">✕</button>
+                </span>
+            </div>
+            <div style="height:3px;background:#1a1a2a;border-radius:2px;margin-top:3px;">
+                <div style="height:100%;width:${pct}%;background:${ok?'#00ff88':'#ff8844'};border-radius:2px;transition:width .3s;"></div>
+            </div>
+        </div>`;
+    }
+    list.innerHTML=html;
+}
+
+async function addThreshold(){
+    const name=document.getElementById('th-name').value.trim();
+    const min=parseInt(document.getElementById('th-min').value);
+    if(!name||isNaN(min)||min<=0){toast('Enter valid ore name and minimum',true);return;}
+    await sendCmd('SET_ORE_THRESHOLD',{name,minimum:min});
+    document.getElementById('th-name').value='';
+    document.getElementById('th-min').value='';
+    toast(`Threshold set: ${name} → ${min}`);
+}
+async function removeThreshold(name){
+    await sendCmd('REMOVE_ORE_THRESHOLD',{name});
+    toast(`Threshold removed: ${name}`);
+    setTimeout(renderThresholdList, 500);
 }
 
 function openModalFromCmd(){
