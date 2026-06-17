@@ -714,6 +714,79 @@ local function ensureMineZone(jobId, params)
         end
         -- First caller for this sharedZoneKey — fall through to create zone normally.
     end
+    -- Targeted mine: ore-filtered sector queue from surveyed zone
+    local oreFilter = params.oreFilter
+    if oreFilter and type(oreFilter) == "table" and #oreFilter > 0 then
+        local allS, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
+        local key = computeZoneKey(bx1, bz1, bx2, bz2)
+        local pz  = state.persistentZones[key]
+        if not pz or not pz.surveyed then
+            logWarn(string.format(
+                "ensureMineZone: targeted mine for unsurveyed zone %s — aborting", key))
+            return
+        end
+        -- Build ore set for fast lookup
+        local oreSet  = {}
+        for _, name in ipairs(oreFilter) do oreSet[name] = true end
+        -- Only include sectors that have the ore AND are not done AND not blacklisted
+        local doneSet = {}
+        for _, s in ipairs(pz.doneSectors or {}) do doneSet[s.x..","..s.z] = true end
+        local targeted = {}
+        for sKey, oreMap in pairs(pz.sectorOreMap or {}) do
+            if not doneSet[sKey] then
+                local hasOre = false
+                for name in pairs(oreMap) do
+                    if oreSet[name] then hasOre = true; break end
+                end
+                if hasOre then
+                    local fc = (pz.sectorFailCount or {})[sKey] or 0
+                    if fc < 3 then
+                        local sx, sz = sKey:match("^(-?%d+),(-?%d+)$")
+                        if sx then
+                            table.insert(targeted, { x = tonumber(sx), z = tonumber(sz) })
+                        end
+                    end
+                end
+            end
+        end
+        -- Shuffle
+        for i = #targeted, 2, -1 do
+            local j = math.random(1, i)
+            targeted[i], targeted[j] = targeted[j], targeted[i]
+        end
+        -- Patch rawBounds for old zones that predate it
+        local rb = pz.rawBounds
+        if not rb and pz.bounds then
+            rb = { x1 = pz.bounds.x1 + SCAN_RADIUS, z1 = pz.bounds.z1 + SCAN_RADIUS,
+                   x2 = pz.bounds.x2 - SCAN_RADIUS, z2 = pz.bounds.z2 - SCAN_RADIUS }
+            pz.rawBounds = rb
+            savePersistentZones()
+        end
+        state.miningZones[jobId] = {
+            pending         = targeted,
+            allSectors      = targeted,
+            total           = #targeted,
+            done            = 0,
+            oreFound        = {},
+            oreMined        = {},
+            startTime       = os.epoch("utc"),
+            bounds          = pz.bounds,
+            rawBounds       = rb,
+            persistentKey   = key,
+            phase           = "MINE",
+            surveyOnly      = false,
+            targeted        = true,
+            oreFilter       = oreFilter,
+            oreMinimum      = params.oreMinimum,
+            surveySectors   = {},
+            surveyDone      = 0,
+            surveyTotal     = 0,
+            lastAssignments = {},
+        }
+        logInfo(string.format("Targeted mine zone %s: %d sector(s) with [%s] (key=%s)",
+            jobId, #targeted, table.concat(oreFilter, ","), key))
+        return
+    end
     local allSectors, bx1, bz1, bx2, bz2 = buildSectorGrid(params.x1, params.z1, params.x2, params.z2)
     local key = computeZoneKey(bx1, bz1, bx2, bz2)
     local pz  = state.persistentZones[key]
@@ -1220,6 +1293,14 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     end
 
     if not nextSect then
+        -- Targeted mine: no rescan needed — we only mined known-ore sectors
+        if zone.targeted then
+            logInfo(string.format(
+                "Zone %s targeted mine exhausted (%d/%d) — MINE_COMPLETE to %s",
+                p.jobId, zone.done, zone.total, msg.from))
+            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            return
+        end
         -- Mine phase exhausted — build rescan list from the full sector grid
         local rescanSectors = {}
         for _, s in ipairs(zone.allSectors or {}) do
@@ -1920,6 +2001,35 @@ function server.run()
             }, 5)
             logInfo(string.format("Dashboard survey %s → (%d,%d) to (%d,%d)",
                 id, x1, z1, x2, z2))
+
+        elseif t == "ORDER_TARGETED_MINE" then
+            local zoneKey   = p.zoneKey
+            local oreFilter = p.oreFilter
+            if not zoneKey or type(oreFilter) ~= "table" or #oreFilter == 0 then
+                logWarn("ORDER_TARGETED_MINE: missing zoneKey or oreFilter"); return
+            end
+            local pz = state.persistentZones[zoneKey]
+            if not pz or not pz.surveyed then
+                logWarn("ORDER_TARGETED_MINE: zone not found or not surveyed: "
+                    .. tostring(zoneKey)); return
+            end
+            local rb = pz.rawBounds
+            if not rb and pz.bounds then
+                rb = { x1=pz.bounds.x1+SCAN_RADIUS, z1=pz.bounds.z1+SCAN_RADIUS,
+                       x2=pz.bounds.x2-SCAN_RADIUS, z2=pz.bounds.z2-SCAN_RADIUS }
+            end
+            if not rb then
+                logWarn("ORDER_TARGETED_MINE: zone has no bounds: " .. tostring(zoneKey)); return
+            end
+            local id = server.submitJob(proto.JOB.MINE, {
+                x1            = rb.x1, z1 = rb.z1,
+                x2            = rb.x2, z2 = rb.z2,
+                sharedZoneKey = zoneKey,
+                oreFilter     = oreFilter,
+                oreMinimum    = p.oreMinimum or nil,
+            }, 5)
+            logInfo(string.format("Dashboard targeted mine %s → zone %s [%s]",
+                id, zoneKey, table.concat(oreFilter, ",")))
 
         else
             logWarn("Unknown bridge command: " .. tostring(t))
