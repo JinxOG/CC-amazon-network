@@ -134,10 +134,10 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
                 -- doesn't time out waiting for it and needlessly return to surface.
                 if job.type == proto.JOB.MINE then
                     local mz = state.miningZones[job.id]
-                    if mz and mz.lastAssigned then
-                        reSendSector = { jobId = job.id,
-                                         x = mz.lastAssigned.x, z = mz.lastAssigned.z,
-                                         isSurvey = mz.lastAssigned.isSurvey }
+                    local la = mz and mz.lastAssignments and mz.lastAssignments[id]
+                    if la then
+                        reSendSector = { jobId = job.id, x = la.x, z = la.z,
+                                         isSurvey = la.isSurvey }
                     end
                 end
             else
@@ -370,19 +370,22 @@ end
 
 -- Called after SECTOR_DONE: snapshot the runtime zone's accumulated ore totals
 -- and record which sector just finished, then save to disk.
-local function mergeToPersistentZone(jobId, sx, sz)
+local function mergeToPersistentZone(jobId, sx, sz, foundOres)
     local zone = state.miningZones[jobId]
     if not zone or not zone.persistentKey then return end
     local pz = state.persistentZones[zone.persistentKey]
     if not pz then return end
-    -- Record this sector as done (guard against double-insert from crash recovery replays)
     local alreadyDone = false
     for _, s in ipairs(pz.doneSectors) do
         if s.x == sx and s.z == sz then alreadyDone = true; break end
     end
     if alreadyDone then return end
     table.insert(pz.doneSectors, { x = sx, z = sz })
-    -- Snapshot the full accumulated ore totals (cumulative across all SECTOR_SCAN calls)
+    -- Per-sector ore map: lets targeted mine skip sectors without desired ore
+    if foundOres and next(foundOres) then
+        pz.sectorOreMap = pz.sectorOreMap or {}
+        pz.sectorOreMap[sx .. "," .. sz] = foundOres
+    end
     pz.oreFound = {}
     for k, v in pairs(zone.oreFound) do pz.oreFound[k] = v end
     pz.oreMined = {}
@@ -560,6 +563,27 @@ function jobQueue.fail(jobId, reason, recoverable)
     local t = state.registry[job.assignedTo or ""]
     if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
 
+    -- Track sector fail count before clearing the zone.
+    -- After 3 failures the sector is blacklisted in ensureMineZone.
+    local zone = state.miningZones[jobId]
+    if zone and zone.persistentKey and job.assignedTo then
+        local la = zone.lastAssignments and zone.lastAssignments[job.assignedTo]
+        if la then
+            local pz = state.persistentZones[zone.persistentKey]
+            if pz then
+                pz.sectorFailCount = pz.sectorFailCount or {}
+                local sKey = la.x .. "," .. la.z
+                pz.sectorFailCount[sKey] = (pz.sectorFailCount[sKey] or 0) + 1
+                if pz.sectorFailCount[sKey] >= 3 then
+                    logWarn(string.format(
+                        "Sector (%d,%d) blacklisted after %d failures",
+                        la.x, la.z, pz.sectorFailCount[sKey]))
+                end
+                savePersistentZones()
+            end
+        end
+    end
+
     if recoverable and job.retries < CFG.MAX_JOB_RETRIES then
         job.retries    = job.retries + 1
         job.status     = JOB_STATUS.PENDING
@@ -696,6 +720,22 @@ local function ensureMineZone(jobId, params)
         sectors = remaining
     end
 
+    -- Skip sectors that failed 3+ times (corrupted chunk protection)
+    if pz and pz.sectorFailCount then
+        local healthy = {}
+        for _, s in ipairs(sectors) do
+            local fc = pz.sectorFailCount[s.x .. "," .. s.z] or 0
+            if fc < 3 then
+                table.insert(healthy, s)
+            else
+                logWarn(string.format(
+                    "ensureMineZone: skipping blacklisted sector (%d,%d) [%d failures]",
+                    s.x, s.z, fc))
+            end
+        end
+        sectors = healthy
+    end
+
     -- Shuffle remaining sectors
     for i = #sectors, 2, -1 do
         local j = math.random(1, i)
@@ -734,21 +774,21 @@ local function ensureMineZone(jobId, params)
     for _, s in ipairs(allSectors) do table.insert(allSectorsCopy, { x=s.x, z=s.z }) end
 
     state.miningZones[jobId] = {
-        pending       = sectors,
-        allSectors    = allSectorsCopy,
-        total         = total,
-        done          = preDone,
-        oreFound      = oreFound,
-        oreMined      = oreMined,
-        startTime     = os.epoch("utc"),
-        bounds        = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
-        rawBounds     = rawBounds,
-        persistentKey = key,
-        -- Survey phase
-        phase         = phase,
-        surveySectors = surveySectors,
-        surveyDone    = 0,
-        surveyTotal   = #surveySectors,
+        pending         = sectors,
+        allSectors      = allSectorsCopy,
+        total           = total,
+        done            = preDone,
+        oreFound        = oreFound,
+        oreMined        = oreMined,
+        startTime       = os.epoch("utc"),
+        bounds          = { x1=bx1, z1=bz1, x2=bx2, z2=bz2 },
+        rawBounds       = rawBounds,
+        persistentKey   = key,
+        phase           = phase,
+        surveySectors   = surveySectors,
+        surveyDone      = 0,
+        surveyTotal     = #surveySectors,
+        lastAssignments = {},   -- [minerId] = {x, z, isSurvey}
     }
 
     -- Create persistent zone entry if this is the first dispatch to these bounds
@@ -1012,7 +1052,8 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
             sector.x, sector.z, isSurvey and " [SURVEY]" or "", msg.from, jobId))
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
             proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
-        zone.lastAssigned = { x = sector.x, z = sector.z, isSurvey = isSurvey }
+        zone.lastAssignments = zone.lastAssignments or {}
+        zone.lastAssignments[msg.from] = { x = sector.x, z = sector.z, isSurvey = isSurvey }
     end
 end
 
@@ -1086,7 +1127,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         zone.done = zone.done + 1
         local job = state.jobs[p.jobId]
         if not job or job.status ~= JOB_STATUS.CANCELLED then
-            mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ)
+            mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ, p.foundOres)
         end
         logInfo(string.format("Sector (%d,%d) done by %s — %d ore mined  [%s: %d/%d sectors]",
             p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
@@ -1181,14 +1222,16 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             local first = table.remove(zone.rescanSectors, 1)
             sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
                 proto.payloadSectorAssign(p.jobId, first.x, first.z, nil, true))
-            zone.lastAssigned = { x = first.x, z = first.z, isSurvey = true }
+            zone.lastAssignments = zone.lastAssignments or {}
+            zone.lastAssignments[msg.from] = { x = first.x, z = first.z, isSurvey = true }
         end
         return
     end
 
     sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
         proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
-    zone.lastAssigned = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey }
+    zone.lastAssignments = zone.lastAssignments or {}
+    zone.lastAssignments[msg.from] = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey }
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
