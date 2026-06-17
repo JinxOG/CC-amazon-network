@@ -1297,6 +1297,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
                 zone.rescanPending = {}
                 zone.rescanFound   = {}
                 zone.phase         = "MINE"
+                zone.postRescan    = true   -- one rescan pass max; mine exhaustion → complete
                 logInfo(string.format("Zone %s rescan found ore in %d sector(s) — re-mining",
                     p.jobId, #remaining))
                 nextSect     = nextSector(p.jobId)
@@ -1319,6 +1320,12 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             logInfo(string.format(
                 "Zone %s targeted mine exhausted (%d/%d) — MINE_COMPLETE to %s",
                 p.jobId, zone.done, zone.total, msg.from))
+            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            return
+        end
+        -- Already did one rescan pass — don't loop
+        if zone.postRescan then
+            logInfo(string.format("Zone %s re-mine exhausted — MINE_COMPLETE to %s", p.jobId, msg.from))
             sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
             return
         end
