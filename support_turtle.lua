@@ -103,8 +103,10 @@ base.run(function(job)
                     _skyReturn = true
                     _recalling = true
                 else
+                    -- Not yet in mining mode (still following miner to zone or waiting).
+                    -- Always use sky return even here — ground return gets stuck on terrain.
                     print("[SUPPORT] Recalled — returning to dock")
-                    _skyReturn = _miningMode
+                    _skyReturn = true
                     break
                 end
             end
@@ -151,6 +153,7 @@ base.run(function(job)
                     local info = base.queryTurtle(partnerId, 5)
                     if not info or not info.online then
                         print("[SUPPORT] Partner offline — returning to dock")
+                        _skyReturn = _miningMode or _recalling
                         break
                     elseif not _miningMode and not info.jobId then
                         -- In mining mode the server clears jobId on cancel before the
