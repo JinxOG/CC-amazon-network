@@ -484,6 +484,27 @@ local function mineJob(job)
         end
         base.move.to(sx, travelY, sz)
 
+        -- Wait for support to reach this chunk before descending.
+        -- The support follows position updates reactively and can lag 1+ chunks
+        -- behind when the miner moves between sectors; descending into an unloaded
+        -- chunk stops heartbeats and triggers the prune cascade.
+        -- Only needed for mine sectors — survey sectors use SURVEY_TRAVEL_Y=95
+        -- which is just 5 below FOLLOW_Y=100, so the support is already close.
+        if job.params.partnerId and not surveyMode then
+            local supportId  = job.params.partnerId
+            local waitUntil  = os.epoch("utc") / 1000 + 45
+            while os.epoch("utc") / 1000 < waitUntil do
+                if base.isRecalled() then break end
+                local info = base.queryTurtle(supportId, 5)
+                if not info or not info.online then break end
+                local sp = info.position
+                if sp and math.abs(sp.x - sx) <= 20 and math.abs(sp.z - sz) <= 20 then
+                    break
+                end
+                sleep(3)
+            end
+        end
+
         -- Scan every depth level; only mine if not in survey mode.
         -- seenOres deduplicates across depth levels: scan spheres overlap
         -- (Y=16 covers Y 0-32, Y=8 covers Y -8 to 24 — 24-block overlap),
