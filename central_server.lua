@@ -19,7 +19,7 @@ local CFG = {
     DISPATCH_STAGGER  = 60,
     -- Web dashboard bridge
     BRIDGE_URL        = "http://127.0.0.1:3000/update",
-    BRIDGE_INTERVAL   = 2,      -- seconds between state pushes
+    BRIDGE_INTERVAL   = 1,      -- seconds between state pushes
 }
 
 -- ─── State ───────────────────────────────────────────────────────────────────

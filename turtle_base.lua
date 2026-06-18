@@ -10,7 +10,7 @@ local base = {}
 -- ─── Config ──────────────────────────────────────────────────────────────────
 
 local CFG = {
-    HEARTBEAT_INTERVAL  = 10,
+    HEARTBEAT_INTERVAL  = 5,
     FUEL_CRITICAL       = 200,
     FUEL_RESERVE        = 500,   -- conservative pre-departure reserve (full warehouse run)
     MOVE_RETRIES        = 3,
