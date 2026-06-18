@@ -239,7 +239,8 @@ function registry.checkTimeouts()
             -- the registry doesn't accumulate ghost turtles indefinitely.
             local offlineSince = t.offlineSince or (now / 1000)
             if not t.offlineSince then t.offlineSince = offlineSince end
-            if (now / 1000) - t.offlineSince > 300 then
+            local pruneAfter = (t.role == proto.ROLE.MINER or t.role == proto.ROLE.SUPPORT) and 1800 or 300
+            if (now / 1000) - t.offlineSince > pruneAfter then
                 state.registry[id] = nil
                 logInfo("Pruned stale offline turtle: " .. id)
             end
@@ -249,9 +250,10 @@ end
 
 -- ─── Persistence ─────────────────────────────────────────────────────────────
 
-local JOB_SAVE_FILE  = "jobs.dat"
-local ZONE_SAVE_FILE = "mine_zones.dat"
-local ORE_THRESHOLDS_FILE = "ore_thresholds.dat"
+local JOB_SAVE_FILE        = "jobs.dat"
+local ZONE_SAVE_FILE       = "mine_zones.dat"
+local ACTIVE_ZONES_FILE    = "active_zones.dat"
+local ORE_THRESHOLDS_FILE  = "ore_thresholds.dat"
 local oreThresholds = {}  -- [name] = minimum_count
 
 local function loadOreThresholds()
@@ -336,9 +338,9 @@ local function loadJobs()
             logInfo(string.format("Restored job %s [%s] assignedTo=%s — waiting for turtle to reconnect",
                 id, job.type, job.assignedTo))
         elseif job.type ~= proto.JOB.SUPPORT_FOLLOW
-            and job.type ~= proto.JOB.PATROL
-            and job.type ~= proto.JOB.MINE then  -- MINE re-queued fresh (zone rebuilt on dispatch)
-            -- Job was queued but not yet assigned — dispatch fresh
+            and job.type ~= proto.JOB.PATROL then
+            -- Job was queued but not yet assigned — dispatch fresh.
+            -- MINE jobs are included so SECTOR_REQUEST can re-link the zone.
             job.status = "PENDING"
             state.jobs[id] = job
             nRestored = nRestored + 1
@@ -398,6 +400,64 @@ local function loadPersistentZones()
     local n = 0
     for _ in pairs(data) do n = n + 1 end
     if n > 0 then logInfo(string.format("Loaded %d persistent mine zone(s)", n)) end
+end
+
+-- ─── Active Mining Zone Persistence ──────────────────────────────────────────
+-- Saves the runtime state.miningZones to disk so that a server restart can
+-- replay SECTOR_ASSIGN to reconnecting mid-job miners.
+
+local function saveMiningZones()
+    local ok, err = pcall(function()
+        local data = textutils.serialise(state.miningZones)
+        local f = fs.open("active_zones.tmp", "w")
+        if not f then error("could not open active_zones.tmp for writing") end
+        f.write(data); f.close()
+        if fs.exists(ACTIVE_ZONES_FILE) then
+            if fs.exists(ACTIVE_ZONES_FILE .. ".bak") then fs.delete(ACTIVE_ZONES_FILE .. ".bak") end
+            fs.copy(ACTIVE_ZONES_FILE, ACTIVE_ZONES_FILE .. ".bak")
+            fs.delete(ACTIVE_ZONES_FILE)
+        end
+        fs.move("active_zones.tmp", ACTIVE_ZONES_FILE)
+    end)
+    if not ok then logWarn("saveMiningZones failed: " .. tostring(err)) end
+end
+
+local function loadMiningZones()
+    local raw = ""
+    if fs.exists(ACTIVE_ZONES_FILE) then
+        local f = fs.open(ACTIVE_ZONES_FILE, "r")
+        if f then raw = f.readAll(); f.close() end
+    elseif fs.exists(ACTIVE_ZONES_FILE .. ".bak") then
+        logWarn("loadMiningZones: " .. ACTIVE_ZONES_FILE .. " missing — loading from backup")
+        local f = fs.open(ACTIVE_ZONES_FILE .. ".bak", "r")
+        if f then raw = f.readAll(); f.close() end
+    else
+        return
+    end
+    if raw == "" then return end
+    local data = textutils.unserialise(raw)
+    if type(data) ~= "table" then return end
+
+    local n = 0
+    for jobId, zone in pairs(data) do
+        if state.jobs[jobId] then
+            state.miningZones[jobId] = zone
+            n = n + 1
+        end
+    end
+
+    -- Re-share zones with the same persistentKey so multi-miner pairs pop from
+    -- one atomic pending queue (serialisation creates separate copies).
+    local keyToZone = {}
+    for jobId, zone in pairs(state.miningZones) do
+        if keyToZone[zone.persistentKey] then
+            state.miningZones[jobId] = keyToZone[zone.persistentKey]
+        else
+            keyToZone[zone.persistentKey] = zone
+        end
+    end
+
+    if n > 0 then logInfo(string.format("Restored %d active mining zone(s)", n)) end
 end
 
 -- Called after SECTOR_DONE: snapshot the runtime zone's accumulated ore totals
@@ -859,6 +919,7 @@ local function ensureMineZone(jobId, params)
             surveyTotal     = 0,
             lastAssignments = {},
         }
+        saveMiningZones()
         logInfo(string.format("Targeted mine zone %s: %d sector(s) with [%s] (key=%s)",
             jobId, #targeted, table.concat(oreFilter, ","), key))
         return
@@ -972,6 +1033,7 @@ local function ensureMineZone(jobId, params)
         savePersistentZones()
     end
 
+    saveMiningZones()
     logInfo(string.format("Mine zone %s: %d/%d sectors remaining (%d,%d → %d,%d)%s",
         jobId, #sectors, total, params.x1, params.z1, params.x2, params.z2,
         preDone > 0 and string.format(" [resuming: %d already done]", preDone) or ""))
@@ -1216,6 +1278,7 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
             proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
         zone.lastAssignments = zone.lastAssignments or {}
         zone.lastAssignments[msg.from] = { x = sector.x, z = sector.z, isSurvey = isSurvey }
+        saveMiningZones()
     end
 end
 
@@ -1411,6 +1474,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
                 proto.payloadSectorAssign(p.jobId, first.x, first.z, nil, true))
             zone.lastAssignments = zone.lastAssignments or {}
             zone.lastAssignments[msg.from] = { x = first.x, z = first.z, isSurvey = true }
+            saveMiningZones()
         end
         return
     end
@@ -1419,6 +1483,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
     zone.lastAssignments = zone.lastAssignments or {}
     zone.lastAssignments[msg.from] = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey }
+    saveMiningZones()
 end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
@@ -2409,6 +2474,7 @@ function server.run()
     W.loadDockAssignments()
     loadJobs()
     loadPersistentZones()
+    loadMiningZones()
     loadOreThresholds()
     print("Console ready. Type 'help' for commands.")
 
