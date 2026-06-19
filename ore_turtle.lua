@@ -24,6 +24,9 @@ local PROTECTED = { [S_SCANNER]=true, [S_COAL]=true, [S_FUEL_EC]=true, [S_ORE_EC
 -- Used as a name-based safety net so protected items can't be dumped
 -- even if they're displaced out of their home slot.
 local protectedItemNames = {}
+-- Slot-indexed companion: home slot → expected item name.
+-- Authoritative for rescue because both ECs share the same item name.
+local protectedSlotNames = {}
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
@@ -123,22 +126,48 @@ local function checkFuel(jobId)
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
 
-    -- Step 2: try the fuel EC in slot 15
+    -- Step 2: restore fuel EC to slot 15 if displaced or crowded out by overflow coal.
+    -- suckDown overflow and dumpOres can push the EC out of slot 15 into mining slots.
+    do
+        local slot15 = turtle.getItemDetail(S_FUEL_EC)
+        local ecName = protectedSlotNames[S_FUEL_EC]
+        if ecName and (not slot15 or slot15.name ~= ecName) then
+            if slot15 then
+                -- Wrong item in slot 15 (e.g. overflow coal) — clear it to slot 14.
+                turtle.select(S_FUEL_EC)
+                turtle.transferTo(S_COAL)
+            end
+            rescueProtectedItems()  -- find EC in slots 2-13 and restore it to slot 15
+        end
+    end
+
+    -- Step 3: try the fuel EC in slot 15
     local ecItem = turtle.getItemDetail(S_FUEL_EC)
-    if ecItem then
+    local ecName = protectedSlotNames[S_FUEL_EC]
+    if ecItem and ecName and ecItem.name == ecName then
         turtle.select(S_FUEL_EC)
         if turtle.detectDown() then turtle.digDown() end
         if turtle.placeDown() then
+            -- Suck only as much as slot 14 can hold to prevent overflow into slot 15.
             turtle.select(S_COAL)
-            local got = turtle.suckDown(32)
-            if got then
+            local space = 64 - turtle.getItemCount(S_COAL)
+            if space == 0 then turtle.refuel(); space = 64 - turtle.getItemCount(S_COAL) end
+            if space > 0 then turtle.suckDown(space) end
+            if turtle.getItemCount(S_COAL) > 0 then
                 turtle.refuel()
             else
                 print("[FUEL] EC chest is empty — no coal available")
                 base.sendProgress("FUEL WARNING: EC chest empty, fuel=" .. turtle.getFuelLevel())
             end
+            -- Recover EC; slot 15 should be free since we controlled overflow above.
             turtle.select(S_FUEL_EC)
             turtle.digDown()
+            -- Safety: if EC landed in a mining slot despite precautions, rescue it now.
+            local recovered = turtle.getItemDetail(S_FUEL_EC)
+            if not recovered or recovered.name ~= ecName then
+                if recovered then turtle.select(S_FUEL_EC); turtle.transferTo(S_COAL) end
+                rescueProtectedItems()
+            end
         else
             print("[FUEL] Failed to place fuel EC")
         end
@@ -148,7 +177,7 @@ local function checkFuel(jobId)
                 .. ", fuel=" .. turtle.getFuelLevel())
     end
 
-    -- Step 3: assess post-refuel fuel level
+    -- Step 4: assess post-refuel fuel level
     local fuel   = turtle.getFuelLevel()
     if fuel >= FUEL_WARN then return end  -- successfully topped up
 
@@ -173,7 +202,8 @@ local function initProtectedSlots()
     for _, s in ipairs({ S_SCANNER, S_FUEL_EC, S_ORE_EC }) do
         local item = turtle.getItemDetail(s)
         if item then
-            protectedItemNames[item.name] = s
+            protectedItemNames[item.name] = s   -- last-write-wins; used only for boolean "is protected?" checks
+            protectedSlotNames[s] = item.name   -- slot → name; authoritative for rescue
             print(string.format("[INIT] Protected slot %d: %s", s, item.name))
         else
             print(string.format("[INIT] WARNING: slot %d is empty — expected protected item", s))
@@ -185,14 +215,19 @@ end
 local function rescueProtectedItems()
     for s = 2, 13 do
         local item = turtle.getItemDetail(s)
-        if item and protectedItemNames[item.name] then
-            local home = protectedItemNames[item.name]
-            if turtle.getItemCount(home) == 0 then
-                turtle.select(s)
-                turtle.transferTo(home)
-                print(string.format("[WARN] Rescued %s from slot %d → slot %d", item.name, s, home))
-            else
-                print(string.format("[WARN] %s in slot %d but home slot %d occupied", item.name, s, home))
+        if item then
+            -- Check protected slots in priority order (15 before 16) so that when
+            -- both ECs share the same item name, the fuel EC home wins.
+            for _, home in ipairs({ S_SCANNER, S_FUEL_EC, S_ORE_EC }) do
+                if protectedSlotNames[home] == item.name then
+                    if turtle.getItemCount(home) == 0 then
+                        turtle.select(s)
+                        turtle.transferTo(home)
+                        print(string.format("[WARN] Rescued %s from slot %d → slot %d", item.name, s, home))
+                        break
+                    end
+                    -- Home occupied; try next protected slot with the same item name.
+                end
             end
         end
     end

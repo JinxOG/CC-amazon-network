@@ -821,6 +821,11 @@ function fuel.refuelFromChest()
         logWarn("Slot " .. CHEST_SLOT .. " has no entangled chest!")
         return false
     end
+    if chestData.name ~= CHEST_ITEM then
+        logWarn(string.format("Slot %d has wrong item (%s) — expected %s, cannot refuel",
+            CHEST_SLOT, chestData.name, CHEST_ITEM))
+        return false
+    end
 
     -- ── Clear debris to make room ────────────────────────────────────────────
     local function freeCount()
