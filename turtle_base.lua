@@ -985,6 +985,9 @@ function fuel.ensureFuel()
         end
         local ok = fuel.refuelFromChest()
         if not ok or fuel.isCritical() then
+            -- GPS resync before reporting ERROR position — corrects position if turtle
+            -- was physically relocated (e.g. player moved it to dock while stuck).
+            gpsSync()
             comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(
                 _self.jobId, proto.STATUS.ERROR, "fuel_critical_no_coal", base.getPos()))
             -- Wait but keep sending heartbeats every 5 seconds
@@ -994,6 +997,7 @@ function fuel.ensureFuel()
                         proto.STATUS.ERROR, fuel.level(), base.getPos(), _self.jobId))
                 end
                 sleep(5)
+                gpsSync()  -- keep position current in case turtle is moved during wait
                 if not fuel.isCritical() then break end
             end
         end
@@ -1053,8 +1057,15 @@ end
 
 local _missedHeartbeats = 0
 local MAX_MISSED = 3  -- re-register after this many missed ACKs
+local _heartbeatCount = 0
 
 local function sendHeartbeat()
+    _heartbeatCount = _heartbeatCount + 1
+    -- Periodic GPS resync so idle or error-state turtles self-correct position drift.
+    -- GPS locate needs no movement — just radio signal from beacons. Silent on failure.
+    if _heartbeatCount % 12 == 0 then
+        gpsSync()
+    end
     comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
         _self.status, fuel.level(), base.getPos(), _self.jobId))
     _missedHeartbeats = _missedHeartbeats + 1
@@ -1228,14 +1239,28 @@ end
 -- while the control loop still handles heartbeats and RECALL.
 
 function base.run(jobHandler)
-    local heartbeatTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
-    local pendingJob     = nil   -- job table waiting to be started
-    local jobCo          = nil   -- running job coroutine
+    -- Wall-clock heartbeat: immune to timer events being consumed by sleep() inside ensureFuel()
+    local lastHeartbeatWall = os.epoch("utc")
+    local wakeupTimer       = os.startTimer(CFG.HEARTBEAT_INTERVAL)
+    local pendingJob        = nil   -- job table waiting to be started
+    local jobCo             = nil   -- running job coroutine
 
     -- Control loop: handles heartbeat, RECALL, and JOB_ASSIGN
     local function controlLoop()
         while true do
-            if fuel.isCritical() then fuel.ensureFuel() end
+            if fuel.isCritical() then
+                fuel.ensureFuel()
+                -- ensureFuel()'s sleep() calls consume timer events; restart wakeup timer
+                -- so the loop doesn't block indefinitely after recovering from ERROR state.
+                wakeupTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
+            end
+
+            -- Wall-clock heartbeat check (survives timer events being swallowed by sleep())
+            local now = os.epoch("utc")
+            if now - lastHeartbeatWall >= CFG.HEARTBEAT_INTERVAL * 1000 then
+                sendHeartbeat()
+                lastHeartbeatWall = now
+            end
 
             local event, p1, p2, p3, p4 = os.pullEvent()
 
@@ -1324,9 +1349,9 @@ function base.run(jobHandler)
                     end
                 end
 
-            elseif event == "timer" and p1 == heartbeatTimer then
-                sendHeartbeat()
-                heartbeatTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
+            elseif event == "timer" and p1 == wakeupTimer then
+                -- Wakeup timer fired — wall-clock check above handles actual heartbeat.
+                wakeupTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
             end
         end
     end
