@@ -4,7 +4,7 @@
 
 local proto = require("protocol")
 
-local ANDROID_VERSION = "1.0.1"
+local ANDROID_VERSION = "1.0.2"
 
 local base = {}
 
@@ -105,29 +105,35 @@ end
 -- ─── Movement ────────────────────────────────────────────────────────────────
 
 local function moveWithRetry(tx, ty, tz)
-    local MAX_ATTEMPTS = 5
-    for attempt = 1, MAX_ATTEMPTS do
+    -- Try direct path first
+    autoRefuel()
+    if android.moveTo(tx, ty, tz) then return true end
+
+    -- Direct path blocked — try sky routing (climb, traverse, descend)
+    updatePos()
+    local skyY = math.max(ty, _self.pos.y) + 35
+    logWarn(string.format("Direct path failed — trying sky route at Y=%d", skyY))
+
+    autoRefuel()
+    if not android.moveTo(_self.pos.x, skyY, _self.pos.z) then
+        logWarn("Can't climb to sky — trying break-and-retry")
+        -- Last resort: break blocks directly above and retry climb
+        pcall(android.breakBlock, _self.pos.x, _self.pos.y + 1, _self.pos.z)
+        pcall(android.breakBlock, _self.pos.x, _self.pos.y + 2, _self.pos.z)
         autoRefuel()
-        local ok = android.moveTo(tx, ty, tz)
-        if ok then return true end
-
-        updatePos()
-        local cx, cy, cz = _self.pos.x, _self.pos.y, _self.pos.z
-        local dx = tx - cx
-        local dz = tz - cz
-        local len = math.sqrt(dx * dx + dz * dz)
-        if len < 1 then return true end
-
-        -- One block step toward destination
-        local nx = math.floor(cx + dx / len + 0.5)
-        local nz = math.floor(cz + dz / len + 0.5)
-
-        logWarn(string.format("Stuck (attempt %d/%d) — breaking %d,%d,%d", attempt, MAX_ATTEMPTS, nx, cy, nz))
-        autoRefuel()
-        pcall(android.breakBlock, nx, cy,     nz)
-        pcall(android.breakBlock, nx, cy + 1, nz)
+        android.moveTo(_self.pos.x, skyY, _self.pos.z)
     end
-    logWarn("Move failed after " .. MAX_ATTEMPTS .. " attempts.")
+
+    autoRefuel()
+    android.moveTo(tx, skyY, tz)
+
+    autoRefuel()
+    if android.moveTo(tx, ty, tz) then
+        logInfo("Sky route complete.")
+        return true
+    end
+
+    logWarn("Move failed after sky route.")
     return false
 end
 
