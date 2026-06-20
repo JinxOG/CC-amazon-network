@@ -4,7 +4,7 @@
 
 local proto = require("protocol")
 
-local ANDROID_VERSION = "1.0.0"
+local ANDROID_VERSION = "1.0.1"
 
 local base = {}
 
@@ -102,6 +102,35 @@ local function register()
     error("Failed to register after " .. CFG.REGISTER_RETRIES .. " attempts.")
 end
 
+-- ─── Movement ────────────────────────────────────────────────────────────────
+
+local function moveWithRetry(tx, ty, tz)
+    local MAX_ATTEMPTS = 5
+    for attempt = 1, MAX_ATTEMPTS do
+        autoRefuel()
+        local ok = android.moveTo(tx, ty, tz)
+        if ok then return true end
+
+        updatePos()
+        local cx, cy, cz = _self.pos.x, _self.pos.y, _self.pos.z
+        local dx = tx - cx
+        local dz = tz - cz
+        local len = math.sqrt(dx * dx + dz * dz)
+        if len < 1 then return true end
+
+        -- One block step toward destination
+        local nx = math.floor(cx + dx / len + 0.5)
+        local nz = math.floor(cz + dz / len + 0.5)
+
+        logWarn(string.format("Stuck (attempt %d/%d) — breaking %d,%d,%d", attempt, MAX_ATTEMPTS, nx, cy, nz))
+        autoRefuel()
+        pcall(android.breakBlock, nx, cy,     nz)
+        pcall(android.breakBlock, nx, cy + 1, nz)
+    end
+    logWarn("Move failed after " .. MAX_ATTEMPTS .. " attempts.")
+    return false
+end
+
 -- ─── Heartbeat ───────────────────────────────────────────────────────────────
 
 local function heartbeat()
@@ -132,8 +161,7 @@ local function handleMsg(msg)
             _self.jobId  = job.jobId
             toServer(proto.MSG.JOB_ACK, proto.payloadJobAck(job.jobId, true))
             logInfo(string.format("Moving to %.0f,%.0f,%.0f", p.x, p.y, p.z))
-            autoRefuel()
-            local ok, err = android.moveTo(p.x, p.y, p.z)
+            local ok = moveWithRetry(p.x, p.y, p.z)
             if ok then
                 _self.status = proto.STATUS.IDLE
                 _self.jobId  = nil
@@ -142,8 +170,8 @@ local function handleMsg(msg)
             else
                 _self.status = proto.STATUS.ERROR
                 _self.jobId  = nil
-                toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(job.jobId, tostring(err)))
-                logWarn("Move failed: " .. tostring(err))
+                toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(job.jobId, "stuck after retries"))
+                logWarn("Move failed after all retries.")
             end
         end
     elseif msg.type == proto.MSG.UPDATE_ALL then
@@ -178,6 +206,7 @@ end
 function base.init()
     commsInit()
     register()
+    android.changeFace("angry")
     logInfo("Android v" .. ANDROID_VERSION .. " online.")
 end
 
