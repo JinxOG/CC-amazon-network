@@ -4,7 +4,7 @@
 
 local proto = require("protocol")
 
-local ANDROID_VERSION = "1.0.2"
+local ANDROID_VERSION = "1.0.3"
 
 local base = {}
 
@@ -116,10 +116,12 @@ local function moveWithRetry(tx, ty, tz)
 
     autoRefuel()
     if not android.moveTo(_self.pos.x, skyY, _self.pos.z) then
-        logWarn("Can't climb to sky — trying break-and-retry")
-        -- Last resort: break blocks directly above and retry climb
-        pcall(android.breakBlock, _self.pos.x, _self.pos.y + 1, _self.pos.z)
-        pcall(android.breakBlock, _self.pos.x, _self.pos.y + 2, _self.pos.z)
+        logWarn("Can't climb to sky — punching through roof")
+        -- Break a full column upward to clear any ceiling/roof
+        updatePos()
+        for clearY = _self.pos.y + 1, _self.pos.y + 40 do
+            pcall(android.breakBlock, _self.pos.x, clearY, _self.pos.z)
+        end
         autoRefuel()
         android.moveTo(_self.pos.x, skyY, _self.pos.z)
     end
