@@ -27,6 +27,21 @@ app.get('/', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ─── Lua file server (used by turtles and androids for wget installs) ─────────
+const LUA_WHITELIST = new Set([
+    'protocol.lua', 'turtle_base.lua', 'waypoints.lua',
+    'ore_turtle.lua', 'support_turtle.lua', 'delivery_turtle.lua',
+    'android_base.lua', 'android_main.lua',
+]);
+app.get('/lua/:file', (req, res) => {
+    const name = req.params.file;
+    if (!LUA_WHITELIST.has(name)) return res.status(404).json({ error: 'not found' });
+    const filePath = path.join(__dirname, name);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'file missing' });
+    res.setHeader('Content-Type', 'text/plain');
+    res.sendFile(filePath);
+});
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const CFG = {

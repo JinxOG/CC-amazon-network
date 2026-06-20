@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.7.20"
+proto.VERSION = "1.7.21"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -101,6 +101,7 @@ proto.ROLE = {
     BUILDER  = "BUILDER",
     SUPPORT  = "SUPPORT",
     MINER    = "MINER",
+    ANDROID  = "ANDROID",
 }
 
 -- ─── Job Types ───────────────────────────────────────────────────────────────
