@@ -2027,6 +2027,21 @@ function server.run()
                 logWarn("FORCE_REFUEL: turtle not found: " .. tostring(tid))
             end
 
+        elseif t == "MOVE_ANDROID" then
+            local aid = p.androidId
+            local tr  = aid and state.registry[aid]
+            if tr and tr.role == proto.ROLE.ANDROID then
+                local tx = tonumber(p.x) or (tr.position and tr.position.x + tonumber(p.dx or 0))
+                local ty = tonumber(p.y) or (tr.position and tr.position.y) or 67
+                local tz = tonumber(p.z) or (tr.position and tr.position.z + tonumber(p.dz or 0))
+                local jobId = "move_" .. tostring(os.epoch("utc"))
+                sendTo(aid, proto.MSG.JOB_ASSIGN,
+                    proto.payloadJobAssign(jobId, "MOVE", { x = tx, y = ty, z = tz }))
+                logInfo(string.format("MOVE_ANDROID: %s → %.0f,%.0f,%.0f", aid, tx, ty, tz))
+            else
+                logWarn("MOVE_ANDROID: android not found: " .. tostring(aid))
+            end
+
         elseif t == "RESET_STATUS" then
             local count = 0
             for _, tr in pairs(state.registry) do

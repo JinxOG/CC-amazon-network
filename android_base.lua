@@ -107,6 +107,27 @@ local function handleMsg(msg)
     local fn = _handlers[msg.type]
     if fn then
         fn(msg)
+    elseif msg.type == proto.MSG.JOB_ASSIGN then
+        local job = msg.payload
+        if job.jobType == "MOVE" then
+            local p = job.params
+            _self.status = proto.STATUS.TRAVELLING
+            _self.jobId  = job.jobId
+            toServer(proto.MSG.JOB_ACK, proto.payloadJobAck(job.jobId, true))
+            logInfo(string.format("Moving to %.0f,%.0f,%.0f", p.x, p.y, p.z))
+            local ok, err = android.moveTo(p.x, p.y, p.z)
+            if ok then
+                _self.status = proto.STATUS.IDLE
+                _self.jobId  = nil
+                toServer(proto.MSG.JOB_COMPLETE, proto.payloadJobComplete(job.jobId, {}))
+                logInfo("Move complete.")
+            else
+                _self.status = proto.STATUS.ERROR
+                _self.jobId  = nil
+                toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(job.jobId, tostring(err)))
+                logWarn("Move failed: " .. tostring(err))
+            end
+        end
     elseif msg.type == proto.MSG.RECALL then
         logInfo("RECALL received — going idle.")
         _self.status = proto.STATUS.IDLE
