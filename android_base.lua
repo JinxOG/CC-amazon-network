@@ -4,6 +4,8 @@
 
 local proto = require("protocol")
 
+local ANDROID_VERSION = "1.0.0"
+
 local base = {}
 
 local CFG = {
@@ -128,6 +130,22 @@ local function handleMsg(msg)
                 logWarn("Move failed: " .. tostring(err))
             end
         end
+    elseif msg.type == proto.MSG.UPDATE_ALL then
+        logInfo("UPDATE_ALL received — downloading latest files...")
+        local BASE = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
+        local files = { "protocol.lua", "android_base.lua", "android_main.lua", "android_update.lua" }
+        for _, name in ipairs(files) do
+            local res = http.get(BASE .. name)
+            if res then
+                local f = fs.open(name, "w")
+                f.write(res.readAll())
+                f.close()
+                res.close()
+            end
+        end
+        logInfo("Update complete. Rebooting...")
+        os.reboot()
+
     elseif msg.type == proto.MSG.RECALL then
         logInfo("RECALL received — going idle.")
         _self.status = proto.STATUS.IDLE
@@ -144,7 +162,7 @@ end
 function base.init()
     commsInit()
     register()
-    logInfo("Android online.")
+    logInfo("Android v" .. ANDROID_VERSION .. " online.")
 end
 
 function base.runHeartbeat()
