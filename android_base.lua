@@ -52,12 +52,26 @@ end
 -- ─── Comms ───────────────────────────────────────────────────────────────────
 
 local function commsInit()
-    _self.modem = peripheral.wrap("right")
+    _self.modem = peripheral.find("modem")
     if not _self.modem then
-        error("No modem on right side. Equip an ender modem pocket upgrade in main hand.")
+        error("No ender modem found. Equip the ender modem pocket upgrade.")
     end
     proto.openChannels(_self.modem, { proto.CH_BROADCAST, proto.CH_PRIVATE })
     logInfo("Modem ready.")
+end
+
+local function autoRefuel()
+    local fuel = android.fuelLevel()
+    if fuel and fuel > 100 then return end
+    -- Redstone is in off-hand — swap so redstone is in main hand, refuel, swap back
+    android.swapHands()
+    local ok, result = pcall(android.refuel)
+    android.swapHands()
+    if ok then
+        logInfo("Refuelled. Fuel: " .. tostring(android.fuelLevel()))
+    else
+        logWarn("Refuel failed: " .. tostring(result))
+    end
 end
 
 local function toServer(msgType, payload)
@@ -117,6 +131,7 @@ local function handleMsg(msg)
             _self.jobId  = job.jobId
             toServer(proto.MSG.JOB_ACK, proto.payloadJobAck(job.jobId, true))
             logInfo(string.format("Moving to %.0f,%.0f,%.0f", p.x, p.y, p.z))
+            autoRefuel()
             local ok, err = android.moveTo(p.x, p.y, p.z)
             if ok then
                 _self.status = proto.STATUS.IDLE
