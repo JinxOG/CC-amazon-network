@@ -34,7 +34,7 @@ local function logWarn(m)  log("WARN",  m) end
 local function updatePos()
     local info = android.getSelf()
     if info then
-        _self.pos = { x = math.floor(info.x), y = math.floor(info.y), z = math.floor(info.z) }
+        _self.pos = { x = math.floor(info.posX), y = math.floor(info.posY), z = math.floor(info.posZ) }
     end
 end
 
