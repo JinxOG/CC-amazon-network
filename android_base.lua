@@ -82,7 +82,8 @@ end
 -- ─── Registration ────────────────────────────────────────────────────────────
 
 local function register()
-    _self.id = proto.selfId()
+    local info = android.getSelf()
+    _self.id = (info and info.name ~= "" and info.name) or proto.selfId()
     logInfo("Registering as " .. _self.id .. " (ANDROID)")
 
     for attempt = 1, CFG.REGISTER_RETRIES do
