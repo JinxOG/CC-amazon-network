@@ -440,8 +440,32 @@ local function mineJob(job)
     local function coordinatedSkyReturn()
         dumpOres()
         checkFuel(jobId)
+        -- Verify support is still online before ascending through unloaded chunks.
+        -- If it bailed, wait up to 90s for the orphan watchdog to act.
+        local supportId = job.params.partnerId
+        if supportId then
+            local si = base.queryTurtle(supportId, 5)
+            if not si or not si.online then
+                print("[MINER] Support offline — waiting up to 90s before ascending")
+                base.sendProgress("Support offline — waiting for chunk-loader before ascending")
+                local waitUntil = os.epoch("utc") / 1000 + 90
+                while os.epoch("utc") / 1000 < waitUntil do
+                    if base.isRecalled() then break end
+                    sleep(10)
+                    si = base.queryTurtle(supportId, 5)
+                    if si and si.online then
+                        print("[MINER] Support back online — proceeding with sky return")
+                        break
+                    end
+                end
+                if not si or not si.online then
+                    print("[MINER] WARNING: ascending without support — chunk unload risk")
+                    base.sendProgress("WARN: ascending without support")
+                end
+            end
+        end
         base.signalPartner(proto.MSG.MINE_RECALL, {})
-        sleep(2)   -- wait for support to receive MINE_RECALL and step east before ascending
+        sleep(12)   -- give support time to process MINE_RECALL and step east (support loop ≤15s)
         local p = base.getPos()
         base.move.to(p.x, 100, p.z)
         sleep(5)

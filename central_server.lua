@@ -554,6 +554,38 @@ function jobQueue.checkGhosts()
     end
 end
 
+-- Orphaned miner watchdog: if a MINE job is active but its support job is
+-- gone/complete, the miner is underground without a chunk-loader. Recall it
+-- after 2 minutes so it can surface safely rather than staying stranded.
+local function checkOrphanedMiners()
+    local nowSec = os.epoch("utc") / 1000
+    for jobId, job in pairs(state.jobs) do
+        if job.type == proto.JOB.MINE
+                and (job.status == JOB_STATUS.IN_PROGRESS or job.status == JOB_STATUS.ASSIGNED) then
+            local linkedSupport = job.linkedJob and state.jobs[job.linkedJob]
+            local supportActive = linkedSupport
+                and (linkedSupport.status == JOB_STATUS.IN_PROGRESS
+                     or linkedSupport.status == JOB_STATUS.ASSIGNED)
+            if not supportActive then
+                job.orphanSince = job.orphanSince or nowSec
+                if nowSec - job.orphanSince > 120 then
+                    local miner = job.assignedTo and state.registry[job.assignedTo]
+                    if miner and miner.online then
+                        logWarn(string.format(
+                            "Orphaned miner %s (job %s): no support for 2min — recalling",
+                            job.assignedTo, jobId))
+                        sendTo(job.assignedTo, proto.MSG.RECALL,
+                            proto.payloadRecall("support_abandoned"))
+                        job.orphanSince = nowSec + 3600  -- suppress re-recall for 1h
+                    end
+                end
+            else
+                job.orphanSince = nil
+            end
+        end
+    end
+end
+
 function jobQueue.add(jobType, params, priority)
     local id  = newJobId()
     local now = os.epoch("utc")
@@ -2613,6 +2645,8 @@ function server.run()
                 if not ok then logError("Health check: " .. tostring(err)) end
                 local ok2, err2 = pcall(jobQueue.checkGhosts)
                 if not ok2 then logError("Ghost check: " .. tostring(err2)) end
+                local ok3, err3 = pcall(checkOrphanedMiners)
+                if not ok3 then logError("Orphan check: " .. tostring(err3)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then

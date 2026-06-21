@@ -66,9 +66,12 @@ base.run(function(job)
             base.sendProgress("Waiting for HOLE_READY from miner " .. partnerId)
             print("[SUPPORT] Waiting for HOLE_READY from " .. partnerId .. "...")
             local signalReceived = false
-            local holeDeadline = os.epoch("utc") / 1000 + 180
+            local holeDeadline = os.epoch("utc") / 1000 + 600
             while os.epoch("utc") / 1000 < holeDeadline do
                 if base.isRecalled() then
+                    -- Signal miner before leaving so it starts its return
+                    base.signalPartner(proto.MSG.MINE_RECALL, {})
+                    sleep(3)
                     return base.sendFailed("recalled", false)
                 end
                 local msg = proto.receive(base.getSelfId(), 5)
@@ -150,9 +153,14 @@ base.run(function(job)
                 if base.isServerDown() then
                     sleep(2)
                 else
-                    local info = base.queryTurtle(partnerId, 5)
+                    local info = nil
+                    for _try = 1, 3 do
+                        info = base.queryTurtle(partnerId, 5)
+                        if info and info.online then break end
+                        sleep(3)
+                    end
                     if not info or not info.online then
-                        print("[SUPPORT] Partner offline — returning to dock")
+                        print("[SUPPORT] Partner offline after 3 queries — returning to dock")
                         _skyReturn = _miningMode or _recalling
                         break
                     elseif not _miningMode and not info.jobId then
@@ -201,6 +209,15 @@ base.run(function(job)
                                     if nxt.type == proto.MSG.POSITION_UPDATE then
                                         prev = nxt.payload.prev
                                         lastUpdateTime = os.epoch("utc") / 1000
+                                        -- Track sky altitude inside drain so CC queue overflow
+                                        -- during long fuel waits can't cause us to miss Y≥190.
+                                        if not _miningMode and prev and type(prev.y) == "number" then
+                                            if prev.y >= 190 then _reachedSky = true end
+                                            if _reachedSky and prev.y < FOLLOW_Y then
+                                                _miningMode = true
+                                                print("[SUPPORT] Miner descended to mine (drain) — locking to Y=" .. FOLLOW_Y)
+                                            end
+                                        end
                                     elseif nxt.type == proto.MSG.RETURN_TO_DOCK then
                                         print("[SUPPORT] Miner returning (drain) — docking")
                                         _skyReturn = true
