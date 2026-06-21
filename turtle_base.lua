@@ -625,10 +625,8 @@ function base.returnToDock()
 
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
 
-    -- Support turtles top up fuel at dock station
-    if not _self.canDig then
-        base.fuel.dockRefuel()
-    end
+    -- All roles top up fuel at dock (dockRefuel skips at ≥80% so miners at full are unaffected).
+    base.fuel.dockRefuel()
 
     return true
 end
@@ -682,9 +680,8 @@ function base.returnToDockFromSky()
     move.face(W.dockFacing(_self.dock))
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
 
-    if not _self.canDig then
-        base.fuel.dockRefuel()
-    end
+    -- All roles top up fuel at dock (dockRefuel skips at ≥80% so miners at full are unaffected).
+    base.fuel.dockRefuel()
 
     return true
 end

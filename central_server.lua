@@ -554,6 +554,22 @@ function jobQueue.checkGhosts()
     end
 end
 
+-- Returns true if the support job is actively held by a turtle.
+-- Checks both the server-side job status AND the turtle registry directly —
+-- after a server restart the job record may be PENDING or missing even though
+-- a support turtle is online and working it (server–disk race on assign).
+local function isSupportWorking(supportJobId)
+    if not supportJobId then return false end
+    local sj = state.jobs[supportJobId]
+    if sj and (sj.status == JOB_STATUS.IN_PROGRESS or sj.status == JOB_STATUS.ASSIGNED) then
+        return true
+    end
+    for _, t in pairs(state.registry) do
+        if t.online and t.jobId == supportJobId then return true end
+    end
+    return false
+end
+
 -- Orphaned miner watchdog: if a MINE job is active but its support job is
 -- gone/complete, the miner is underground without a chunk-loader. Recall it
 -- after 2 minutes so it can surface safely rather than staying stranded.
@@ -562,10 +578,7 @@ local function checkOrphanedMiners()
     for jobId, job in pairs(state.jobs) do
         if job.type == proto.JOB.MINE
                 and (job.status == JOB_STATUS.IN_PROGRESS or job.status == JOB_STATUS.ASSIGNED) then
-            local linkedSupport = job.linkedJob and state.jobs[job.linkedJob]
-            local supportActive = linkedSupport
-                and (linkedSupport.status == JOB_STATUS.IN_PROGRESS
-                     or linkedSupport.status == JOB_STATUS.ASSIGNED)
+            local supportActive = isSupportWorking(job.linkedJob)
             if not supportActive then
                 job.orphanSince = job.orphanSince or nowSec
                 if nowSec - job.orphanSince > 120 then
@@ -1354,7 +1367,14 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             ensureMineZone(p.jobId, job.params)
             zone = state.miningZones[p.jobId]
         end
-        if not zone then return end
+        if not zone then
+            -- Ghost job: both zone and job record are gone (server lost state during crash).
+            -- Send MINE_COMPLETE so the miner surfaces immediately rather than timing out.
+            logWarn(string.format("SECTOR_DONE from %s — ghost job %s (no zone/record) — sending MINE_COMPLETE",
+                msg.from, tostring(p.jobId)))
+            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            return
+        end
     end
 
     if zone.phase == "SURVEY" then
