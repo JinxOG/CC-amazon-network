@@ -19,7 +19,7 @@ local CFG = {
     DISPATCH_STAGGER  = 60,
     -- Web dashboard bridge
     BRIDGE_URL        = "http://127.0.0.1:3000/update",
-    BRIDGE_INTERVAL   = 1,      -- seconds between state pushes
+    BRIDGE_INTERVAL   = 3,      -- seconds between state pushes
 }
 
 -- ─── State ───────────────────────────────────────────────────────────────────
@@ -2421,7 +2421,22 @@ function server.run()
             return "[" .. table.concat(parts, ",") .. "]"
         end
 
-        local jobs = buildJobsJSON(state.jobs)
+        -- Only send active jobs to the bridge. Completed/failed jobs accumulate
+        -- unboundedly in memory; serialising all of them every few seconds grows
+        -- O(n) with the number of past mining cycles and eventually blocks the
+        -- event loop long enough to drop consecutive heartbeats.
+        local activeJobs = {}
+        for id, j in pairs(state.jobs) do
+            if j.status == JOB_STATUS.PENDING
+            or j.status == JOB_STATUS.ASSIGNED
+            or j.status == JOB_STATUS.IN_PROGRESS then
+                activeJobs[id] = j
+            end
+        end
+        local jobs = buildJobsJSON(activeJobs)
+        -- Yield so pending heartbeats / modem_messages are processed before
+        -- we begin the heavier mineZones serialisation pass.
+        sleep(0)
         -- Build mineZones summary for the dashboard overlay (active + historical)
         local mineZones = {}
         -- Active zones — keyed by jobId
@@ -2478,6 +2493,8 @@ function server.run()
             }
             if z.persistentKey then activeKeys[z.persistentKey] = true end
         end
+        -- Yield between the two zone passes so incoming heartbeats stay responsive.
+        sleep(0)
         -- Historical zones — persistent zones with no current active job.
         -- Include zones with 0 completed mine sectors (crashed during survey) so
         -- the user can see them and they are not silently re-dispatched from scratch.
@@ -2494,19 +2511,21 @@ function server.run()
                            x2 = pz.bounds.x2 - SCAN_RADIUS, z2 = pz.bounds.z2 - SCAN_RADIUS }
                 end
                 mineZones["zone:" .. key] = {
-                    bounds       = cp(pz.bounds),
-                    rawBounds    = cp(rb),
-                    total        = pz.total,
-                    done         = done,
-                    pct          = pct,
-                    eta          = nil,
-                    oreFound     = cp(pz.oreFound),
-                    oreMined     = cp(pz.oreMined),
-                    minerId      = nil,
-                    minerStatus  = nil,
-                    status       = "HISTORICAL",
-                    surveyed     = pz.surveyed or false,
-                    sectorOreMap = cp(pz.sectorOreMap),
+                    bounds      = cp(pz.bounds),
+                    rawBounds   = cp(rb),
+                    total       = pz.total,
+                    done        = done,
+                    pct         = pct,
+                    eta         = nil,
+                    oreFound    = cp(pz.oreFound),
+                    oreMined    = cp(pz.oreMined),
+                    minerId     = nil,
+                    minerStatus = nil,
+                    status      = "HISTORICAL",
+                    surveyed    = pz.surveyed or false,
+                    -- sectorOreMap excluded: per-sector maps grow to thousands of
+                    -- entries across historical zones and block the event loop when
+                    -- serialised every few seconds. Totals above are sufficient.
                 }
             end
         end

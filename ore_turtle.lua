@@ -464,9 +464,22 @@ local function mineJob(job)
                 end
             end
         end
+        local p = base.getPos()
+        -- Near-surface recall (e.g. recalled while still in the departure shaft):
+        -- don't arc up to Y=200 through the departure column — that conflicts with
+        -- outbound turtles and is unnecessary when we're already close to floor level.
+        -- Signal support (it steps 1 block east on MINE_RECALL, clearing our column),
+        -- then return underground via the arrivals hole.
+        if p.y >= W.WORLD_EXIT.y then
+            base.signalPartner(proto.MSG.MINE_RECALL, {})
+            base.setSkyReturn(true)
+            base.returnToDock()
+            base.setSkyReturn(false)
+            return
+        end
         base.signalPartner(proto.MSG.MINE_RECALL, {})
         sleep(12)   -- give support time to process MINE_RECALL and step east (support loop ≤15s)
-        local p = base.getPos()
+        p = base.getPos()
         base.setSkyReturn(true)   -- fixed path home; don't freeze in arrivals shaft on serverDown
         base.move.to(p.x, 100, p.z)
         sleep(5)
