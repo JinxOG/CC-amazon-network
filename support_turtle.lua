@@ -293,7 +293,9 @@ base.run(function(job)
             -- canDig=false so if miner is in the shaft it cannot push through.
             -- 5s gives ~15 blocks of shaft clearance at 3 blocks/sec — plenty of margin.
             sleep(5)
+            base.setSkyReturn(true)
             base.returnToDockFromSky()
+            base.setSkyReturn(false)
         else
             base.returnToDock()
         end

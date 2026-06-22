@@ -467,6 +467,7 @@ local function mineJob(job)
         base.signalPartner(proto.MSG.MINE_RECALL, {})
         sleep(12)   -- give support time to process MINE_RECALL and step east (support loop ≤15s)
         local p = base.getPos()
+        base.setSkyReturn(true)   -- fixed path home; don't freeze in arrivals shaft on serverDown
         base.move.to(p.x, 100, p.z)
         sleep(5)
         base.move.to(p.x, SKY_Y, p.z)
@@ -474,6 +475,7 @@ local function mineJob(job)
         base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
         base.setPartnerId(nil)
         base.returnToDockFromSky()
+        base.setSkyReturn(false)
     end
 
     local function recallReturn(failReason, failRecoverable)

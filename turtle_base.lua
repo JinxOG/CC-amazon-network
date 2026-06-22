@@ -38,9 +38,10 @@ local _self = {
     facing     = 0,      -- 0=north(-z) 1=east(+x) 2=south(+z) 3=west(-x)
     moveCount  = 0,
     busy       = false,
-    canDig     = true,   -- false for turtles without a pickaxe (e.g. support)
-    serverDown = false,  -- true while server is unreachable; pauses movement + freezes deadlines
-    recalled   = false,  -- set by RECALL handler; causes waitForAny to exit the job runner
+    canDig      = true,   -- false for turtles without a pickaxe (e.g. support)
+    serverDown  = false,  -- true while server is unreachable; pauses movement + freezes deadlines
+    recalled    = false,  -- set by RECALL handler; causes waitForAny to exit the job runner
+    inSkyReturn = false,  -- true during sky return; bypasses serverDown freeze (path is fixed)
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -61,9 +62,10 @@ function base.getDock()          return _self.dock       end
 function base.getPartnerId()     return _self.partnerId  end
 function base.setPartnerId(id)   _self.partnerId = id    end
 function base.setCanDig(val)     _self.canDig = val      end
-function base.isServerDown()     return _self.serverDown end
-function base.isRecalled()       return _self.recalled   end
-function base.setRecalled(v)     _self.recalled = v      end
+function base.isServerDown()     return _self.serverDown  end
+function base.isRecalled()       return _self.recalled    end
+function base.setRecalled(v)     _self.recalled = v       end
+function base.setSkyReturn(v)    _self.inSkyReturn = v    end
 
 local _customRefuelFn = nil
 function base.setRefuelFn(fn)    _customRefuelFn = fn    end
@@ -327,7 +329,8 @@ end
 
 local function tryMove(moveFn, digFn, dir)
     -- Hold position while server is unreachable; resume when reconnected.
-    while _self.serverDown do sleep(2) end
+    -- Exception: sky return has a fixed safe path — don't freeze in the arrivals shaft.
+    while _self.serverDown and not _self.inSkyReturn do sleep(2) end
 
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
     local digAttempts = 0
