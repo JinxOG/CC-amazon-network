@@ -165,7 +165,7 @@ function registry.update(id, status, fuel, position, jobId, version)
     -- the server-side assignment and re-open the turtle for a second dispatch.
     local activeJob = t.jobId and state.jobs[t.jobId]
     local serverHasActive = activeJob and
-        (activeJob.status == JOB_STATUS.ASSIGNED or activeJob.status == JOB_STATUS.IN_PROGRESS)
+        (activeJob.status == "ASSIGNED" or activeJob.status == "IN_PROGRESS")
     if serverHasActive then
         if status == proto.STATUS.IDLE then status = nil end  -- keep server status
         if jobId  == nil              then jobId  = t.jobId end  -- keep server jobId
