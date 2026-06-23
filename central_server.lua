@@ -1116,6 +1116,9 @@ local JOB_ROLE = {
 -- Both must be available before either gets assigned.
 
 local dispatcher = {}
+-- Throttle dispatch-hold and stagger log spam: only print once per 60s.
+local lastDispatchHoldLog = 0
+local lastStaggerLog      = 0
 
 -- Returns true if another job is already ASSIGNED or IN_PROGRESS to the same (x, z).
 local function destinationBusy(dest)
@@ -1148,8 +1151,11 @@ function dispatcher.tick()
     local now = os.epoch("utc")
     local msSinceLast = now - state.lastDispatchTime
     if msSinceLast < CFG.DISPATCH_STAGGER * 1000 then
-        local waitSec = math.ceil((CFG.DISPATCH_STAGGER * 1000 - msSinceLast) / 1000)
-        logInfo(string.format("Dispatch stagger: next pair in %ds", waitSec))
+        if (now - lastStaggerLog) >= 60000 then
+            local waitSec = math.ceil((CFG.DISPATCH_STAGGER * 1000 - msSinceLast) / 1000)
+            logInfo(string.format("Dispatch stagger: next pair in %ds", waitSec))
+            lastStaggerLog = now
+        end
         return
     end
 
@@ -1210,8 +1216,11 @@ function dispatcher.tick()
             state.lastDispatchTime = os.epoch("utc")
             return
         else
-            logInfo(string.format("Dispatch hold: %s needs %s (idle=%d fuel≥%d) + SUPPORT (idle=%d)",
-                job.id, JOB_ROLE[job.type] or "?", #workers, CFG.MIN_DISPATCH_FUEL, #supports))
+            if (now - lastDispatchHoldLog) >= 60000 then
+                logInfo(string.format("Dispatch hold: %s needs %s (idle=%d fuel≥%d) + SUPPORT (idle=%d)",
+                    job.id, JOB_ROLE[job.type] or "?", #workers, CFG.MIN_DISPATCH_FUEL, #supports))
+                lastDispatchHoldLog = now
+            end
         end
 
         end -- destination-busy / mine else
