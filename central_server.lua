@@ -2460,9 +2460,6 @@ function server.run()
             end
         end
         local jobs = buildJobsJSON(activeJobs)
-        -- Yield so pending heartbeats / modem_messages are processed before
-        -- we begin the heavier mineZones serialisation pass.
-        sleep(0)
         -- Build mineZones summary for the dashboard overlay (active + historical)
         local mineZones = {}
         -- Active zones — keyed by jobId
@@ -2519,8 +2516,6 @@ function server.run()
             }
             if z.persistentKey then activeKeys[z.persistentKey] = true end
         end
-        -- Yield between the two zone passes so incoming heartbeats stay responsive.
-        sleep(0)
         -- Historical zones — persistent zones with no current active job.
         -- Include zones with 0 completed mine sectors (crashed during survey) so
         -- the user can see them and they are not silently re-dispatched from scratch.
