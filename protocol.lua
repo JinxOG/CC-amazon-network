@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.7.26"
+proto.VERSION = "1.7.27"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -92,6 +92,9 @@ proto.MSG = {
 
     -- Admin commands (server → turtle)
     FORCE_REFUEL = "FORCE_REFUEL", -- server → idle turtle: refuel at dock now
+
+    -- Remote logging (turtle → server)
+    TURTLE_LOG   = "TURTLE_LOG",   -- turtle → server: batch of recent print() lines for remote monitoring
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

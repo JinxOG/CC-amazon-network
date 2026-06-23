@@ -53,6 +53,21 @@ local function logInfo(m)  log("INFO",  m) end
 local function logWarn(m)  log("WARN",  m) end
 local function logError(m) log("ERROR", m) end
 
+-- ─── Remote Log Queue ────────────────────────────────────────────────────────
+-- Captures every print() call (from any module) and batches lines to the
+-- server every 15 seconds so turtle activity is visible without local console.
+local _logQueue    = {}
+local LOG_QUEUE_MAX = 40
+do
+    local _rawPrint = print
+    print = function(...)
+        _rawPrint(...)
+        local line = table.concat({...}, "\t")
+        if #_logQueue >= LOG_QUEUE_MAX then table.remove(_logQueue, 1) end
+        table.insert(_logQueue, { ts = os.epoch("utc"), msg = line })
+    end
+end
+
 -- ─── Public Accessors ────────────────────────────────────────────────────────
 
 function base.getSelfId()        return _self.id         end
@@ -92,6 +107,13 @@ end
 function comms.toServer(msgType, payload)
     local msg = proto.encode(msgType, _self.id, "server", payload)
     proto.send(_self.modem, proto.CH_SERVER, msg)
+end
+
+local function flushLogQueue()
+    if not _self.modem or #_logQueue == 0 then return end
+    local batch = _logQueue
+    _logQueue = {}
+    comms.toServer(proto.MSG.TURTLE_LOG, { lines = batch })
 end
 
 -- ─── Position ────────────────────────────────────────────────────────────────
@@ -1241,6 +1263,7 @@ end
 function base.run(jobHandler)
     -- Wall-clock heartbeat: immune to timer events being consumed by sleep() inside ensureFuel()
     local lastHeartbeatWall = os.epoch("utc")
+    local lastLogFlushWall  = os.epoch("utc")
     local wakeupTimer       = os.startTimer(CFG.HEARTBEAT_INTERVAL)
     local pendingJob        = nil   -- job table waiting to be started
     local jobCo             = nil   -- running job coroutine
@@ -1260,6 +1283,11 @@ function base.run(jobHandler)
             if now - lastHeartbeatWall >= CFG.HEARTBEAT_INTERVAL * 1000 then
                 sendHeartbeat()
                 lastHeartbeatWall = now
+            end
+            -- Batch-forward accumulated print() lines to server every 15 seconds.
+            if now - lastLogFlushWall >= 15000 then
+                flushLogQueue()
+                lastLogFlushWall = now
             end
 
             local event, p1, p2, p3, p4 = os.pullEvent()

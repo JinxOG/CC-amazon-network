@@ -33,6 +33,7 @@ local state = {
     lastDispatchTime = 0,   -- epoch ms of last successful pair dispatch
     miningZones     = {},   -- [jobId] = { pending={sectors}, total=n, done=n, scanY=n }
     persistentZones = {},   -- [zoneKey] = { bounds, total, doneSectors, oreFound, oreMined, … }
+    turtleLogs      = {},   -- [id] = ring buffer of {ts, msg} entries from TURTLE_LOG messages
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -1264,6 +1265,19 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     local p = msg.payload
     registry.update(msg.from, p.status, nil, p.position, p.jobId)
     jobQueue.progress(p.jobId, p.status, p.detail)
+end
+
+handlers[proto.MSG.TURTLE_LOG] = function(msg)
+    local lines = msg.payload.lines
+    if type(lines) ~= "table" then return end
+    if not state.turtleLogs[msg.from] then state.turtleLogs[msg.from] = {} end
+    local buf = state.turtleLogs[msg.from]
+    for _, entry in ipairs(lines) do
+        if type(entry) == "table" and entry.msg then
+            table.insert(buf, entry)
+        end
+    end
+    while #buf > 60 do table.remove(buf, 1) end
 end
 
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
@@ -2546,13 +2560,14 @@ function server.run()
         for i = logStart, #state.log do
             table.insert(logSlice, state.log[i])
         end
-        local payload = '{"turtles":'      .. js(turtles,        "{}",  "turtles") ..
+        local payload = '{"turtles":'      .. js(turtles,             "{}",  "turtles") ..
                         ',"jobs":'         .. jobs ..
-                        ',"version":'      .. js(proto.VERSION,   '"?"', "version") ..
+                        ',"version":'      .. js(proto.VERSION,        '"?"', "version") ..
                         ',"storage":'      .. storageJSON ..
-                        ',"mineZones":'    .. js(mineZones,       "{}",  "mineZones") ..
-                        ',"oreThresholds":' .. js(oreThresholds,  "{}",  "oreThresholds") ..
-                        ',"serverLog":'    .. js(logSlice,        "[]",  "serverLog") .. '}'
+                        ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
+                        ',"oreThresholds":' .. js(oreThresholds,       "{}",  "oreThresholds") ..
+                        ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
+                        ',"turtleLogs":'   .. js(state.turtleLogs,     "{}",  "turtleLogs") .. '}'
         return payload
     end
 
