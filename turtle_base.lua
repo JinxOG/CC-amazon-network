@@ -116,6 +116,19 @@ local function flushLogQueue()
     comms.toServer(proto.MSG.TURTLE_LOG, { lines = batch })
 end
 
+-- Throttled position push: sends current position as STATUS_UPDATE at most once
+-- per 2 seconds. Intended for support turtles which move constantly but never
+-- call sendProgress(). Without this the server only learns position via heartbeats
+-- (every 5s), leaving the map up to 15+ blocks behind.
+local _lastPositionPush = 0
+function base.pushPosition()
+    local now = os.epoch("utc")
+    if now - _lastPositionPush < 2000 then return end
+    _lastPositionPush = now
+    comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(
+        _self.jobId, _self.status, nil, base.getPos()))
+end
+
 -- ─── Position ────────────────────────────────────────────────────────────────
 
 local function gpsSync()

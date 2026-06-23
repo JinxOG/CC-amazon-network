@@ -2579,15 +2579,17 @@ function server.run()
     loadOreThresholds()
     print("Console ready. Type 'help' for commands.")
 
-    local dispatchTimer   = os.startTimer(CFG.DISPATCH_INTERVAL)
-    local healthTimer     = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
-    local bridgeTimer     = os.startTimer(CFG.BRIDGE_INTERVAL)
-    local staleTimer      = os.startTimer(30)
+    local dispatchTimer    = os.startTimer(CFG.DISPATCH_INTERVAL)
+    local healthTimer      = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
+    local bridgeTimer      = os.startTimer(CFG.BRIDGE_INTERVAL)
+    local staleTimer       = os.startTimer(30)
     local oreWatchdogTimer = os.startTimer(60)
+    -- RS peripheral calls block the event loop for several seconds — keep them
+    -- on their own timers so they never run inside the bridge push path.
+    local storageTimer     = os.startTimer(30)
+    local craftableTimer   = os.startTimer(60)
     pcall(refreshStorage)
     pcall(refreshCraftable)
-    local lastStorageRefresh   = os.epoch("utc")
-    local lastCraftableRefresh = os.epoch("utc")
 
     -- Async bridge push state.  A push is fire-and-forget: http.request returns
     -- immediately, the response arrives as http_success / http_failure in the main
@@ -2597,19 +2599,6 @@ function server.run()
 
     local function startBridgePush()
         if bridgePending then return end
-        local now = os.epoch("utc")
-        if now - lastStorageRefresh >= 5000 then
-            local t0 = os.epoch("utc")
-            pcall(refreshStorage)
-            if os.epoch("utc") - t0 > 3000 then
-                logWarn("RS refresh took " .. tostring(os.epoch("utc") - t0) .. "ms")
-            end
-            lastStorageRefresh = os.epoch("utc")
-        end
-        if now - lastCraftableRefresh >= 60000 then
-            pcall(refreshCraftable)
-            lastCraftableRefresh = os.epoch("utc")
-        end
         local ok, payload = pcall(buildBridgePayload)
         if not ok then
             logWarn("Bridge payload build error: " .. tostring(payload))
@@ -2721,6 +2710,16 @@ function server.run()
                 bridgePending   = false
                 bridgeTimeoutId = nil
                 logWarn("Bridge push timed out (>15s)")
+
+            elseif p1 == storageTimer then
+                -- Runs on its own timer so the blocking peripheral scan never
+                -- happens inside startBridgePush() where it would stall the event loop.
+                pcall(refreshStorage)
+                storageTimer = os.startTimer(30)
+
+            elseif p1 == craftableTimer then
+                pcall(refreshCraftable)
+                craftableTimer = os.startTimer(60)
 
             end
 

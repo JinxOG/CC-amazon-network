@@ -258,9 +258,7 @@ base.run(function(job)
                         -- switch to xOffset=0 so support trails 1 block directly behind.
                         local xOffset = (_recalling and prev.y < 200) and 1 or 0
                         base.move.to(prev.x + xOffset, targetY, prev.z)
-                        -- Push position to server after each move so the map stays current.
-                        -- Support has no frequent sendProgress calls unlike miners.
-                        base.setStatus(proto.STATUS.WORKING, job.id)
+                        base.pushPosition()  -- throttled: sends position to server at most once per 2s
                     end
 
                 elseif msg.type == proto.MSG.RETURN_TO_DOCK then
