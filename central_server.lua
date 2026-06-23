@@ -2693,7 +2693,8 @@ function server.run()
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then
-                startBridgePush()
+                local ok_bp, err_bp = pcall(startBridgePush)
+                if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
             elseif p1 == staleTimer then
@@ -2741,4 +2742,15 @@ function server.run()
     end
 end
 
-server.run()
+-- Auto-reboot on crash: server.run() crashing silently leaves the bridge stale
+-- forever with no log. Wrap it so any unhandled error is printed and the
+-- computer reboots itself (turtles re-register when server comes back up).
+while true do
+    local ok, err = pcall(server.run)
+    if not ok then
+        print("[FATAL] server.run crashed: " .. tostring(err))
+        print("Rebooting in 5 seconds...")
+        sleep(5)
+        os.reboot()
+    end
+end
