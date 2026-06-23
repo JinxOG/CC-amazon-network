@@ -17,6 +17,9 @@ local CFG = {
     -- Gives the previous pair time to clear the dispatch hole and taxiway
     -- before the next pair starts their departure route.
     DISPATCH_STAGGER  = 60,
+    -- Minimum fuel a MINER must have before it will be dispatched.
+    -- Prevents turtles from being assigned when they can't complete departure.
+    MIN_DISPATCH_FUEL = 500,
     -- Web dashboard bridge
     BRIDGE_URL        = "http://127.0.0.1:3000/update",
     BRIDGE_INTERVAL   = 3,      -- seconds between state pushes
@@ -183,9 +186,15 @@ end
 function registry.getIdle(role)
     local result = {}
     for _, t in pairs(state.registry) do
+        local fuelOk = (t.fuel or 0) > 0
+        -- MINER turtles need enough fuel to actually depart; exclude low-fuel miners
+        -- so they don't get dispatched and fail immediately at the departure check.
+        if t.role == proto.ROLE.MINER and (t.fuel or 0) < CFG.MIN_DISPATCH_FUEL then
+            fuelOk = false
+        end
         if t.online and t.status == proto.STATUS.IDLE
                     and (role == nil or t.role == role)
-                    and (t.fuel or 0) > 0 then
+                    and fuelOk then
             table.insert(result, t)
         end
     end
@@ -1200,6 +1209,9 @@ function dispatcher.tick()
 
             state.lastDispatchTime = os.epoch("utc")
             return
+        else
+            logInfo(string.format("Dispatch hold: %s needs %s (idle=%d fuel≥%d) + SUPPORT (idle=%d)",
+                job.id, JOB_ROLE[job.type] or "?", #workers, CFG.MIN_DISPATCH_FUEL, #supports))
         end
 
         end -- destination-busy / mine else
@@ -2658,7 +2670,11 @@ function server.run()
                             pendingUpdate = false
                             logWarn("UPDATE_ALL — updating server in 3s...")
                             sleep(3)
-                            if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
+                            if fs.exists("updater.lua") then shell.run("updater") end
+                            -- Always reboot after update attempt: sleep() and shell.run() consume
+                            -- timer events, leaving dispatchTimer/bridgeTimer/healthTimer stale.
+                            -- A clean reboot is the only safe recovery.
+                            os.reboot()
                         end
                     end
                 else
