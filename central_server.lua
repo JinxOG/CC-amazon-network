@@ -217,6 +217,17 @@ function registry.markOffline(id)
     end
 end
 
+function registry.autoRefuelIdle()
+    for id, t in pairs(state.registry) do
+        if t.online and t.status == proto.STATUS.IDLE
+                    and t.role == proto.ROLE.MINER
+                    and (t.fuel or 0) < CFG.MIN_DISPATCH_FUEL then
+            logInfo(string.format("Auto-FORCE_REFUEL: %s is idle with only %d fuel", id, t.fuel or 0))
+            sendTo(id, proto.MSG.FORCE_REFUEL, {})
+        end
+    end
+end
+
 function registry.checkTimeouts()
     local now = os.epoch("utc")
     for id, t in pairs(state.registry) do
@@ -2710,6 +2721,8 @@ function server.run()
                 if not ok2 then logError("Ghost check: " .. tostring(err2)) end
                 local ok3, err3 = pcall(checkOrphanedMiners)
                 if not ok3 then logError("Orphan check: " .. tostring(err3)) end
+                local ok4, err4 = pcall(registry.autoRefuelIdle)
+                if not ok4 then logError("Auto-refuel: " .. tostring(err4)) end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then
