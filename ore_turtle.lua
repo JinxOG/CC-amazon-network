@@ -30,7 +30,7 @@ local protectedSlotNames = {}
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
-local SURVEY_TRAVEL_Y = 95   -- 5 below support FOLLOW_Y=100; avoids vertical collision during survey
+local SURVEY_TRAVEL_Y = 175  -- 5 below support FOLLOW_Y=180; avoids vertical collision during survey
 local FUEL_WARN    = 3000  -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
@@ -434,7 +434,7 @@ local function mineJob(job)
 
     -- Shared coordinated sky return: keeps partnerId set (POSITION_UPDATEs
     -- broadcasting) so the support chunk-loads the miner the entire way home.
-    -- Signals MINE_RECALL so support enters follow mode, leads it to Y=100,
+    -- Signals MINE_RECALL so support enters follow mode, leads it to Y=180,
     -- waits for alignment, then ascends together to SKY_Y and arrivals hole.
     -- Clears partnerId only once both turtles are at the hole.
     local function coordinatedSkyReturn()
@@ -481,7 +481,7 @@ local function mineJob(job)
         sleep(12)   -- give support time to process MINE_RECALL and step east (support loop ≤15s)
         p = base.getPos()
         base.setSkyReturn(true)   -- fixed path home; don't freeze in arrivals shaft on serverDown
-        base.move.to(p.x, 100, p.z)
+        base.move.to(p.x, 180, p.z)
         sleep(5)
         base.move.to(p.x, SKY_Y, p.z)
         base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)

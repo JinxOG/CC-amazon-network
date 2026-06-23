@@ -28,7 +28,7 @@ base.run(function(job)
     -- Support sucks coal forward from miner, refuels, signals FUEL_FILLED.
     if params.fuelManage then
         local SUPPORT_FUEL_WARN = 800
-        local FOLLOW_Y          = 100   -- altitude support hovers at while tracking miner
+        local FOLLOW_Y          = 180   -- altitude support hovers at while tracking miner
 
         -- No pre-ascent. POSITION_UPDATEs from the miner guide us in real time.
         -- Phase 1 (following): track the miner's full X,Y,Z.
@@ -257,7 +257,16 @@ base.run(function(job)
                         -- (_miningMode=false, prev.y < 200). At sky altitude (prev.y >= 200)
                         -- switch to xOffset=0 so support trails 1 block directly behind.
                         local xOffset = (_recalling and prev.y < 200) and 1 or 0
-                        base.move.to(prev.x + xOffset, targetY, prev.z)
+                        local tx, tz = prev.x + xOffset, prev.z
+                        local ok = base.move.to(tx, targetY, tz)
+                        if not ok then
+                            -- Terrain blocked horizontal travel at FOLLOW_Y.
+                            -- Escape upward by 30 blocks so the path clears, then
+                            -- the next POSITION_UPDATE descends back once past the obstacle.
+                            print(string.format("[SUPPORT] Terrain blocked at Y=%d — escaping to Y=%d",
+                                targetY, targetY + 30))
+                            base.move.to(tx, targetY + 30, tz)
+                        end
                         base.pushPosition()  -- throttled: sends position to server at most once per 2s
                     end
 
