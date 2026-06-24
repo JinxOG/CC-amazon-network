@@ -2621,10 +2621,21 @@ function server.run()
     -- Async bridge push state.  A push is fire-and-forget: http.request returns
     -- immediately, the response arrives as http_success / http_failure in the main
     -- event loop.  No parallel.waitForAny means no event consumption side-effects.
-    local bridgePending   = false
-    local bridgeTimeoutId = nil
+    local bridgePending     = false
+    local bridgeTimeoutId   = nil
+    local bridgePendingSince = 0  -- wall-clock ms when current push started
 
     local function startBridgePush()
+        local now = os.epoch("utc")
+        -- Wall-clock failsafe: if bridgePending has been stuck for >30s both the
+        -- http_success and bridgeTimeoutId events must have been dropped (event
+        -- buffer overflow during a blocking peripheral call).  Force-clear so
+        -- the next push can start instead of staying stale forever.
+        if bridgePending and (now - bridgePendingSince) > 30000 then
+            logWarn("Bridge push stuck >30s — force-clearing (dropped events)")
+            bridgePending   = false
+            bridgeTimeoutId = nil
+        end
         if bridgePending then return end
         local ok, payload = pcall(buildBridgePayload)
         if not ok then
@@ -2633,8 +2644,9 @@ function server.run()
         end
         local started = http.request(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
         if started then
-            bridgePending   = true
-            bridgeTimeoutId = os.startTimer(15)
+            bridgePending     = true
+            bridgePendingSince = now
+            bridgeTimeoutId   = os.startTimer(15)
         else
             logWarn("Bridge: http.request could not start")
         end
