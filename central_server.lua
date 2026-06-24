@@ -2624,6 +2624,7 @@ function server.run()
     local bridgePending     = false
     local bridgeTimeoutId   = nil
     local bridgePendingSince = 0  -- wall-clock ms when current push started
+    local lastBridgePushWC   = 0  -- wall-clock ms of last push attempt (fallback if bridgeTimer drops)
 
     local function startBridgePush()
         local now = os.epoch("utc")
@@ -2782,6 +2783,18 @@ function server.run()
                 if #consoleBuffer > 0 then
                     consoleBuffer = consoleBuffer:sub(1, -2)
                 end
+            end
+        end
+
+        -- Wall-clock bridge push — immune to bridgeTimer event drops.
+        -- Fires on every OS event; starts a push if BRIDGE_INTERVAL has elapsed
+        -- and no push is in flight.  bridgeTimer remains as a supplemental trigger.
+        do
+            local wc = os.epoch("utc")
+            if not bridgePending and (wc - lastBridgePushWC) >= (CFG.BRIDGE_INTERVAL * 1000) then
+                local ok_bp, err_bp = pcall(startBridgePush)
+                if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
+                lastBridgePushWC = wc
             end
         end
     end
