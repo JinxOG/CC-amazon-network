@@ -2625,6 +2625,7 @@ function server.run()
     local bridgeTimeoutId   = nil
     local bridgePendingSince = 0  -- wall-clock ms when current push started
     local lastBridgePushWC   = 0  -- wall-clock ms of last push attempt (fallback if bridgeTimer drops)
+    local lastDispatchWC     = 0  -- wall-clock ms of last dispatch tick (fallback if dispatchTimer drops)
 
     local function startBridgePush()
         local now = os.epoch("utc")
@@ -2786,15 +2787,25 @@ function server.run()
             end
         end
 
-        -- Wall-clock bridge push — immune to bridgeTimer event drops.
-        -- Fires on every OS event; starts a push if BRIDGE_INTERVAL has elapsed
-        -- and no push is in flight.  bridgeTimer remains as a supplemental trigger.
+        -- Wall-clock fallbacks — run critical operations even if their timer events
+        -- were dropped by an OS event buffer overflow (e.g. during refreshStorage).
+        -- Each dedicated timer remains as a supplemental trigger for normal operation.
         do
             local wc = os.epoch("utc")
+            -- Bridge push
             if not bridgePending and (wc - lastBridgePushWC) >= (CFG.BRIDGE_INTERVAL * 1000) then
                 local ok_bp, err_bp = pcall(startBridgePush)
                 if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
                 lastBridgePushWC = wc
+            end
+            -- Dispatch tick — essential: if dispatchTimer drops, miners sit idle indefinitely
+            if (wc - lastDispatchWC) >= (CFG.DISPATCH_INTERVAL * 1000) then
+                local ok_d, err_d = pcall(function()
+                    jobQueue.checkAckTimeouts()
+                    dispatcher.tick()
+                end)
+                if not ok_d then logError("Dispatcher WC: " .. tostring(err_d)) end
+                lastDispatchWC = wc
             end
         end
     end
