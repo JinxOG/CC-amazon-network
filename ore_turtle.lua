@@ -34,10 +34,11 @@ local SURVEY_TRAVEL_Y = 175  -- 5 below support FOLLOW_Y=180; avoids vertical co
 local FUEL_WARN    = 3000  -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 local SCANNER_NAME = "advancedperipherals:geo_scanner"
-local MIN_ORE_Y    = 5     -- don't mine ores below this Y; bedrock starts at Y≤4
+local MIN_ORE_Y    = -58   -- 1.18+ world: bedrock ends at Y=-60; safe floor is -58
 
--- Y levels scanned per sector — each covers ±16 blocks vertically
-local SCAN_LEVELS = { 80, 48, 16, 8 }
+-- Y levels scanned per sector — each covers ±16 blocks vertically.
+-- 1.18+ ore peaks: iron/coal y=16, copper/gold y=0, redstone y=-32, diamond y=-52.
+local SCAN_LEVELS = { 16, 0, -32, -52 }
 
 base.init(proto.ROLE.MINER)
 
