@@ -571,6 +571,24 @@ function jobQueue.checkGhosts()
             else
                 job.idleSince = nil
             end
+
+            -- Case 3: turtle absent from registry or offline (server restart + no reconnect).
+            -- checkTimeouts() only marks turtles offline while they're in the registry;
+            -- if a turtle never re-registers after a crash, its job sits IN_PROGRESS forever.
+            -- Give 5 minutes grace for the turtle to reconnect before requeueing.
+            local isAbsent = not isGhost and not isIdleStuck
+                and (not t or not t.online)
+            if isAbsent then
+                job.absentSince = job.absentSince or nowSec
+                if nowSec - job.absentSince > 300 then
+                    logWarn(string.format(
+                        "Absent-turtle job %s: %s not online for >5min — requeueing",
+                        jobId, job.assignedTo))
+                    jobQueue.reassign(jobId, job.assignedTo, "turtle_absent")
+                end
+            else
+                job.absentSince = nil
+            end
         end
     end
 end
@@ -2626,6 +2644,7 @@ function server.run()
     local bridgePendingSince = 0  -- wall-clock ms when current push started
     local lastBridgePushWC   = 0  -- wall-clock ms of last push attempt (fallback if bridgeTimer drops)
     local lastDispatchWC     = 0  -- wall-clock ms of last dispatch tick (fallback if dispatchTimer drops)
+    local lastHealthWC       = 0  -- wall-clock ms of last health check (fallback if healthTimer drops)
 
     local function startBridgePush()
         local now = os.epoch("utc")
@@ -2806,6 +2825,17 @@ function server.run()
                 end)
                 if not ok_d then logError("Dispatcher WC: " .. tostring(err_d)) end
                 lastDispatchWC = wc
+            end
+            -- Health checks — essential: if healthTimer drops, ghost/absent jobs never clear
+            if (wc - lastHealthWC) >= (CFG.HEARTBEAT_TIMEOUT * 1000) then
+                local ok_h, err_h = pcall(function()
+                    registry.checkTimeouts()
+                    jobQueue.checkGhosts()
+                    checkOrphanedMiners()
+                    registry.autoRefuelIdle()
+                end)
+                if not ok_h then logError("Health WC: " .. tostring(err_h)) end
+                lastHealthWC = wc
             end
         end
     end
