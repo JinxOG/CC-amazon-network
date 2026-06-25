@@ -429,7 +429,22 @@ end
 
 local function saveMiningZones()
     local ok, err = pcall(function()
-        local data = textutils.serialise(state.miningZones)
+        -- Multi-miner jobs share the same zone table (same Lua reference).
+        -- textutils.serialise rejects tables that appear at multiple keys, so
+        -- deduplicate: secondary entries become {sharedWith=primaryJobId}.
+        -- loadMiningZones re-links them after deserialisation.
+        local seen = {}   -- tostring(zone) → first jobId that claimed it
+        local toSave = {}
+        for jobId, zone in pairs(state.miningZones) do
+            local addr = tostring(zone)
+            if seen[addr] then
+                toSave[jobId] = { sharedWith = seen[addr] }
+            else
+                seen[addr] = jobId
+                toSave[jobId] = zone
+            end
+        end
+        local data = textutils.serialise(toSave)
         local f = fs.open("active_zones.tmp", "w")
         if not f then error("could not open active_zones.tmp for writing") end
         f.write(data); f.close()
@@ -467,11 +482,14 @@ local function loadMiningZones()
         end
     end
 
-    -- Re-share zones with the same persistentKey so multi-miner pairs pop from
-    -- one atomic pending queue (serialisation creates separate copies).
+    -- Re-link sharedWith stubs, then re-share zones with the same persistentKey.
+    -- saveMiningZones writes {sharedWith=primaryJobId} for secondary entries.
     local keyToZone = {}
     for jobId, zone in pairs(state.miningZones) do
-        if keyToZone[zone.persistentKey] then
+        if zone.sharedWith then
+            local primary = state.miningZones[zone.sharedWith]
+            if primary then state.miningZones[jobId] = primary end
+        elseif keyToZone[zone.persistentKey] then
             state.miningZones[jobId] = keyToZone[zone.persistentKey]
         else
             keyToZone[zone.persistentKey] = zone
@@ -528,6 +546,11 @@ local JOB_STATUS = {
 
 jobQueue = {}
 
+-- Forward declaration: populated after jobQueue._hist is defined below.
+-- Allows checkGhosts() and jobQueue.reassign() (defined before 'server') to
+-- cancel jobs without accessing the 'server' local (which is defined much later).
+local cancelJobInline
+
 -- Detect jobs that are IN_PROGRESS/ASSIGNED but whose turtle has moved on to a
 -- different job (or is idle).  These are orphaned by crash-recovery cycles where
 -- the server dispatched a fresh job before the old one was properly closed.
@@ -546,7 +569,7 @@ function jobQueue.checkGhosts()
                     logWarn(string.format(
                         "Ghost job %s: assigned to %s but turtle is on %s — auto-cancelling",
                         jobId, job.assignedTo, t.jobId or "nothing"))
-                    server.cancelJob(jobId)
+                    cancelJobInline(jobId)
                 end
             else
                 job.ghostSince = nil
@@ -665,6 +688,28 @@ function jobQueue._hist(jobId, event, detail)
     local job = state.jobs[jobId]
     if not job then return end
     table.insert(job.history, { ts = os.epoch("utc"), event = event, detail = detail or "" })
+end
+
+-- Populate the forward-declared cancelJobInline now that jobQueue._hist exists.
+-- Used by checkGhosts() and jobQueue.reassign() which are defined before 'server'.
+cancelJobInline = function(jobId)
+    local j = state.jobs[jobId]
+    if not j then return end
+    if j.status == JOB_STATUS.COMPLETE or j.status == JOB_STATUS.FAILED
+       or j.status == JOB_STATUS.CANCELLED then return end
+    if j.assignedTo then
+        sendTo(j.assignedTo, proto.MSG.RECALL, proto.payloadRecall("job_cancelled"))
+        local t = state.registry[j.assignedTo]
+        if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
+    end
+    j.status     = JOB_STATUS.CANCELLED
+    j.assignedTo = nil
+    j.updatedAt  = os.epoch("utc")
+    jobQueue._hist(jobId, "cancelled", "inline")
+    state.miningZones[jobId] = nil
+    if j.linkedJob then cancelJobInline(j.linkedJob) end
+    saveJobs()
+    logInfo("Job cancelled (inline): " .. jobId)
 end
 
 function jobQueue.assign(jobId, turtleId)
@@ -794,7 +839,7 @@ function jobQueue.fail(jobId, reason, recoverable)
            and linked.status ~= JOB_STATUS.COMPLETE
            and linked.status ~= JOB_STATUS.CANCELLED
            and linked.status ~= JOB_STATUS.FAILED then
-            server.cancelJob(job.linkedJob)
+            cancelJobInline(job.linkedJob)
         end
     end
     -- Auto-respawn: if this zone is now orphaned (no other pending/active MINE
@@ -840,14 +885,14 @@ function jobQueue.reassign(jobId, fromId, reason)
     local t = state.registry[fromId or ""]
     if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
     -- Cancel the linked support job so it doesn't orphan indefinitely.
-    -- Same guard as jobQueue.fail() — support jobs have no linkedJob so no recursion.
+    -- Use cancelJobInline — server.cancelJob is defined after jobQueue.
     if job.linkedJob then
         local linked = state.jobs[job.linkedJob]
         if linked
            and linked.status ~= JOB_STATUS.COMPLETE
            and linked.status ~= JOB_STATUS.CANCELLED
            and linked.status ~= JOB_STATUS.FAILED then
-            server.cancelJob(job.linkedJob)
+            cancelJobInline(job.linkedJob)
         end
     end
     job.status     = JOB_STATUS.PENDING
@@ -2644,7 +2689,7 @@ function server.run()
     local bridgePendingSince = 0  -- wall-clock ms when current push started
     local lastBridgePushWC   = 0  -- wall-clock ms of last push attempt (fallback if bridgeTimer drops)
     local lastDispatchWC     = 0  -- wall-clock ms of last dispatch tick (fallback if dispatchTimer drops)
-    local lastHealthWC       = 0  -- wall-clock ms of last health check (fallback if healthTimer drops)
+    local lastHealthWC       = os.epoch("utc")  -- init to now so first WC health check fires after full interval
 
     local function startBridgePush()
         local now = os.epoch("utc")
