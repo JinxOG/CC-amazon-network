@@ -559,15 +559,18 @@ local function mineJob(job)
         end
         base.move.to(sx, travelY, sz)
 
-        -- Wait for support to reach this chunk before descending.
+        -- Wait for support to reach this chunk before proceeding.
         -- The support follows position updates reactively and can lag 1+ chunks
-        -- behind when the miner moves between sectors; descending into an unloaded
-        -- chunk stops heartbeats and triggers the prune cascade.
-        -- Only needed for mine sectors — survey sectors use SURVEY_TRAVEL_Y=95
-        -- which is just 5 below FOLLOW_Y=100, so the support is already close.
-        if job.params.partnerId and not surveyMode then
+        -- behind when the miner moves between sectors. Without this wait, the
+        -- miner enters the next sector's chunk before the support arrives —
+        -- the chunk unloads, heartbeats stop, and the server prunes the miner.
+        -- Applied in BOTH survey and mine modes: survey at SURVEY_TRAVEL_Y=175
+        -- is 5 blocks below FOLLOW_Y=180 which isn't close enough to guarantee
+        -- the support is in the same chunk after a long inter-sector transit.
+        if job.params.partnerId then
             local supportId  = job.params.partnerId
-            local waitUntil  = os.epoch("utc") / 1000 + 45
+            local timeout    = surveyMode and 20 or 45  -- shorter wait OK during survey
+            local waitUntil  = os.epoch("utc") / 1000 + timeout
             while os.epoch("utc") / 1000 < waitUntil do
                 if base.isRecalled() then break end
                 local info = base.queryTurtle(supportId, 5)

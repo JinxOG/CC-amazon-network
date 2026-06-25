@@ -8,7 +8,7 @@ local W     = require("waypoints")
 -- ─── Config ──────────────────────────────────────────────────────────────────
 
 local CFG = {
-    HEARTBEAT_TIMEOUT = 120,    -- seconds before a turtle is considered offline
+    HEARTBEAT_TIMEOUT = 240,    -- seconds before a turtle is considered offline (deep mine ascent ~120-180s)
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
