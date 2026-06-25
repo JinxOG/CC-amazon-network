@@ -1260,13 +1260,31 @@ function dispatcher.tick()
             for k, v in pairs(job.params) do workerParams[k] = v end
             workerParams.partnerId = support.id
 
+            -- Assign a vertical altitude slot to this mine pair so concurrent
+            -- pairs don't fly at the same height and physically collide.
+            -- Slot 0 → SURVEY_TRAVEL_Y=175, FOLLOW_Y=180, SKY_Y=200 (defaults).
+            -- Slot 1 → +10 on each; slot 2 → +20, etc.
+            -- Each slot is 10 blocks apart (5-block miner/support gap + 5 clearance).
+            if isMine then
+                local mineSlot = 0
+                for _, j2 in pairs(state.jobs) do
+                    if j2.id ~= job.id and j2.type == proto.JOB.MINE
+                       and (j2.status == JOB_STATUS.ASSIGNED or j2.status == JOB_STATUS.IN_PROGRESS)
+                       and j2.params and (j2.params.travelYOffset or 0) == mineSlot * 10 then
+                        mineSlot = mineSlot + 1
+                    end
+                end
+                workerParams.travelYOffset = mineSlot * 10
+            end
+
             -- Create the paired support job
             -- MINE support gets fuelManage=true so it runs the coal-transfer loop
             local supportParams = {
-                partnerId   = worker.id,
-                masterJobId = job.id,
-                fuelManage  = isMine,
-                destination = job.params.destination,  -- nil for MINE, that's fine
+                partnerId      = worker.id,
+                masterJobId    = job.id,
+                fuelManage     = isMine,
+                destination    = job.params.destination,  -- nil for MINE, that's fine
+                travelYOffset  = workerParams.travelYOffset or 0,
             }
             local supportJobId = jobQueue.add(proto.JOB.SUPPORT_FOLLOW, supportParams, job.priority)
 

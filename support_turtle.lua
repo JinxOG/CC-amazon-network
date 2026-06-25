@@ -28,7 +28,9 @@ base.run(function(job)
     -- Support sucks coal forward from miner, refuels, signals FUEL_FILLED.
     if params.fuelManage then
         local SUPPORT_FUEL_WARN = 800
-        local FOLLOW_Y          = 180   -- altitude support hovers at while tracking miner
+        -- Per-pair altitude slot keeps concurrent mine pairs vertically separated.
+        -- travelYOffset=0 means slot 0 (default); each additional slot adds 10.
+        local FOLLOW_Y          = 180 + (params.travelYOffset or 0)
 
         -- No pre-ascent. POSITION_UPDATEs from the miner guide us in real time.
         -- Phase 1 (following): track the miner's full X,Y,Z.

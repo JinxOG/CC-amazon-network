@@ -433,6 +433,13 @@ local function mineJob(job)
     local jobId    = job.id
     local totalOre = 0
 
+    -- Per-pair altitude slot: concurrent mine pairs each get a unique vertical
+    -- band so they never occupy the same Y during inter-sector transit.
+    -- Slot 0 (default) = baseline constants; slot N adds N*10 to each.
+    local yOff           = (job.params.travelYOffset or 0)
+    local SKY_Y          = 200 + yOff   -- shadows module-level constant
+    local SURVEY_TRAVEL_Y = 175 + yOff  -- shadows module-level constant
+
     -- Shared coordinated sky return: keeps partnerId set (POSITION_UPDATEs
     -- broadcasting) so the support chunk-loads the miner the entire way home.
     -- Signals MINE_RECALL so support enters follow mode, leads it to Y=180,
