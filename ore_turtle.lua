@@ -460,6 +460,10 @@ local function mineJob(job)
             base.setSkyReturn(true)
             base.returnToDock()
             base.setSkyReturn(false)
+            -- Always notify support after docking so it knows to return home.
+            if supportId then
+                base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+            end
             return
         end
 
@@ -519,10 +523,13 @@ local function mineJob(job)
         base.move.to(p.x, 180, p.z)
         sleep(5)
         base.move.to(p.x, SKY_Y, p.z)
-        base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
+        -- Signal support NOW — both start the horizontal leg home at the same time.
+        -- Sending from SKY_Y (before horizontal flight) gives support a 5s head
+        -- start on shaft clearance while miner covers the horizontal leg.
         if supportOnline then
             base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
         end
+        base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
         base.setPartnerId(nil)
         base.returnToDockFromSky()
         base.setSkyReturn(false)

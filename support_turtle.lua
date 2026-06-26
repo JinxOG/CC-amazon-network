@@ -166,17 +166,16 @@ local function supportJob(job)
                         _skyReturn = _miningMode or _recalling
                         break
                     elseif not _miningMode and not info.jobId then
-                        -- In mining mode the server clears jobId on cancel before the
-                        -- miner can send MINE_RECALL — don't leave; wait for the signal.
+                        -- Job ID clears at MINE_COMPLETE while miner may still be
+                        -- mid-ascent. Only break immediately if NOT recalling — the
+                        -- miner will send RETURN_TO_DOCK once it reaches SKY_Y.
                         if _recalling then
-                            -- RETURN_TO_DOCK may have been dropped (CC event queue overflow
-                            -- during long horizontal sky flight). Use sky path as fallback.
-                            print("[SUPPORT] Partner docked — missed RETURN_TO_DOCK, sky-returning")
-                            _skyReturn = true
+                            -- Stay put. The 5-min stale timeout below is the last resort.
+                            print("[SUPPORT] Miner job done, still ascending — holding for RETURN_TO_DOCK")
                         else
                             print("[SUPPORT] Partner job complete — returning to dock")
+                            break
                         end
-                        break
                     end
                     local staleSec = os.epoch("utc") / 1000 - lastUpdateTime
                     if (_miningMode or _recalling) and staleSec > 300 then
