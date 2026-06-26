@@ -2134,7 +2134,7 @@ function server.run()
             }, 5)
             logInfo(string.format("Dashboard dispatch: %s → %d,%d,%d", id, x, y, z))
 
-        elseif t == "RECALL" then
+        elseif t == "RECALL" or t == "RECALL_TURTLE" then
             local tid = p.turtleId
             if tid and state.registry[tid] then
                 sendTo(tid, proto.MSG.RECALL, proto.payloadRecall(p.reason or "admin_recall"))
