@@ -664,4 +664,13 @@ local function mineJob(job)
 end
 
 initProtectedSlots()
-base.run(mineJob)
+local ok, err = pcall(base.run, mineJob)
+if not ok then
+    -- Unhandled crash. Print so it's visible on the terminal, then reboot
+    -- so the turtle re-registers with the server and can be re-dispatched.
+    -- The 20s pause keeps the error readable before the screen clears.
+    print("[MINER] Fatal crash: " .. tostring(err))
+    print("[MINER] Rebooting in 20s...")
+    sleep(20)
+end
+os.reboot()

@@ -11,7 +11,7 @@ base.setCanDig(false)
 base.init(proto.ROLE.SUPPORT)
 base.fuel.dockRefuel()
 
-base.run(function(job)
+local function supportJob(job)
     local params      = job.params
     local partnerId   = params.partnerId
     local masterJobId = params.masterJobId
@@ -453,4 +453,12 @@ base.run(function(job)
 
     base.returnToDock()
     base.sendComplete()
-end)
+end
+
+local ok, err = pcall(base.run, supportJob)
+if not ok then
+    print("[SUPPORT] Fatal crash: " .. tostring(err))
+    print("[SUPPORT] Rebooting in 20s...")
+    sleep(20)
+end
+os.reboot()
