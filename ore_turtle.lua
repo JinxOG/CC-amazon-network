@@ -379,9 +379,11 @@ end
 local function navToOre(ore, jobId)
     checkFuel(jobId)
     local p = base.getPos()
-    base.move.to(ore.x, p.y, ore.z)
+    local ok1 = base.move.to(ore.x, p.y, ore.z)
+    if not ok1 then return false end
     checkFuel(jobId)
-    base.move.to(ore.x, ore.y, ore.z)
+    local ok2 = base.move.to(ore.x, ore.y, ore.z)
+    return ok2
 end
 
 local function mineOreList(ores, jobId, sx, sz, sy)
@@ -394,8 +396,9 @@ local function mineOreList(ores, jobId, sx, sz, sy)
         if o.y >= MIN_ORE_Y then table.insert(remaining, o) end
     end
 
-    local mined = 0
-    local byType = {}
+    local mined   = 0
+    local skipped = 0
+    local byType  = {}
     while #remaining > 0 do
         if base.isRecalled() then break end
         local p = base.getPos()
@@ -406,12 +409,20 @@ local function mineOreList(ores, jobId, sx, sz, sy)
         end)
         local ore = table.remove(remaining, 1)
         if inventoryFull() then dumpOres() end
-        navToOre(ore, jobId)
-        byType[ore.name] = (byType[ore.name] or 0) + 1
-        mined = mined + 1
-        -- Immediate per-ore update so the dashboard reflects each mine in real time
-        base.sendToServer(proto.MSG.SECTOR_SCAN,
-            proto.payloadSectorScan(jobId, sx, sz, sy, {}, {[ore.name]=1}))
+        local reached = navToOre(ore, jobId)
+        if not reached then
+            -- Path blocked (bedrock, unbreakable block) — skip this ore.
+            skipped = skipped + 1
+        else
+            byType[ore.name] = (byType[ore.name] or 0) + 1
+            mined = mined + 1
+            -- Immediate per-ore update so the dashboard reflects each mine in real time
+            base.sendToServer(proto.MSG.SECTOR_SCAN,
+                proto.payloadSectorScan(jobId, sx, sz, sy, {}, {[ore.name]=1}))
+        end
+    end
+    if skipped > 0 then
+        print(string.format("[MINER] Skipped %d unreachable ores (bedrock/blocked)", skipped))
     end
     return mined, byType
 end
