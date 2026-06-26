@@ -231,6 +231,12 @@ local function supportJob(job)
                                         print("[SUPPORT] Mine recalled (drain) — clearing column")
                                         _skyReturn  = true
                                         _recalling  = true
+                                        local rp = nxt.payload and nxt.payload.pos
+                                        local sp  = base.getPos()
+                                        base.move.to(rp and (rp.x+1) or (sp.x+1), sp.y,
+                                                     rp and rp.z or sp.z)
+                                        base.signalPartner(proto.MSG.MINE_CLEAR, {})
+                                        print("[SUPPORT] Column cleared (drain) — ACK sent")
                                         break
                                     end
                                 end
@@ -281,16 +287,22 @@ local function supportJob(job)
                     print("[SUPPORT] JOB_ABORT — returning to dock")
                     break
 
+                elseif msg.type == proto.MSG.MINE_CLEAR then
+                    -- Duplicate ACK (miner retried MINE_RECALL); already positioned east.
+                    -- No action needed; miner will stop retrying when it receives our ACK.
+
                 elseif msg.type == proto.MSG.MINE_RECALL then
                     print("[SUPPORT] Mine recalled — clearing miner column")
                     _skyReturn = true
                     _recalling = true
-                    -- Step immediately east to vacate the miner's vertical column.
-                    -- If the miner is already at FOLLOW_Y-1 it is blocked and cannot
-                    -- send more POSITION_UPDATEs; we must move NOW rather than waiting
-                    -- for the next update to trigger the xOffset path.
-                    local p = base.getPos()
-                    base.move.to(p.x + 1, p.y, p.z)
+                    -- Step east relative to miner's reported position so the column is
+                    -- guaranteed clear before we ACK. Uses miner's payload.pos if present
+                    -- (new protocol); falls back to own position + 1 (old behaviour).
+                    local rp = msg.payload and msg.payload.pos
+                    local sp = base.getPos()
+                    base.move.to(rp and (rp.x+1) or (sp.x+1), sp.y, rp and rp.z or sp.z)
+                    base.signalPartner(proto.MSG.MINE_CLEAR, {})
+                    print("[SUPPORT] Column cleared — ACK sent to miner")
                 end
             end
         end

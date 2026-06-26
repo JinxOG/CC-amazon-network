@@ -440,60 +440,89 @@ local function mineJob(job)
     local SKY_Y          = 200 + yOff   -- shadows module-level constant
     local SURVEY_TRAVEL_Y = 175 + yOff  -- shadows module-level constant
 
-    -- Shared coordinated sky return: keeps partnerId set (POSITION_UPDATEs
-    -- broadcasting) so the support chunk-loads the miner the entire way home.
-    -- Signals MINE_RECALL so support enters follow mode, leads it to Y=180,
-    -- waits for alignment, then ascends together to SKY_Y and arrivals hole.
-    -- Clears partnerId only once both turtles are at the hole.
+    -- Coordinated sky return: miner signals support to step east, waits for an
+    -- explicit MINE_CLEAR ACK before ascending through the column, then both
+    -- travel home together with the support chunk-loading the miner the whole way.
+    -- Falls back to solo return if the support is offline or unresponsive.
     local function coordinatedSkyReturn()
         dumpOres()
         checkFuel(jobId)
-        -- Verify support is still online before ascending through unloaded chunks.
-        -- If it bailed, wait up to 90s for the orphan watchdog to act.
+
         local supportId = job.params.partnerId
-        if supportId then
-            local si = base.queryTurtle(supportId, 5)
-            if not si or not si.online then
-                print("[MINER] Support offline — waiting up to 90s before ascending")
-                base.sendProgress("Support offline — waiting for chunk-loader before ascending")
-                local waitUntil = os.epoch("utc") / 1000 + 90
-                while os.epoch("utc") / 1000 < waitUntil do
-                    if base.isRecalled() then break end
-                    sleep(10)
-                    si = base.queryTurtle(supportId, 5)
-                    if si and si.online then
-                        print("[MINER] Support back online — proceeding with sky return")
-                        break
-                    end
-                end
-                if not si or not si.online then
-                    print("[MINER] WARNING: ascending without support — chunk unload risk")
-                    base.sendProgress("WARN: ascending without support")
-                end
-            end
-        end
-        local p = base.getPos()
-        -- Near-surface recall (e.g. recalled while still in the departure shaft):
-        -- don't arc up to Y=200 through the departure column — that conflicts with
-        -- outbound turtles and is unnecessary when we're already close to floor level.
-        -- Signal support (it steps 1 block east on MINE_RECALL, clearing our column),
-        -- then return underground via the arrivals hole.
+        local p         = base.getPos()
+
+        -- Near-surface shortcut: already at exit altitude; skip the deep-ascent
+        -- path and return via the arrivals shaft directly.
         if p.y >= W.WORLD_EXIT.y then
-            base.signalPartner(proto.MSG.MINE_RECALL, {})
+            if supportId then
+                base.signalPartner(proto.MSG.MINE_RECALL, { pos = {x=p.x,y=p.y,z=p.z} })
+            end
             base.setSkyReturn(true)
             base.returnToDock()
             base.setSkyReturn(false)
             return
         end
-        base.signalPartner(proto.MSG.MINE_RECALL, {})
-        sleep(12)   -- give support time to process MINE_RECALL and step east (support loop ≤15s)
+
+        -- Check whether the support is reachable. Give it up to 60 s to come
+        -- back if it just rebooted. Beyond that, do a solo return.
+        local supportOnline = false
+        if supportId then
+            for _attempt = 1, 6 do
+                local si = base.queryTurtle(supportId, 5)
+                if si and si.online then supportOnline = true; break end
+                if base.isRecalled() then break end
+                sleep(10)
+            end
+            if not supportOnline then
+                print("[MINER] Support offline after 60s — solo sky return")
+                base.sendProgress("Support offline — solo return")
+            end
+        end
+
+        if supportOnline then
+            -- Retry MINE_RECALL every 5 s until the support explicitly ACKs with
+            -- MINE_CLEAR (it stepped 1 block east, column is clear) or 30 s pass.
+            -- This replaces the old blind 12 s sleep, which was shorter than the
+            -- support's 15 s receive cycle and caused timing-dependent collisions.
+            local cleared = false
+            for _retry = 1, 6 do
+                base.signalPartner(proto.MSG.MINE_RECALL, { pos = {x=p.x,y=p.y,z=p.z} })
+                -- Companion position update lets support immediately compute where
+                -- to step east without waiting for its next message-receive cycle.
+                base.signalPartner(proto.MSG.POSITION_UPDATE,
+                    { prev = {x=p.x, y=p.y, z=p.z, facing=0} })
+                local deadline = os.epoch("utc") / 1000 + 5
+                while os.epoch("utc") / 1000 < deadline do
+                    local m = proto.receive(base.getSelfId(), 1)
+                    if m and m.from == supportId
+                            and m.type == proto.MSG.MINE_CLEAR then
+                        print("[MINER] Support cleared column — ascending safely")
+                        cleared = true; break
+                    end
+                end
+                if cleared then break end
+                -- Recheck support online so we don't spin against a dead turtle
+                local si = base.queryTurtle(supportId, 2)
+                if not si or not si.online then
+                    print("[MINER] Support went offline mid-recall — solo return")
+                    supportOnline = false; break
+                end
+            end
+            if not cleared and supportOnline then
+                print("[MINER] No MINE_CLEAR after 30s — ascending with caution")
+                base.sendProgress("WARN: no column-clear ACK; ascending")
+            end
+        end
+
         p = base.getPos()
-        base.setSkyReturn(true)   -- fixed path home; don't freeze in arrivals shaft on serverDown
+        base.setSkyReturn(true)
         base.move.to(p.x, 180, p.z)
         sleep(5)
         base.move.to(p.x, SKY_Y, p.z)
         base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
-        base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+        if supportOnline then
+            base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+        end
         base.setPartnerId(nil)
         base.returnToDockFromSky()
         base.setSkyReturn(false)
