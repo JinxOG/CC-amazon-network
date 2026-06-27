@@ -396,9 +396,20 @@ local function mineOreList(ores, jobId, sx, sz, sy)
         if o.y >= MIN_ORE_Y then table.insert(remaining, o) end
     end
 
-    local mined   = 0
-    local skipped = 0
-    local byType  = {}
+    local SCAN_BATCH = 25   -- send one SECTOR_SCAN per N ores to avoid modem flood
+    local mined      = 0
+    local skipped    = 0
+    local byType     = {}
+    local scanBatch  = {}   -- accumulated since last flush: oreName → count
+
+    local function flushScanBatch()
+        if next(scanBatch) then
+            base.sendToServer(proto.MSG.SECTOR_SCAN,
+                proto.payloadSectorScan(jobId, sx, sz, sy, {}, scanBatch))
+            scanBatch = {}
+        end
+    end
+
     while #remaining > 0 do
         if base.isRecalled() then break end
         local p = base.getPos()
@@ -411,16 +422,15 @@ local function mineOreList(ores, jobId, sx, sz, sy)
         if inventoryFull() then dumpOres() end
         local reached = navToOre(ore, jobId)
         if not reached then
-            -- Path blocked (bedrock, unbreakable block) — skip this ore.
             skipped = skipped + 1
         else
-            byType[ore.name] = (byType[ore.name] or 0) + 1
+            byType[ore.name]    = (byType[ore.name]    or 0) + 1
+            scanBatch[ore.name] = (scanBatch[ore.name] or 0) + 1
             mined = mined + 1
-            -- Immediate per-ore update so the dashboard reflects each mine in real time
-            base.sendToServer(proto.MSG.SECTOR_SCAN,
-                proto.payloadSectorScan(jobId, sx, sz, sy, {}, {[ore.name]=1}))
+            if mined % SCAN_BATCH == 0 then flushScanBatch() end
         end
     end
+    flushScanBatch()   -- send any remainder before SECTOR_DONE
     if skipped > 0 then
         print(string.format("[MINER] Skipped %d unreachable ores (bedrock/blocked)", skipped))
     end

@@ -2877,8 +2877,10 @@ function server.run()
         -- Each dedicated timer remains as a supplemental trigger for normal operation.
         do
             local wc = os.epoch("utc")
-            -- Bridge push
-            if not bridgePending and (wc - lastBridgePushWC) >= (CFG.BRIDGE_INTERVAL * 1000) then
+            -- Bridge push — call unconditionally: startBridgePush contains the 30s
+            -- force-clear for stuck bridgePending; guarding with "not bridgePending"
+            -- here would prevent that recovery path from ever running.
+            if (wc - lastBridgePushWC) >= (CFG.BRIDGE_INTERVAL * 1000) then
                 local ok_bp, err_bp = pcall(startBridgePush)
                 if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
                 lastBridgePushWC = wc
