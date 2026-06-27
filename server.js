@@ -84,6 +84,7 @@ let state = {
     jobs:      [],   // job queue from CC server
     version:   null,
     storage:   [],   // RS storage snapshot [{name, displayName, amount, craftable}]
+    storageTs: 0,    // unix ms when CC last successfully polled rsBridge.listItems()
     mineZones: {},   // { [jobId]: { bounds, total, done, pct, eta, oreFound, oreMined } }
     serverLog: [],   // last 100 log lines from CC server: [{ ts, level, msg }]
     players:   [],   // online players from Dynmap: [{ name, x, y, z, health, world }]
@@ -257,7 +258,7 @@ app.get('/dynmap-frame', (req, res) => {
 const CC_RESTART_GAP_MS = 20 * 1000;  // >20s between updates → CC server restarted
 
 app.post('/update', async (req, res) => {
-    const { turtles, jobs, version, storage, mineZones } = req.body || {};
+    const { turtles, jobs, version, storage, storageTs, mineZones } = req.body || {};
     console.log(`[UPDATE] v=${version} turtles=${Object.keys(turtles||{}).length} storage=${Array.isArray(storage)?storage.length:'?'}`);
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
@@ -305,6 +306,7 @@ app.post('/update', async (req, res) => {
     if (jobs)                        state.jobs      = jobs;
     if (version)                     state.version   = version;
     if (Array.isArray(storage))      state.storage   = storage;
+    if (typeof storageTs === 'number' && storageTs > 0) state.storageTs = storageTs;
     if (mineZones)                   state.mineZones = mineZones;
     if (Array.isArray(req.body?.serverLog)) state.serverLog = req.body.serverLog;
     state.updatedAt = now;

@@ -1966,6 +1966,7 @@ function server.run()
     local storageItems  = {}
     local craftableMap  = {}
     local storageJSON   = "[]"
+    local storageTs     = 0   -- os.epoch("utc") ms of last successful rsBridge.listItems()
 
     -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
     local activeAutoMines = {}   -- [oreName] = jobId of the running auto-mine
@@ -2091,6 +2092,7 @@ function server.run()
         end
         storageItems = result
         storageJSON  = textutils.serialiseJSON(result)
+        storageTs    = os.epoch("utc")
         logInfo("RS storage refreshed: " .. #storageItems .. " items")
     end
 
@@ -2672,6 +2674,7 @@ function server.run()
                         ',"jobs":'         .. jobs ..
                         ',"version":'      .. js(proto.VERSION,        '"?"', "version") ..
                         ',"storage":'      .. storageJSON ..
+                        ',"storageTs":'    .. tostring(storageTs) ..
                         ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
                         ',"oreThresholds":' .. js(oreThresholds,       "{}",  "oreThresholds") ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
