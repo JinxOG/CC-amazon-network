@@ -50,24 +50,32 @@ independently once told what it is.
 
 ## Host Settings (set at game creation)
 
-- Mode: **Free-For-All** (no theme constraint) or **Genre** (a prompt
-  pack, e.g. "Country," "90s," "Pop")
-- Number of rounds
+- Mode: **Free-For-All** (no theme constraint, host sets number of
+  rounds) or **Genre** (max 5 rounds; each round's genre is randomly
+  selected by the server from a pool and revealed fresh — not chosen by
+  the host in advance)
 - Clip length per song (15s / 30s / 45s / 60s / full song)
 - Submission time limit per round
 - Skip-vote threshold (default: majority of active players)
 
 ## Round Flow
 
-1. Host clicks "Start Round" — Display shows the round's prompt.
+1. Host clicks "Start Round" — Display shows the round's prompt. In
+   Genre mode, the server picks a genre at random from a pool and
+   reveals it here (e.g. "Round 2: 80s Rock"); in Free-For-All it's just
+   "anything goes."
 2. Players search YouTube (or paste a SoundCloud link), preview, and drag
    a scrubber to pick a start point — defaulted to ~35–40% into the
-   track as a naive "likely chorus" heuristic — then submit before the
-   timer expires.
+   track as a naive "likely chorus" heuristic — then submit the song
+   they think best fits the round's prompt before the timer expires.
 3. Server shuffles submissions into an anonymized playback queue.
 4. Display plays each song from its chosen timestamp for the configured
    clip length, or shorter if enough players tap "Skip" (skip-vote
-   threshold reached cuts playback and jumps straight to voting).
+   threshold reached cuts playback and jumps straight to voting). While
+   a song plays, players can tap preset emoji reactions on their Player
+   view; these appear as floating reactions drifting across the Display
+   screen in real time (DJMAX Respect V–style), purely cosmetic and not
+   stored or scored.
 5. After each clip, everyone except its submitter rates it on the
    sliding scale (0–10) within a voting window.
 6. Once every song in the round is rated, Display reveals each
@@ -112,12 +120,14 @@ not a gap to close in this phase.
 
 - **Game server** — in-memory state per game code (players, current
   round, submissions, votes, skip-tally); runs the round state machine;
-  broadcasts state deltas to connected clients. Sole source of truth.
+  broadcasts state deltas to connected clients, including relaying live
+  reaction events during playback. Sole source of truth.
 - **YouTube search proxy** — server-side endpoint applying the
   category/duration filter, keeps the API key server-side.
 - **Display client** — big-screen view, playback, leaderboard, host
-  controls, merged host player panel.
-- **Player client** — phone view, join/search/submit/scrub/vote/skip UI.
+  controls, merged host player panel, floating-reaction overlay.
+- **Player client** — phone view, join/search/submit/scrub/vote/skip UI,
+  plus a preset emoji picker shown during playback.
 
 ## Error Handling
 
