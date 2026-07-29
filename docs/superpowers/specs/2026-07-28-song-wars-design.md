@@ -92,6 +92,19 @@ independently once told what it is.
 - You cannot vote on your own submission.
 - Final ranking = sum of round scores across the game.
 
+## Player Avatars
+
+- When joining (code + nickname screen), a player can optionally upload
+  a photo as their avatar. Client-side resize/compress before upload,
+  with a server-enforced size cap (e.g. 2MB) and image-type restriction.
+- Shown next to the player's name in the lobby, on the leaderboard, and
+  during the post-vote reveal.
+- Players who skip upload get a simple generated fallback (e.g. initials
+  on a colored background).
+- Session-only: held in server memory for that game's duration and
+  discarded when the game ends, consistent with the no-accounts design —
+  no photo storage persists between games.
+
 ## Song Sources
 
 - **YouTube** — primary source. Server-side search proxy calls the
@@ -119,9 +132,10 @@ not a gap to close in this phase.
 ## Components
 
 - **Game server** — in-memory state per game code (players, current
-  round, submissions, votes, skip-tally); runs the round state machine;
-  broadcasts state deltas to connected clients, including relaying live
-  reaction events during playback. Sole source of truth.
+  round, submissions, votes, skip-tally, uploaded avatars); runs the
+  round state machine; broadcasts state deltas to connected clients,
+  including relaying live reaction events during playback. Sole source
+  of truth.
 - **YouTube search proxy** — server-side endpoint applying the
   category/duration filter, keeps the API key server-side.
 - **Display client** — big-screen view, playback, leaderboard, host
@@ -143,6 +157,10 @@ not a gap to close in this phase.
   search filter) — Display detects the IFrame Player's error event, and
   the server auto-advances to voting for that entry marked "unplayable,"
   excluded from scoring.
+- **Invalid avatar upload** (oversized, wrong file type, upload failure)
+  — rejected client-side before it reaches the server where possible;
+  the player just falls back to the generated default avatar rather than
+  blocking them from joining.
 - **Minimum players** — at least 2 required to start a game (a lone
   player has nobody to rate their song).
 
