@@ -44,9 +44,6 @@ base.init(proto.ROLE.MINER)
 
 -- ── Messaging ────────────────────────────────────────────────────────────────
 
-local _servingFuel = false
-local serveSupportFuel   -- forward declaration; assigned after dumpOres is defined
-
 local function waitMsg(types, secs)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end
@@ -63,11 +60,7 @@ local function waitMsg(types, secs)
         if remain <= 0 then break end
         local msg = proto.receive(base.getSelfId(), math.max(0.5, remain))
         if msg then
-            if not _servingFuel
-                    and msg.type == proto.MSG.FUEL_LOW
-                    and msg.from == base.getPartnerId() then
-                serveSupportFuel(msg.payload)
-            elseif msg.type == proto.MSG.JOB_ABORT
+            if msg.type == proto.MSG.JOB_ABORT
                     and msg.from == base.getPartnerId() then
                 -- Support was recalled independently and signalled us.
                 -- Self-recall so existing isRecalled() checks fire recallReturn(),
@@ -160,7 +153,14 @@ local function checkFuel(jobId)
                 print("[FUEL] EC chest is empty — no coal available")
                 base.sendProgress("FUEL WARNING: EC chest empty, fuel=" .. turtle.getFuelLevel())
             end
-            -- Recover EC; slot 15 should be free since we controlled overflow above.
+            -- Recover EC; clear slot 15 first in case overflow landed there
+            local s15 = turtle.getItemDetail(S_FUEL_EC)
+            if s15 and s15.name ~= protectedSlotNames[S_FUEL_EC] then
+                turtle.select(S_FUEL_EC)
+                for free = 1, 13 do
+                    if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
+                end
+            end
             turtle.select(S_FUEL_EC)
             turtle.digDown()
             -- Safety: if EC landed in a mining slot despite precautions, rescue it now.
@@ -247,12 +247,70 @@ local function sweepCoalToSlot14()
     end
 end
 
+-- Place an EC from targetSlot, run fn() with it deployed, then recover it.
+-- Handles EC slot drift by scanning all slots for the expected item name.
+-- Ensures targetSlot is free before pickup so digDown always succeeds.
+local function withEC(targetSlot, fn)
+    local expectedName = protectedSlotNames[targetSlot]
+    if not expectedName then return false, "ec_unregistered" end
+
+    -- Find EC wherever it actually landed (by name, prefer its home slot)
+    local ecSlot = nil
+    for slot = 1, 16 do
+        local item = turtle.getItemDetail(slot)
+        if item and item.name == expectedName then
+            if slot == targetSlot or not protectedSlotNames[slot] then
+                ecSlot = slot; break
+            end
+        end
+    end
+    if not ecSlot then return false, "ec_lost" end
+
+    -- Restore EC to its home slot if it drifted
+    if ecSlot ~= targetSlot then
+        local occupant = turtle.getItemDetail(targetSlot)
+        if occupant then
+            turtle.select(targetSlot)
+            for tmp = 1, 13 do
+                if turtle.getItemCount(tmp) == 0 and tmp ~= ecSlot then
+                    turtle.transferTo(tmp); break
+                end
+            end
+        end
+        turtle.select(ecSlot)
+        turtle.transferTo(targetSlot)
+    end
+
+    turtle.select(targetSlot)
+    if turtle.detectDown() then
+        turtle.digDown()
+        rescueProtectedItems()
+        turtle.select(targetSlot)  -- re-select after rescue
+    end
+    if not turtle.placeDown() then return false, "ec_place_failed" end
+
+    fn()
+
+    -- Clear targetSlot if something from the chest landed there during fn()
+    local inSlot = turtle.getItemDetail(targetSlot)
+    if inSlot and inSlot.name ~= expectedName then
+        turtle.select(targetSlot)
+        for free = 1, 13 do
+            if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
+        end
+    end
+    turtle.select(targetSlot)
+    if not turtle.digDown() then return false, "ec_pickup_failed" end
+    return true
+end
+
 local function dumpOres()
     sweepCoalToSlot14()
     turtle.select(S_ORE_EC)
     if turtle.detectDown() then
         turtle.digDown()
         rescueProtectedItems()  -- recover anything displaced into mining slots
+        turtle.select(S_ORE_EC)  -- re-select: rescueProtectedItems changes selected slot
     end
     turtle.placeDown()
     for s = 1, 16 do
@@ -262,6 +320,14 @@ local function dumpOres()
                 and not (item and protectedItemNames[item.name]) then
             turtle.select(s)
             turtle.dropDown()
+        end
+    end
+    -- Clear slot 16 if something (from a full EC) landed there during the dump
+    local inSlot = turtle.getItemDetail(S_ORE_EC)
+    if inSlot and inSlot.name ~= protectedSlotNames[S_ORE_EC] then
+        turtle.select(S_ORE_EC)
+        for free = 1, 13 do
+            if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
         end
     end
     turtle.select(S_ORE_EC)
@@ -274,53 +340,6 @@ local function inventoryFull()
         if turtle.getItemCount(s) == 0 then free = free + 1 end
     end
     return free < 2
-end
-
--- ── Support field refuel ──────────────────────────────────────────────────────
-
-serveSupportFuel = function(payload)
-    if _servingFuel then return end
-    _servingFuel = true
-    local jobId      = payload and payload.jobId
-    local supportPos = payload and payload.pos
-    print("[MINER] Support fuel low — ascending for refuel")
-
-    local miningPos = base.getPos()
-    dumpOres()
-
-    if supportPos then
-        print(string.format("[MINER] Ascending to support at %d,%d,%d",
-            supportPos.x, supportPos.y, supportPos.z))
-        base.move.to(supportPos.x, supportPos.y - 1, supportPos.z)
-    end
-
-    -- Load coal from fuel EC into slots 2-13 for support to suck
-    turtle.select(S_FUEL_EC)
-    if turtle.detectDown() then turtle.digDown() end
-    turtle.placeDown()
-    for s = 2, 13 do
-        turtle.select(s)
-        turtle.suckDown(64)
-    end
-    turtle.select(S_FUEL_EC)
-    turtle.digDown()
-
-    base.signalPartner(proto.MSG.FUEL_READY, { jobId = jobId })
-    print("[MINER] Coal ready — waiting for support to refuel")
-    local deadline = os.epoch("utc") / 1000 + 30
-    while os.epoch("utc") / 1000 < deadline do
-        local msg = proto.receive(base.getSelfId(), 3)
-        if msg and msg.type == proto.MSG.FUEL_FILLED
-                and msg.from == base.getPartnerId() then
-            break
-        end
-    end
-
-    sweepCoalToSlot14()
-    print("[MINER] Refuel done — descending back to mining position")
-    base.move.to(miningPos.x, miningPos.y, miningPos.z)
-    _servingFuel = false
-    print("[MINER] Resumed mining")
 end
 
 -- ── Geo Scanner ──────────────────────────────────────────────────────────────
@@ -428,6 +447,9 @@ local function mineOreList(ores, jobId, sx, sz, sy)
             scanBatch[ore.name] = (scanBatch[ore.name] or 0) + 1
             mined = mined + 1
             if mined % SCAN_BATCH == 0 then flushScanBatch() end
+            if mined % 25 == 0 and turtle.getFuelLevel() < FUEL_WARN then
+                checkFuel(jobId)
+            end
         end
     end
     flushScanBatch()   -- send any remainder before SECTOR_DONE
@@ -476,15 +498,11 @@ local function mineJob(job)
         -- path and return via the arrivals shaft directly.
         if p.y >= W.WORLD_EXIT.y then
             if supportId then
-                base.signalPartner(proto.MSG.MINE_RECALL, { pos = {x=p.x,y=p.y,z=p.z} })
+                base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
             end
             base.setSkyReturn(true)
             base.returnToDock()
             base.setSkyReturn(false)
-            -- Always notify support after docking so it knows to return home.
-            if supportId then
-                base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-            end
             return
         end
 
@@ -492,14 +510,14 @@ local function mineJob(job)
         -- back if it just rebooted. Beyond that, do a solo return.
         local supportOnline = false
         if supportId then
-            for _attempt = 1, 6 do
-                local si = base.queryTurtle(supportId, 5)
+            for _attempt = 1, 10 do
+                local si = base.queryTurtle(supportId, 10)
                 if si and si.online then supportOnline = true; break end
                 if base.isRecalled() then break end
-                sleep(10)
+                sleep(5)
             end
             if not supportOnline then
-                print("[MINER] Support offline after 60s — solo sky return")
+                print("[MINER] Support offline after 150s — solo sky return")
                 base.sendProgress("Support offline — solo return")
             end
         end

@@ -23,9 +23,8 @@ local function supportJob(job)
 
     -- ── Mining support mode (fuelManage=true) ────────────────────────────────
     -- Mining support: follows 1 block behind via POSITION_UPDATE.
-    -- When support fuel drops below threshold, signals miner to prepare coal.
-    -- Miner dumps ores, fills slots 2-13 with coal from its EC, signals FUEL_READY.
-    -- Support sucks coal forward from miner, refuels, signals FUEL_FILLED.
+    -- When support fuel drops below threshold, burns on-board coal from slots 13-14.
+    -- If coal is exhausted, sends JOB_ABORT to miner and returns to dock.
     if params.fuelManage then
         local SUPPORT_FUEL_WARN = 800
         -- Per-pair altitude slot keeps concurrent mine pairs vertically separated.
@@ -40,6 +39,7 @@ local function supportJob(job)
         local _miningMode    = false   -- true once miner first descends below FOLLOW_Y
         local _skyReturn     = false   -- true when MINE_RECALL received; use sky return path
         local _recalling     = false   -- true when MINE_RECALL received; stay at FOLLOW_Y until miner ascends
+        local _jobFailed     = false   -- true if support ran out of coal; suppresses sendComplete
         local lastUpdateTime = os.epoch("utc") / 1000
 
         local p = base.getPos()
@@ -59,6 +59,7 @@ local function supportJob(job)
             lastUpdateTime = os.epoch("utc") / 1000   -- reset so stale clock starts at loop entry, not block entry
         else
             base.fuel.dockRefuel()
+            base.fuel.dockFillCoal()
             if base.fuel.isCritical() then
                 print("[SUPPORT] Insufficient fuel — aborting")
                 return base.sendFailed("insufficient_fuel", false)
@@ -117,36 +118,16 @@ local function supportJob(job)
             end
 
             -- ── Field fuel check ─────────────────────────────────────────────
-            -- Miner will ascend to 1 block below support to deliver coal.
+            -- Support carries coal in slots 13-14 for field self-refueling.
             if turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
-                print("[SUPPORT] Fuel low — signalling miner to ascend for refuel")
-                local myPos = base.getPos()
-                base.signalPartner(proto.MSG.FUEL_LOW, {
-                    jobId = job.id,
-                    pos   = { x = myPos.x, y = myPos.y, z = myPos.z },
-                })
-                -- Wait for miner to ascend and load coal (needs travel time)
-                local fuelDeadline = os.epoch("utc") / 1000 + 120
-                local ready = false
-                while os.epoch("utc") / 1000 < fuelDeadline do
-                    local m = proto.receive(base.getSelfId(), 5)
-                    if m and m.from == partnerId
-                            and m.type == proto.MSG.FUEL_READY then
-                        ready = true; break
-                    end
+                if not base.fuel.selfRefuel() then
+                    print("[SUPPORT] Coal exhausted — fuel-exhaustion return")
+                    base.signalPartner(proto.MSG.JOB_ABORT, {})
+                    _skyReturn = true
+                    _jobFailed = true
+                    break
                 end
-                if ready then
-                    -- Miner is directly below at FOLLOW_Y-1; suck coal down from it
-                    turtle.select(1)
-                    while turtle.getFuelLevel() < SUPPORT_FUEL_WARN + 400 do
-                        if not turtle.suckDown(64) then break end
-                        turtle.refuel()
-                    end
-                    base.signalPartner(proto.MSG.FUEL_FILLED, { jobId = job.id })
-                    print("[SUPPORT] Refueled to " .. turtle.getFuelLevel())
-                else
-                    print("[SUPPORT] Refuel timeout — miner did not arrive")
-                end
+                print("[SUPPORT] Self-refueled to " .. turtle.getFuelLevel())
             end
 
             local msg = proto.receive(base.getSelfId(), 15)
@@ -319,7 +300,11 @@ local function supportJob(job)
         else
             base.returnToDock()
         end
-        base.sendComplete()
+        if _jobFailed then
+            base.sendFailed("support_fuel_exhausted", true)
+        else
+            base.sendComplete()
+        end
         return
     end
 
@@ -360,7 +345,7 @@ local function supportJob(job)
 
     if aborted then
         base.returnToDock()
-        return base.sendComplete()
+        return base.sendFailed("partner_aborted_pre_hole", false)
     end
 
     if not signalReceived then

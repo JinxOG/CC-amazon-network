@@ -699,8 +699,6 @@ cancelJobInline = function(jobId)
        or j.status == JOB_STATUS.CANCELLED then return end
     if j.assignedTo then
         sendTo(j.assignedTo, proto.MSG.RECALL, proto.payloadRecall("job_cancelled"))
-        local t = state.registry[j.assignedTo]
-        if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
     end
     j.status     = JOB_STATUS.CANCELLED
     j.assignedTo = nil
@@ -1266,14 +1264,16 @@ function dispatcher.tick()
             -- Slot 1 → +10 on each; slot 2 → +20, etc.
             -- Each slot is 10 blocks apart (5-block miner/support gap + 5 clearance).
             if isMine then
-                local mineSlot = 0
+                local usedSlots = {}
                 for _, j2 in pairs(state.jobs) do
                     if j2.id ~= job.id and j2.type == proto.JOB.MINE
                        and (j2.status == JOB_STATUS.ASSIGNED or j2.status == JOB_STATUS.IN_PROGRESS)
-                       and j2.params and (j2.params.travelYOffset or 0) == mineSlot * 10 then
-                        mineSlot = mineSlot + 1
+                       and j2.params then
+                        usedSlots[(j2.params.travelYOffset or 0) / 10] = true
                     end
                 end
+                local mineSlot = 0
+                while usedSlots[mineSlot] do mineSlot = mineSlot + 1 end
                 workerParams.travelYOffset = mineSlot * 10
             end
 

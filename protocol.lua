@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.7.50"
+proto.VERSION = "1.8.0"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -81,11 +81,6 @@ proto.MSG = {
     SECTOR_SCAN    = "SECTOR_SCAN",     -- miner → server: one depth-level scan complete, here are found ores
     SECTOR_DONE    = "SECTOR_DONE",     -- miner → server: sector fully mined, here are mined ores
     MINE_COMPLETE  = "MINE_COMPLETE",   -- server → miner: all sectors exhausted, return home
-
-    -- Mining fuel handshake (support ↔ miner, CH_LOCAL, field-only)
-    FUEL_LOW    = "FUEL_LOW",    -- support → miner: I need coal
-    FUEL_READY  = "FUEL_READY",  -- miner → support: inventory filled with coal, suck now
-    FUEL_FILLED = "FUEL_FILLED", -- support → miner: done sucking, continue
 
     -- Mining recall (miner → support, CH_LOCAL)
     MINE_RECALL = "MINE_RECALL", -- miner → support: job recalled, ascend to sky and return home
