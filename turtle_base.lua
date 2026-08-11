@@ -513,26 +513,35 @@ function base.depart(noDescend)
         if not ok then return false, "departure route failed: " .. (err or "?") end
 
         if _self.partnerId then
-            -- Signal support to start its departure route
+            -- Signal support to start its departure route. Reliable: if this is
+            -- lost the support waits out its full HOLE_READY timeout and the
+            -- pair is stranded, so resend until it ACKs.
             logInfo("At hole — signalling support to stage...")
-            local sig = proto.encode(proto.MSG.HOLE_READY, _self.id, _self.partnerId, {})
-            proto.send(_self.modem, proto.CH_LOCAL, sig)
+            base.signalPartnerReliable(proto.MSG.HOLE_READY, {})
 
             -- Wait for support to reach staging position (1 block behind us)
-            -- Loop so we don't consume unrelated messages (heartbeat ACKs etc.)
+            -- base.receive() routes anything else to the inbox instead of dropping it.
             logInfo("Waiting for SUPPORT_STAGED...")
             local deadline = os.epoch("utc") / 1000 + 60
+            local staged = false
+            local held   = {}
             while os.epoch("utc") / 1000 < deadline do
                 if base.isRecalled() then break end
-                local msg = proto.receive(_self.id, 5)
-                if not msg then
-                    -- timeout tick — keep waiting
-                elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
-                    logInfo("Support staged — descending together.")
-                    break
+                local msg = base.receive(5)
+                if msg then
+                    if msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
+                        logInfo("Support staged — descending together.")
+                        staged = true
+                        break
+                    end
+                    -- Held, not re-queued inline: base.receive drains the inbox
+                    -- first, so pushing back here would re-pop it and spin.
+                    held[#held + 1] = msg
                 end
-                -- Any other message (HEARTBEAT_ACK etc.) is silently ignored here;
-                -- controlLoop also receives it via parallel and handles it there.
+            end
+            for i = 1, #held do base.pushJobInbox(held[i]) end
+            if not staged and not base.isRecalled() then
+                logWarn("SUPPORT_STAGED never arrived — descending anyway.")
             end
             if base.isRecalled() then return true end
         end
@@ -556,9 +565,10 @@ function base.depart(noDescend)
 
         -- At staging position — tell delivery it can descend
         if _self.partnerId then
+            -- Reliable: if this is lost the worker waits out its full 60s stage
+            -- timeout and descends without its chunk loader.
             logInfo("Staged behind hole — signalling delivery to descend.")
-            local sig = proto.encode(proto.MSG.SUPPORT_STAGED, _self.id, _self.partnerId, {})
-            proto.send(_self.modem, proto.CH_LOCAL, sig)
+            base.signalPartnerReliable(proto.MSG.SUPPORT_STAGED, {}, { attempts = 4, interval = 2 })
         end
 
         -- Brief pause so delivery starts descending first (clears the hole entrance)
@@ -1230,13 +1240,202 @@ function base.signalPartnerDirect(msgType, targetId, payload)
     proto.send(_self.modem, proto.CH_LOCAL, sig)
 end
 
+-- ─── Shared message inbox ────────────────────────────────────────────────────
+-- base.run() drives controlLoop and jobRunner under parallel.waitForAny, so both
+-- coroutines drain the SAME OS event queue. Whichever one pulls an event first
+-- consumes it. Before this inbox existed, a coordination signal pulled by the
+-- control loop (RETURN_TO_DOCK, MINE_CLEAR, TURTLE_INFO, …) was silently
+-- discarded, because the control loop only ever acted on four message types.
+-- POSITION_UPDATE survived that by sheer volume; once-only signals did not.
+--
+-- Each coroutine now hands off whatever it pulls that belongs to the other,
+-- instead of dropping it. Nothing addressed to this turtle is ever lost.
+local _jobInbox  = {}   -- coordination messages awaiting the job runner
+local _ctrlInbox = {}   -- control messages awaiting the control loop
+
+-- Message types the control loop owns. Everything else belongs to the job runner.
+-- HEARTBEAT_ACK is listed so it always reaches the control loop: it is the only
+-- proof the server is alive, and if the job runner absorbed it instead,
+-- _missedHeartbeats would reach MAX_MISSED and falsely trip serverDown, which
+-- freezes all movement in tryMove().
+local CTRL_TYPES = {
+    [proto.MSG.JOB_ASSIGN]    = true,
+    [proto.MSG.RECALL]        = true,
+    [proto.MSG.FORCE_REFUEL]  = true,
+    [proto.MSG.UPDATE_ALL]    = true,
+    [proto.MSG.HEARTBEAT_ACK] = true,
+}
+
+local _ackedSigs  = {}   -- sigId → true; ACKs seen for signals we sent
+local _seenSigs   = {}   -- sigId → timestamp; signals we received (duplicate filter)
+local _seenCount  = 0
+local _sigCounter = 0
+
+local MAX_INBOX = 64
+
+local function pushJobInbox(msg)
+    -- Cap the queue: a message no loop ever claims would otherwise circulate
+    -- (popped, not matched, pushed back) and grow the table without bound.
+    if #_jobInbox >= MAX_INBOX then table.remove(_jobInbox, 1) end
+    _jobInbox[#_jobInbox + 1] = msg
+    os.queueEvent("inbox_job")
+end
+
+local function pushCtrlInbox(msg)
+    _ctrlInbox[#_ctrlInbox + 1] = msg
+    os.queueEvent("inbox_ctrl")
+end
+
+base.pushJobInbox  = pushJobInbox
+base.hasCtrlInbox  = function() return #_ctrlInbox > 0 end
+base.popCtrlInbox  = function() return table.remove(_ctrlInbox, 1) end
+
+-- ACK a reliable signal and report whether it is a duplicate retransmission.
+-- Returns true if this sigId was already delivered once (caller should drop it).
+local function ackSignal(msg)
+    -- Never ACK an ACK — its payload also carries _sigId, so acking it would
+    -- ping-pong forever between the two turtles.
+    if msg.type == proto.MSG.SIGNAL_ACK then return true end
+    local sid = msg.payload and msg.payload._sigId
+    if not sid then return false end
+    if _self.modem then
+        proto.send(_self.modem, proto.CH_LOCAL,
+            proto.encode(proto.MSG.SIGNAL_ACK, _self.id, msg.from, { _sigId = sid }))
+    end
+    if _seenSigs[sid] then return true end
+    -- Bound the duplicate filter: drop entries older than 5 minutes once it grows.
+    _seenCount = _seenCount + 1
+    if _seenCount > 200 then
+        local cutoff = os.epoch("utc") - 300000
+        for k, ts in pairs(_seenSigs) do
+            if ts < cutoff then _seenSigs[k] = nil end
+        end
+        _seenCount = 0
+    end
+    _seenSigs[sid] = os.epoch("utc")
+    return false
+end
+-- Exposed so the control loop can ACK a coordination signal it pulled before
+-- handing it to the job runner. Only ever call this at first receipt — messages
+-- re-queued into the inbox were already ACKed and must not be filtered twice.
+base.ackSignal = ackSignal
+
+-- Record an ACK for a signal we sent, so sendReliable() can stop retrying.
+-- Needed because the control loop may pull the ACK before sendReliable does.
+function base.noteSignalAck(msg)
+    local sid = msg.payload and msg.payload._sigId
+    if sid then _ackedSigs[sid] = true end
+end
+
+-- Receive one message for the job runner.
+-- Drains the shared inbox first, then the OS event queue. Control messages
+-- pulled here are handed to the control loop rather than dropped, and
+-- SIGNAL_ACKs are absorbed into _ackedSigs for sendReliable().
+function base.receive(timeout)
+    if #_jobInbox > 0 then return table.remove(_jobInbox, 1) end
+    local timer = timeout and os.startTimer(timeout) or nil
+    while true do
+        local event, evtArg2, _ch, _rep, raw = os.pullEvent()
+        if event == "modem_message" then
+            local parsed = type(raw) == "table" and raw or textutils.unserialise(raw)
+            if parsed then
+                local valid, msg = proto.decode(parsed)
+                if valid and (msg.to == _self.id or msg.to == "broadcast") then
+                    -- Any decodable message addressed to us proves the radio is
+                    -- live. The control loop used to do this for every message it
+                    -- pulled; preserve that here now that we intercept some.
+                    resetMissedHeartbeats()
+                    if msg.type == proto.MSG.SIGNAL_ACK then
+                        local sid = msg.payload and msg.payload._sigId
+                        if sid then _ackedSigs[sid] = true end
+                    elseif CTRL_TYPES[msg.type] then
+                        pushCtrlInbox(msg)
+                    elseif not ackSignal(msg) then
+                        return msg
+                    end
+                end
+            end
+        elseif event == "inbox_job" then
+            if #_jobInbox > 0 then return table.remove(_jobInbox, 1) end
+        elseif event == "timer" and evtArg2 == timer then
+            return nil
+        end
+    end
+end
+
+-- Receive the first message satisfying pred(msg). Messages that don't match are
+-- held and returned to the inbox afterwards, so waiting for one signal can never
+-- consume another.
+local function receiveMatching(pred, timeout)
+    local deadline = os.epoch("utc") / 1000 + (timeout or 5)
+    local held, found = {}, nil
+    while os.epoch("utc") / 1000 < deadline do
+        local remain = deadline - os.epoch("utc") / 1000
+        local m = base.receive(math.max(0.2, remain))
+        if m then
+            if pred(m) then found = m; break end
+            held[#held + 1] = m
+        end
+    end
+    for i = 1, #held do _jobInbox[#_jobInbox + 1] = held[i] end
+    if #held > 0 then os.queueEvent("inbox_job") end
+    return found
+end
+base.receiveMatching = receiveMatching
+
+-- Send a coordination signal and resend until the partner ACKs it.
+-- Use for once-only signals whose loss strands the partner (RETURN_TO_DOCK,
+-- HOLE_READY, SUPPORT_STAGED, JOB_ABORT). High-frequency loss-tolerant traffic
+-- (POSITION_UPDATE) should keep using signalPartner instead.
+-- Returns true if acknowledged, false if every attempt timed out.
+function base.sendReliable(msgType, targetId, payload, opts)
+    if not targetId or not _self.modem then return false end
+    opts = opts or {}
+    local attempts = opts.attempts or 6
+    local interval = opts.interval or 2
+
+    _sigCounter = _sigCounter + 1
+    local sigId = _self.id .. "#" .. _sigCounter
+    local body = {}
+    for k, v in pairs(payload or {}) do body[k] = v end
+    body._sigId = sigId
+
+    local held, acked = {}, false
+    for _ = 1, attempts do
+        proto.send(_self.modem, proto.CH_LOCAL,
+            proto.encode(msgType, _self.id, targetId, body))
+        local deadline = os.epoch("utc") / 1000 + interval
+        while os.epoch("utc") / 1000 < deadline do
+            if _ackedSigs[sigId] then break end
+            local remain = deadline - os.epoch("utc") / 1000
+            local m = base.receive(math.max(0.2, remain))
+            if m then held[#held + 1] = m end
+        end
+        if _ackedSigs[sigId] then acked = true; break end
+    end
+
+    _ackedSigs[sigId] = nil
+    -- Hand back everything we intercepted so the caller's own loop still sees it.
+    for i = 1, #held do _jobInbox[#_jobInbox + 1] = held[i] end
+    if #held > 0 then os.queueEvent("inbox_job") end
+
+    if not acked then
+        logWarn(string.format("%s to %s never ACKed after %d attempts",
+            msgType, targetId, attempts))
+    end
+    return acked
+end
+
+-- Reliable variant of signalPartner, using the current partnerId.
+function base.signalPartnerReliable(msgType, payload, opts)
+    return base.sendReliable(msgType, _self.partnerId, payload, opts)
+end
+
 function base.queryTurtle(targetId, timeout)
     comms.toServer(proto.MSG.TURTLE_QUERY, proto.payloadTurtleQuery(targetId))
-    local reply = proto.receive(_self.id, timeout or 5)
-    if reply and reply.type == proto.MSG.TURTLE_INFO then
-        return reply.payload
-    end
-    return nil
+    local reply = receiveMatching(
+        function(m) return m.type == proto.MSG.TURTLE_INFO end, timeout or 5)
+    return reply and reply.payload or nil
 end
 
 -- Wait for one of several message types, returning the message or nil on
@@ -1245,17 +1444,24 @@ function base.waitForAny(types, seconds)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end
     local deadline = os.epoch("utc") / 1000 + seconds
+    local held = {}
+    local found = nil
     while os.epoch("utc") / 1000 < deadline do
-        if base.isRecalled() then return nil end
+        if base.isRecalled() then break end
         if base.isServerDown() then
             deadline = os.epoch("utc") / 1000 + seconds
             sleep(2)
         else
-            local msg = proto.receive(_self.id, math.max(1, deadline - os.epoch("utc") / 1000))
-            if msg and set[msg.type] then return msg end
+            local msg = base.receive(math.max(1, deadline - os.epoch("utc") / 1000))
+            if msg then
+                if set[msg.type] then found = msg; break end
+                held[#held + 1] = msg
+            end
         end
     end
-    return nil
+    -- Non-matching messages go back to the inbox rather than being discarded.
+    for i = 1, #held do base.pushJobInbox(held[i]) end
+    return found
 end
 
 -- ─── Init ────────────────────────────────────────────────────────────────────
@@ -1331,6 +1537,9 @@ function base.run(jobHandler)
     local pendingJob        = nil   -- job table waiting to be started
     local jobCo             = nil   -- running job coroutine
 
+    -- Defined below controlLoop; forward-declared so controlLoop can call it.
+    local handleControlMessage
+
     -- Control loop: handles heartbeat, RECALL, and JOB_ASSIGN
     local function controlLoop()
         while true do
@@ -1353,6 +1562,11 @@ function base.run(jobHandler)
                 lastLogFlushWall = now
             end
 
+            -- Drain control messages the job runner pulled and handed to us.
+            while base.hasCtrlInbox() do
+                handleControlMessage(base.popCtrlInbox())
+            end
+
             local event, p1, p2, p3, p4 = os.pullEvent()
 
             if event == "modem_message" then
@@ -1360,81 +1574,11 @@ function base.run(jobHandler)
                 if parsed then
                     local valid, msg = proto.decode(parsed)
                     if valid and (msg.to == _self.id or msg.to == "broadcast") then
-
-                        resetMissedHeartbeats()
-
-                    if msg.type == proto.MSG.JOB_ASSIGN and not _self.busy then
-                            local job = msg.payload
-                            comms.toServer(proto.MSG.JOB_ACK,
-                                proto.payloadJobAck(job.jobId, true, nil))
-                            _self.busy   = true
-                            _self.jobId  = job.jobId
-                            _self.status = proto.STATUS.TRAVELLING
-                            pendingJob   = { id=job.jobId, type=job.jobType, params=job.params }
-
-                        elseif msg.type == proto.MSG.JOB_ASSIGN and _self.busy then
-                            comms.toServer(proto.MSG.JOB_ACK,
-                                proto.payloadJobAck(msg.payload.jobId, false, "busy"))
-
-                        elseif msg.type == proto.MSG.RECALL then
-                            logWarn("RECALL: " .. (msg.payload.reason or "?"))
-                            if _self.busy then
-                                -- Signal the job runner to exit its current wait loop.
-                                -- The job runner will clean up (pick up EC etc.) then
-                                -- call returnToDock itself. Control loop must NOT also
-                                -- navigate or the two coroutines fight over movement.
-                                _self.recalled = true
-                                pendingJob = nil
-                                -- Miners coordinate via MINE_RECALL in recallReturn() —
-                                -- sendFailed here would fire JOB_ABORT to the support and
-                                -- clear partnerId before the coordinated return can happen.
-                                if _self.role ~= proto.ROLE.MINER then
-                                    base.sendFailed("recalled", true)
-                                end
-                            else
-                                -- Idle turtle: navigate directly.
-                                local insideBuilding = base.isInsideBuilding(_self.pos)
-                                if insideBuilding then
-                                    base.returnToDockInternal()
-                                elseif _self.pos.y >= 100 then
-                                    -- Turtle is at sky altitude (mine recall position) —
-                                    -- fly home at Y=200 via arrivals hole, not underground.
-                                    base.returnToDockFromSky()
-                                else
-                                    base.returnToDock()
-                                end
-                                _self.busy   = false
-                                _self.status = proto.STATUS.IDLE
-                                _self.jobId  = nil
-                            end
-
-                        elseif msg.type == proto.MSG.FORCE_REFUEL then
-                            if not _self.busy and not _self.recalled
-                                    and base.isInsideBuilding(_self.pos) then
-                                logInfo("FORCE_REFUEL received — refuelling at dock")
-                                if _customRefuelFn then
-                                    _customRefuelFn()
-                                else
-                                    fuel.dockRefuel()
-                                end
-                                -- Push fresh fuel level so fleet panel updates immediately
-                                comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
-                                    _self.status, fuel.level(), base.getPos(), _self.jobId))
-                            elseif not base.isInsideBuilding(_self.pos) then
-                                logWarn("FORCE_REFUEL ignored — turtle not at dock")
-                            end
-
-                        elseif msg.type == proto.MSG.UPDATE_ALL then
-                            logWarn("UPDATE_ALL received — running updater then rebooting...")
-                            if _self.busy and _self.jobId then
-                                base.sendFailed("update_all", false)
-                            end
-                            sleep(1)
-                            if fs.exists("updater.lua") then
-                                shell.run("updater")
-                            else
-                                logWarn("updater.lua not found — rebooting anyway")
-                                os.reboot()
+                        if not handleControlMessage(msg) then
+                            -- Belongs to the job runner. Hand it over instead of
+                            -- dropping it — this is what stranded recalled supports.
+                            if not base.ackSignal(msg) then
+                                base.pushJobInbox(msg)
                             end
                         end
                     end
@@ -1445,6 +1589,93 @@ function base.run(jobHandler)
                 wakeupTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
             end
         end
+    end
+
+    -- Handle one control-plane message.
+    -- Returns true if consumed, false if it belongs to the job runner.
+    handleControlMessage = function(msg)
+        resetMissedHeartbeats()
+
+        if msg.type == proto.MSG.HEARTBEAT_ACK then
+            -- resetMissedHeartbeats() above is the entire point of routing it here.
+
+        elseif msg.type == proto.MSG.SIGNAL_ACK then
+            base.noteSignalAck(msg)
+
+        elseif msg.type == proto.MSG.JOB_ASSIGN and not _self.busy then
+            local job = msg.payload
+            comms.toServer(proto.MSG.JOB_ACK,
+                proto.payloadJobAck(job.jobId, true, nil))
+            _self.busy   = true
+            _self.jobId  = job.jobId
+            _self.status = proto.STATUS.TRAVELLING
+            pendingJob   = { id=job.jobId, type=job.jobType, params=job.params }
+
+        elseif msg.type == proto.MSG.JOB_ASSIGN and _self.busy then
+            comms.toServer(proto.MSG.JOB_ACK,
+                proto.payloadJobAck(msg.payload.jobId, false, "busy"))
+
+        elseif msg.type == proto.MSG.RECALL then
+            logWarn("RECALL: " .. (msg.payload.reason or "?"))
+            if _self.busy then
+                -- Set the flag and nothing else. The job runner owns the terminal
+                -- report; reporting here used to clear partnerId/jobId/busy while
+                -- the handler was still mid-coordination, which fired a spurious
+                -- JOB_ABORT at the partner and stranded recalled mining supports.
+                -- The control loop must also never navigate, or the two coroutines
+                -- fight over movement.
+                _self.recalled = true
+                pendingJob = nil
+            else
+                -- Idle turtle: navigate directly.
+                local insideBuilding = base.isInsideBuilding(_self.pos)
+                if insideBuilding then
+                    base.returnToDockInternal()
+                elseif _self.pos.y >= 100 then
+                    -- Turtle is at sky altitude (mine recall position) —
+                    -- fly home at Y=200 via arrivals hole, not underground.
+                    base.returnToDockFromSky()
+                else
+                    base.returnToDock()
+                end
+                _self.busy   = false
+                _self.status = proto.STATUS.IDLE
+                _self.jobId  = nil
+            end
+
+        elseif msg.type == proto.MSG.FORCE_REFUEL then
+            if not _self.busy and not _self.recalled
+                    and base.isInsideBuilding(_self.pos) then
+                logInfo("FORCE_REFUEL received — refuelling at dock")
+                if _customRefuelFn then
+                    _customRefuelFn()
+                else
+                    fuel.dockRefuel()
+                end
+                -- Push fresh fuel level so fleet panel updates immediately
+                comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
+                    _self.status, fuel.level(), base.getPos(), _self.jobId))
+            elseif not base.isInsideBuilding(_self.pos) then
+                logWarn("FORCE_REFUEL ignored — turtle not at dock")
+            end
+
+        elseif msg.type == proto.MSG.UPDATE_ALL then
+            logWarn("UPDATE_ALL received — running updater then rebooting...")
+            if _self.busy and _self.jobId then
+                base.sendFailed("update_all", false)
+            end
+            sleep(1)
+            if fs.exists("updater.lua") then
+                shell.run("updater")
+            else
+                logWarn("updater.lua not found — rebooting anyway")
+                os.reboot()
+            end
+
+        else
+            return false   -- job runner's message
+        end
+        return true
     end
 
     -- Job runner: waits for a pending job then executes it
@@ -1459,11 +1690,19 @@ function base.run(jobHandler)
             pendingJob = nil
 
             local ok, err = pcall(jobHandler, job)
-            _self.recalled = false   -- clear after job exits regardless of reason
             if not ok then
                 logError("Job handler crashed: " .. tostring(err))
                 base.sendFailed(tostring(err), true)
+            elseif _self.busy then
+                -- The handler returned without reporting a terminal status.
+                -- The control loop used to report on our behalf the moment RECALL
+                -- arrived, which tore down partnerId/jobId mid-coordination. The
+                -- job runner is the only place that knows the handler is really
+                -- finished, so the report happens here instead.
+                base.sendFailed(
+                    _self.recalled and "recalled" or "handler_returned_without_report", true)
             end
+            _self.recalled = false   -- clear after job exits regardless of reason
         end
     end
 

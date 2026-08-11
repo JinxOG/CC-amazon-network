@@ -48,8 +48,10 @@ local function waitMsg(types, secs)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end
     local deadline = os.epoch("utc") / 1000 + secs
+    local held   = {}   -- messages meant for other loops; returned to the inbox on exit
+    local result = nil
     while os.epoch("utc") / 1000 < deadline do
-        if base.isRecalled() then return nil end
+        if base.isRecalled() then break end
         if base.isServerDown() then
             -- Freeze deadline while server is unreachable so a crash doesn't
             -- trigger sector_request_timeout and dispatch a duplicate mining pair.
@@ -58,7 +60,7 @@ local function waitMsg(types, secs)
         end
         local remain = deadline - os.epoch("utc") / 1000
         if remain <= 0 then break end
-        local msg = proto.receive(base.getSelfId(), math.max(0.5, remain))
+        local msg = base.receive(math.max(0.5, remain))
         if msg then
             if msg.type == proto.MSG.JOB_ABORT
                     and msg.from == base.getPartnerId() then
@@ -67,13 +69,17 @@ local function waitMsg(types, secs)
                 -- which sends MINE_RECALL back to the waiting support.
                 print("[MINER] Support sent JOB_ABORT — self-recalling for coordinated return")
                 base.setRecalled(true)
-                return nil
+                break
             elseif set[msg.type] then
-                return msg
+                result = msg
+                break
+            else
+                held[#held + 1] = msg
             end
         end
     end
-    return nil
+    for i = 1, #held do base.pushJobInbox(held[i]) end
+    return result
 end
 
 -- ── Ore detection ────────────────────────────────────────────────────────────
@@ -498,7 +504,9 @@ local function mineJob(job)
         -- path and return via the arrivals shaft directly.
         if p.y >= W.WORLD_EXIT.y then
             if supportId then
-                base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+                -- Reliable: losing this strands the support in the sky with no
+                -- other signal coming, which is exactly how node_145 hung.
+                base.signalPartnerReliable(proto.MSG.RETURN_TO_DOCK, {})
             end
             base.setSkyReturn(true)
             base.returnToDock()
@@ -535,14 +543,18 @@ local function mineJob(job)
                 base.signalPartner(proto.MSG.POSITION_UPDATE,
                     { prev = {x=p.x, y=p.y, z=p.z, facing=0} })
                 local deadline = os.epoch("utc") / 1000 + 5
+                local held = {}
                 while os.epoch("utc") / 1000 < deadline do
-                    local m = proto.receive(base.getSelfId(), 1)
-                    if m and m.from == supportId
-                            and m.type == proto.MSG.MINE_CLEAR then
-                        print("[MINER] Support cleared column — ascending safely")
-                        cleared = true; break
+                    local m = base.receive(1)
+                    if m then
+                        if m.from == supportId and m.type == proto.MSG.MINE_CLEAR then
+                            print("[MINER] Support cleared column — ascending safely")
+                            cleared = true; break
+                        end
+                        held[#held + 1] = m
                     end
                 end
+                for i = 1, #held do base.pushJobInbox(held[i]) end
                 if cleared then break end
                 -- Recheck support online so we don't spin against a dead turtle
                 local si = base.queryTurtle(supportId, 2)
@@ -566,7 +578,8 @@ local function mineJob(job)
         -- Sending from SKY_Y (before horizontal flight) gives support a 5s head
         -- start on shaft clearance while miner covers the horizontal leg.
         if supportOnline then
-            base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
+            -- Reliable: the support's only cue to leave FOLLOW_Y and go home.
+            base.signalPartnerReliable(proto.MSG.RETURN_TO_DOCK, {})
         end
         base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
         base.setPartnerId(nil)

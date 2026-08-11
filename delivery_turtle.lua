@@ -5,8 +5,9 @@
 
 local base  = require("turtle_base")
 local proto = require("protocol")
+local W     = require("waypoints")
 
-local UNDERGROUND_Y = 60   -- Y level for all underground travel
+local UNDERGROUND_Y = W.WORLD_ENTRY.y   -- Y level for all underground travel
 
 -- Slot reserved for the entangled chest (always kept here)
 local EC_SLOT = 16
@@ -27,23 +28,7 @@ end)
 
 -- ─── Helpers ─────────────────────────────────────────────────────────────────
 
--- Wait for one of several message types (returns msg or nil on timeout)
-local function waitForAny(types, seconds)
-    local set = {}
-    for _, t in ipairs(types) do set[t] = true end
-    local deadline = os.epoch("utc") / 1000 + seconds
-    while os.epoch("utc") / 1000 < deadline do
-        if base.isRecalled() then return nil end
-        if base.isServerDown() then
-            deadline = os.epoch("utc") / 1000 + seconds
-            sleep(2)
-        else
-            local msg = proto.receive(base.getSelfId(), math.max(1, deadline - os.epoch("utc") / 1000))
-            if msg and set[msg.type] then return msg end
-        end
-    end
-    return nil
-end
+local waitForAny = base.waitForAny
 
 -- Place a block below, digging first if blocked
 local function placeDownClear()
@@ -571,7 +556,13 @@ base.run(function(job)
     -- ── CHECKPOINT 4: ARRIVAL ────────────────────────────────────────────────
     checkEC("ARRIVAL", false)
 
-    if not base.isRecalled() then
+    if base.isRecalled() then
+        -- The control loop no longer reports on our behalf. Restore partnerId so
+        -- sendFailed still fires JOB_ABORT at the support, then report explicitly
+        -- rather than leaving it to the job runner's safety net.
+        if savedPartnerId then base.setPartnerId(savedPartnerId) end
+        base.sendFailed("recalled", true)
+    else
         base.sendComplete({ destination = d })
     end
 end)

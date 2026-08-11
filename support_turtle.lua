@@ -69,6 +69,7 @@ local function supportJob(job)
             base.sendProgress("Waiting for HOLE_READY from miner " .. partnerId)
             print("[SUPPORT] Waiting for HOLE_READY from " .. partnerId .. "...")
             local signalReceived = false
+            local holeHeld     = {}
             local holeDeadline = os.epoch("utc") / 1000 + 600
             while os.epoch("utc") / 1000 < holeDeadline do
                 if base.isRecalled() then
@@ -77,12 +78,18 @@ local function supportJob(job)
                     sleep(3)
                     return base.sendFailed("recalled", false)
                 end
-                local msg = proto.receive(base.getSelfId(), 5)
-                if msg and msg.from == partnerId and msg.type == proto.MSG.HOLE_READY then
-                    signalReceived = true
-                    break
+                local msg = base.receive(5)
+                if msg then
+                    if msg.from == partnerId and msg.type == proto.MSG.HOLE_READY then
+                        signalReceived = true
+                        break
+                    end
+                    -- Held, not re-queued inline: pushing back inside the loop
+                    -- would be re-popped immediately and spin.
+                    holeHeld[#holeHeld + 1] = msg
                 end
             end
+            for i = 1, #holeHeld do base.pushJobInbox(holeHeld[i]) end
 
             if not signalReceived then
                 base.returnToDock()
@@ -122,7 +129,8 @@ local function supportJob(job)
             if turtle.getFuelLevel() < SUPPORT_FUEL_WARN then
                 if not base.fuel.selfRefuel() then
                     print("[SUPPORT] Coal exhausted — fuel-exhaustion return")
-                    base.signalPartner(proto.MSG.JOB_ABORT, {})
+                    -- Reliable: the miner has no other cue that we are leaving.
+                    base.signalPartnerReliable(proto.MSG.JOB_ABORT, {}, { attempts = 3, interval = 2 })
                     _skyReturn = true
                     _jobFailed = true
                     break
@@ -130,46 +138,50 @@ local function supportJob(job)
                 print("[SUPPORT] Self-refueled to " .. turtle.getFuelLevel())
             end
 
-            local msg = proto.receive(base.getSelfId(), 15)
-
-            if not msg then
-                if base.isServerDown() then
-                    sleep(2)
-                else
-                    local info = nil
-                    for _try = 1, 3 do
-                        info = base.queryTurtle(partnerId, 5)
-                        if info and info.online then break end
-                        sleep(3)
-                    end
-                    if not info or not info.online then
-                        print("[SUPPORT] Partner offline after 3 queries — returning to dock")
-                        _skyReturn = _miningMode or _recalling
-                        break
-                    elseif not _miningMode and not info.jobId then
-                        -- Job ID clears at MINE_COMPLETE while miner may still be
-                        -- mid-ascent. Only break immediately if NOT recalling — the
-                        -- miner will send RETURN_TO_DOCK once it reaches SKY_Y.
-                        if _recalling then
-                            -- Stay put. The 5-min stale timeout below is the last resort.
-                            print("[SUPPORT] Miner job done, still ascending — holding for RETURN_TO_DOCK")
-                        else
-                            print("[SUPPORT] Partner job complete — returning to dock")
-                            break
-                        end
-                    end
-                    local staleSec = os.epoch("utc") / 1000 - lastUpdateTime
-                    if (_miningMode or _recalling) and staleSec > 300 then
-                        print("[SUPPORT] No miner update for 5min — returning")
-                        _skyReturn = true
+            -- ── Partner liveness ─────────────────────────────────────────────
+            -- Gated on how long the PARTNER has been quiet, not on an empty
+            -- receive. These checks used to live inside `if not msg`, but the
+            -- server ACKs our heartbeat every 5s, so a 15s receive window
+            -- practically never returned nil — the checks below were unreachable
+            -- and a support that missed RETURN_TO_DOCK hovered indefinitely.
+            local quietSec = os.epoch("utc") / 1000 - lastUpdateTime
+            if quietSec >= 15 and not base.isServerDown() then
+                local info = nil
+                for _try = 1, 3 do
+                    info = base.queryTurtle(partnerId, 5)
+                    if info and info.online then break end
+                    sleep(3)
+                end
+                if not info or not info.online then
+                    print("[SUPPORT] Partner offline after 3 queries — returning to dock")
+                    _skyReturn = _miningMode or _recalling
+                    break
+                elseif not _miningMode and not info.jobId then
+                    -- Job ID clears at MINE_COMPLETE while miner may still be
+                    -- mid-ascent. Only break immediately if NOT recalling — the
+                    -- miner will send RETURN_TO_DOCK once it reaches SKY_Y.
+                    if _recalling then
+                        -- Stay put. The 5-min stale timeout below is the last resort.
+                        print("[SUPPORT] Miner job done, still ascending — holding for RETURN_TO_DOCK")
+                    else
+                        print("[SUPPORT] Partner job complete — returning to dock")
                         break
                     end
                 end
+                if (_miningMode or _recalling) and quietSec > 300 then
+                    print("[SUPPORT] No miner update for 5min — returning")
+                    _skyReturn = true
+                    break
+                end
+            end
 
-            elseif msg.from == partnerId then
+            local msg = base.receive(15)
+
+            if msg and msg.from == partnerId then
+                -- Any partner traffic counts as liveness, not just POSITION_UPDATE.
+                lastUpdateTime = os.epoch("utc") / 1000
                 if msg.type == proto.MSG.POSITION_UPDATE then
                     local prev = msg.payload.prev
-                    lastUpdateTime = os.epoch("utc") / 1000
                     if prev and type(prev.x) == "number" then
                         if not _miningMode then
                             if prev.y >= 190 then _reachedSky = true end
@@ -184,10 +196,13 @@ local function supportJob(job)
                         -- draining catches MINE_RECALL queued behind recent updates so
                         -- support applies xOffset=1 before moving (prevents blocking miner).
                         do
+                            local drained = {}
                             while true do
-                                local nxt = proto.receive(base.getSelfId(), 0.05)
+                                local nxt = base.receive(0.05)
                                 if not nxt then break end
-                                if nxt.from == partnerId then
+                                if nxt.from ~= partnerId then
+                                    drained[#drained + 1] = nxt
+                                elseif nxt.from == partnerId then
                                     if nxt.type == proto.MSG.POSITION_UPDATE then
                                         prev = nxt.payload.prev
                                         lastUpdateTime = os.epoch("utc") / 1000
@@ -221,6 +236,9 @@ local function supportJob(job)
                                     end
                                 end
                             end
+                            -- Anything not from the partner goes back rather than
+                            -- being swallowed by the drain.
+                            for i = 1, #drained do base.pushJobInbox(drained[i]) end
                         end
                         -- When recalling: transition to sky-follow once miner reaches FOLLOW_Y
                         if _recalling and _miningMode and prev.y >= FOLLOW_Y then
@@ -302,6 +320,10 @@ local function supportJob(job)
         end
         if _jobFailed then
             base.sendFailed("support_fuel_exhausted", true)
+        elseif base.isRecalled() then
+            -- The control loop no longer reports on our behalf, so a recalled
+            -- job must be reported as failed here — not completed.
+            base.sendFailed("recalled", true)
         else
             base.sendComplete()
         end
@@ -320,28 +342,33 @@ local function supportJob(job)
     -- 10 min to restart, re-register, and reach the hole before giving up.
     local holeTimeout = base.isInsideBuilding(base.getPos()) and 180 or 600
     local deadline = os.epoch("utc") / 1000 + holeTimeout
+    local held = {}
     while os.epoch("utc") / 1000 < deadline do
         if base.isServerDown() then
             deadline = os.epoch("utc") / 1000 + holeTimeout   -- freeze while server unreachable
             sleep(2)
         end
-        local msg = proto.receive(base.getSelfId(), 5)
+        local msg = base.receive(5)
         if base.isRecalled() then
             print("[SUPPORT] Recalled while waiting — aborting")
+            for i = 1, #held do base.pushJobInbox(held[i]) end
             return base.sendFailed("recalled", false)
         end
-        if msg and msg.from == partnerId then
-            if msg.type == proto.MSG.HOLE_READY then
+        if msg then
+            if msg.from == partnerId and msg.type == proto.MSG.HOLE_READY then
                 print("HOLE_READY received — heading to dispatch hole!")
                 signalReceived = true
                 break
-            elseif msg.type == proto.MSG.JOB_ABORT then
+            elseif msg.from == partnerId and msg.type == proto.MSG.JOB_ABORT then
                 print("JOB_ABORT received — delivery failed. Returning to dock.")
                 aborted = true
                 break
+            else
+                held[#held + 1] = msg
             end
         end
     end
+    for i = 1, #held do base.pushJobInbox(held[i]) end
 
     if aborted then
         base.returnToDock()
@@ -382,32 +409,33 @@ local function supportJob(job)
     base.sendProgress("Following " .. partnerId)
     print("Following " .. partnerId .. " (1 block behind)")
 
-    local ascending = false
+    local ascending      = false
+    local lastPartnerMsg = os.epoch("utc") / 1000
 
     while true do
-        local msg = proto.receive(base.getSelfId(), 15)
-
         if base.isRecalled() then
             print("[SUPPORT] Recalled mid-follow — returning to dock")
             break
         end
 
-        if not msg then
-            -- Timeout — if server is down just wait, don't abandon partner
-            if base.isServerDown() then
-                sleep(2)
-            else
-                local info = base.queryTurtle(partnerId, 5)
-                if not info or not info.online then
-                    print("Partner offline. Returning to dock.")
-                    break
-                elseif not info.jobId then
-                    print("Partner job complete. Returning to dock.")
-                    break
-                end
+        -- Partner liveness, gated on partner silence rather than on an empty
+        -- receive. The server ACKs our heartbeat every 5s, so `if not msg` was
+        -- effectively unreachable and these checks never ran.
+        if os.epoch("utc") / 1000 - lastPartnerMsg >= 15 and not base.isServerDown() then
+            local info = base.queryTurtle(partnerId, 5)
+            if not info or not info.online then
+                print("Partner offline. Returning to dock.")
+                break
+            elseif not info.jobId then
+                print("Partner job complete. Returning to dock.")
+                break
             end
+        end
 
-        elseif msg.from == partnerId then
+        local msg = base.receive(15)
+
+        if msg and msg.from == partnerId then
+            lastPartnerMsg = os.epoch("utc") / 1000
 
             if msg.type == proto.MSG.POSITION_UPDATE and not ascending then
                 -- Move to where delivery just was (1 block behind)
@@ -448,7 +476,13 @@ local function supportJob(job)
     -- ── Step 5: Return to dock ────────────────────────────────────────────────
 
     base.returnToDock()
-    base.sendComplete()
+    if base.isRecalled() then
+        -- The control loop no longer reports on our behalf, so a recalled job
+        -- must be reported as failed here — not completed.
+        base.sendFailed("recalled", true)
+    else
+        base.sendComplete()
+    end
 end
 
 local ok, err = pcall(base.run, supportJob)
