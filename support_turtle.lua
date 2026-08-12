@@ -154,17 +154,20 @@ local function supportJob(job)
                 end
                 if not info or not info.online then
                     print("[SUPPORT] Partner offline after 3 queries — returning to dock")
-                    _skyReturn = _miningMode or _recalling
+                    -- Derived from altitude, not from mode flags: at FOLLOW_Y the
+                    -- only safe route home is the sky one.
+                    _skyReturn = base.getPos().y >= 100
                     break
                 elseif not _miningMode and not info.jobId then
-                    -- Job ID clears at MINE_COMPLETE while miner may still be
-                    -- mid-ascent. Only break immediately if NOT recalling — the
-                    -- miner will send RETURN_TO_DOCK once it reaches SKY_Y.
-                    if _recalling then
-                        -- Stay put. The 5-min stale timeout below is the last resort.
-                        print("[SUPPORT] Miner job done, still ascending — holding for RETURN_TO_DOCK")
+                    -- Job ID clears at MINE_COMPLETE while the miner may still be
+                    -- mid-ascent, and a cancelled job clears it too. Either way this
+                    -- is not proof the miner is home — hold whenever we are in any
+                    -- kind of return, and let RETURN_TO_DOCK or the stale timer end it.
+                    if _recalling or base.isRecalled() then
+                        print("[SUPPORT] Miner job ended, still ascending — holding for RETURN_TO_DOCK")
                     else
                         print("[SUPPORT] Partner job complete — returning to dock")
+                        _skyReturn = base.getPos().y >= 100
                         break
                     end
                 end
@@ -221,6 +224,7 @@ local function supportJob(job)
                                         goto mine_done
                                     elseif nxt.type == proto.MSG.JOB_ABORT then
                                         print("[SUPPORT] JOB_ABORT (drain) — docking")
+                                        _skyReturn = base.getPos().y >= 100
                                         goto mine_done
                                     elseif nxt.type == proto.MSG.MINE_RECALL then
                                         print("[SUPPORT] Mine recalled (drain) — clearing column")
@@ -283,6 +287,7 @@ local function supportJob(job)
 
                 elseif msg.type == proto.MSG.JOB_ABORT then
                     print("[SUPPORT] JOB_ABORT — returning to dock")
+                    _skyReturn = base.getPos().y >= 100
                     break
 
                 elseif msg.type == proto.MSG.MINE_CLEAR then

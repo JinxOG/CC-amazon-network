@@ -592,8 +592,24 @@ end
 -- Navigate from the world back to dock via arrivals hole.
 -- Call this when turtle is outside/underground after completing a job.
 -- Always goes underground first then up through the arrivals hole.
+-- Above this altitude a turtle is flying, not walking: the only safe way home is
+-- the sky route. Matches the threshold the RECALL handler already uses for idle
+-- turtles. Delivery traffic runs at UNDERGROUND_Y=60 and is unaffected.
+local SKY_ALTITUDE = 100
+
 function base.returnToDock()
     if not _self.dock then logWarn("No dock assigned, staying put.") return true end
+
+    -- Safety net, deliberately at the choke point rather than at each call site.
+    -- Return mode is DERIVED from altitude instead of tracked in a _skyReturn flag
+    -- threaded through a dozen break paths — one missed assignment used to send an
+    -- airborne support diving ~130 blocks through terrain toward UNDERGROUND_Y.
+    if _self.pos.y >= SKY_ALTITUDE and not base.isInsideBuilding(_self.pos) then
+        logWarn(string.format(
+            "returnToDock at sky altitude Y=%d — using sky route instead of descending.",
+            _self.pos.y))
+        return base.returnToDockFromSky()
+    end
 
     base.setStatus(proto.STATUS.RETURNING)
 
