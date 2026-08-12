@@ -494,11 +494,16 @@ local function mineJob(job)
     -- travel home together with the support chunk-loading the miner the whole way.
     -- Falls back to solo return if the support is offline or unresponsive.
     local function coordinatedSkyReturn()
+        local rp0 = base.getPos()
+        print(string.format("[MINER] Return starting from %d,%d,%d (recalled=%s)",
+            rp0.x, rp0.y, rp0.z, tostring(base.isRecalled())))
         dumpOres()
         checkFuel(jobId)
 
         local supportId = job.params.partnerId
         local p         = base.getPos()
+        print(string.format("[MINER] Ores dumped, fuel %d — coordinating with %s",
+            turtle.getFuelLevel(), tostring(supportId)))
 
         -- Near-surface shortcut: already at exit altitude; skip the deep-ascent
         -- path and return via the arrivals shaft directly.
@@ -571,8 +576,16 @@ local function mineJob(job)
 
         p = base.getPos()
         base.setSkyReturn(true)
-        base.move.to(p.x, 180, p.z)
+        -- Meeting altitude is this pair's FOLLOW_Y, not a literal 180. Pairs with
+        -- a travelYOffset sit at 180+yOff, so the constant put the miner below its
+        -- own support and required it to pass through the support's band on the way
+        -- to SKY_Y. Logged because this whole return used to run silently.
+        local MEET_Y = 180 + yOff
+        print(string.format("[MINER] Recall: ascending %d -> %d (meet), support=%s",
+            p.y, MEET_Y, tostring(supportOnline)))
+        base.move.to(p.x, MEET_Y, p.z)
         sleep(5)
+        print(string.format("[MINER] Recall: ascending %d -> %d (sky)", MEET_Y, SKY_Y))
         base.move.to(p.x, SKY_Y, p.z)
         -- Signal support NOW — both start the horizontal leg home at the same time.
         -- Sending from SKY_Y (before horizontal flight) gives support a 5s head
