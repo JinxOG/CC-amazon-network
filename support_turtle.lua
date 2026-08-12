@@ -170,6 +170,20 @@ local function supportJob(job)
                         _skyReturn = base.getPos().y >= 100
                         break
                     end
+                else
+                    -- Miner is online and still on a job, but we have heard nothing
+                    -- from it. Every other outcome in this loop breaks and logs;
+                    -- this one used to fall through silently, which is why a stalled
+                    -- pair looked identical to a hung turtle. Print both positions:
+                    -- if the miner's Y is climbing we are not receiving its
+                    -- POSITION_UPDATEs, if it is static the miner is the one stuck.
+                    local sp = base.getPos()
+                    local ip = info.position
+                    print(string.format(
+                        "[SUPPORT] No partner traffic %ds | me %d,%d,%d | %s %s job=%s",
+                        math.floor(quietSec), sp.x, sp.y, sp.z, partnerId,
+                        ip and string.format("%d,%d,%d", ip.x, ip.y, ip.z) or "pos?",
+                        tostring(info.jobId)))
                 end
                 if (_miningMode or _recalling) and quietSec > 300 then
                     print("[SUPPORT] No miner update for 5min — returning")
