@@ -571,8 +571,31 @@ function base.depart(noDescend)
             base.signalPartnerReliable(proto.MSG.SUPPORT_STAGED, {}, { attempts = 4, interval = 2 })
         end
 
-        -- Brief pause so delivery starts descending first (clears the hole entrance)
-        sleep(1)
+        -- Wait for the worker to actually clear the shaft before entering it.
+        -- A flat sleep(1) was shorter than the worker's ~10-block descent, so the
+        -- support arrived while the worker was still in the hole. With canDig=false
+        -- it then blocked against the worker's body inside tryMove, which waits up
+        -- to 120s silently — this is what left the last support of a multi-pair
+        -- dispatch parked at the hole. Poll the worker's altitude instead, and log
+        -- the wait so it is visible rather than looking like a hang.
+        if _self.partnerId then
+            local clearDeadline = os.epoch("utc") / 1000 + 60
+            local waited = false
+            while os.epoch("utc") / 1000 < clearDeadline do
+                local info = base.queryTurtle(_self.partnerId, 3)
+                if not info or not info.online then break end
+                local ip = info.position
+                if not ip or ip.y <= W.WORLD_EXIT.y then break end
+                if not waited then
+                    logInfo("Holding at staging — worker still in the shaft...")
+                    waited = true
+                end
+                sleep(1)
+            end
+            if waited then logInfo("Shaft clear — entering dispatch hole.") end
+        else
+            sleep(1)
+        end
 
         -- Move to hole and descend
         move.to(W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.y, W.DISPATCH_HOLE.z)
@@ -1424,7 +1447,11 @@ function base.sendReliable(msgType, targetId, payload, opts)
         while os.epoch("utc") / 1000 < deadline do
             if _ackedSigs[sigId] then break end
             local remain = deadline - os.epoch("utc") / 1000
-            local m = base.receive(math.max(0.2, remain))
+            -- Poll in short slices. base.receive() absorbs SIGNAL_ACK internally
+            -- and keeps blocking, so a full-interval timeout here would sit out
+            -- the whole 2s even when the partner ACKed instantly — dead time that
+            -- multiplies across every pair serialising through the dispatch hole.
+            local m = base.receive(math.max(0.05, math.min(0.25, remain)))
             if m then held[#held + 1] = m end
         end
         if _ackedSigs[sigId] then acked = true; break end
