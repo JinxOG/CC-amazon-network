@@ -144,8 +144,10 @@ local function supportJob(job)
             -- server ACKs our heartbeat every 5s, so a 15s receive window
             -- practically never returned nil — the checks below were unreachable
             -- and a support that missed RETURN_TO_DOCK hovered indefinitely.
+            -- 6s, not 15s: this is also the fallback-follow trigger now, and every
+            -- second spent waiting is a second parked on the shared dispatch hole.
             local quietSec = os.epoch("utc") / 1000 - lastUpdateTime
-            if quietSec >= 15 and not base.isServerDown() then
+            if quietSec >= 6 and not base.isServerDown() then
                 local info = nil
                 for _try = 1, 3 do
                     info = base.queryTurtle(partnerId, 5)
@@ -171,19 +173,31 @@ local function supportJob(job)
                         break
                     end
                 else
-                    -- Miner is online and still on a job, but we have heard nothing
-                    -- from it. Every other outcome in this loop breaks and logs;
-                    -- this one used to fall through silently, which is why a stalled
-                    -- pair looked identical to a hung turtle. Print both positions:
-                    -- if the miner's Y is climbing we are not receiving its
-                    -- POSITION_UPDATEs, if it is static the miner is the one stuck.
+                    -- Miner is online and still working, but no POSITION_UPDATEs are
+                    -- reaching us. Follow the server's view of it instead of waiting.
+                    --
+                    -- Waiting here is what caused the traffic jam: the support parks
+                    -- on the dispatch hole at floor level, which is the single shared
+                    -- chokepoint every pair departs through, so one silent pair blocks
+                    -- the whole queue behind it. Clearing the hole takes priority over
+                    -- perfect 1-block-behind spacing.
                     local sp = base.getPos()
                     local ip = info.position
                     print(string.format(
-                        "[SUPPORT] No partner traffic %ds | me %d,%d,%d | %s %s job=%s",
+                        "[SUPPORT] No partner traffic %ds | me %d,%d,%d | %s %s job=%s — following server position",
                         math.floor(quietSec), sp.x, sp.y, sp.z, partnerId,
                         ip and string.format("%d,%d,%d", ip.x, ip.y, ip.z) or "pos?",
                         tostring(info.jobId)))
+                    if ip and type(ip.y) == "number" then
+                        -- Trail a few blocks below so we ascend the shaft the miner
+                        -- dug without ramming it (canDig=false cannot push past).
+                        local targetY = _miningMode and FOLLOW_Y
+                                        or math.min(ip.y - 3, FOLLOW_Y)
+                        if targetY > sp.y or math.abs(ip.x - sp.x) > 1
+                                          or math.abs(ip.z - sp.z) > 1 then
+                            base.move.to(ip.x, targetY, ip.z)
+                        end
+                    end
                 end
                 if (_miningMode or _recalling) and quietSec > 300 then
                     print("[SUPPORT] No miner update for 5min — returning")
