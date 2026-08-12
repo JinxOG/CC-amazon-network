@@ -571,31 +571,13 @@ function base.depart(noDescend)
             base.signalPartnerReliable(proto.MSG.SUPPORT_STAGED, {}, { attempts = 4, interval = 2 })
         end
 
-        -- Wait for the worker to actually clear the shaft before entering it.
-        -- A flat sleep(1) was shorter than the worker's ~10-block descent, so the
-        -- support arrived while the worker was still in the hole. With canDig=false
-        -- it then blocked against the worker's body inside tryMove, which waits up
-        -- to 120s silently — this is what left the last support of a multi-pair
-        -- dispatch parked at the hole. Poll the worker's altitude instead, and log
-        -- the wait so it is visible rather than looking like a hang.
-        if _self.partnerId then
-            local clearDeadline = os.epoch("utc") / 1000 + 60
-            local waited = false
-            while os.epoch("utc") / 1000 < clearDeadline do
-                local info = base.queryTurtle(_self.partnerId, 3)
-                if not info or not info.online then break end
-                local ip = info.position
-                if not ip or ip.y <= W.WORLD_EXIT.y then break end
-                if not waited then
-                    logInfo("Holding at staging — worker still in the shaft...")
-                    waited = true
-                end
-                sleep(1)
-            end
-            if waited then logInfo("Shaft clear — entering dispatch hole.") end
-        else
-            sleep(1)
-        end
+        -- Brief pause so the worker starts moving off the hole entrance first.
+        -- Do NOT wait on the worker's altitude here: mining workers depart with
+        -- noDescend=true and ascend to SKY_Y instead of entering the shaft, so a
+        -- "descended below WORLD_EXIT" check never becomes true for them and the
+        -- support sits at staging blocking the departure lane behind it.
+        -- move.to() below already retries when the worker is still in the way.
+        sleep(1)
 
         -- Move to hole and descend
         move.to(W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.y, W.DISPATCH_HOLE.z)
