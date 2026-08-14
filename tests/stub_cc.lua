@@ -8,6 +8,13 @@
 -- returns nil for a pickaxe side, so that's what this stub mirrors.
 local M = {}
 
+-- The only equipped upgrade that shows up as a peripheral type at all;
+-- pickaxe and chunk controller sides report nil from getType in-world, and
+-- find() must agree with that or callers probing by type get a false miss.
+local PERIPHERAL_TYPE_BY_NAME = {
+    ["computercraft:wireless_modem_advanced"] = "modem",
+}
+
 function M.install(opts)
     opts = opts or {}
     local c = {
@@ -18,7 +25,6 @@ function M.install(opts)
         events   = opts.events or {},       -- queue of {name, ...}
         selected = 1,
         fuel     = opts.fuel or 100000,
-        log      = {},
     }
     -- facing lives only on c.pos; c.facing would drift out of sync with it
     -- the moment either got written independently, so there's one owner.
@@ -37,6 +43,27 @@ function M.install(opts)
     local function firstEmpty()
         for s = 1, 16 do if not c.inv[s] then return s end end
         return nil
+    end
+
+    -- Mirrors real CC:Tweaked dig semantics: scan every slot for a
+    -- same-item stack with room before falling back to an empty slot, and
+    -- cap stacks at 64 rather than growing them unbounded. Returns false
+    -- (rather than mutating anything) when no slot can take the item, so
+    -- callers can decide not to destroy the block.
+    local function collectDug(name)
+        for s = 1, 16 do
+            local i = c.inv[s]
+            if i and i.name == name and i.count < 64 then
+                i.count = i.count + 1
+                return true
+            end
+        end
+        local s = firstEmpty()
+        if s then
+            c.inv[s] = { name = name, count = 1 }
+            return true
+        end
+        return false
     end
 
     turtle = {
@@ -77,13 +104,8 @@ function M.install(opts)
             end
             local b = c.world[ahead()]
             if not b then return false, "Nothing to dig here" end
+            if not collectDug(b) then return false, "No space for item" end
             c.world[ahead()] = nil
-            local s = c.selected
-            if c.inv[s] and c.inv[s].name == b then c.inv[s].count = c.inv[s].count + 1
-            else
-                s = c.inv[s] and firstEmpty() or s
-                if s then c.inv[s] = { name = b, count = 1 } end
-            end
             return true
         end,
         digDown = function()
@@ -107,6 +129,11 @@ function M.install(opts)
         turnRight = function() c.pos.facing = (c.pos.facing + 1) % 4; return true end,
 
         transferTo = function(dest, n)
+            -- Transferring a slot into itself must be a no-op: the merge
+            -- logic below reads the old count, replaces the slot with a
+            -- new table, then nils the slot out once the (orphaned) old
+            -- table's count hits zero -- net effect was wiping the slot.
+            if dest == c.selected then return true end
             local src = c.inv[c.selected]
             if not src then return false end
             n = n or src.count
@@ -127,13 +154,15 @@ function M.install(opts)
         -- chunk controller are turtle upgrades that getType can't see, which
         -- is what in-world probing showed for this CC:Tweaked version.
         getType = function(side)
-            local e = c.equipped[side]
-            if e == "computercraft:wireless_modem_advanced" then return "modem" end
-            return nil
+            return PERIPHERAL_TYPE_BY_NAME[c.equipped[side]]
         end,
         find = function(kind)
+            -- Must resolve through the same name->type table as getType:
+            -- equipped now stores registry names, and comparing those
+            -- directly against a peripheral type (the old behaviour) made
+            -- find("modem") silently return nil with a modem equipped.
             for _, side in ipairs({ "left", "right" }) do
-                if c.equipped[side] == kind then
+                if PERIPHERAL_TYPE_BY_NAME[c.equipped[side]] == kind then
                     return { transmit = function() end, open = function() end,
                              isOpen = function() return true end }
                 end
@@ -143,13 +172,38 @@ function M.install(opts)
         wrap = function() return nil end,
     }
 
+    -- os already exists as a real Lua table (os.exit, os.time, ...); add
+    -- the CC-specific pieces rather than replacing it, so run.lua's own
+    -- os.exit call still works after install() runs.
+    os.pullEvent = function(filter)
+        while true do
+            local ev = table.remove(c.events, 1)
+            if not ev then
+                error("stub_cc: no more queued events (os.pullEvent)", 2)
+            end
+            -- Real CC discards events that don't match the filter rather
+            -- than requeuing them, so a non-match just continues the loop.
+            if not filter or ev[1] == filter then
+                return table.unpack(ev)
+            end
+        end
+    end
+
+    textutils = {
+        serialise = function(t) return M._serialise(t) end,
+        unserialise = function(s) return M._unserialise(s) end,
+    }
+
     c.pos.facing = c.pos.facing or 0
-    M._ctl = c
     return c
 end
 
 -- Swap the selected inventory slot with the upgrade on `side`, matching
 -- CC:Tweaked semantics: empty slot unequips into it, occupied slot swaps.
+-- NOTE: equipping from a stack of count > 1 discards the remainder (only
+-- one item becomes the equipped upgrade) -- unmodelled here because every
+-- upgrade in this system is only ever held as count 1, so the gap never
+-- gets exercised.
 function M._equip(c, side)
     local item = c.inv[c.selected]
     local cur  = c.equipped[side]
@@ -187,6 +241,40 @@ function M._move(c, dir)
     c.pos.x = c.pos.x + dx
     c.pos.z = c.pos.z + dz
     return true
+end
+
+-- Real textutils.serialise/unserialise round-trip Lua values through a
+-- Lua-literal string. Only the plain-table/string/number/boolean subset
+-- the mining code needs is supported.
+function M._serialise(t)
+    local ty = type(t)
+    if ty == "string" then return string.format("%q", t) end
+    if ty == "number" or ty == "boolean" then return tostring(t) end
+    if ty == "nil" then return "nil" end
+    if ty == "table" then
+        local parts = {}
+        for k, v in pairs(t) do
+            local key
+            if type(k) == "number" then
+                key = "[" .. k .. "]"
+            elseif type(k) == "string" and k:match("^[%a_][%w_]*$") then
+                key = k
+            else
+                key = "[" .. M._serialise(k) .. "]"
+            end
+            table.insert(parts, key .. " = " .. M._serialise(v))
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    error("Cannot serialise type " .. ty, 0)
+end
+
+function M._unserialise(s)
+    local chunk = load("return " .. s)
+    if not chunk then return nil end
+    local ok, result = pcall(chunk)
+    if not ok then return nil end
+    return result
 end
 
 return M
