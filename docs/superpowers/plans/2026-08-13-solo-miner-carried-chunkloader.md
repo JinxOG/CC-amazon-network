@@ -443,6 +443,18 @@ git commit -m "test: add headless CC:Tweaked stub and test runner"
 
 This is the module that prevents stranding. It owns every equip transition.
 
+**AMENDED after Task 1 Step 4b.** `turtle.getEquippedLeft()`/`getEquippedRight()`
+exist on this version and return the equipped item's detail including its registry
+name, while `peripheral.getType()` returns `nil` for the pickaxe side. Upgrades are
+therefore identified **by registry name**, and the original peripheral-type +
+infer-the-pickaxe-by-elimination scheme is deleted. That scheme assumed exactly one
+equipped upgrade reports `nil`, which stops holding the moment two tools are held.
+
+Consequence for the test fixtures below: equipped sides and inventory items must be
+seeded with `equipment.ITEMS.*` registry names, not the short kinds (`"modem"`,
+`"chunky"`, `"pickaxe"`) used in the snippets. The stub's `equipped` table holds
+registry names and `stub_cc` must implement `getEquippedLeft`/`getEquippedRight`.
+
 **Files:**
 - Create: `equipment.lua`
 - Test: `tests/test_equipment.lua`
@@ -627,23 +639,27 @@ equipment.ITEMS = {
 
 local S, I = equipment.SLOTS, equipment.ITEMS
 
--- Peripheral type reported for each upgrade. A pickaxe is a tool, not a
--- peripheral, so getType returns nil for it and we must infer it instead.
-local PERIPHERAL_TYPE = {
-    [I.MODEM]  = "modem",
-    [I.CHUNKY] = "chunky",
+-- Upgrade kind for a registry name. Identity comes from the item itself, never
+-- from what peripheral it happens to expose: peripheral.getType() returns nil
+-- for the pickaxe side and so cannot tell a tool from an empty side.
+local KIND_OF_ITEM = {
+    [I.MODEM]   = "modem",
+    [I.CHUNKY]  = "chunky",
+    [I.PICKAXE] = "pickaxe",
 }
 
--- Which kind is on a given side, or nil. Sides are never assumed: the swap
--- dance flips them every cycle, so everything here is side-agnostic.
+-- Verified present in Task 1 Step 4b. Sides are never assumed: the swap dance
+-- flips them every cycle, so everything here is side-agnostic.
+local function equippedOn(side)
+    local fn = (side == "left") and turtle.getEquippedLeft
+                                 or turtle.getEquippedRight
+    if not fn then return nil end
+    local item = fn()
+    return item and item.name or nil
+end
+
 local function kindOnSide(side)
-    local t = peripheral.getType(side)
-    if t == "modem"  then return "modem"  end
-    if t == "chunky" then return "chunky" end
-    -- No peripheral: either empty or a tool. Tools are not introspectable, so
-    -- treat a non-empty, non-peripheral side as the pickaxe.
-    if t == nil then return nil end
-    return t
+    return KIND_OF_ITEM[equippedOn(side) or ""]
 end
 
 function equipment.sideOf(kind)
@@ -653,8 +669,6 @@ function equipment.sideOf(kind)
     return nil
 end
 
--- A side that reports no peripheral may still hold the pickaxe. We track that
--- by elimination: if the pickaxe is not in inventory it must be equipped.
 local function pickaxeStowedSlot()
     for s = 1, 16 do
         local it = turtle.getItemDetail(s)
@@ -685,7 +699,7 @@ function equipment.state()
     return {
         left        = kindOnSide("left"),
         right       = kindOnSide("right"),
-        pickaxeOn   = pickaxeStowedSlot() == nil,
+        pickaxeOn   = equipment.sideOf("pickaxe") ~= nil,
         invLoader   = findSlot(I.LOADER_TURTLE) ~= nil,
         invScanner  = findSlot(I.SCANNER)       ~= nil,
         invFuelEC   = turtle.getItemDetail(S.FUEL_EC) ~= nil,
@@ -712,7 +726,7 @@ function equipment.validate(mode)
         if not equipment.state().invLoader then return false, "loader_turtle_missing" end
     elseif mode == "mine" then
         if equipment.sideOf("chunky") then return false, "chunky_still_equipped" end
-        if pickaxeStowedSlot() ~= nil then return false, "pickaxe_not_equipped" end
+        if not equipment.sideOf("pickaxe") then return false, "pickaxe_not_equipped" end
     else
         return false, "unknown_mode"
     end
@@ -1470,15 +1484,13 @@ git commit -m "feat: persist placed-loader state and add autonomous return on se
 
 ### Task 5c: Loader beacon — modem on the carried chunk loader
 
-**AMENDED after Task 1: this task is mandatory and load-bearing, not telemetry.**
-The pack sets `chunkLoadValidTime = 600` — "time in seconds while a loaded chunk
-can be considered valid without touch". If a placed, idle turtle running no
-program does not constitute a touch, chunk loading expires **10 minutes into a
-sector** and the miner freezes: Invariant A failing on a timer. A loader running
-`loader_turtle.lua` ticks continuously, which is the most plausible "touch", so
-the beacon program is what keeps the ticket alive. It must ship before any long
-sector run, not after. Raising `chunkLoadValidTime` (range is open above 60) is
-recommended belt-and-braces, not a substitute.
+**AMENDED after Task 1 Step 1 — correcting an earlier amendment.** I previously
+promoted this task to load-bearing on the theory that `chunkLoadValidTime = 600`
+would expire an idle loader's chunk ticket after ten minutes. **Measured false:**
+an idle, program-less chunky turtle held its chunk for 20.8 minutes with no stall
+(largest gap 7.0 s against a 5 s tick). The beacon is therefore *not* what keeps
+the chunk alive, and this task reverts to its original standing: worth building
+for verification and orphan self-reporting, not required for chunk retention.
 
 The loader turtle has two upgrade slots and uses one for chunky. Putting an ender
 modem in the other turns it from a silent object into one that reports itself.

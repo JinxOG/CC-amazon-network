@@ -65,29 +65,65 @@ changing both.
 
 Invariant: `FENCE_CHUNK_RADIUS <= chunkyTurtleRadius - 1`.
 
-## `chunkLoadValidTime = 600` — open risk
+## `chunkLoadValidTime = 600` — measured, not a decay timer for idle loaders
 
-The config describes this as the time a loaded chunk stays valid "without touch".
-If a placed, idle turtle running no program does not constitute a touch, chunk
-loading expires **10 minutes into a sector** and the miner freezes — Invariant A
-failing on a timer.
+The config describes this as the time a loaded chunk stays valid "without touch",
+which raised the worry that an idle placed loader would stop holding its chunk
+ten minutes into a sector. **Measured: it does not.**
 
-Consequences already folded into the plan:
+Test C ran a witness turtle 5 blocks from an idle, program-less chunky turtle
+with the player 300+ blocks away:
 
-- Task 1 Step 1's 3-minute observation window is too short to detect this. It
-  needs a ≥12-minute run before assumption 1 can be considered verified.
-- Task 5c (loader beacon) is mandatory, not optional. A loader running
-  `loader_turtle.lua` ticks continuously, which is the most plausible "touch".
-  The beacon is load-bearing for chunk retention, not just telemetry.
+```
+[REPORT] 248 ticks over 20.8 min of wall clock
+[REPORT] expected ~250 ticks if never stalled
+[REPORT] largest gap: 7.0 s
+[REPORT] no stall detected — loading held.
+```
 
-Recommended: raise `chunkLoadValidTime` well above any sector duration (e.g.
-86400). The documented range is open-ended above 60.
+20.8 minutes is comfortably past the 600 s threshold, and the largest gap (7.0 s
+against a 5 s interval) is ordinary tick jitter, not a stall. Whatever "touch"
+means here, an idle placed chunky turtle satisfies it.
+
+Consequence: the loader beacon (Task 5c) is **not** load-bearing for chunk
+retention. It remains worth building for verification and orphan self-reporting,
+which is what it was originally for.
+
+Residual: no control run was recorded. A control — break the loader, wipe
+`tick.log`, rerun for 5 minutes, confirm it stalls almost immediately — would
+rule out the area having been held loaded by something else. Cheap, and worth
+doing before rollout.
 
 ## Verification status
 
+All three assumptions verified in-world 2026-08-13 using `tests/inworld/`.
+
 | Assumption | Status |
 |---|---|
-| 1. Placed idle turtle loads chunks (≥12 min) | **PENDING** |
-| 2. Upgrade survives place → break → re-place | **PENDING** |
-| 3. Runtime equip swap; pickaxe + chunky together | **PENDING** |
-| 4. Footprint measured | Resolved from config: 5×5 chunks |
+| 1. Placed idle turtle loads chunks | **PASS** — 20.8 min, no stall (control run outstanding) |
+| 2. Upgrade survives place → break → re-place | **PASS** — returns as `Advanced Chunky Turtle` |
+| 3. Runtime equip swap; pickaxe + chunky together | **PASS** — `equip` true in both directions, loadout restored |
+| 4. Footprint | Resolved from config: 5×5 chunks |
+
+## Equipment detection — use `turtle.getEquippedLeft/Right`
+
+The Step 4b probe settled how `equipment.lua` should identify upgrades:
+
+```
+restored:  L=modem  R=nil
+   getEquipped L: computercraft:wireless_modem_advanced
+                R: minecraft:diamond_pickaxe
+```
+
+Two facts:
+
+1. **`turtle.getEquippedLeft()` / `getEquippedRight()` exist** on this version and
+   return the equipped item's detail, including its registry `name`.
+2. **`peripheral.getType()` returns `nil` for the pickaxe side**, so it cannot
+   distinguish a tool from an empty side.
+
+So upgrades are identified by registry name directly. The original plan's scheme —
+map peripheral types to upgrade kinds, then infer the pickaxe by elimination
+because it is the only non-peripheral upgrade — is unnecessary and is deleted.
+That inference would also have been fragile: it assumed exactly one equipped
+upgrade reports `nil`, which stops being true the moment two tools are held.
