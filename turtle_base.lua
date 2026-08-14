@@ -5,6 +5,11 @@
 local proto = require("protocol")
 local W     = require("waypoints")
 
+-- geofence.lua is not installed on every turtle role (delivery/support don't
+-- ship it — see install.lua). pcall so those roles behave exactly as before.
+local ok_gf, _geofence = pcall(require, "geofence")
+if not ok_gf then _geofence = nil end
+
 local base = {}
 
 -- ─── Config ──────────────────────────────────────────────────────────────────
@@ -81,6 +86,10 @@ function base.isServerDown()     return _self.serverDown  end
 function base.isRecalled()       return _self.recalled    end
 function base.setRecalled(v)     _self.recalled = v       end
 function base.setSkyReturn(v)    _self.inSkyReturn = v    end
+
+-- Exposed so the miner can set/clear the anchor around placed-loader work.
+-- nil on roles that don't ship geofence.lua (see the pcall require above).
+base.geofence = _geofence
 
 local _customRefuelFn = nil
 function base.setRefuelFn(fn)    _customRefuelFn = fn    end
@@ -382,6 +391,28 @@ local function tryMove(moveFn, digFn, dir)
     -- Hold position while server is unreachable; resume when reconnected.
     -- Exception: sky return has a fixed safe path — don't freeze in the arrivals shaft.
     while _self.serverDown and not _self.inSkyReturn do sleep(2) end
+
+    -- Geofence: refuse any move that would leave the placed loader's footprint.
+    -- Enforced here, at the single choke point every move passes through, so a
+    -- new call site cannot bypass it. Only forward/back change x/z (and hence
+    -- chunk); up/down only change y, which the chunk grid ignores, so vertical
+    -- moves are never fenced.
+    if _geofence and _geofence.isActive() and (dir == "forward" or dir == "back") then
+        local nx, nz = _self.pos.x, _self.pos.z
+        local sign = (dir == "forward") and 1 or -1
+        if     _self.facing == 0 then nz = nz - sign
+        elseif _self.facing == 1 then nx = nx + sign
+        elseif _self.facing == 2 then nz = nz + sign
+        else                          nx = nx - sign end
+
+        if not _geofence.contains(nx, nz) then
+            local a = _geofence.anchor()
+            logWarn(string.format(
+                "Geofence: refusing move to %d,%d (anchor chunk %d,%d r%d)",
+                nx, nz, a.cx, a.cz, a.chunkRadius))
+            return false, "geofence_breach"
+        end
+    end
 
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
     local digAttempts = 0
