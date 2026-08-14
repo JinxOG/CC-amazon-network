@@ -82,6 +82,11 @@ proto.MSG = {
     SECTOR_DONE    = "SECTOR_DONE",     -- miner → server: sector fully mined, here are mined ores
     MINE_COMPLETE  = "MINE_COMPLETE",   -- server → miner: all sectors exhausted, return home
 
+    -- Solo-miner phase reporting (miner → server). Drives the dashboard's
+    -- per-node process view and distinguishes a deliberate comms gap during the
+    -- loader-retrieval swap from an actual turtle failure.
+    MINE_PHASE     = "MINE_PHASE",
+
     -- Mining recall (miner → support, CH_LOCAL)
     MINE_RECALL = "MINE_RECALL", -- miner → support: job recalled, ascend to sky and return home
     MINE_CLEAR  = "MINE_CLEAR",  -- support → miner: column cleared (stepped east), safe to ascend
@@ -128,6 +133,23 @@ proto.STATUS = {
     WORKING     = "WORKING",
     RETURNING   = "RETURNING",
     ERROR       = "ERROR",
+}
+
+-- ─── Solo Miner Phases ───────────────────────────────────────────────────────
+-- Ordered lifecycle of one sector. Reported on entry to each phase so the
+-- dashboard can show exactly where a node is, and so a stall is attributable.
+proto.PHASE = {
+    DEPARTING       = "DEPARTING",        -- leaving the depot, modem+chunky
+    TRAVELLING      = "TRAVELLING",       -- flying to sector, self-loading
+    PLACING_LOADER  = "PLACING_LOADER",   -- placing the carried chunk loader
+    SWAP_TO_PICKAXE = "SWAP_TO_PICKAXE",  -- chunky → pickaxe
+    SCANNING        = "SCANNING",          -- geo scan at a depth level
+    MINING          = "MINING",            -- working ores inside the fence
+    DUMPING         = "DUMPING",           -- emptying to the ore ender chest
+    SWAP_TO_CHUNKY  = "SWAP_TO_CHUNKY",   -- pickaxe → chunky, loader still down
+    RETRIEVING      = "RETRIEVING",        -- comms-gap window: digging loader up
+    RETURNING       = "RETURNING",         -- flying home, modem+chunky
+    DOCKED          = "DOCKED",
 }
 
 -- ─── Sequence Counter ────────────────────────────────────────────────────────
@@ -178,13 +200,19 @@ function proto.payloadRegister(role, fuelLevel, fuelMax, position)
     }
 end
 
-function proto.payloadHeartbeat(status, fuelLevel, position, jobId)
+-- phase/chunk/commsGap are optional and nil for every non-miner role, so
+-- delivery and support heartbeats are unchanged on the wire.
+function proto.payloadHeartbeat(status, fuelLevel, position, jobId, extra)
+    extra = extra or {}
     return {
         status   = status,
         fuel     = fuelLevel,
         position = position,
         jobId    = jobId,
         version  = proto.VERSION,
+        phase    = extra.phase,
+        chunk    = extra.chunk,      -- { cx=, cz= } the miner is working in
+        commsGap = extra.commsGap,   -- true while a deliberate gap is expected
     }
 end
 
@@ -292,6 +320,16 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         oreCount   = oreCount  or 0,
         foundOres  = foundOres or {},
         minedOres  = minedOres or {},
+    }
+end
+
+-- detail is free-form context for the dashboard: a reason, a sector, a count.
+function proto.payloadMinePhase(jobId, phase, detail)
+    return {
+        jobId  = jobId,
+        phase  = phase,
+        detail = detail,
+        ts     = os.epoch("utc"),
     }
 end
 
