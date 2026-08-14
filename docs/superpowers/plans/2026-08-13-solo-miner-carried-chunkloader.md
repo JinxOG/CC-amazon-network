@@ -1379,6 +1379,252 @@ git commit -m "feat: persist placed-loader state and add autonomous return on se
 
 ---
 
+### Task 5c: Loader beacon — modem on the carried chunk loader
+
+The loader turtle has two upgrade slots and uses one for chunky. Putting an ender
+modem in the other turns it from a silent object into one that reports itself.
+
+This does **not** close the retrieval comms gap — radio needs a modem at both
+ends, and the miner has none during the swap. What it buys is bigger:
+
+- **Invariant A becomes verified rather than assumed.** Today the miner places the
+  loader, sees a block standing, and trusts it is loading. If that upgrade fails
+  or something breaks the loader, the miner mines on until it silently unloads.
+  A beacon makes loss detectable in seconds.
+- **Orphans self-report.** Task 5b infers orphans from the miner's disk state plus
+  server bookkeeping. A beacon just announces itself, and keeps announcing even
+  if the miner that placed it is permanently gone.
+
+The loader program is the simplest turtle program in the fleet: register, beacon,
+nothing else. It never moves, never touches inventory, never coordinates, and
+needs no fuel.
+
+**Files:**
+- Create: `loader_turtle.lua` (renamed to `startup.lua` on each loader)
+- Modify: `protocol.lua` — `ROLE.LOADER`, `MSG.LOADER_BEACON`
+- Modify: `central_server.lua` — register loaders, never dispatch to them, expose in `/state`
+- Modify: `mine_flow.lua` — verify the beacon before removing chunky; monitor it while mining
+- Test: `tests/test_loader_beacon.lua`
+
+**Interfaces:**
+- Produces: `LOADER_BEACON` broadcast on `CH_LOCAL` and `CH_SERVER` every 5s carrying `{ loaderId, position, deployedBy }`.
+- Produces: `mine_flow.beaconSeenWithin(seconds) → bool`
+
+- [ ] **Step 1: Add the role and message**
+
+In `protocol.lua`:
+
+```lua
+    LOADER   = "LOADER",     -- in proto.ROLE: placed chunk loader, never dispatched
+```
+
+```lua
+    -- Placed chunk loader liveness (loader → server + CH_LOCAL to any miner).
+    -- Proves the chunk is actually held, and makes an abandoned loader
+    -- self-reporting rather than something the server has to infer.
+    LOADER_BEACON = "LOADER_BEACON",
+```
+
+```lua
+function proto.payloadLoaderBeacon(position, deployedBy)
+    return { position = position, deployedBy = deployedBy, ts = os.epoch("utc") }
+end
+```
+
+- [ ] **Step 2: Write the loader program**
+
+Create `loader_turtle.lua`:
+
+```lua
+-- loader_turtle.lua
+-- Rename to startup.lua on any turtle used as a placed chunk loader.
+--
+-- Equipped: chunky upgrade + ender modem. Never moves, never digs, holds no
+-- cargo, needs no fuel. Its entire job is to hold a chunk and say so.
+--
+-- The beacon is what makes chunk loading verifiable: a miner that stops hearing
+-- it re-equips its own chunky immediately rather than mining on inside a chunk
+-- that may no longer be loaded.
+
+local proto = require("protocol")
+
+local BEACON_INTERVAL = 5
+
+local modem = peripheral.find("modem")
+if not modem then
+    -- Nothing useful can be done without comms, but the chunky upgrade still
+    -- works, so keep holding the chunk rather than halting.
+    print("[LOADER] No modem — holding chunk silently.")
+    while true do sleep(60) end
+end
+
+proto.openChannels(modem, { proto.CH_SERVER, proto.CH_BROADCAST,
+                            proto.CH_PRIVATE, proto.CH_LOCAL })
+
+local selfId = proto.selfId()
+local deployedBy = nil
+if fs.exists("deployed_by.txt") then
+    local f = fs.open("deployed_by.txt", "r")
+    deployedBy = f.readAll()
+    f.close()
+end
+
+local function position()
+    local x, y, z = gps.locate(2)
+    if x then return { x = x, y = y, z = z } end
+    return nil
+end
+
+print("[LOADER] " .. selfId .. " holding chunk. Beaconing every "
+      .. BEACON_INTERVAL .. "s.")
+
+while true do
+    local pos = position()
+    local payload = proto.payloadLoaderBeacon(pos, deployedBy)
+    -- CH_LOCAL so a nearby miner can verify directly without a server round
+    -- trip; CH_SERVER so the fleet view knows this loader exists at all.
+    proto.send(modem, proto.CH_LOCAL,
+        proto.encode(proto.MSG.LOADER_BEACON, selfId, "broadcast", payload))
+    proto.send(modem, proto.CH_SERVER,
+        proto.encode(proto.MSG.LOADER_BEACON, selfId, "server", payload))
+    sleep(BEACON_INTERVAL)
+end
+```
+
+- [ ] **Step 3: Gate the chunky swap on a live beacon**
+
+In `mine_flow.lua`, add beacon tracking and require it before giving up chunky:
+
+```lua
+local _lastBeacon = 0
+local _beaconId   = nil
+
+-- Called by ore_turtle whenever a LOADER_BEACON arrives.
+function mine_flow.noteBeacon(msg)
+    _lastBeacon = os.epoch("utc")
+    _beaconId   = msg.from
+end
+
+function mine_flow.beaconSeenWithin(seconds)
+    return (os.epoch("utc") - _lastBeacon) < (seconds * 1000)
+end
+```
+
+In `placeLoader`, between confirming the block is standing and swapping:
+
+```lua
+    -- Wait for the placed loader to announce itself before giving up our own
+    -- chunk loading. Without this we would be trusting that a block we can see
+    -- is actually holding the chunk.
+    _lastBeacon = 0
+    local beaconDeadline = os.epoch("utc") + 15000
+    while os.epoch("utc") < beaconDeadline do
+        if mine_flow.beaconSeenWithin(10) then break end
+        _hooks.pump(1)   -- let ore_turtle drain messages into noteBeacon
+    end
+    if not mine_flow.beaconSeenWithin(10) then
+        -- Never remove chunky on an unverified loader. Take it back and fail
+        -- the sector; a loader that cannot beacon may not be loading either.
+        log("Loader placed but never beaconed — recovering it")
+        return false, "loader_no_beacon"
+    end
+```
+
+Add `pump` to the injected hooks in Task 8, implemented in `ore_turtle.lua` as a
+short `base.receive`-style drain that routes `LOADER_BEACON` to
+`mine_flow.noteBeacon` and ignores everything else.
+
+- [ ] **Step 4: Monitor the beacon while mining**
+
+In the miner's ore loop, beside the existing periodic fuel check:
+
+```lua
+            -- If the loader stops beaconing we may no longer be in a loaded
+            -- chunk. Re-equip our own chunky immediately — mining can wait,
+            -- being unloaded outside the base area cannot be undone.
+            if mined % 10 == 0 and geofence.isActive()
+                    and not mine_flow.beaconSeenWithin(30) then
+                print("[MINER] Loader beacon lost — restoring own chunk loading")
+                base.sendProgress("loader_beacon_lost")
+                equipment.toTravelMode()
+                geofence.clear()
+                break
+            end
+```
+
+- [ ] **Step 5: Record the deployer on placement**
+
+In `placeLoader`, before `turtle.place()`, the miner cannot write to the loader's
+filesystem, so record the pairing server-side instead: include the miner's own ID
+in the `PLACING_LOADER` phase detail (Task 5b Step 9 already sends coordinates —
+extend it to `"x,y,z by <selfId>"`). The server joins beacon reports to that
+record so the dashboard can show which miner owns which loader.
+
+- [ ] **Step 6: Server — register loaders, never dispatch to them**
+
+In `central_server.lua`, handle `LOADER_BEACON`:
+
+```lua
+-- Loaders are inventory, not workers. They register so the fleet view can show
+-- them and flag orphans, but the dispatcher must never assign them a job.
+local function handleLoaderBeacon(msg)
+    local p = msg.payload
+    local t = state.registry[msg.from] or {}
+    t.role       = proto.ROLE.LOADER
+    t.online     = true
+    t.lastSeen   = os.epoch("utc")
+    t.position   = p.position or t.position
+    t.deployedBy = p.deployedBy or t.deployedBy
+    state.registry[msg.from] = t
+end
+```
+
+Confirm `registry.getIdle(role)` can never return a LOADER — the dispatcher asks
+for `MINER`, `DELIVERY` and `SUPPORT` roles specifically, so verify by inspection
+that no code path requests an idle turtle without naming a role.
+
+- [ ] **Step 7: Dashboard — orphan warning**
+
+A loader beaconing with no active mine job owning it is an orphan. Surface it as
+a warning row with its coordinates so it can be collected by hand. This is the
+case that would otherwise silently force-load a chunk indefinitely.
+
+- [ ] **Step 8: Write the tests**
+
+Create `tests/test_loader_beacon.lua` covering:
+- `beaconSeenWithin` returns false before any beacon and true immediately after `noteBeacon`
+- `placeLoader` returns `loader_no_beacon` and **leaves chunky equipped** when no beacon arrives
+- the mining loop's beacon-lost path restores travel mode and clears the fence
+
+The second is the important one: it is the guard that stops the miner giving up
+chunk loading to a loader that may not be working.
+
+- [ ] **Step 9: Run the suite**
+
+Run: `lua tests/run.lua`
+Expected: all pass
+
+- [ ] **Step 10: Prepare the loader turtles**
+
+On each turtle intended as a loader: equip chunky and an ender modem, copy
+`loader_turtle.lua` to `startup.lua`, and label it (`label set loader_1`) so it
+has a stable identity. A turtle keeps its computer ID and filesystem through
+place → break → re-place, so this is a one-time setup per loader.
+
+- [ ] **Step 11: Commit and push**
+
+```lua
+proto.VERSION = "1.9.3"
+```
+
+```bash
+git add protocol.lua loader_turtle.lua mine_flow.lua ore_turtle.lua central_server.lua tests/test_loader_beacon.lua tests/run.lua
+git commit -m "feat: loader beacon verifies chunk loading and self-reports orphans (v1.9.3)"
+git push origin master
+```
+
+---
+
 ### Task 6: Protocol additions
 
 Additive only. Nothing is removed, so delivery is unaffected.
