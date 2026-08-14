@@ -10,6 +10,7 @@ local files = {
     "tests.test_loader_state",
     "tests.test_loader_beacon",
     "tests.test_mine_phase",
+    "tests.test_mine_flow",
 }
 
 local passed, failed = 0, 0
