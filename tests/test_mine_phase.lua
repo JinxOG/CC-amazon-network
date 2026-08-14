@@ -9,6 +9,8 @@
 
 package.path = "./?.lua;" .. package.path
 
+local stub = require("tests.stub_cc")
+
 local function fresh()
     package.loaded["protocol"] = nil
     return require("protocol")
@@ -122,6 +124,37 @@ return {
         assert_eq(p.phase, nil)
         assert_eq(p.chunk, nil)
         assert_eq(p.commsGap, nil)
+    end,
+
+    -- ─── Wire round-trip: commsGap = false and a nested chunk table ─────────
+    -- `false` is the classic value serialisation silently drops (many naive
+    -- encoders treat a falsy value as "absent"). The server's ghost-detection
+    -- change (Task 7) depends on being able to tell "commsGap explicitly
+    -- false" apart from "commsGap nil / turtle never sent one", so this pins
+    -- that `false` survives a real encode -> serialise -> unserialise ->
+    -- decode trip rather than arriving as nil. Also covers a nested
+    -- {cx=, cz=} chunk table surviving the same trip.
+    ["a heartbeat payload with commsGap=false and a nested chunk round-trips on the wire"] = function(assert_eq)
+        stub.install({})
+        os.epoch = os.epoch or function() return os.time() * 1000 end
+        local proto = fresh()
+        local payload = proto.payloadHeartbeat("WORKING", 500, { x = 1, y = 2, z = 3 }, "job_5", {
+            phase    = proto.PHASE.MINING,
+            chunk    = { cx = 4, cz = -2 },
+            commsGap = false,
+        })
+        local msg  = proto.encode(proto.MSG.HEARTBEAT, "miner_1", "server", payload)
+        local wire = textutils.unserialise(textutils.serialise(msg))
+        local ok, decoded = proto.decode(wire)
+        assert_eq(ok, true)
+        assert_eq(decoded.payload.phase, "MINING")
+        assert_eq(decoded.payload.commsGap, false)
+        -- The actual regression this guards against: a naive serialiser (or
+        -- an `x or default` pattern somewhere in the pipeline) collapsing
+        -- `false` down to `nil`, which is indistinguishable from "no report".
+        assert_eq(decoded.payload.commsGap == nil, false)
+        assert_eq(decoded.payload.chunk.cx, 4)
+        assert_eq(decoded.payload.chunk.cz, -2)
     end,
 
 }

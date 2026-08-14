@@ -216,11 +216,13 @@ function proto.payloadHeartbeat(status, fuelLevel, position, jobId, extra)
     }
 end
 
--- params is job-specific. Always includes partnerId for the paired turtle.
+-- params is job-specific. DELIVER/BUILD/SUPPORT_FOLLOW still include
+-- partnerId for the paired turtle. MINE is solo since v1.9.0 (the miner
+-- carries its own chunk loader) and has no partnerId at all.
 --   DELIVER:        { items={[name]=count}, destination={x,y,z}, partnerId="id" }
 --   BUILD:          { blueprint="name", origin={x,y,z}, facing=0, partnerId="id" }
 --   SUPPORT_FOLLOW: { partnerId="id", masterJobId="job_id", fuelManage=false }
---   MINE:           { centerX=n, centerZ=n, radius=n, scanY=56, partnerId="id" }
+--   MINE:           { centerX=n, centerZ=n, radius=n, scanY=56 }
 function proto.payloadJobAssign(jobId, jobType, params)
     return {
         jobId   = jobId,

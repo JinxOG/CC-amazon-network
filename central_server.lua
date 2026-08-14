@@ -231,7 +231,14 @@ end
 function registry.checkTimeouts()
     local now = os.epoch("utc")
     for id, t in pairs(state.registry) do
-        if t.online and (now - t.lastSeen) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
+        -- A miner in RETRIEVING has deliberately unequipped its modem; missed
+        -- heartbeats there are expected, not evidence of a failure. Allow a
+        -- generous 60s before treating it as real. commsGap/phaseAt are nil
+        -- for every non-miner role, so this never applies to them.
+        local inPlannedCommsGap = t.commsGap and t.phaseAt and (now - t.phaseAt) < 60000
+        if inPlannedCommsGap then
+            -- skip: expected gap, don't count it as a timeout or prune it
+        elseif t.online and (now - t.lastSeen) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
             local jobId = t.jobId
             registry.markOffline(id)
             if jobId then
@@ -561,6 +568,20 @@ function jobQueue.checkGhosts()
         if (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS)
            and job.assignedTo then
             local t = state.registry[job.assignedTo]
+
+            -- A miner in RETRIEVING has deliberately unequipped its modem; missed
+            -- heartbeats there are expected, not evidence of a failure. Allow a
+            -- generous 60s before treating it as real. commsGap/phaseAt are nil
+            -- for every non-miner role, so this never applies to them.
+            local inPlannedCommsGap = t and t.commsGap and t.phaseAt
+                and (nowSec - (t.phaseAt / 1000)) < 60
+
+            if inPlannedCommsGap then
+                job.ghostSince   = nil
+                job.idleSince    = nil
+                job.absentSince  = nil
+            else
+
             -- Case 1: turtle moved on to a different job (classic ghost)
             local isGhost = t and t.online and t.jobId ~= jobId
             if isGhost then
@@ -612,6 +633,8 @@ function jobQueue.checkGhosts()
             else
                 job.absentSince = nil
             end
+
+            end
         end
     end
 end
@@ -640,22 +663,31 @@ local function checkOrphanedMiners()
     for jobId, job in pairs(state.jobs) do
         if job.type == proto.JOB.MINE
                 and (job.status == JOB_STATUS.IN_PROGRESS or job.status == JOB_STATUS.ASSIGNED) then
-            local supportActive = isSupportWorking(job.linkedJob)
-            if not supportActive then
-                job.orphanSince = job.orphanSince or nowSec
-                if nowSec - job.orphanSince > 120 then
-                    local miner = job.assignedTo and state.registry[job.assignedTo]
-                    if miner and miner.online then
-                        logWarn(string.format(
-                            "Orphaned miner %s (job %s): no support for 2min — recalling",
-                            job.assignedTo, jobId))
-                        sendTo(job.assignedTo, proto.MSG.RECALL,
-                            proto.payloadRecall("support_abandoned"))
-                        job.orphanSince = nowSec + 3600  -- suppress re-recall for 1h
-                    end
-                end
-            else
+            -- Solo miners (v1.9.0+) carry their own chunk loader and are
+            -- dispatched with no linkedJob support job at all — there is
+            -- nothing for them to be "orphaned" from. Without this guard
+            -- isSupportWorking(nil) is always false and every solo mine job
+            -- would get recalled 2 minutes after dispatch.
+            if not job.linkedJob then
                 job.orphanSince = nil
+            else
+                local supportActive = isSupportWorking(job.linkedJob)
+                if not supportActive then
+                    job.orphanSince = job.orphanSince or nowSec
+                    if nowSec - job.orphanSince > 120 then
+                        local miner = job.assignedTo and state.registry[job.assignedTo]
+                        if miner and miner.online then
+                            logWarn(string.format(
+                                "Orphaned miner %s (job %s): no support for 2min — recalling",
+                                job.assignedTo, jobId))
+                            sendTo(job.assignedTo, proto.MSG.RECALL,
+                                proto.payloadRecall("support_abandoned"))
+                            job.orphanSince = nowSec + 3600  -- suppress re-recall for 1h
+                        end
+                    end
+                else
+                    job.orphanSince = nil
+                end
             end
         end
     end
@@ -1244,9 +1276,14 @@ function dispatcher.tick()
         local workers  = registry.getIdle(role)
         local supports = registry.getIdle(proto.ROLE.SUPPORT)
 
-        if #workers > 0 and #supports > 0 then
+        -- MINE jobs are solo since v1.9.0: the miner carries its own chunk
+        -- loader, so dispatch never needs an idle SUPPORT turtle for one.
+        -- DELIVER keeps the pair system unchanged — a delivery turtle moves
+        -- continuously to its destination, so a stationary loader cannot
+        -- cover it.
+        if #workers > 0 and (isMine or #supports > 0) then
             local worker  = workers[1]
-            local support = supports[1]
+            local support = (not isMine) and supports[1] or nil
 
             -- For MINE jobs: initialise the sector grid before dispatch
             if isMine then
@@ -1256,7 +1293,7 @@ function dispatcher.tick()
             -- Build worker params (copy job params + inject partnerId)
             local workerParams = {}
             for k, v in pairs(job.params) do workerParams[k] = v end
-            workerParams.partnerId = support.id
+            if not isMine then workerParams.partnerId = support.id end
 
             -- Assign a vertical altitude slot to this mine pair so concurrent
             -- pairs don't fly at the same height and physically collide.
@@ -1277,40 +1314,51 @@ function dispatcher.tick()
                 workerParams.travelYOffset = mineSlot * 10
             end
 
-            -- Create the paired support job
-            -- MINE support gets fuelManage=true so it runs the coal-transfer loop
-            local supportParams = {
-                partnerId      = worker.id,
-                masterJobId    = job.id,
-                fuelManage     = isMine,
-                destination    = job.params.destination,  -- nil for MINE, that's fine
-                travelYOffset  = workerParams.travelYOffset or 0,
-            }
-            local supportJobId = jobQueue.add(proto.JOB.SUPPORT_FOLLOW, supportParams, job.priority)
+            -- Create the paired support job (DELIVER only — see comment above)
+            local supportJobId = nil
+            if not isMine then
+                local supportParams = {
+                    partnerId      = worker.id,
+                    masterJobId    = job.id,
+                    fuelManage     = false,
+                    destination    = job.params.destination,
+                    travelYOffset  = workerParams.travelYOffset or 0,
+                }
+                supportJobId = jobQueue.add(proto.JOB.SUPPORT_FOLLOW, supportParams, job.priority)
 
-            -- Link the two jobs
-            job.linkedJob = supportJobId
-            -- NOTE: support job intentionally has no linkedJob — prevents cancelJob() back-cycle
+                -- Link the two jobs
+                job.linkedJob = supportJobId
+                -- NOTE: support job intentionally has no linkedJob — prevents cancelJob() back-cycle
+
+                -- Assign support
+                jobQueue.assign(supportJobId, support.id)
+                sendTo(support.id, proto.MSG.JOB_ASSIGN,
+                    proto.payloadJobAssign(supportJobId, proto.JOB.SUPPORT_FOLLOW, supportParams))
+            end
 
             -- Assign worker
             jobQueue.assign(job.id, worker.id)
             sendTo(worker.id, proto.MSG.JOB_ASSIGN,
                 proto.payloadJobAssign(job.id, job.type, workerParams))
 
-            -- Assign support
-            jobQueue.assign(supportJobId, support.id)
-            sendTo(support.id, proto.MSG.JOB_ASSIGN,
-                proto.payloadJobAssign(supportJobId, proto.JOB.SUPPORT_FOLLOW, supportParams))
-
-            logInfo(string.format("Dispatched %s [%s] -> %s  support %s -> %s",
-                job.id, job.type, worker.id, supportJobId, support.id))
+            if isMine then
+                logInfo(string.format("Dispatched %s [%s] -> %s (solo)", job.id, job.type, worker.id))
+            else
+                logInfo(string.format("Dispatched %s [%s] -> %s  support %s -> %s",
+                    job.id, job.type, worker.id, supportJobId, support.id))
+            end
 
             state.lastDispatchTime = os.epoch("utc")
             return
         else
             if (now - lastDispatchHoldLog) >= 60000 then
-                logInfo(string.format("Dispatch hold: %s needs %s (idle=%d fuel≥%d) + SUPPORT (idle=%d)",
-                    job.id, JOB_ROLE[job.type] or "?", #workers, CFG.MIN_DISPATCH_FUEL, #supports))
+                if isMine then
+                    logInfo(string.format("Dispatch hold: %s needs %s (idle=%d fuel≥%d)",
+                        job.id, JOB_ROLE[job.type] or "?", #workers, CFG.MIN_DISPATCH_FUEL))
+                else
+                    logInfo(string.format("Dispatch hold: %s needs %s (idle=%d fuel≥%d) + SUPPORT (idle=%d)",
+                        job.id, JOB_ROLE[job.type] or "?", #workers, CFG.MIN_DISPATCH_FUEL, #supports))
+                end
                 lastDispatchHoldLog = now
             end
         end
@@ -1356,8 +1404,17 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         registry.update(msg.from, p.status, p.fuel, p.position, p.jobId, p.version)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
-        -- Deliver any staged update now that the turtle is idle
         local t = state.registry[msg.from]
+        -- Solo-miner telemetry. nil for every other role, so this is a no-op for them.
+        if t then
+            if p.phase then
+                if t.phase ~= p.phase then t.phaseAt = os.epoch("utc") end
+                t.phase = p.phase
+            end
+            if p.chunk    then t.chunk    = p.chunk    end
+            if p.commsGap ~= nil then t.commsGap = p.commsGap end
+        end
+        -- Deliver any staged update now that the turtle is idle
         if t and t.pendingUpdate and t.status == proto.STATUS.IDLE then
             t.pendingUpdate = nil
             sendTo(msg.from, proto.MSG.UPDATE_ALL, {})
@@ -1681,6 +1738,25 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     zone.lastAssignments[msg.from] = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey }
     saveMiningZones()
 end
+
+-- Phase transitions arrive as their own message as well as on heartbeats, so a
+-- short-lived phase between two heartbeats is not missed by the dashboard.
+local function handleMinePhase(msg)
+    local p = msg.payload
+    local t = state.registry[msg.from]
+    if not t then return end
+    if t.phase ~= p.phase then t.phaseAt = p.ts or os.epoch("utc") end
+    t.phase = p.phase
+    -- RETRIEVING is the deliberate comms-gap window: the miner sacrifices its
+    -- modem so pickaxe and chunky can be equipped together. Mark it so a
+    -- missed heartbeat during it is not misread as a failure.
+    t.commsGap = (p.phase == proto.PHASE.RETRIEVING)
+    jobQueue.progress(p.jobId, proto.STATUS.WORKING,
+        string.format("phase %s%s", p.phase, p.detail and (" — " .. p.detail) or ""))
+    logInfo(string.format("%s phase: %s%s", msg.from, p.phase,
+        p.detail and (" (" .. p.detail .. ")") or ""))
+end
+handlers[proto.MSG.MINE_PHASE] = handleMinePhase
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
 
@@ -2511,6 +2587,13 @@ function server.run()
                 jobId   = t.jobId,
                 online  = t.online,
                 version = t.version,
+                -- Solo-miner telemetry (Task 7). nil/false for every other
+                -- role, so the dashboard falls back to today's plain
+                -- "offline" for delivery/support turtles.
+                phase    = t.phase,
+                phaseAt  = t.phaseAt or 0,
+                commsGap = t.commsGap and true or false,
+                chunk    = t.chunk,
                 dock    = t.dock and string.format("bay%d%s", t.dock.bay, t.dock.row) or nil,
                 dockX   = t.dock and t.dock.x or nil,
                 dockZ   = t.dock and t.dock.z or nil,
