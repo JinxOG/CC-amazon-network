@@ -112,6 +112,13 @@ function M.install(opts)
             if c.equipped.left ~= "minecraft:diamond_pickaxe" and c.equipped.right ~= "minecraft:diamond_pickaxe" then
                 return false, "No tool to dig with"
             end
+            -- Miner descends by digging down, so this is real ore collection
+            -- in practice -- must route through the same collectDug path as
+            -- dig(), including its full-inventory failure, not just clear
+            -- the block.
+            local b = c.world[below()]
+            if not b then return false, "Nothing to dig here" end
+            if not collectDug(b) then return false, "No space for item" end
             c.world[below()] = nil
             return true
         end,
@@ -137,6 +144,11 @@ function M.install(opts)
             local src = c.inv[c.selected]
             if not src then return false end
             n = n or src.count
+            -- n = n or src.count treats an explicit 0 as truthy (0 is not
+            -- falsy in Lua), so without this guard the merge below still
+            -- ran and wrote a { count = 0 } phantom entry into an empty
+            -- dest slot. Real CC leaves the slot nil.
+            if n <= 0 then return true end
             local d = c.inv[dest]
             if d and d.name ~= src.name then return false end
             c.inv[dest] = { name = src.name, count = (d and d.count or 0) + n }
@@ -269,12 +281,19 @@ function M._serialise(t)
     error("Cannot serialise type " .. ty, 0)
 end
 
+-- Matches real CC:Tweaked's implementation exactly, including the empty
+-- environment table as load()'s 4th argument -- that's what stops loaded
+-- input from reaching globals. Deliberately not stricter than this: real
+-- CC:Tweaked's unserialise("1+1") returns 2 (load-and-call has no notion
+-- of "is this a literal"), so this stub must return 2 there too rather
+-- than rejecting non-literal-but-valid input as an invented safeguard.
 function M._unserialise(s)
-    local chunk = load("return " .. s)
-    if not chunk then return nil end
-    local ok, result = pcall(chunk)
-    if not ok then return nil end
-    return result
+    local func = load("return " .. s, "unserialise", "t", {})
+    if func then
+        local ok, result = pcall(func)
+        if ok then return result end
+    end
+    return nil
 end
 
 return M

@@ -103,4 +103,55 @@ return {
         assert_eq(c.inv[1].count, 64)
         assert_eq(c.inv[1].name, "minecraft:stone")
     end,
+
+    ["transferTo with n = 0 does not create a phantom slot entry"] = function(assert_eq)
+        local c = stub.install({
+            inv = { [1] = { name = "minecraft:stone", count = 64 } },
+        })
+        turtle.select(1)
+        local ok = turtle.transferTo(2, 0)
+        assert_eq(ok, true)
+        assert_eq(c.inv[2], nil)
+        assert_eq(c.inv[1].count, 64)
+    end,
+
+    ["digDown collects the block into inventory, not just clears it"] = function(assert_eq)
+        local c = stub.install({
+            equipped = { right = "minecraft:diamond_pickaxe" },
+            world = { ["0,63,0"] = "minecraft:diamond_ore" },
+        })
+        local ok = turtle.digDown()
+        assert_eq(ok, true)
+        assert_eq(c.world["0,63,0"], nil)
+        assert_eq(c.inv[1].name, "minecraft:diamond_ore")
+        assert_eq(c.inv[1].count, 1)
+    end,
+
+    ["digDown fails without destroying the block when inventory is full"] = function(assert_eq)
+        local inv = {}
+        for s = 1, 16 do
+            inv[s] = { name = "minecraft:item" .. s, count = 64 }
+        end
+        local c = stub.install({
+            equipped = { right = "minecraft:diamond_pickaxe" },
+            world = { ["0,63,0"] = "minecraft:diamond_ore" },
+            inv = inv,
+        })
+        local ok = turtle.digDown()
+        assert_eq(ok, false)
+        assert_eq(c.world["0,63,0"], "minecraft:diamond_ore")
+    end,
+
+    ["textutils.unserialise returns nil on corrupt input instead of raising"] = function(assert_eq)
+        stub.install({})
+        local result = textutils.unserialise("{ this is not valid lua")
+        assert_eq(result, nil)
+    end,
+
+    ["textutils.unserialise matches real CC:Tweaked's load-and-call fidelity"] = function(assert_eq)
+        stub.install({})
+        -- Not a defect: real CC:Tweaked's unserialise runs load("return "..s)
+        -- and calls it, so non-literal-but-valid expressions evaluate too.
+        assert_eq(textutils.unserialise("1+1"), 2)
+    end,
 }
