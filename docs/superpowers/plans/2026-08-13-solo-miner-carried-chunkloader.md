@@ -18,6 +18,8 @@ Every task's requirements implicitly include this section.
 - **Invariant A — chunk safety:** the miner must never be outside the base-loaded area with neither its own chunky equipped nor a placed loader within footprint. Any code path that could violate this is a defect regardless of how unlikely.
 - **Invariant B — modem recoverability:** the miner must be able to recover a missing modem on boot from its own inventory. A reboot inside the swap window must not brick it.
 - **Invariant C — geofence:** while the pickaxe is equipped (chunky in inventory), the miner must not move outside the placed loader's guaranteed-loaded footprint. Enforced at the movement primitive, not at call sites.
+- **Invariant D — no abandoned loaders:** a placed loader must always be recoverable. The miner persists its placement to disk before placing and clears it only after confirmed retrieval, so a reboot or server crash at any instant errs toward "we may have one out there" rather than silently losing it. An abandoned loader is a turtle lost from the fleet plus a permanently force-loaded chunk.
+- **Invariant E — server independence for return:** the miner must be able to retrieve its loader and reach its dock with no server contact at all. A server outage may pause work; it must never strand a turtle in the field.
 - Slot numbers, item names, and altitudes are given as exact values in each task. Use them verbatim.
 - Existing style: 4-space indent, `--` comments explaining *why*, `logInfo`/`logWarn`/`logError` for base-level messages, `print("[MINER] ...")` for role-level.
 
@@ -39,6 +41,7 @@ Three assumptions carry the entire design. If any fails, stop and re-plan rather
 |---|---|
 | `equipment.lua` **(new)** | Equipment state model. Finds modem/pickaxe/chunky regardless of side, validates the full inventory contract, performs the two swap sequences atomically. No movement, no comms — pure inventory/peripheral logic so it is unit-testable. |
 | `geofence.lua` **(new)** | Chunk-footprint maths and the movement guard. Given a loader anchor and a target, answers "is this inside the loaded footprint". Pure functions. |
+| `loader_state.lua` **(new)** | Disk-persisted record of a placed loader, so a reboot never abandons one. Survives crashes on either side of the wire. |
 | `tests/stub_cc.lua` **(new)** | Stubs `turtle`, `peripheral`, `os.pullEvent`, `fs`, `textutils` so turtle modules load and run headless. |
 | `tests/run.lua` **(new)** | Test runner: discovers `tests/test_*.lua`, reports pass/fail, non-zero exit on failure. |
 | `tests/test_equipment.lua` **(new)** | Unit tests for `equipment.lua`. |
@@ -1054,6 +1057,328 @@ git commit -m "feat: add geofence and enforce it in the movement primitive"
 
 ---
 
+### Task 5b: Crash recovery — persistent loader state and autonomous return
+
+**Implement before Task 8.** Task 8's flow depends on the functions defined here.
+
+A placed loader is a physical object the miner is responsible for. In-memory
+state does not survive a reboot, so without this a rebooted miner abandons its
+loader: the turtle is lost from the fleet and the chunk stays force-loaded
+forever with nothing recording why. A server crash must also never leave a miner
+parked in the field indefinitely.
+
+**Files:**
+- Create: `loader_state.lua`
+- Modify: `turtle_base.lua` — `tryMove` serverDown hold; add `base.setAutonomousReturn()`
+- Modify: `ore_turtle.lua` — boot recovery before accepting work
+- Test: `tests/test_loader_state.lua`
+
+**Interfaces:**
+- Consumes: `equipment` (Task 3), `geofence` (Task 5).
+- Produces:
+  - `loader_state.record(x, y, z, sector, radius)` — persist before placing
+  - `loader_state.clear()` — after confirmed retrieval
+  - `loader_state.get() → { x, y, z, sector, radius } | nil`
+  - `loader_state.hasPlaced() → bool`
+  - `base.setAutonomousReturn(bool)` — exempts movement from the serverDown hold
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_loader_state.lua`:
+
+```lua
+local stub = require("tests.stub_cc")
+
+local function fresh()
+    stub.install({})
+    package.loaded["loader_state"] = nil
+    local ls = require("loader_state")
+    ls.clear()
+    return ls
+end
+
+return {
+    ["no loader recorded on a clean start"] = function(assert_eq)
+        local ls = fresh()
+        assert_eq(ls.hasPlaced(), false)
+        assert_eq(ls.get(), nil)
+    end,
+
+    ["record survives a simulated reboot"] = function(assert_eq)
+        local ls = fresh()
+        ls.record(100, 64, -200, { sx = 96, sz = -208 }, 24)
+        package.loaded["loader_state"] = nil          -- simulate reboot
+        local ls2 = require("loader_state")
+        assert_eq(ls2.hasPlaced(), true)
+        local s = ls2.get()
+        assert_eq(s.x, 100); assert_eq(s.y, 64); assert_eq(s.z, -200)
+        assert_eq(s.sector.sx, 96); assert_eq(s.radius, 24)
+    end,
+
+    ["clear removes the record"] = function(assert_eq)
+        local ls = fresh()
+        ls.record(1, 2, 3, { sx = 0, sz = 0 }, 24)
+        ls.clear()
+        assert_eq(ls.hasPlaced(), false)
+    end,
+
+    ["corrupt state file is treated as no loader, not a crash"] = function(assert_eq)
+        local ls = fresh()
+        local f = fs.open("loader_state.dat", "w")
+        f.write("{ this is not valid lua")
+        f.close()
+        package.loaded["loader_state"] = nil
+        local ls2 = require("loader_state")
+        assert_eq(ls2.hasPlaced(), false,
+            "a corrupt file must not brick the miner on boot")
+    end,
+}
+```
+
+Extend `tests/stub_cc.lua` with an in-memory `fs` so these run headless:
+
+```lua
+    local files = {}
+    fs = {
+        open = function(path, mode)
+            if mode == "r" then
+                if not files[path] then return nil end
+                local content, done = files[path], false
+                return {
+                    readAll = function() return content end,
+                    close   = function() end,
+                }
+            end
+            local buf = {}
+            return {
+                write = function(_, s) buf[#buf + 1] = s end,
+                writeLine = function(_, s) buf[#buf + 1] = s .. "\n" end,
+                close = function() files[path] = table.concat(buf) end,
+            }
+        end,
+        exists = function(path) return files[path] ~= nil end,
+        delete = function(path) files[path] = nil end,
+    }
+    c.files = files
+```
+
+Note the `write` signature: the stub is called as `f.write(s)` in `loader_state.lua`,
+so drop the leading `_` parameter if you call it without a colon. Keep the call
+style consistent between stub and implementation.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Add `"tests.test_loader_state"` to `tests/run.lua`, then run: `lua tests/run.lua`
+Expected: 4 tests FAIL — `module 'loader_state' not found`
+
+- [ ] **Step 3: Implement `loader_state.lua`**
+
+```lua
+-- loader_state.lua
+-- Persists the fact that this miner has a chunk loader placed in the world.
+--
+-- The loader is a physical turtle the miner is responsible for retrieving. In
+-- memory that fact dies with a reboot, and an abandoned loader means a turtle
+-- lost from the fleet plus a chunk force-loaded forever with nothing recording
+-- why. So the record is written to disk BEFORE placing and cleared only AFTER a
+-- confirmed retrieval — that ordering means a crash at any instant errs toward
+-- "we may have one out there", which is the recoverable direction.
+
+local loader_state = {}
+
+local PATH = "loader_state.dat"
+local _cache = nil
+local _loaded = false
+
+local function load()
+    if _loaded then return _cache end
+    _loaded = true
+    _cache = nil
+    if not fs.exists(PATH) then return nil end
+    local f = fs.open(PATH, "r")
+    if not f then return nil end
+    local raw = f.readAll()
+    f.close()
+    -- A truncated write (power loss mid-save) must not brick the miner on boot.
+    local ok, data = pcall(textutils.unserialise, raw)
+    if ok and type(data) == "table" and data.x then
+        _cache = data
+    end
+    return _cache
+end
+
+function loader_state.record(x, y, z, sector, radius)
+    _cache = { x = x, y = y, z = z, sector = sector, radius = radius,
+               placedAt = os.epoch("utc") }
+    _loaded = true
+    local f = fs.open(PATH, "w")
+    f.write(textutils.serialise(_cache))
+    f.close()
+end
+
+function loader_state.clear()
+    _cache = nil
+    _loaded = true
+    if fs.exists(PATH) then fs.delete(PATH) end
+end
+
+function loader_state.get() return load() end
+
+function loader_state.hasPlaced() return load() ~= nil end
+
+return loader_state
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `lua tests/run.lua`
+Expected: all pass
+
+- [ ] **Step 5: Wire the record into the flow**
+
+In `mine_flow.lua` (Task 8), `placeLoader` must call `loader_state.record(...)`
+immediately **before** `turtle.place()`, and `retrieveLoader` must call
+`loader_state.clear()` only **after** `retrievalSwapOut()` succeeds. Add
+`local loader_state = require("loader_state")` at the top of that module.
+
+- [ ] **Step 6: Exempt the autonomous return from the serverDown hold**
+
+In `turtle_base.lua`, the hold at the top of `tryMove` currently reads:
+
+```lua
+    while _self.serverDown and not _self.inSkyReturn do sleep(2) end
+```
+
+Replace with:
+
+```lua
+    -- Hold position while the server is unreachable so it does not lose track of
+    -- us — except during a fixed-path sky return, or an autonomous return, where
+    -- the whole point is to get home WITHOUT the server. Blocking there would
+    -- strand the miner in the field for as long as the server stays down, and
+    -- leave its placed loader force-loading a chunk indefinitely.
+    while _self.serverDown
+          and not _self.inSkyReturn
+          and not _self.autonomousReturn do
+        sleep(2)
+    end
+```
+
+Add beside the other accessors:
+
+```lua
+function base.setAutonomousReturn(v) _self.autonomousReturn = v end
+function base.isAutonomousReturn()   return _self.autonomousReturn end
+```
+
+and initialise `autonomousReturn = false` in the `_self` table.
+
+- [ ] **Step 7: Boot recovery in `ore_turtle.lua`**
+
+Before `base.run(mineJob)` is reached — immediately after `initProtectedSlots()`
+— recover any abandoned loader:
+
+```lua
+-- Boot recovery. A reboot with a loader still placed would otherwise abandon it:
+-- the turtle is lost and its chunk stays force-loaded with nothing recording it.
+-- This runs before any job is accepted, so recovery always precedes new work.
+local function recoverPlacedLoader()
+    if not loader_state.hasPlaced() then return end
+    local s = loader_state.get()
+    print(string.format("[MINER] Boot: loader recorded at %d,%d,%d — recovering",
+        s.x, s.y, s.z))
+    base.sendProgress(string.format("recovering abandoned loader at %d,%d", s.x, s.z))
+
+    equipment.reconcile()
+    base.setAutonomousReturn(true)
+
+    -- Approach at sky altitude, then drop onto the loader's own level so the
+    -- fence stays valid for the descent.
+    geofence.setAnchor(s.x, s.z, s.radius)
+    base.move.to(s.x, SKY_Y, s.z)
+    base.move.to(s.x, s.y, s.z)
+
+    local ok, reason = mine_flow.retrieveLoader()
+    if ok then
+        print("[MINER] Loader recovered.")
+        loader_state.clear()
+    else
+        -- Report loudly and leave the record in place: an operator needs to know
+        -- a loader is standing out there, and the next boot will retry.
+        print("[MINER] Loader recovery FAILED: " .. tostring(reason))
+        base.sendProgress("loader_recovery_failed: " .. tostring(reason))
+    end
+
+    geofence.clear()
+    base.setAutonomousReturn(false)
+end
+
+recoverPlacedLoader()
+```
+
+- [ ] **Step 8: Autonomous return on prolonged server loss**
+
+Inside the miner's sector loop, check elapsed server-down time each iteration:
+
+```lua
+        -- A server outage must not leave the miner parked in the field with a
+        -- loader force-loading a chunk. After 5 minutes, take ourselves home:
+        -- retrieve the loader, restore travel mode, dock, and wait for the
+        -- server there. GPS comes from beacons, not the server, so navigation
+        -- is unaffected by the outage.
+        if base.isServerDown() then
+            _serverDownSince = _serverDownSince or os.epoch("utc")
+            if os.epoch("utc") - _serverDownSince > 300000 then
+                print("[MINER] Server unreachable 5min — autonomous return")
+                base.setAutonomousReturn(true)
+                soloReturn()
+                base.setAutonomousReturn(false)
+                return base.sendFailed("server_unreachable_autonomous_return", true)
+            end
+        else
+            _serverDownSince = nil
+        end
+```
+
+Declare `local _serverDownSince = nil` beside the other job-scope locals.
+
+- [ ] **Step 9: Report placed loaders to the server**
+
+So an operator can find orphans. In `mine_flow.placeLoader`, after the record is
+written, include the coordinates in the phase report:
+
+```lua
+    report("PLACING_LOADER", string.format("%d,%d,%d", p.x, p.y, p.z))
+```
+
+In `central_server.lua`'s `handleMinePhase`, capture it:
+
+```lua
+    -- Track placed loaders so orphans are findable after a crash on either side.
+    if p.phase == proto.PHASE.PLACING_LOADER and p.detail then
+        t.placedLoader = p.detail
+    elseif p.phase == proto.PHASE.TRAVELLING or p.phase == proto.PHASE.RETURNING then
+        t.placedLoader = nil
+    end
+```
+
+Expose `placedLoader` in `/state` beside `chunk`, and surface it in the dashboard
+(Task 10) as an explicit warning row when a turtle is offline while holding one.
+
+- [ ] **Step 10: Run the suite**
+
+Run: `lua tests/run.lua`
+Expected: all pass
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add loader_state.lua turtle_base.lua ore_turtle.lua mine_flow.lua central_server.lua tests/test_loader_state.lua tests/stub_cc.lua tests/run.lua
+git commit -m "feat: persist placed-loader state and add autonomous return on server loss"
+```
+
+---
+
 ### Task 6: Protocol additions
 
 Additive only. Nothing is removed, so delivery is unaffected.
@@ -1860,6 +2185,22 @@ The survey phase regressed once already under untested changes. Run a survey-onl
 - [ ] **Step 6: Cancel-mid-job trial**
 
 Cancel the job from the dashboard mid-sector. The miner must retrieve its loader, restore travel mode, and fly home solo. Confirm no loader is left standing in the world.
+
+- [ ] **Step 6b: Crash-recovery trial**
+
+Two failures to force deliberately, since they are the ones that lose hardware:
+
+1. **Miner reboot mid-sector.** With a loader placed and the miner mining, reboot
+   the miner (`os.reboot()` from its terminal). Expected: on boot it announces
+   `Boot: loader recorded at x,y,z — recovering`, flies back, retrieves the
+   loader, and only then accepts work. Confirm no loader is left standing.
+2. **Server crash mid-sector.** Kill the server process while a miner is mining.
+   Expected: the miner keeps working, then after 5 minutes reports
+   `Server unreachable 5min — autonomous return`, retrieves its loader, and docks
+   unaided. Restart the server and confirm it re-registers cleanly.
+
+Both must pass before rollout — they are the two cases where a failure costs a
+turtle and leaves a chunk force-loaded with no record of why.
 
 - [ ] **Step 7: Fleet rollout**
 
