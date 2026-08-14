@@ -4,6 +4,7 @@ package.path = "./?.lua;" .. package.path
 
 local files = {
     "tests.test_stub",
+    "tests.test_equipment",
 }
 
 local passed, failed = 0, 0
