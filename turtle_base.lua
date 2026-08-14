@@ -98,6 +98,22 @@ local comms = {}
 function comms.init()
     _self.modem = peripheral.find("modem")
     if not _self.modem then
+        -- A miner rebooted inside the retrieval swap window has its modem in
+        -- inventory, not equipped. Recover it rather than erroring out, which
+        -- would strand the turtle in the field until a player intervened.
+        local ok, equipment = pcall(require, "equipment")
+        if ok and equipment then
+            logWarn("No modem equipped — attempting equipment reconciliation")
+            local healed, reason = equipment.reconcile()
+            if healed then
+                _self.modem = peripheral.find("modem")
+                logInfo("Modem recovered from inventory.")
+            else
+                logError("Equipment reconciliation failed: " .. tostring(reason))
+            end
+        end
+    end
+    if not _self.modem then
         error("No modem found. Attach a wireless or ender modem.")
     end
     proto.openChannels(_self.modem, { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL })

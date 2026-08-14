@@ -158,4 +158,20 @@ return {
         assert_eq(eq.sideOf("chunky"), nil,
             "chunk safety genuinely was not restored")
     end,
+
+    -- Task 4: comms.init() in turtle_base.lua calls peripheral.find("modem")
+    -- to decide whether to attempt recovery, and re-checks the same call to
+    -- decide whether recovery worked -- not eq.sideOf("modem"), which every
+    -- other reconcile test above asserts against. This exercises that exact
+    -- API so a future change that keeps sideOf("modem") true but breaks
+    -- peripheral.find("modem") (e.g. a stub/registry mismatch) is caught
+    -- here even though it would slip past the sideOf-based assertions.
+    ["reconcile recovers a stowed modem such that peripheral.find(\"modem\") sees it"] = function(assert_eq)
+        local eq = fresh({ left = nil, right = CHUNKY },
+                         fullInv({ [4] = { name = MODEM, count = 1 } }))
+        assert_eq(peripheral.find("modem"), nil, "precondition: no modem equipped")
+        local ok, reason = eq.reconcile()
+        assert_eq(ok, true, reason)
+        assert_eq(peripheral.find("modem") ~= nil, true, "modem now findable")
+    end,
 }
