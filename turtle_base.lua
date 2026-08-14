@@ -261,6 +261,35 @@ local function applyMove(dir)
     end
 end
 
+-- ─── Geofence helpers ───────────────────────────────────────────────────────
+-- Shared by tryMove's own dir-based guard AND bypassForward's raw turtle.
+-- forward() calls below -- bypassForward turns and moves the turtle directly,
+-- bypassing tryMove entirely, so it needs the identical check applied at
+-- every individual step or the fence stops meaning anything once a turtle
+-- (e.g. a placed chunk loader sitting right in front of the miner, which the
+-- solo-miner design does on purpose) blocks the forward path.
+
+-- Position after a single forward/back step from the CURRENT facing, without
+-- mutating any state.
+local function projectStep(dir)
+    local nx, nz = _self.pos.x, _self.pos.z
+    local sign = (dir == "forward") and 1 or -1
+    if     _self.facing == 0 then nz = nz - sign
+    elseif _self.facing == 1 then nx = nx + sign
+    elseif _self.facing == 2 then nz = nz + sign
+    else                          nx = nx - sign end
+    return nx, nz
+end
+
+-- True when the fence is active and stepping `dir` from the current facing
+-- would leave it. Always false when the fence is absent/inactive, so callers
+-- never need to separately check isActive().
+local function fenceBlocksStep(dir)
+    if not (_geofence and _geofence.isActive()) then return false end
+    local nx, nz = projectStep(dir)
+    return not _geofence.contains(nx, nz)
+end
+
 -- ─── Movement ────────────────────────────────────────────────────────────────
 
 local move = {}
@@ -295,12 +324,14 @@ local function bypassForward()
         local turnRtn = isLeft and move.turnRight or move.turnLeft
 
         turnOut()
+        if fenceBlocksStep("forward") then turnRtn(); return false end
         if not turtle.forward() then turnRtn(); return false end
         applyMove("forward")
         turnRtn()
 
         local advanced = 0
         for _ = 1, 3 do
+            if fenceBlocksStep("forward") then break end
             if turtle.forward() then
                 applyMove("forward")
                 advanced = advanced + 1
@@ -311,12 +342,24 @@ local function bypassForward()
         end
 
         if advanced == 0 then
-            turnRtn(); turtle.forward(); applyMove("forward"); turnOut()
+            turnRtn()
+            -- Undoing the sideways step. Original code called turtle.forward()
+            -- + applyMove unconditionally here (not even checking forward()'s
+            -- return) -- preserved exactly when the fence isn't blocking; only
+            -- skip the real move when it would breach the fence.
+            if fenceBlocksStep("forward") then
+                turnOut()
+                return false
+            end
+            turtle.forward(); applyMove("forward")
+            turnOut()
             return false
         end
 
         turnRtn()
-        if turtle.forward() then applyMove("forward") end
+        if not fenceBlocksStep("forward") then
+            if turtle.forward() then applyMove("forward") end
+        end
         turnOut()
         return true
     end
@@ -342,12 +385,17 @@ local function bypassForward()
         applyMove(applyDir)
 
         -- 2. Advance 2 blocks past the obstacle at this level (dig terrain if needed)
+        -- This is horizontal (x/z) movement despite living inside the "vertical"
+        -- bypass -- the up/down step itself never touches x/z and needs no
+        -- check, but this forward advance does, same as tryStrafe above.
         local advanced = 0
         for _ = 1, 2 do
+            if fenceBlocksStep("forward") then break end
             if not turtle.forward() then
                 if isTurtleBlock("forward") then break end  -- another turtle, stop
                 turtle.dig()                                -- terrain — dig it
                 sleep(0.2)
+                if fenceBlocksStep("forward") then break end
                 if not turtle.forward() then break end
             end
             applyMove("forward")
@@ -396,22 +444,15 @@ local function tryMove(moveFn, digFn, dir)
     -- Enforced here, at the single choke point every move passes through, so a
     -- new call site cannot bypass it. Only forward/back change x/z (and hence
     -- chunk); up/down only change y, which the chunk grid ignores, so vertical
-    -- moves are never fenced.
-    if _geofence and _geofence.isActive() and (dir == "forward" or dir == "back") then
-        local nx, nz = _self.pos.x, _self.pos.z
-        local sign = (dir == "forward") and 1 or -1
-        if     _self.facing == 0 then nz = nz - sign
-        elseif _self.facing == 1 then nx = nx + sign
-        elseif _self.facing == 2 then nz = nz + sign
-        else                          nx = nx - sign end
-
-        if not _geofence.contains(nx, nz) then
-            local a = _geofence.anchor()
-            logWarn(string.format(
-                "Geofence: refusing move to %d,%d (anchor chunk %d,%d r%d)",
-                nx, nz, a.cx, a.cz, a.chunkRadius))
-            return false, "geofence_breach"
-        end
+    -- moves are never fenced. (bypassForward below has its own raw turtle.
+    -- forward() calls that bypass this function entirely -- see fenceBlocksStep.)
+    if (dir == "forward" or dir == "back") and fenceBlocksStep(dir) then
+        local nx, nz = projectStep(dir)
+        local a = _geofence.anchor()
+        logWarn(string.format(
+            "Geofence: refusing move to %d,%d (anchor chunk %d,%d r%d)",
+            nx, nz, a.cx, a.cz, a.chunkRadius))
+        return false, "geofence_breach"
     end
 
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES

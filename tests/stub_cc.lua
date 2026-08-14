@@ -265,17 +265,30 @@ function M._equippedDetail(c, side)
     return { name = name, count = 1 }
 end
 
+-- Real CC:Tweaked turtle.forward()/back()/up()/down() refuse to move into an
+-- occupied block (including another turtle) rather than silently gliding
+-- through it. Added so tests can model a turtle physically blocking the
+-- forward path (bypassForward's trigger condition) -- no existing test drove
+-- movement into a placed world block before this, so this only adds
+-- behaviour, it never changes an outcome any current test observes.
 function M._move(c, dir)
-    if dir == "up"   then c.pos.y = c.pos.y + 1; return true end
-    if dir == "down" then c.pos.y = c.pos.y - 1; return true end
+    if dir == "up" or dir == "down" then
+        local ny  = c.pos.y + (dir == "up" and 1 or -1)
+        local key = c.pos.x .. "," .. ny .. "," .. c.pos.z
+        if c.world[key] then return false, "Movement obstructed" end
+        c.pos.y = ny
+        return true
+    end
     local dx, dz = 0, 0
     if     c.pos.facing == 0 then dz = -1
     elseif c.pos.facing == 1 then dx =  1
     elseif c.pos.facing == 2 then dz =  1
     else                          dx = -1 end
     if dir == "back" then dx, dz = -dx, -dz end
-    c.pos.x = c.pos.x + dx
-    c.pos.z = c.pos.z + dz
+    local nx, nz = c.pos.x + dx, c.pos.z + dz
+    local key = nx .. "," .. c.pos.y .. "," .. nz
+    if c.world[key] then return false, "Movement obstructed" end
+    c.pos.x, c.pos.z = nx, nz
     return true
 end
 
