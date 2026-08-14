@@ -230,6 +230,34 @@ function M.install(opts)
         unserialise = function(s) return M._unserialise(s) end,
     }
 
+    -- In-memory fs, just enough for loader_state.lua's persistence to run
+    -- headlessly. Real CC:Tweaked file handles are called dot-style (no
+    -- implicit self) -- `h.write(text)`, not `h:write(text)` -- so write/
+    -- writeLine below take a single argument to match that, and callers
+    -- must use the same convention.
+    local files = {}
+    fs = {
+        open = function(path, mode)
+            if mode == "r" then
+                if not files[path] then return nil end
+                local content = files[path]
+                return {
+                    readAll = function() return content end,
+                    close   = function() end,
+                }
+            end
+            local buf = {}
+            return {
+                write     = function(s) buf[#buf + 1] = s end,
+                writeLine = function(s) buf[#buf + 1] = s .. "\n" end,
+                close     = function() files[path] = table.concat(buf) end,
+            }
+        end,
+        exists = function(path) return files[path] ~= nil end,
+        delete = function(path) files[path] = nil end,
+    }
+    c.files = files
+
     c.pos.facing = c.pos.facing or 0
     return c
 end

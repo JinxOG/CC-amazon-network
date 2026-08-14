@@ -47,6 +47,7 @@ local _self = {
     serverDown  = false,  -- true while server is unreachable; pauses movement + freezes deadlines
     recalled    = false,  -- set by RECALL handler; causes waitForAny to exit the job runner
     inSkyReturn = false,  -- true during sky return; bypasses serverDown freeze (path is fixed)
+    autonomousReturn = false,  -- true while navigating home without the server (see setAutonomousReturn)
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -86,6 +87,13 @@ function base.isServerDown()     return _self.serverDown  end
 function base.isRecalled()       return _self.recalled    end
 function base.setRecalled(v)     _self.recalled = v       end
 function base.setSkyReturn(v)    _self.inSkyReturn = v    end
+
+-- Exempts movement from the serverDown hold below for a solo miner navigating
+-- home on its own (GPS beacons, not the server). Every other role leaves this
+-- false permanently, so tryMove's hold behaves exactly as it does today for
+-- delivery/support/warehouse turtles.
+function base.setAutonomousReturn(v) _self.autonomousReturn = v end
+function base.isAutonomousReturn()   return _self.autonomousReturn end
 
 -- Exposed so the miner can set/clear the anchor around placed-loader work.
 -- nil on roles that don't ship geofence.lua (see the pcall require above).
@@ -436,9 +444,16 @@ local function bypassForward()
 end
 
 local function tryMove(moveFn, digFn, dir)
-    -- Hold position while server is unreachable; resume when reconnected.
-    -- Exception: sky return has a fixed safe path — don't freeze in the arrivals shaft.
-    while _self.serverDown and not _self.inSkyReturn do sleep(2) end
+    -- Hold position while the server is unreachable so it does not lose track of
+    -- us — except during a fixed-path sky return, or an autonomous return, where
+    -- the whole point is to get home WITHOUT the server. Blocking there would
+    -- strand the miner in the field for as long as the server stays down, and
+    -- leave its placed loader force-loading a chunk indefinitely.
+    while _self.serverDown
+          and not _self.inSkyReturn
+          and not _self.autonomousReturn do
+        sleep(2)
+    end
 
     -- Geofence: refuse any move that would leave the placed loader's footprint.
     -- Enforced here, at the single choke point every move passes through, so a

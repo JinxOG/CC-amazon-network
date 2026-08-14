@@ -7,6 +7,7 @@ local files = {
     "tests.test_equipment",
     "tests.test_geofence",
     "tests.test_bypass_geofence",
+    "tests.test_loader_state",
 }
 
 local passed, failed = 0, 0
