@@ -7,14 +7,19 @@
 --   placeLoader:    place loader  ->  confirm standing  ->  wait for its
 --                   beacon  ->  chunky->pickaxe  ->  arm fence (on the
 --                   LOADER's chunk)
---   retrieveLoader: verify chunky carried  ->  modem->chunky  ->  dig  ->
---                   pickaxe->modem  ->  release fence
+--   retrieveLoader: verify chunky carried (or already equipped)  ->  verify
+--                   the block ahead IS the recorded loader, by position AND
+--                   identity  ->  modem->chunky (or skip if already done)
+--                   ->  dig  ->  confirm the loader actually came back  ->
+--                   release the fence/record  ->  pickaxe->modem
 --
 -- Placement removes chunky only AFTER the loader is confirmed down AND has
--- proven -- via a LOADER_BEACON -- that it is actually holding the chunk.
--- Retrieval equips chunky BEFORE the loader comes up. At no instant is the
--- miner both unloaded (no chunky of its own) and outside the base-loaded
--- area.
+-- proven -- via a LOADER_BEACON reporting the exact block it landed on --
+-- that it is actually holding the chunk. Retrieval equips chunky BEFORE the
+-- loader comes up, and never digs on trust: turtle.detect() alone only
+-- proves SOMETHING is in front of the miner, never that it's the loader. At
+-- no instant is the miner both unloaded (no chunky of its own) and outside
+-- the base-loaded area.
 --
 -- turtle.place() drops the loader one block AHEAD of the miner, which can be
 -- a DIFFERENT chunk than the miner's own position. So every fence anchors on
@@ -23,14 +28,15 @@
 -- computed from bare coordinates.
 --
 -- loader_state.record() is called before turtle.place() and loader_state.
--- clear() only after a confirmed retrieval, so a crash at any instant errs
--- toward "we may have a loader out there" rather than silently losing one
--- (see loader_state.lua). A *clean* place() failure (not a crash -- we get a
--- definite answer back) does roll the record back, because leaving a false
--- positive on disk is strictly worse than a correct one and we know for
--- certain nothing was placed. A place() that reports success but then can't
--- be confirmed standing leaves the record in place: we do NOT know what
--- happened there, and the cautious assumption is that it exists.
+-- clear() only once the loader is confirmed back in our own inventory, so a
+-- crash at any instant errs toward "we may have a loader out there" rather
+-- than silently losing one (see loader_state.lua). A *clean* place() failure
+-- (not a crash -- we get a definite answer back) does roll the record back,
+-- because leaving a false positive on disk is strictly worse than a correct
+-- one and we know for certain nothing was placed. A place() that reports
+-- success but then can't be confirmed standing leaves the record in place:
+-- we do NOT know what happened there, and the cautious assumption is that it
+-- exists.
 
 local equipment    = require("equipment")
 local geofence      = require("geofence")
@@ -57,15 +63,18 @@ local mine_flow = {}
 --
 --   pump(pollSeconds)
 --       Called repeatedly while placeLoader waits for the placed loader's
---       first LOADER_BEACON. Each call is expected to block for roughly
---       `pollSeconds` real seconds (a proto.receive-style wait blocks via
---       os.pullEvent, so this falls out naturally) and to call
---       mine_flow.noteBeacon(msg) for any LOADER_BEACON message it sees
---       during that window. mine_flow calls it up to BEACON_WAIT_ATTEMPTS
---       times, so real-world wait time is approximately
---       BEACON_WAIT_ATTEMPTS * pollSeconds. A pump that never delivers a
---       beacon is a safe default (fail closed): placeLoader will refuse
---       rather than silently proceed.
+--       first LOADER_BEACON, until either a matching beacon arrives or
+--       BEACON_WAIT_SECONDS of real wall-clock time elapse -- NOT a fixed
+--       attempt count: a pump that drains one message and returns near-
+--       instantly (e.g. non-beacon traffic -- server heartbeats, job
+--       messages) must not be able to burn through the whole wait in well
+--       under a second. Each call is expected to block for roughly
+--       `pollSeconds` real seconds when there is nothing to drain (a
+--       proto.receive-style wait blocks via os.pullEvent, so this falls out
+--       naturally) and to call mine_flow.noteBeacon(msg) for any
+--       LOADER_BEACON message it sees during that window. A pump that never
+--       delivers a beacon is a safe default (fail closed): placeLoader will
+--       refuse rather than silently proceed.
 --
 --       IMPORTANT: pump must forward the message as proto.decode() produced
 --       it -- msg.payload.position intact, not stripped down to msg.type.
@@ -74,6 +83,13 @@ local mine_flow = {}
 --       that discards the payload before calling noteBeacon silently
 --       disables the position check (every beacon would look "positionless"
 --       and get refused as loader_beacon_no_position).
+--
+--       IMPORTANT: mine_flow does not pcall this hook. An error thrown
+--       inside pump propagates straight out of placeLoader uncaught. State
+--       fails safe either way (nothing has been surrendered yet at the point
+--       pump is called), but Task 8b's pump implementation must wrap its own
+--       body in pcall if it wants placeLoader to return a reason string
+--       instead of raising.
 local _hooks = {
     reportPhase = function() end,
     log         = print,
@@ -106,8 +122,13 @@ end
 -- requiring protocol.lua, for the same reason phase names are plain strings
 -- above: this module has no wire dependency, only a value-shape one.
 
-local BEACON_WAIT_ATTEMPTS = 15   -- ~15s of real time if pump() blocks ~1s/call
-local BEACON_POLL_SECONDS  = 1
+local BEACON_WAIT_SECONDS = 15     -- real deadline the loader has to prove it's alive
+local BEACON_POLL_SECONDS = 1
+-- Last-resort backstop against a frozen or non-monotonic clock spinning this
+-- forever. Should never bind in real use: a real pump always blocks on at
+-- least one os.pullEvent per call, so BEACON_WAIT_SECONDS of wall-clock time
+-- elapses in far fewer than this many iterations.
+local BEACON_MAX_POLLS    = 100000
 
 local _lastBeaconAt           = nil    -- os.epoch("utc")/1000 of the most recent MATCHING beacon
 local _beaconArrivedSinceGate = false  -- reset at the start of every wait; see waitForFreshBeacon
@@ -164,35 +185,53 @@ end
 -- in the last `seconds` real seconds? Scoped to _expectedLoaderPos exactly
 -- like the placement gate below -- a mid-mining monitor (Task 8b) that
 -- silently followed a neighbouring loader's beacon would be the same bug in
--- slower motion.
+-- slower motion. Returns false once _expectedLoaderPos is cleared (no
+-- placement in flight, e.g. after a successful retrieveLoader) even if
+-- _lastBeaconAt is technically still recent -- a stale "yes" surviving into
+-- the NEXT sector, when nothing is even placed yet, is exactly the failure
+-- this scoping exists to prevent.
 function mine_flow.beaconSeenWithin(seconds)
+    if not _expectedLoaderPos then return false end
     if not _lastBeaconAt then return false end
     return (os.epoch("utc") / 1000 - _lastBeaconAt) <= seconds
 end
 
 -- Blocks (via repeated _hooks.pump calls) until a MATCHING beacon arrives,
--- or BEACON_WAIT_ATTEMPTS run out. Returns ok, reason -- reason distinguishes
--- "nothing answered at all" from "something answered, but not our loader"
--- from "our loader may have answered, but with no way to check", because an
--- operator investigating a stuck miner needs to know which one happened: the
--- first is a plain timeout, the other two mean a second loader (or a GPS
--- coverage gap) needs attention.
+-- or BEACON_WAIT_SECONDS of real wall-clock time elapse. Returns ok, reason
+-- -- reason distinguishes "nothing answered at all" from "something
+-- answered, but not our loader" from "our loader may have answered, but
+-- with no way to check", because an operator investigating a stuck miner
+-- needs to know which one happened: the first is a plain timeout, the other
+-- two mean a second loader (or a GPS coverage gap) needs attention.
 --
--- The gate uses its own flags rather than a timestamp comparison against
--- when the wait started: two events a few real milliseconds apart can land
--- in the same integer second under os.epoch's precision, which would make a
--- "was it seen since time T" comparison unreliable right at a placement
--- boundary -- exactly where it matters most. A beacon from the PREVIOUS
--- sector's (now-retrieved) loader must never satisfy THIS sector's gate, so
--- the flags are explicitly reset before waiting rather than inferred from a
--- clock reading.
+-- This is a WALL-CLOCK DEADLINE, not an attempt count: counting pump() calls
+-- instead would let a pump that returns near-instantly on non-beacon traffic
+-- (server heartbeats, job messages arriving while we wait) burn through the
+-- entire budget in well under a second and fail closed on a loader that was
+-- about to answer moments later. BEACON_MAX_POLLS is a separate, much larger
+-- safety backstop against a frozen/non-monotonic clock -- it should never be
+-- the thing that actually ends the loop in practice.
+--
+-- The MATCH itself uses its own flags rather than a timestamp comparison
+-- against when the wait started: two events a few real milliseconds apart
+-- can land in the same integer second under os.epoch's precision, which
+-- would make a "was it seen since time T" comparison unreliable right at a
+-- placement boundary -- exactly where it matters most. A beacon from the
+-- PREVIOUS sector's (now-retrieved) loader must never satisfy THIS sector's
+-- gate, so the flags (and _lastBeaconAt) are explicitly reset before waiting
+-- rather than inferred from a clock reading.
 local function waitForFreshBeacon()
     _beaconArrivedSinceGate = false
     _mismatchSinceGate      = false
     _nilPositionSinceGate   = false
-    for _ = 1, BEACON_WAIT_ATTEMPTS do
+    _lastBeaconAt           = nil
+
+    local deadline = os.epoch("utc") / 1000 + BEACON_WAIT_SECONDS
+    local polls = 0
+    while os.epoch("utc") / 1000 < deadline and polls < BEACON_MAX_POLLS do
         if _beaconArrivedSinceGate then return true end
         _hooks.pump(BEACON_POLL_SECONDS)
+        polls = polls + 1
     end
     if _beaconArrivedSinceGate then return true end
     if _mismatchSinceGate then return false, "loader_beacon_mismatch" end
@@ -279,8 +318,20 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     report("SWAP_TO_PICKAXE")
     local swapped, why = equipment.toMineMode()
     if not swapped then
-        -- We still hold chunky, so we are safe; the loader is down and will
-        -- be retrieved by the caller's failure path.
+        -- equipment.toMineMode() swaps chunky for pickaxe FIRST, and only
+        -- THEN runs a trailing equipment.validate("mine") as its own success
+        -- check (equipment.lua:156). If that trailing check is what failed,
+        -- the swap already landed: chunky is off. The loader is already
+        -- confirmed alive via the beacon gate above, so arm the fence anyway
+        -- -- leaving chunky off AND the fence unarmed would be exactly the
+        -- unloaded-and-unfenced state this module exists to prevent, and the
+        -- loader really is holding this chunk regardless of why toMineMode
+        -- reported failure.
+        if equipment.sideOf("chunky") == nil then
+            geofence.setAnchorBlock(tx, tz, chunkRadius)
+            log("toMineMode failed after the swap already landed -- " ..
+                "fence armed anyway since the loader is confirmed alive: " .. tostring(why))
+        end
         return false, why
     end
 
@@ -291,22 +342,62 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     return true
 end
 
--- Restore self-loading, then take the loader back. Never dig it up first.
+-- Restore self-loading, then take the loader back. Never dig it up first,
+-- and never dig on trust: turtle.detect() alone only proves SOMETHING is in
+-- front of the miner, not that it's our loader. A block that happens to be
+-- there for any other reason (a neighbour's build, terrain, a mistake in
+-- positioning) would otherwise get silently destroyed while this function
+-- calls the retrieval a success.
 function mine_flow.retrieveLoader()
     -- Refuse before touching anything if we cannot restore our own loading.
-    if not equipment.findSlot(equipment.ITEMS.CHUNKY) then
+    -- Chunky already equipped counts as success here too, not failure --
+    -- findSlot() alone can't see it (equipped items aren't in inventory),
+    -- and equipment.reconcile() (the documented boot self-heal) or a reboot
+    -- landing mid-retrieval (right after retrievalSwapIn, before dig()) can
+    -- both leave chunky already on. Matches equipment.toTravelMode's
+    -- identical "already there is fine" pattern (equipment.lua:164).
+    local chunkyCarried  = equipment.findSlot(equipment.ITEMS.CHUNKY) ~= nil
+    local chunkyEquipped = equipment.sideOf("chunky") ~= nil
+    if not chunkyCarried and not chunkyEquipped then
         return false, "chunky_missing"
     end
-    if not turtle.detect() then
+
+    -- Verify the block ahead IS our loader before touching anything else:
+    -- by position (against the persisted, reboot-safe record of where it
+    -- actually is) AND by identity (turtle.inspect() naming it, not just
+    -- turtle.detect() proving something is there).
+    local recorded = loader_state.get()
+    if not recorded then
+        return false, "no_loader_recorded"
+    end
+    local p = _hooks.pos()
+    local ax, az = aheadBlock(p)
+    if ax ~= recorded.x or p.y ~= recorded.y or az ~= recorded.z then
+        return false, "loader_position_mismatch"
+    end
+    local inspected, block = turtle.inspect()
+    if not inspected or block.name ~= equipment.ITEMS.LOADER_TURTLE then
         return false, "loader_not_in_front"
     end
 
     report("RETRIEVING", "comms gap expected")
 
-    -- Sacrifice the modem, not chunk loading: offline is recoverable,
-    -- unloaded is not. Comms are down from here until the swap-out below.
-    local ok, reason = equipment.retrievalSwapIn()
-    if not ok then return false, reason end
+    if not chunkyEquipped then
+        -- Sacrifice the modem, not chunk loading: offline is recoverable,
+        -- unloaded is not. Comms are down from here until the swap-out
+        -- below. Skipped entirely when chunky is already equipped -- this
+        -- step has already happened, most likely because a reboot landed
+        -- between it and the dig below.
+        local ok, reason = equipment.retrievalSwapIn()
+        if not ok then return false, reason end
+    end
+
+    -- Whichever path got us here, never dig without both upgrades
+    -- confirmed on: this is the one invariant that makes digging safe at
+    -- all (loaded AND able to dig, simultaneously).
+    if not equipment.sideOf("chunky") or not equipment.sideOf("pickaxe") then
+        return false, "retrieval_equipment_invalid"
+    end
 
     local dug = turtle.dig()
     if not dug then
@@ -317,16 +408,36 @@ function mine_flow.retrieveLoader()
         return false, "loader_dig_failed"
     end
 
-    local restored, why = equipment.retrievalSwapOut()
-    if not restored then return false, why end
+    -- turtle.dig() succeeding proves SOMETHING was collected, not that it
+    -- was our loader turtle specifically (the checks above make this very
+    -- unlikely, but this module does not assume a scan-then-act race can't
+    -- happen). Confirm before trusting anything downstream of "we have it".
+    if not equipment.findSlot(equipment.ITEMS.LOADER_TURTLE) then
+        equipment.retrievalSwapOut()
+        return false, "loader_not_recovered"
+    end
 
-    -- Only now is the loader confirmed back in our own inventory: clear the
-    -- persisted record. Any earlier failure above must leave it intact.
+    -- The loader is physically back in our inventory from here on, whatever
+    -- happens next below: it is no longer standing in the world holding
+    -- anything, so the persisted record and the fence around its chunk are
+    -- both stale as of THIS instant, regardless of how the comms swap-out
+    -- goes.
     loader_state.clear()
-
     geofence.clear()
-    -- No loader left to verify a beacon against until the next placeLoader.
     _expectedLoaderPos = nil
+    _lastBeaconAt = nil
+
+    local restored, why = equipment.retrievalSwapOut()
+    if not restored then
+        -- The loader really is retrieved (see above) -- this is purely an
+        -- equipment problem: chunky is on, modem never came back, comms are
+        -- down. Distinct from loader_dig_failed so a caller (and an
+        -- operator reading the failure reason) can tell "the loader is
+        -- safe in your inventory, fix your radio" apart from "the loader
+        -- may still be standing out there."
+        return false, "loader_recovered_comms_down"
+    end
+
     log("Loader retrieved; self-loading restored.")
     return true
 end

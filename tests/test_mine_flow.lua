@@ -26,10 +26,11 @@ local PICKAXE = "minecraft:diamond_pickaxe"
 local function E_TRAVEL() return { left = MODEM, right = CHUNKY } end
 local function E_MINE()   return { left = MODEM, right = PICKAXE } end
 
--- mine_flow.noteBeacon/beaconSeenWithin stamp os.epoch("utc"). stub_cc does
--- not model the real-time clock (only turtle/peripheral/os.pullEvent/
--- textutils), so provide the same fallback tests/test_loader_state.lua and
--- tests/test_bypass_geofence.lua use for the same gap.
+-- mine_flow.noteBeacon/beaconSeenWithin/the beacon-wait deadline all stamp
+-- os.epoch("utc"). stub_cc does not model the real-time clock (only turtle/
+-- peripheral/os.pullEvent/textutils), so provide the same fallback
+-- tests/test_loader_state.lua and tests/test_bypass_geofence.lua use for the
+-- same gap.
 os.epoch = os.epoch or function() return os.time() * 1000 end
 
 local function freshModules()
@@ -37,6 +38,23 @@ local function freshModules()
     package.loaded["geofence"]     = nil
     package.loaded["loader_state"] = nil
     package.loaded["mine_flow"]    = nil
+end
+
+-- A controllable fake clock for os.epoch, so tests that exercise the beacon
+-- wait's real wall-clock deadline (mine_flow.lua's BEACON_WAIT_SECONDS)
+-- don't have to actually block the test runner for 15 real seconds per test.
+-- restore() MUST be called before the test returns, success or failure --
+-- callers use it in a straight-line sequence, not pcall/finally, so a test
+-- that errors before restoring will leak the fake clock into later tests;
+-- every use below is written to reach restore() on every path.
+local function fakeClock(startSeconds)
+    local now = startSeconds
+    local orig = os.epoch
+    os.epoch = function() return now * 1000 end
+    return {
+        advance = function(by) now = now + (by or 0) end,
+        restore = function() os.epoch = orig end,
+    }
 end
 
 -- A pump hook that delivers exactly one fresh LOADER_BEACON, reporting
@@ -51,6 +69,22 @@ local function beaconOnFirstPump(position)
                 flow.noteBeacon({ type = "LOADER_BEACON", payload = { position = position } })
                 delivered = true
             end
+        end
+    end
+end
+
+-- A pump hook that never delivers a beacon but advances a fakeClock by
+-- `pollSeconds` (mine_flow.lua's own BEACON_POLL_SECONDS) per call --
+-- modelling a real proto.receive-backed pump that blocks for roughly one
+-- real second when nothing arrives. Using this instead of a truly no-op
+-- pump means the "no beacon ever arrives, wait out the deadline" tests below
+-- exercise the full 15-second wall-clock wait via a fake clock advancing at
+-- a REALISTIC rate, without the test runner actually blocking for 15 real
+-- seconds.
+local function neverBeaconPump(clock)
+    return function(flow)
+        return function(pollSeconds)
+            clock.advance(pollSeconds or 1)
         end
     end
 end
@@ -177,6 +211,28 @@ return {
             "place() never actually consumed the item")
     end,
 
+    -- Finding 7 (review fix pass 2): pins that loader_state.record() runs
+    -- BEFORE turtle.place() ever executes, not merely that hasPlaced() is
+    -- true somewhere in the aftermath -- the two end-state tests above and
+    -- below are satisfied just as well by a place()-then-record() ordering,
+    -- which is exactly the ordering loader_state.lua's whole design exists
+    -- to avoid (a crash between them would lose the loader with no record at
+    -- all). Verified red against that mutation, then green again below.
+    ["loader_state.record() runs strictly BEFORE turtle.place(), never after"] = function(assert_eq)
+        local flow, eq, gf, ls = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
+        local recordedBeforePlace = nil
+        local origPlace = turtle.place
+        turtle.place = function(...)
+            recordedBeforePlace = ls.hasPlaced()
+            return origPlace(...)
+        end
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, true, reason)
+        assert_eq(recordedBeforePlace, true,
+            "loader_state.record() must have already run by the time turtle.place() is called")
+    end,
+
     ["placeLoader keeps the loader_state record when place() succeeds but standing can't be confirmed"] = function(assert_eq)
         local flow, eq, gf, ls = loadFlow(
             E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
@@ -197,13 +253,55 @@ return {
         assert_eq(gf.isActive(), false)
     end,
 
+    -- Finding 5 (review fix pass 2): equipment.toMineMode() swaps chunky for
+    -- pickaxe FIRST, then runs a trailing equipment.validate("mine") as its
+    -- own success check (equipment.lua:156). If ONLY that trailing check
+    -- fails (e.g. missing cargo, unrelated to chunk safety), the swap has
+    -- already landed -- chunky is off -- and the old comment "we still hold
+    -- chunky, so we are safe" was not actually true. The loader is already
+    -- beacon-confirmed alive by this point, so the fence must go up anyway.
+    ["placeLoader arms the fence even when toMineMode reports failure after its swap already landed, so chunky-off never means fence-off"] = function(assert_eq)
+        -- equipment.toMineMode() swaps chunky for pickaxe FIRST, then runs a
+        -- trailing equipment.validate("mine") as its own success check
+        -- (equipment.lua:156). Not reachable through today's equipment.lua
+        -- -- validate("mine")'s validateCargo() checks exactly the same
+        -- scanner/fuel_ec/ore_ec that validate("travel") already confirmed
+        -- at the very top of placeLoader, and nothing in between touches
+        -- them, so it cannot fail there without something ELSE changing
+        -- cargo out from under it first (confirmed empirically: dropping the
+        -- ore ender chest from inventory makes validate("travel") fail
+        -- first, before the loader is even placed, not this trailing
+        -- check). But the invariant this branch asserts must hold
+        -- regardless of how toMineMode's own internals evolve, so this
+        -- simulates the exact shape directly: the swap already landed
+        -- (chunky off, pickaxe on), and toMineMode still reports failure.
+        local flow, eq, gf = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
+        eq.toMineMode = function()
+            local pSlot = eq.findSlot(eq.ITEMS.PICKAXE)
+            local chunkySide = eq.sideOf("chunky")
+            turtle.select(pSlot)
+            if chunkySide == "left" then turtle.equipLeft() else turtle.equipRight() end
+            return false, "simulated_post_swap_validation_failure"
+        end
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, false)
+        assert_eq(reason, "simulated_post_swap_validation_failure")
+        assert_eq(eq.sideOf("chunky"), nil, "the swap itself did land")
+        assert_eq(gf.isActive(), true,
+            "chunky is off -- the fence MUST be on, or the miner is unloaded and unfenced")
+        local a = gf.anchor()
+        assert_eq(a.cx, 0); assert_eq(a.cz, -1)
+    end,
+
     -- ─── Beacon gate ────────────────────────────────────────────────────
 
     ["placeLoader refuses to give up chunky if no beacon arrives before the deadline"] = function(assert_eq)
-        -- No pumpFactory: default pump is a no-op, so no beacon ever arrives.
+        local clock = fakeClock(1000)
         local flow, eq, gf, ls = loadFlow(
-            E_TRAVEL(), travelInv())
+            E_TRAVEL(), travelInv(), nil, neverBeaconPump(clock))
         local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        clock.restore()
         assert_eq(ok, false)
         assert_eq(reason, "loader_no_beacon")
         assert_eq(eq.sideOf("chunky") ~= nil, true,
@@ -211,6 +309,39 @@ return {
         assert_eq(gf.isActive(), false, "fence must never arm around an unconfirmed loader")
         assert_eq(ls.hasPlaced(), true,
             "the loader really is standing there -- still recorded for recovery")
+    end,
+
+    -- Finding 4 (review fix pass 2): the wait must be governed by real
+    -- wall-clock time elapsing, not by how many times pump() happens to get
+    -- called. A pump that returns near-instantly (draining non-beacon
+    -- traffic -- server heartbeats, job messages -- without blocking) must
+    -- not be able to exhaust the wait in well under a second just by being
+    -- called many times fast. Modelled with a fake clock that advances only
+    -- 0.01s per call (far less than the documented ~1s/call a real pump is
+    -- expected to take): hundreds of such calls must still occur before the
+    -- deadline, proving the loop is time-bounded, not count-bounded (the old
+    -- code's BEACON_WAIT_ATTEMPTS was 15).
+    ["the beacon wait is governed by elapsed wall-clock time, not by how many times pump() is called"] = function(assert_eq)
+        local clock = fakeClock(1000)
+        local pumpCalls = 0
+        local flow = loadFlow(E_TRAVEL(), travelInv(), nil, function()
+            return function(pollSeconds)
+                pumpCalls = pumpCalls + 1
+                clock.advance(0.01)
+                if pumpCalls > 100000 then
+                    error("pump called suspiciously many times -- looks like a real hang, not a fast-return simulation")
+                end
+            end
+        end)
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        clock.restore()
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_no_beacon")
+        if pumpCalls <= 20 then
+            error("pump was called only " .. pumpCalls .. " times before giving up -- " ..
+                  "that is consistent with an attempt-count loop (old BEACON_WAIT_ATTEMPTS = 15), " ..
+                  "not a wall-clock deadline")
+        end
     end,
 
     ["placeLoader accepts a beacon whose position matches exactly where the loader landed"] = function(assert_eq)
@@ -265,10 +396,11 @@ return {
         -- before placeLoader has ever run is a no-op regardless of position,
         -- since there is no _expectedLoaderPos yet to match against -- which
         -- is a stronger guarantee than "stale", but exercises the same risk.
-        local flow, eq = loadFlow(E_TRAVEL(), travelInv())
+        local clock = fakeClock(1000)
+        local flow, eq = loadFlow(E_TRAVEL(), travelInv(), nil, neverBeaconPump(clock))
         flow.noteBeacon({ type = "LOADER_BEACON", payload = { position = LOADER_LANDING } })
-        -- default pump is a no-op: no FRESH beacon ever arrives
         local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        clock.restore()
         assert_eq(ok, false)
         assert_eq(reason, "loader_no_beacon")
         assert_eq(eq.sideOf("chunky") ~= nil, true)
@@ -298,6 +430,26 @@ return {
         fakeNow = 1020
         assert_eq(flow.beaconSeenWithin(10), false)
         os.epoch = origEpoch
+    end,
+
+    -- Finding 3 (review fix pass 2): _lastBeaconAt used to survive a
+    -- successful retrieval untouched, so beaconSeenWithin could report a
+    -- stale "yes" (the placement gate itself was never at risk -- its flags
+    -- reset per-wait -- but a mid-mining liveness monitor built on
+    -- beaconSeenWithin, per Task 8b, would trust a beacon from a loader
+    -- that is now sitting in our inventory).
+    ["beaconSeenWithin returns false immediately after a successful retrieval, not stale-true into the next sector"] = function(assert_eq)
+        local eqm = require("equipment")
+        local flow, eq, gf, ls, c = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
+        local ok = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, true)
+        assert_eq(flow.beaconSeenWithin(9999), true)
+
+        local ok2, reason2 = flow.retrieveLoader()
+        assert_eq(ok2, true, reason2)
+        assert_eq(flow.beaconSeenWithin(9999), false,
+            "a stale true here means the miner could trust a loader that is now sitting in its own inventory")
     end,
 
     -- ─── retrieveLoader ─────────────────────────────────────────────────
@@ -333,6 +485,7 @@ return {
         inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
         local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
         local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
 
         local origDig = turtle.dig
         local chunkyOnAtDigTime = nil
@@ -345,6 +498,31 @@ return {
         assert_eq(ok, true, reason)
         assert_eq(chunkyOnAtDigTime, true,
             "chunky must already be equipped at the instant dig() runs -- never dig, then swap")
+    end,
+
+    -- Finding 2 (review fix pass 2): findSlot(CHUNKY) is inventory-only, so
+    -- it can't see a chunky that's already equipped -- which is exactly
+    -- what equipment.reconcile() (the documented boot self-heal) can leave
+    -- behind, or what a reboot landing right after retrievalSwapIn (before
+    -- dig()) leaves in place. Already-equipped must be treated as success,
+    -- matching equipment.toTravelMode's identical pattern (equipment.lua:164).
+    ["retrieveLoader succeeds when chunky is already equipped, not chunky_missing"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = nil                                   -- loader is placed, not carried
+        inv[3] = { name = eqm.ITEMS.MODEM, count = 1 }  -- already displaced into inventory
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        -- chunky+pickaxe both already equipped: exactly the state a reboot
+        -- right after retrievalSwapIn (but before dig()) would leave behind.
+        local flow, eq, gf, ls = loadFlow(
+            { left = eqm.ITEMS.CHUNKY, right = eqm.ITEMS.PICKAXE }, inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, true, reason)
+        assert_eq(eq.sideOf("chunky") ~= nil, true)
+        assert_eq(eq.sideOf("modem") ~= nil, true, "modem restored at the end")
+        assert_eq(ls.hasPlaced(), false)
     end,
 
     ["retrieveLoader aborts before digging if chunky is not carried, leaving the loader standing"] = function(assert_eq)
@@ -360,6 +538,51 @@ return {
         assert_eq(world["0,80,-1"], eqm.ITEMS.LOADER_TURTLE,
             "loader must still be standing -- never dig it up without chunky in hand")
         assert_eq(ls.hasPlaced(), true, "nothing was retrieved -- the record must survive")
+    end,
+
+    -- Finding 1 (review fix pass 2, reproduction A): turtle.detect() alone
+    -- only proves SOMETHING is in front of the miner. Here the real loader
+    -- is genuinely standing at its recorded position (0,80,-1), but the
+    -- miner is turned to face a completely different, plain block. The old
+    -- code would have dug that block, called it a successful retrieval, and
+    -- abandoned the real loader forever.
+    ["retrieveLoader refuses when the recorded loader position doesn't match what's ahead of the miner"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv(); inv[2] = nil
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        -- Miner faces south (facing=2): ahead is (0,80,1), a plain stone
+        -- block. The real loader is recorded at (0,80,-1) -- behind the
+        -- miner, not ahead of it.
+        local world = { ["0,80,1"] = "minecraft:stone", ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, gf, ls, c = loadFlow(E_MINE(), inv, world)
+        c.pos.facing = 2
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_position_mismatch")
+        assert_eq(world["0,80,1"], "minecraft:stone", "the stone must never be dug")
+        assert_eq(world["0,80,-1"], eqm.ITEMS.LOADER_TURTLE, "the real loader must be left alone")
+        assert_eq(ls.hasPlaced(), true, "the real loader is still out there -- the record must survive")
+    end,
+
+    -- Finding 1 (review fix pass 2, reproduction B): the position matches
+    -- the record exactly, but the block actually there is not a loader
+    -- turtle -- turtle.detect() can't tell that apart from the real thing;
+    -- turtle.inspect()'s reported name can.
+    ["retrieveLoader refuses when the block ahead matches the recorded position but is not a loader turtle"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv(); inv[2] = nil
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        local world = { ["0,80,-1"] = "minecraft:stone" } -- right position, wrong block
+        local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_not_in_front")
+        assert_eq(world["0,80,-1"], "minecraft:stone", "must never dig a block that isn't the loader")
+        assert_eq(ls.hasPlaced(), true)
     end,
 
     ["retrieveLoader leaves the loader_state record intact when the dig itself fails"] = function(assert_eq)
@@ -395,5 +618,36 @@ return {
         assert_eq(ok, false)
         assert_eq(reason, "loader_not_in_front")
         assert_eq(ls.hasPlaced(), true)
+    end,
+
+    -- Finding 6 (review fix pass 2): a dig that succeeds but is followed by
+    -- a comms swap-out failure used to be indistinguishable from a failed
+    -- dig (same generic path), and left the fence armed around a chunk with
+    -- no loader in it -- the record and the fence both need to reflect
+    -- reality (loader recovered) as soon as that's known, independent of
+    -- whether the equipment swap back to comms succeeds.
+    ["retrieveLoader returns a distinct reason when the loader is recovered but the comms swap-out fails, and releases the fence anyway"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = nil
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
+        gf.setAnchorChunk(0, 0, 1)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        -- Force a deeper equipment fault on the comms swap-out specifically,
+        -- AFTER a normal, successful dig.
+        eq.retrievalSwapOut = function() return false, "forced failure" end
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_recovered_comms_down")
+        assert_eq(eq.findSlot(eqm.ITEMS.LOADER_TURTLE) ~= nil, true,
+            "the loader really is back in inventory")
+        assert_eq(ls.hasPlaced(), false,
+            "the loader is no longer standing anywhere -- the record must not survive")
+        assert_eq(gf.isActive(), false,
+            "nothing holds that chunk anymore -- the fence must not still claim it does")
     end,
 }
