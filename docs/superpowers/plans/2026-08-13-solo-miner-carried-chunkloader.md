@@ -74,8 +74,16 @@ while true do
 end
 ```
 
-Fly away until the area is well outside render/loaded distance. Wait 3 minutes. Return and read `tick.txt`.
-Expected: the counter advanced by roughly 36 (3 min ÷ 5 s). If it stalled, **assumption 1 fails — stop.**
+Fly away until the area is well outside render/loaded distance. Wait **at least 12
+minutes** (amended: see below). Return and read `tick.txt`.
+Expected: the counter advanced by roughly 144 (12 min ÷ 5 s). If it stalled, **assumption 1 fails — stop.**
+
+**The 12-minute window is not padding.** The pack sets `chunkLoadValidTime = 600`,
+so the chunk ticket may expire after 10 minutes without a "touch". A 3-minute
+observation cannot detect that, and an expiry mid-sector freezes the miner. If the
+counter advances for 3 minutes but stalls before 12, assumption 1 fails in the
+form that matters: idle loaders decay, and only a running loader program (Task 5c)
+keeps them alive.
 
 - [ ] **Step 2: Confirm the upgrade survives place → break → re-place**
 
@@ -108,11 +116,43 @@ print("equipRight back ->", turtle.equipRight())
 
 Expected: `equipRight()` returns true both times; after the first the pickaxe is in slot 2; after the second it is back on the right. If it returns false, **assumption 3 fails — stop.**
 
-- [ ] **Step 4: Measure the geofence radius**
+- [x] **Step 4: Measure the geofence radius** — RESOLVED FROM CONFIG
 
-Place the chunky turtle. Send the ticking turtle progressively further away on X, checking at 16 / 32 / 48 blocks whether it keeps ticking with the base area unloaded. Record the largest distance that still ticks.
+Not measured empirically; read directly from the pack's Advanced Peripherals
+config, which is authoritative:
 
-Write the result into `docs/superpowers/specs/chunkloader-footprint.md` as a single line, e.g. `SAFE_RADIUS = 24`. Task 5 consumes this number.
+```
+chunkyTurtleRadius = 2     # was 0; loads 5x5 chunks = 80x80 blocks
+```
+
+Recorded in `docs/superpowers/specs/chunkloader-footprint.md`. The fence is
+**1 chunk** (3×3 = 48×48), one below the loaded radius, so there is a full chunk
+of slack. Tasks 5 and 8 consume the chunk radius, not a block radius — see the
+amendment note on Task 5.
+
+- [ ] **Step 4b: Probe the equipment-detection surface** (added after Task 1)
+
+The chunky upgrade turned out to be `advancedperipherals:chunk_controller`, not
+the `chunkloaders` item the plan assumed. Task 3 identifies upgrades by peripheral
+type and infers the pickaxe by elimination, which only works if exactly one
+equipped upgrade reports `nil`. Run at the turtle's Lua prompt, with the modem
+left and the chunk controller right:
+
+```lua
+print("L:", peripheral.getType("left"), " R:", peripheral.getType("right"))
+print(textutils.serialise(
+    turtle.getEquippedRight and turtle.getEquippedRight() or "absent"))
+```
+
+Two answers needed:
+1. What `peripheral.getType` reports for the chunk-controller side. If it is
+   `nil`, both it and the pickaxe are invisible to the plan's detection scheme
+   and `equipment.lua` must be rewritten.
+2. Whether `turtle.getEquippedRight()` exists (believed added ~CC:Tweaked 1.109;
+   this pack is 1.116). If it does, it returns the equipped item's detail and
+   upgrades can be identified by registry name directly — strictly better than
+   inference, and the whole `PERIPHERAL_TYPE`/elimination scheme in Task 3 should
+   be deleted in favour of it.
 
 - [ ] **Step 5: Commit the findings**
 
@@ -573,10 +613,13 @@ equipment.SLOTS = {
     ORE_EC  = 16,
 }
 
--- Registry names. Replace with the exact values observed in Task 1.
+-- Registry names, verified in-world 2026-08-13. See
+-- docs/superpowers/specs/chunkloader-footprint.md.
+-- The chunky upgrade is Advanced Peripherals' Chunky Turtle, not the
+-- `chunkloaders` mod — that mod is not in this pack.
 equipment.ITEMS = {
     PICKAXE       = "minecraft:diamond_pickaxe",
-    CHUNKY        = "chunkloaders:chunk_loader_upgrade",
+    CHUNKY        = "advancedperipherals:chunk_controller",
     MODEM         = "computercraft:wireless_modem_advanced",
     LOADER_TURTLE = "computercraft:turtle_advanced",
     SCANNER       = "advancedperipherals:geo_scanner",
@@ -873,7 +916,13 @@ git commit -m "fix: recover a stowed modem on boot instead of erroring out"
 
 ### Task 5: `geofence.lua` — loaded-area bounds and movement guard
 
-Uses `SAFE_RADIUS` recorded in Task 1 Step 4.
+**AMENDED after Task 1.** The fence works in **chunk space**, not block space.
+Advanced Peripherals' chunky turtle loads a grid-aligned square of chunks around
+the chunk it occupies — not a square centred on the turtle. A block-radius
+Chebyshev fence cannot express that: near a chunk edge the two disagree by up to
+15 blocks, every one of them unloaded. Uses `FENCE_CHUNK_RADIUS = 1` (3×3 chunks)
+against a configured `chunkyTurtleRadius = 2` (5×5 loaded), per
+`docs/superpowers/specs/chunkloader-footprint.md`.
 
 **Files:**
 - Create: `geofence.lua`
@@ -881,11 +930,12 @@ Uses `SAFE_RADIUS` recorded in Task 1 Step 4.
 
 **Interfaces:**
 - Produces:
-  - `geofence.setAnchor(x, z, radius)` / `geofence.clear()`
+  - `geofence.setAnchorChunk(cx, cz, chunkRadius)` / `geofence.clear()`
+  - `geofence.setAnchorBlock(x, z, chunkRadius)` — anchors on the chunk containing that block
   - `geofence.isActive() → bool`
   - `geofence.contains(x, z) → bool`
   - `geofence.check(x, z) → ok, reason`
-  - `geofence.anchor() → { x=, z=, radius= } | nil`
+  - `geofence.anchor() → { cx=, cz=, chunkRadius= } | nil`
   - `geofence.chunkOf(x, z) → cx, cz`
 
 - [ ] **Step 1: Write the failing tests**
@@ -905,28 +955,50 @@ return {
         assert_eq(g.contains(99999, -99999), true)
     end,
 
-    ["anchor confines movement to the radius"] = function(assert_eq)
+    ["anchor confines movement to the chunk block"] = function(assert_eq)
         local g = fresh()
-        g.setAnchor(100, -200, 24)
+        g.setAnchorChunk(0, 0, 1)          -- chunks -1..1 => blocks -16..31
         assert_eq(g.isActive(), true)
-        assert_eq(g.contains(100, -200), true)
-        assert_eq(g.contains(124, -200), true)
-        assert_eq(g.contains(125, -200), false)
-        assert_eq(g.contains(100, -224), true)
-        assert_eq(g.contains(100, -225), false)
+        assert_eq(g.contains(0, 0), true)
+        assert_eq(g.contains(-16, -16), true, "far corner of chunk -1")
+        assert_eq(g.contains(31, 31), true, "far corner of chunk 1")
+        assert_eq(g.contains(-17, 0), false, "chunk -2 is outside")
+        assert_eq(g.contains(32, 0), false, "chunk 2 is outside")
+        assert_eq(g.contains(0, 32), false)
+    end,
+
+    ["the fence is grid-aligned, not centred on the anchor block"] = function(assert_eq)
+        -- The bug this whole redesign exists to prevent: a loader placed at the
+        -- high edge of its chunk loads the SAME chunks as one at the low edge.
+        local g = fresh()
+        g.setAnchorBlock(15, 15, 1)        -- block 15,15 is still chunk 0,0
+        assert_eq(g.contains(31, 31), true)
+        assert_eq(g.contains(32, 32), false,
+            "a block-radius fence would wrongly allow this")
+        assert_eq(g.contains(-16, -16), true,
+            "a block-radius fence would wrongly forbid this")
+    end,
+
+    ["a sector's 33x33 work area fits a radius-1 fence exactly"] = function(assert_eq)
+        -- SECTOR_STEP=32, SCAN_RADIUS=16 => centre c, area [c-16, c+16].
+        -- Sector centres are multiples of 32, so they land on chunk boundaries.
+        local g = fresh()
+        g.setAnchorBlock(0, 0, 1)          -- loader in the sector's anchor chunk
+        assert_eq(g.contains(-16, -16), true, "sector min corner")
+        assert_eq(g.contains(16, 16), true,  "sector max corner")
     end,
 
     ["check reports the reason on breach"] = function(assert_eq)
         local g = fresh()
-        g.setAnchor(0, 0, 16)
-        local ok, reason = g.check(40, 0)
+        g.setAnchorChunk(0, 0, 1)
+        local ok, reason = g.check(400, 0)
         assert_eq(ok, false)
         assert_eq(reason, "geofence_breach")
     end,
 
     ["clear releases the fence"] = function(assert_eq)
         local g = fresh()
-        g.setAnchor(0, 0, 16)
+        g.setAnchorChunk(0, 0, 1)
         g.clear()
         assert_eq(g.isActive(), false)
         assert_eq(g.contains(9999, 9999), true)
@@ -962,15 +1034,34 @@ Expected: 5 geofence tests FAIL — `module 'geofence' not found`
 -- freezes with no way to recover. The fence is enforced inside the movement
 -- primitive rather than at call sites, so no future caller can forget it.
 --
--- radius comes from the measured footprint in
--- docs/superpowers/specs/chunkloader-footprint.md — do not raise it on a guess.
+-- The fence is measured in CHUNKS, not blocks. Advanced Peripherals' chunky
+-- turtle loads a grid-aligned square of chunks around the chunk it occupies —
+-- it is not a square centred on the turtle. A block radius cannot express that:
+-- a loader at the high edge of its chunk loads exactly the same chunks as one at
+-- the low edge, and a block-centred fence would be wrong by up to 15 blocks in
+-- both directions, every one of them unloaded.
+--
+-- chunkRadius comes from docs/superpowers/specs/chunkloader-footprint.md and
+-- MUST stay at least one below the pack's chunkyTurtleRadius. Nothing checks
+-- that at runtime — the config is server-side and unreadable from here.
 
 local geofence = {}
 
-local _anchor = nil   -- { x, z, radius } or nil when travelling with own chunky
+local _anchor = nil   -- { cx, cz, chunkRadius } or nil when travelling on our own chunky
 
-function geofence.setAnchor(x, z, radius)
-    _anchor = { x = x, z = z, radius = radius }
+function geofence.chunkOf(x, z)
+    return math.floor(x / 16), math.floor(z / 16)
+end
+
+function geofence.setAnchorChunk(cx, cz, chunkRadius)
+    _anchor = { cx = cx, cz = cz, chunkRadius = chunkRadius }
+end
+
+-- Anchor on the chunk CONTAINING this block. Callers hold block coords, and
+-- doing the conversion here means no call site can forget it.
+function geofence.setAnchorBlock(x, z, chunkRadius)
+    local cx, cz = geofence.chunkOf(x, z)
+    geofence.setAnchorChunk(cx, cz, chunkRadius)
 end
 
 function geofence.clear() _anchor = nil end
@@ -979,20 +1070,17 @@ function geofence.isActive() return _anchor ~= nil end
 
 function geofence.anchor() return _anchor end
 
--- Chebyshev distance, because chunk loading covers a square footprint.
+-- Chebyshev distance in chunk space.
 function geofence.contains(x, z)
     if not _anchor then return true end
-    return math.abs(x - _anchor.x) <= _anchor.radius
-       and math.abs(z - _anchor.z) <= _anchor.radius
+    local cx, cz = geofence.chunkOf(x, z)
+    return math.abs(cx - _anchor.cx) <= _anchor.chunkRadius
+       and math.abs(cz - _anchor.cz) <= _anchor.chunkRadius
 end
 
 function geofence.check(x, z)
     if geofence.contains(x, z) then return true end
     return false, "geofence_breach"
-end
-
-function geofence.chunkOf(x, z)
-    return math.floor(x / 16), math.floor(z / 16)
 end
 
 return geofence
@@ -1021,10 +1109,10 @@ In `turtle_base.lua`, at the top of `tryMove` (around line 365, immediately afte
             else                          nx = nx - sign end
         end
         if not _geofence.contains(nx, nz) then
+            local a = _geofence.anchor()
             logWarn(string.format(
-                "Geofence: refusing move to %d,%d (anchor %d,%d r%d)",
-                nx, nz, _geofence.anchor().x, _geofence.anchor().z,
-                _geofence.anchor().radius))
+                "Geofence: refusing move to %d,%d (anchor chunk %d,%d r%d)",
+                nx, nz, a.cx, a.cz, a.chunkRadius))
             return false, "geofence_breach"
         end
     end
@@ -1293,8 +1381,9 @@ local function recoverPlacedLoader()
     base.setAutonomousReturn(true)
 
     -- Approach at sky altitude, then drop onto the loader's own level so the
-    -- fence stays valid for the descent.
-    geofence.setAnchor(s.x, s.z, s.radius)
+    -- fence stays valid for the descent. s.radius is a CHUNK radius and s.x/s.z
+    -- are the loader's own block coords, so anchor on its chunk.
+    geofence.setAnchorBlock(s.x, s.z, s.radius)
     base.move.to(s.x, SKY_Y, s.z)
     base.move.to(s.x, s.y, s.z)
 
@@ -1380,6 +1469,16 @@ git commit -m "feat: persist placed-loader state and add autonomous return on se
 ---
 
 ### Task 5c: Loader beacon — modem on the carried chunk loader
+
+**AMENDED after Task 1: this task is mandatory and load-bearing, not telemetry.**
+The pack sets `chunkLoadValidTime = 600` — "time in seconds while a loaded chunk
+can be considered valid without touch". If a placed, idle turtle running no
+program does not constitute a touch, chunk loading expires **10 minutes into a
+sector** and the miner freezes: Invariant A failing on a timer. A loader running
+`loader_turtle.lua` ticks continuously, which is the most plausible "touch", so
+the beacon program is what keeps the ticket alive. It must ship before any long
+sector run, not after. Raising `chunkLoadValidTime` (range is open above 60) is
+recommended belt-and-braces, not a substitute.
 
 The loader turtle has two upgrade slots and uses one for chunky. Putting an ender
 modem in the other turns it from a silent object into one that reports itself.
@@ -1902,11 +2001,31 @@ return {
         local eqm = require("equipment")
         local flow, eq, gf = loadFlow(
             { left = "modem", right = "chunky" }, travelInv())
-        local ok, reason = flow.placeLoader(24)
+        -- Miner at 0,0 facing north => loader lands at 0,-1, which is chunk 0,-1.
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
         assert_eq(ok, true, reason)
         assert_eq(eq.sideOf("chunky"), nil, "chunky must be stowed after the swap")
         assert_eq(eq.sideOf("modem") ~= nil, true, "modem stays on")
         assert_eq(gf.isActive(), true, "fence must be armed once the pickaxe is on")
+        local a = gf.anchor()
+        assert_eq(a.cx, 0);  assert_eq(a.cz, -1,
+            "fence anchors on the LOADER's chunk, not the miner's position")
+    end,
+
+    ["placeLoader refuses a target outside the sector's anchor chunk"] = function(assert_eq)
+        package.loaded["equipment"] = nil
+        local eqm = require("equipment")
+        local flow, eq, gf = loadFlow(
+            { left = "modem", right = "chunky" }, travelInv())
+        -- Demand a chunk the placement cannot reach from here.
+        local ok, reason = flow.placeLoader(1, { cx = 5, cz = 5 })
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_target_wrong_chunk")
+        assert_eq(eq.sideOf("chunky") ~= nil, true,
+            "chunky must NOT be removed when placement is refused")
+        assert_eq(gf.isActive(), false)
+        assert_eq(eq.findSlot(eqm.ITEMS.LOADER_TURTLE) ~= nil, true,
+            "loader must still be carried, not dropped in the wrong chunk")
     end,
 
     ["placeLoader refuses when the loader turtle is not carried"] = function(assert_eq)
@@ -1914,7 +2033,7 @@ return {
         local eqm = require("equipment")
         local inv = travelInv(); inv[2] = nil
         local flow, eq, gf = loadFlow({ left = "modem", right = "chunky" }, inv)
-        local ok, reason = flow.placeLoader(24)
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
         assert_eq(ok, false)
         assert_eq(reason, "loader_turtle_missing")
         assert_eq(eq.sideOf("chunky") ~= nil, true,
@@ -1930,7 +2049,7 @@ return {
         inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
         local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
         local flow, eq, gf = loadFlow({ left = "modem", right = "pickaxe" }, inv, world)
-        gf.setAnchor(0, 0, 24)
+        gf.setAnchorChunk(0, 0, 1)
         local ok, reason = flow.retrieveLoader()
         assert_eq(ok, true, reason)
         assert_eq(eq.sideOf("chunky") ~= nil, true, "chunky on at the end")
@@ -1991,9 +2110,24 @@ end
 local function report(phase, detail) _hooks.reportPhase(phase, detail) end
 local function log(msg) _hooks.log(msg) end
 
+-- One block ahead of the miner — where turtle.place() will put the loader.
+local function aheadBlock(p)
+    local dx, dz = 0, 0
+    if     p.facing == 0 then dz = -1
+    elseif p.facing == 1 then dx =  1
+    elseif p.facing == 2 then dz =  1
+    else                      dx = -1 end
+    return p.x + dx, p.z + dz
+end
+
 -- Place the carried loader turtle ahead, confirm it is standing, then hand
 -- chunk duty over to it and arm the fence around it.
-function mine_flow.placeLoader(radius)
+--
+-- anchorChunk is the chunk the sector requires the loader to occupy: with
+-- SECTOR_STEP=32 and SCAN_RADIUS=16 the work area is exactly the 3x3 chunks
+-- centred on chunkOf(sectorCentre). Placing one chunk off leaves the sector's
+-- far edge unloaded, so this is checked BEFORE the loader leaves the inventory.
+function mine_flow.placeLoader(chunkRadius, anchorChunk)
     report("PLACING_LOADER")
 
     local ok, reason = equipment.validate("travel")
@@ -2001,6 +2135,20 @@ function mine_flow.placeLoader(radius)
 
     local slot = equipment.findSlot(equipment.ITEMS.LOADER_TURTLE)
     if not slot then return false, "loader_turtle_missing" end
+
+    -- turtle.place() puts the loader one block AHEAD, which can be in a
+    -- different chunk than the miner. The fence must describe the LOADER's
+    -- chunk, since that is the thing doing the loading — anchoring on the
+    -- miner's own position is wrong wherever the two straddle a boundary.
+    local p = _hooks.pos()
+    local tx, tz = aheadBlock(p)
+    local lcx, lcz = geofence.chunkOf(tx, tz)
+
+    if anchorChunk and (lcx ~= anchorChunk.cx or lcz ~= anchorChunk.cz) then
+        -- Caller must reposition; never place a loader that cannot cover the
+        -- sector. Recovering it would need a pickaxe we are not holding.
+        return false, "loader_target_wrong_chunk"
+    end
 
     turtle.select(slot)
     if turtle.detect() then
@@ -2024,9 +2172,10 @@ function mine_flow.placeLoader(radius)
         return false, why
     end
 
-    local p = _hooks.pos()
-    geofence.setAnchor(p.x, p.z, radius)
-    log(string.format("Fence armed at %d,%d radius %d", p.x, p.z, radius))
+    -- Anchor on the loader's chunk, not the miner's position.
+    geofence.setAnchorBlock(tx, tz, chunkRadius)
+    log(string.format("Fence armed on chunk %d,%d radius %d (loader at %d,%d)",
+        lcx, lcz, chunkRadius, tx, tz))
     return true
 end
 
@@ -2081,10 +2230,16 @@ local equipment = require("equipment")
 local geofence  = require("geofence")
 local mine_flow = require("mine_flow")
 
--- Measured footprint from docs/superpowers/specs/chunkloader-footprint.md.
--- Do not raise without re-measuring: this is the only thing keeping the miner
--- inside loaded chunks while its chunky upgrade is stowed.
-local FENCE_RADIUS = 24
+-- Footprint from docs/superpowers/specs/chunkloader-footprint.md. Measured in
+-- CHUNKS: 1 => the 3x3 chunks around the loader's own chunk, which is exactly a
+-- 33x33 sector. The pack loads 5x5 (chunkyTurtleRadius=2), so this leaves one
+-- chunk of slack on every side.
+--
+-- This is the only thing keeping the miner inside loaded chunks while its own
+-- chunky upgrade is stowed. Do NOT raise it without raising chunkyTurtleRadius
+-- in the Advanced Peripherals config first — nothing checks that they agree,
+-- and a mismatch does not error, it freezes the turtle in an unloaded chunk.
+local FENCE_CHUNK_RADIUS = 1
 ```
 
 Add a phase reporter and wire the hooks:
@@ -2150,9 +2305,18 @@ Wrap each sector's work with the place/retrieve pair:
         -- Fly to the sector while self-loading, then hand chunk duty to the
         -- placed loader before removing our own.
         reportPhase(proto.PHASE.TRAVELLING, string.format("sector %d,%d", sx, sz))
-        base.move.to(sx, travelY, sz)
 
-        local placed, placeErr = mine_flow.placeLoader(FENCE_RADIUS)
+        -- Stand at the middle of the sector's anchor chunk, not at the sector
+        -- centre. Sector centres are multiples of 32 and so land exactly ON a
+        -- chunk boundary: placing from there would drop the loader into
+        -- whichever neighbouring chunk we happened to be facing, and the fence
+        -- would then cover the wrong 3x3. From 8 blocks in, every facing keeps
+        -- both miner and loader inside the anchor chunk.
+        local acx, acz = geofence.chunkOf(sx, sz)
+        base.move.to(sx + 8, travelY, sz + 8)
+
+        local placed, placeErr =
+            mine_flow.placeLoader(FENCE_CHUNK_RADIUS, { cx = acx, cz = acz })
         if not placed then
             print("[MINER] Cannot start sector: " .. tostring(placeErr))
             base.sendProgress("sector_setup_failed: " .. tostring(placeErr))
