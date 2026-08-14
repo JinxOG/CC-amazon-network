@@ -18,6 +18,14 @@
 -- inside a chunk that may no longer be loaded. That verification/monitoring
 -- logic lives in mine_flow.lua (added in a later task) -- this program's only
 -- job is to produce the beacon.
+--
+-- Invariant this file must hold: there is no failure mode in which this
+-- program stops running. The chunky upgrade holds the chunk regardless of
+-- whether the program is alive, but a halted program can never report
+-- itself -- which defeats the whole point of a beacon. So every step past
+-- "no modem" (startup, and each loop iteration) is wrapped so a transient
+-- fault costs one missed beacon, or one retried startup attempt, never the
+-- program.
 
 local proto = require("protocol")
 
@@ -32,10 +40,21 @@ if not modem then
     while true do sleep(60) end
 end
 
-proto.openChannels(modem, { proto.CH_SERVER, proto.CH_BROADCAST,
-                            proto.CH_PRIVATE, proto.CH_LOCAL })
-
-local selfId = proto.selfId()
+-- Startup must not be able to kill the program before the beacon loop is
+-- even entered. Neither call is expected to throw in normal operation, but
+-- retrying under pcall rather than letting either be fatal costs nothing.
+local selfId
+while not selfId do
+    local ok, err = pcall(function()
+        proto.openChannels(modem, { proto.CH_SERVER, proto.CH_BROADCAST,
+                                    proto.CH_PRIVATE, proto.CH_LOCAL })
+        selfId = proto.selfId()
+    end)
+    if not ok then
+        print("[LOADER] Startup error, retrying in 5s: " .. tostring(err))
+        sleep(5)
+    end
+end
 
 -- deployedBy is intentionally left nil here: this turtle has no way to learn
 -- which miner placed it -- the miner cannot write to a separate turtle's
@@ -46,22 +65,50 @@ local selfId = proto.selfId()
 local deployedBy = nil
 
 local function position()
-    local x, y, z = gps.locate(2)
-    if x then return { x = x, y = y, z = z } end
+    -- pcall belt-and-suspenders: gps.locate() already returns nil (not an
+    -- error) on a plain timeout, but a wrapped GPS/peripheral hiccup must
+    -- cost this one position lookup, not the beacon that carries it.
+    local ok, x, y, z = pcall(gps.locate, 2)
+    if ok and x then return { x = x, y = y, z = z } end
     return nil
 end
 
 print("[LOADER] " .. selfId .. " holding chunk. Beaconing every "
       .. BEACON_INTERVAL .. "s.")
 
+-- Tracks consecutive send failures so a human standing next to the loader
+-- can tell "beaconing but nobody's listening" apart from "the program
+-- silently died" -- exactly the ambiguity this beacon exists to remove for
+-- everyone else, so it should be visible on the loader's own terminal too.
+local consecutiveFailures = 0
+
 while true do
-    local pos = position()
-    local payload = proto.payloadLoaderBeacon(pos, deployedBy)
-    -- CH_LOCAL so a nearby miner can verify directly without a server round
-    -- trip; CH_SERVER so the fleet view knows this loader exists at all.
-    proto.send(modem, proto.CH_LOCAL,
-        proto.encode(proto.MSG.LOADER_BEACON, selfId, "broadcast", payload))
-    proto.send(modem, proto.CH_SERVER,
-        proto.encode(proto.MSG.LOADER_BEACON, selfId, "server", payload))
+    local ok, err = pcall(function()
+        local pos = position()
+        local payload = proto.payloadLoaderBeacon(pos, deployedBy)
+        -- CH_LOCAL so a nearby miner can verify directly without a server
+        -- round trip; CH_SERVER so the fleet view knows this loader exists.
+        proto.send(modem, proto.CH_LOCAL,
+            proto.encode(proto.MSG.LOADER_BEACON, selfId, "broadcast", payload))
+        proto.send(modem, proto.CH_SERVER,
+            proto.encode(proto.MSG.LOADER_BEACON, selfId, "server", payload))
+    end)
+
+    if ok then
+        if consecutiveFailures >= 3 then
+            print("[LOADER] Beacon recovered after " .. consecutiveFailures
+                  .. " failed attempt(s).")
+        end
+        consecutiveFailures = 0
+    else
+        consecutiveFailures = consecutiveFailures + 1
+        -- Log the first failure immediately, then every 3rd repeat -- loud
+        -- enough to notice, not a line-per-5s scroll on a stuck modem.
+        if consecutiveFailures == 1 or consecutiveFailures % 3 == 0 then
+            print("[LOADER] Beacon send failed (" .. consecutiveFailures
+                  .. " in a row): " .. tostring(err))
+        end
+    end
+
     sleep(BEACON_INTERVAL)
 end
