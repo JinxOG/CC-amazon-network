@@ -205,10 +205,23 @@ end
 -- intervenes. Chunk safety is restored before comms, because being unloaded is
 -- unrecoverable while being offline is not.
 function equipment.reconcile()
+    local chunkyFailed = false
     if not equipment.sideOf("chunky") then
         local cSlot = findSlot(I.CHUNKY)
-        local side  = emptySide()
-        if cSlot and side then swap(cSlot, side) end
+        if cSlot then
+            -- A chunky item is carried but not equipped: this is the case
+            -- reconcile() exists for, and we must know whether the fix
+            -- actually landed, not just attempt it and move on.
+            local side = emptySide()
+            local ok = false
+            if side then ok = swap(cSlot, side) end
+            if not ok or not equipment.sideOf("chunky") then
+                chunkyFailed = true
+            end
+        end
+        -- cSlot == nil means no chunky item is carried at all (genuinely
+        -- absent, or -- impossible here since we're inside `not sideOf` --
+        -- already equipped). Nothing to recover, so that is not a failure.
     end
     if not equipment.sideOf("modem") then
         local mSlot = findSlot(I.MODEM)
@@ -226,6 +239,7 @@ function equipment.reconcile()
             end
         end
     end
+    if chunkyFailed then return false, "chunky_unrecoverable" end
     if not equipment.sideOf("modem") then return false, "modem_unrecoverable" end
     return true
 end

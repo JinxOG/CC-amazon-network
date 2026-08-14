@@ -1,7 +1,9 @@
 local stub = require("tests.stub_cc")
 
-local function fresh(equipped, inv)
-    stub.install({ equipped = equipped, inv = inv })
+local function fresh(equipped, inv, stubExtra)
+    local opts = { equipped = equipped, inv = inv }
+    for k, v in pairs(stubExtra or {}) do opts[k] = v end
+    stub.install(opts)
     package.loaded["equipment"] = nil
     return require("equipment")
 end
@@ -121,5 +123,39 @@ return {
         assert_eq(ok, true)
         assert_eq(eq.sideOf("chunky") ~= nil, true,
             "chunk safety outranks digging when recovering")
+    end,
+
+    -- Forces the actual priority conflict: pickaxe occupies one side, and
+    -- both chunky and modem are loose in inventory competing for the single
+    -- side that starts empty. reconcile() must restore chunky first -- if it
+    -- restored modem first instead, chunky would be left with no empty side
+    -- and no fallback (only the modem path evicts the pickaxe), stranding
+    -- chunk safety while comms came back. This is the case the two older
+    -- reconcile tests never exercised: in both of those, one of chunky/modem
+    -- was already correctly equipped, so block order never mattered.
+    ["reconcile restores chunky before modem when both compete for the only free side"] = function(assert_eq)
+        local eq = fresh({ left = PICKAXE, right = nil },
+                         fullInv({ [3] = { name = CHUNKY, count = 1 },
+                                   [4] = { name = MODEM,  count = 1 } }))
+        local ok, reason = eq.reconcile()
+        assert_eq(ok, true, reason)
+        assert_eq(eq.sideOf("chunky") ~= nil, true,
+            "chunk safety must win the race for the only empty side")
+    end,
+
+    -- Finding-1 regression: if the chunky swap() itself fails (not just "no
+    -- slot available"), reconcile() must not paper over it by reporting
+    -- success once the unrelated modem side checks out. Forces a real
+    -- equip failure via the stub's equipFail hook, since a genuine chunky
+    -- item can never fail the stub's item-validity check on its own.
+    ["reconcile does not report success when the chunky swap itself fails"] = function(assert_eq)
+        local eq = fresh({ left = MODEM, right = nil },
+                         fullInv({ [3] = { name = CHUNKY, count = 1 } }),
+                         { equipFail = { right = true } })
+        local ok, reason = eq.reconcile()
+        assert_eq(ok, false, "must not report success")
+        assert_eq(reason, "chunky_unrecoverable")
+        assert_eq(eq.sideOf("chunky"), nil,
+            "chunk safety genuinely was not restored")
     end,
 }

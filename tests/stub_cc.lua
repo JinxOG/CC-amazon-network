@@ -25,6 +25,14 @@ function M.install(opts)
         events   = opts.events or {},       -- queue of {name, ...}
         selected = 1,
         fuel     = opts.fuel or 100000,
+        -- Forces equipLeft/equipRight to fail on the given side regardless
+        -- of what's selected, e.g. { right = true }. Added for equipment.lua
+        -- reconcile() coverage: M._equip's only real failure path is "item
+        -- isn't a valid upgrade", which a genuine chunky/modem/pickaxe item
+        -- never hits, so there was no way to exercise a caller's handling of
+        -- a *failed* equip call without this. Defaults to {}, so no existing
+        -- test observes any change.
+        equipFail = opts.equipFail or {},
     }
     -- facing lives only on c.pos; c.facing would drift out of sync with it
     -- the moment either got written independently, so there's one owner.
@@ -123,8 +131,14 @@ function M.install(opts)
             return true
         end,
 
-        equipLeft  = function() return M._equip(c, "left")  end,
-        equipRight = function() return M._equip(c, "right") end,
+        equipLeft  = function()
+            if c.equipFail.left then return false, "stub-forced equip failure" end
+            return M._equip(c, "left")
+        end,
+        equipRight = function()
+            if c.equipFail.right then return false, "stub-forced equip failure" end
+            return M._equip(c, "right")
+        end,
         getEquippedLeft  = function() return M._equippedDetail(c, "left")  end,
         getEquippedRight = function() return M._equippedDetail(c, "right") end,
 
