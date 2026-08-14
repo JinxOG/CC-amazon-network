@@ -115,6 +115,45 @@ return {
         assert_eq(c.inv[1].count, 64)
     end,
 
+    ["transferTo clamps n to the source stack's actual count"] = function(assert_eq)
+        local c = stub.install({
+            inv = { [1] = { name = "minecraft:coal", count = 5 } },
+        })
+        turtle.select(1)
+        local ok = turtle.transferTo(2, 100)
+        assert_eq(ok, true)
+        assert_eq(c.inv[2].count, 5)
+        assert_eq(c.inv[1], nil)
+    end,
+
+    ["transferTo clamps a merge at 64 rather than overflowing the stack"] = function(assert_eq)
+        local c = stub.install({
+            inv = {
+                [1] = { name = "minecraft:coal", count = 40 },
+                [2] = { name = "minecraft:coal", count = 40 },
+            },
+        })
+        turtle.select(1)
+        local ok = turtle.transferTo(2)
+        assert_eq(ok, true)
+        assert_eq(c.inv[2].count, 64)
+        assert_eq(c.inv[1].count, 16)
+    end,
+
+    ["transferTo fails when the destination has no room at all"] = function(assert_eq)
+        local c = stub.install({
+            inv = {
+                [1] = { name = "minecraft:coal", count = 5 },
+                [2] = { name = "minecraft:coal", count = 64 },
+            },
+        })
+        turtle.select(1)
+        local ok = turtle.transferTo(2)
+        assert_eq(ok, false)
+        assert_eq(c.inv[1].count, 5)
+        assert_eq(c.inv[2].count, 64)
+    end,
+
     ["digDown collects the block into inventory, not just clears it"] = function(assert_eq)
         local c = stub.install({
             equipped = { right = "minecraft:diamond_pickaxe" },

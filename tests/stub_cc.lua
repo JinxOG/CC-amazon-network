@@ -151,8 +151,18 @@ function M.install(opts)
             if n <= 0 then return true end
             local d = c.inv[dest]
             if d and d.name ~= src.name then return false end
-            c.inv[dest] = { name = src.name, count = (d and d.count or 0) + n }
-            src.count = src.count - n
+            -- Real CC:Tweaked never manufactures items or overflows a
+            -- stack past 64: n is capped by what the source actually
+            -- holds, then further capped by the destination's remaining
+            -- room, and only the amount actually moved comes off the
+            -- source. A destination already at 64 accepts nothing, which
+            -- is a failed transfer, not a silent no-op success.
+            n = math.min(n, src.count)
+            local space = 64 - (d and d.count or 0)
+            if space <= 0 then return false end
+            local moved = math.min(n, space)
+            c.inv[dest] = { name = src.name, count = (d and d.count or 0) + moved }
+            src.count = src.count - moved
             if src.count <= 0 then c.inv[c.selected] = nil end
             return true
         end,
