@@ -9,6 +9,15 @@ local W     = require("waypoints")
 
 local CFG = {
     HEARTBEAT_TIMEOUT = 240,    -- seconds before a turtle is considered offline (deep mine ascent ~120-180s)
+    -- Grace window for a miner's RETRIEVING comms gap (modem unequipped to swap
+    -- pickaxe<->chunky). Must exceed the real duration of that swap -- if the
+    -- swap ever gets slower (bigger inventory shuffle, slower equip calls),
+    -- this has to grow with it or a legitimate gap starts reading as a real
+    -- failure. Currently near-dead in practice: HEARTBEAT_TIMEOUT (240s) and
+    -- the absent-turtle grace (300s) both require the turtle to have gone
+    -- fully offline first, which this window (60s) rarely reaches before the
+    -- gap itself ends -- it's defence-in-depth for if those get tuned down.
+    COMMS_GAP_GRACE_SEC = 60,
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -232,10 +241,12 @@ function registry.checkTimeouts()
     local now = os.epoch("utc")
     for id, t in pairs(state.registry) do
         -- A miner in RETRIEVING has deliberately unequipped its modem; missed
-        -- heartbeats there are expected, not evidence of a failure. Allow a
-        -- generous 60s before treating it as real. commsGap/phaseAt are nil
-        -- for every non-miner role, so this never applies to them.
-        local inPlannedCommsGap = t.commsGap and t.phaseAt and (now - t.phaseAt) < 60000
+        -- heartbeats there are expected, not evidence of a failure. See
+        -- CFG.COMMS_GAP_GRACE_SEC's comment for what this window must satisfy.
+        -- commsGap/phaseAt are nil for every non-miner role, so this never
+        -- applies to them.
+        local inPlannedCommsGap = t.commsGap and t.phaseAt
+            and (now - t.phaseAt) < (CFG.COMMS_GAP_GRACE_SEC * 1000)
         if inPlannedCommsGap then
             -- skip: expected gap, don't count it as a timeout or prune it
         elseif t.online and (now - t.lastSeen) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
@@ -570,11 +581,12 @@ function jobQueue.checkGhosts()
             local t = state.registry[job.assignedTo]
 
             -- A miner in RETRIEVING has deliberately unequipped its modem; missed
-            -- heartbeats there are expected, not evidence of a failure. Allow a
-            -- generous 60s before treating it as real. commsGap/phaseAt are nil
-            -- for every non-miner role, so this never applies to them.
+            -- heartbeats there are expected, not evidence of a failure. See
+            -- CFG.COMMS_GAP_GRACE_SEC's comment for what this window must satisfy.
+            -- commsGap/phaseAt are nil for every non-miner role, so this never
+            -- applies to them.
             local inPlannedCommsGap = t and t.commsGap and t.phaseAt
-                and (nowSec - (t.phaseAt / 1000)) < 60
+                and (nowSec - (t.phaseAt / 1000)) < CFG.COMMS_GAP_GRACE_SEC
 
             if inPlannedCommsGap then
                 job.ghostSince   = nil
@@ -1410,6 +1422,10 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
             if p.phase then
                 if t.phase ~= p.phase then t.phaseAt = os.epoch("utc") end
                 t.phase = p.phase
+                -- Terminal phase: docked and idle again, so the last chunk it
+                -- worked is stale from here on. Mirrors the same check in
+                -- handleMinePhase() for the MINE_PHASE-message delivery path.
+                if p.phase == proto.PHASE.DOCKED then t.chunk = nil end
             end
             if p.chunk    then t.chunk    = p.chunk    end
             if p.commsGap ~= nil then t.commsGap = p.commsGap end
@@ -1742,15 +1758,28 @@ end
 -- Phase transitions arrive as their own message as well as on heartbeats, so a
 -- short-lived phase between two heartbeats is not missed by the dashboard.
 local function handleMinePhase(msg)
-    local p = msg.payload
-    local t = state.registry[msg.from]
+    local p   = msg.payload
+    local t   = state.registry[msg.from]
     if not t then return end
-    if t.phase ~= p.phase then t.phaseAt = p.ts or os.epoch("utc") end
+    local now = os.epoch("utc")
+    -- Clamp to "now" so a turtle with a skewed clock can't extend its own
+    -- comms-gap suppression window (checkTimeouts/checkGhosts) by reporting a
+    -- timestamp in the future. The heartbeat path is already server-
+    -- authoritative (always os.epoch("utc")); this keeps phaseAt uniform
+    -- with that rather than trusting the turtle's clock.
+    if t.phase ~= p.phase then t.phaseAt = math.min(p.ts or now, now) end
     t.phase = p.phase
     -- RETRIEVING is the deliberate comms-gap window: the miner sacrifices its
     -- modem so pickaxe and chunky can be equipped together. Mark it so a
     -- missed heartbeat during it is not misread as a failure.
     t.commsGap = (p.phase == proto.PHASE.RETRIEVING)
+    -- Terminal phase: the miner is docked and idle again, so the last chunk
+    -- it worked (and the phase itself) is stale from here on. Same lifecycle
+    -- point as jobQueue.complete()'s reset of status/jobId, just reached via
+    -- the phase-report path instead of JOB_COMPLETE.
+    if p.phase == proto.PHASE.DOCKED then
+        t.chunk = nil
+    end
     jobQueue.progress(p.jobId, proto.STATUS.WORKING,
         string.format("phase %s%s", p.phase, p.detail and (" — " .. p.detail) or ""))
     logInfo(string.format("%s phase: %s%s", msg.from, p.phase,
@@ -2590,10 +2619,18 @@ function server.run()
                 -- Solo-miner telemetry (Task 7). nil/false for every other
                 -- role, so the dashboard falls back to today's plain
                 -- "offline" for delivery/support turtles.
+                -- chunk is flattened to scalars (chunkX/chunkZ), same as
+                -- dock -> dockX/dockZ/dockJX and position -> x/y/z above:
+                -- every other value here is a scalar, and js(turtles, ...)
+                -- serialises the whole turtles table under one pcall, so one
+                -- unvalidated nested table from a single turtle would blank
+                -- out every turtle (delivery included) rather than just that
+                -- turtle's chunk field.
                 phase    = t.phase,
                 phaseAt  = t.phaseAt or 0,
                 commsGap = t.commsGap and true or false,
-                chunk    = t.chunk,
+                chunkX   = t.chunk and t.chunk.cx or nil,
+                chunkZ   = t.chunk and t.chunk.cz or nil,
                 dock    = t.dock and string.format("bay%d%s", t.dock.bay, t.dock.row) or nil,
                 dockX   = t.dock and t.dock.x or nil,
                 dockZ   = t.dock and t.dock.z or nil,
