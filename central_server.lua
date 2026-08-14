@@ -1405,6 +1405,23 @@ handlers[proto.MSG.JOB_FAILED] = function(msg)
     pcall(dispatcher.tick)
 end
 
+-- ── Placed chunk loader beacon ────────────────────────────────────────────────
+-- Loaders are inventory, not workers. They register here so the fleet view
+-- can show them and (later) flag orphans, but registry.getIdle only ever
+-- returns turtles whose role matches one the dispatcher explicitly asks for
+-- (MINER / DELIVERY / SUPPORT / BUILDER) -- a LOADER entry can never satisfy
+-- that match, so the dispatcher can never assign it a job.
+handlers[proto.MSG.LOADER_BEACON] = function(msg)
+    local p = msg.payload
+    local t = state.registry[msg.from] or {}
+    t.role       = proto.ROLE.LOADER
+    t.online     = true
+    t.lastSeen   = os.epoch("utc")
+    t.position   = p.position or t.position
+    t.deployedBy = p.deployedBy or t.deployedBy
+    state.registry[msg.from] = t
+end
+
 -- ── Mining sector handshake ───────────────────────────────────────────────────
 
 handlers[proto.MSG.SECTOR_REQUEST] = function(msg)

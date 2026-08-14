@@ -91,6 +91,11 @@ proto.MSG = {
 
     -- Remote logging (turtle → server)
     TURTLE_LOG   = "TURTLE_LOG",   -- turtle → server: batch of recent print() lines for remote monitoring
+
+    -- Placed chunk loader liveness (loader → server + CH_LOCAL to any miner).
+    -- Proves the chunk is actually held, and makes an abandoned loader
+    -- self-reporting rather than something the server has to infer.
+    LOADER_BEACON = "LOADER_BEACON",
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────
@@ -101,6 +106,7 @@ proto.ROLE = {
     SUPPORT  = "SUPPORT",
     MINER    = "MINER",
     ANDROID  = "ANDROID",
+    LOADER   = "LOADER",     -- placed chunk loader, never dispatched
 }
 
 -- ─── Job Types ───────────────────────────────────────────────────────────────
@@ -287,6 +293,12 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         foundOres  = foundOres or {},
         minedOres  = minedOres or {},
     }
+end
+
+-- ─── Loader Beacon Payload Builder ───────────────────────────────────────────
+
+function proto.payloadLoaderBeacon(position, deployedBy)
+    return { position = position, deployedBy = deployedBy, ts = os.epoch("utc") }
 end
 
 -- ─── Modem Helpers ───────────────────────────────────────────────────────────
