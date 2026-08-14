@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.8.7"
+proto.VERSION = "1.8.0"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -57,12 +57,6 @@ proto.MSG = {
 
     -- Job abort (CH_LOCAL)
     JOB_ABORT       = "JOB_ABORT",       -- delivery → support: job failed, return to dock immediately
-
-    -- Reliable-signal acknowledgement (CH_LOCAL)
-    -- Any message carrying payload._sigId is auto-ACKed by the receiver.
-    -- base.sendReliable() resends until this arrives, so once-only coordination
-    -- signals (RETURN_TO_DOCK, HOLE_READY, …) can no longer be lost.
-    SIGNAL_ACK      = "SIGNAL_ACK",      -- receiver → sender: got your signal (payload._sigId)
 
     -- Remote dispatch (admin → server)
     JOB_REQUEST     = "JOB_REQUEST",     -- admin UI → server: submit a new delivery job

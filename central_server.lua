@@ -247,8 +247,8 @@ function registry.checkTimeouts()
                         linkedJob.status = "CANCELLED"
                         linkedJob.assignedTo = nil
                         if supportTurtle and state.registry[supportTurtle] then
-                            -- Registry left intact on purpose — see server.cancelJob.
-                            -- The support self-reports IDLE once it actually docks.
+                            state.registry[supportTurtle].status = proto.STATUS.IDLE
+                            state.registry[supportTurtle].jobId  = nil
                             sendTo(supportTurtle, proto.MSG.RECALL, proto.payloadRecall("partner_timed_out"))
                         end
                         logInfo("Cancelled linked support job " .. tostring(linkedId) .. " after partner timeout")
@@ -1756,10 +1756,8 @@ function server.cancelJob(jobId)
     end
     if job.assignedTo then
         sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("job_cancelled"))
-        -- Do NOT clear the registry entry here. The turtle is still executing its
-        -- coordinated return; clearing jobId makes queryTurtle report "job done" to
-        -- its partner, which reads that as "my partner finished" and abandons the
-        -- pair mid-return. The turtle self-reports IDLE when it actually docks.
+        local t = state.registry[job.assignedTo]
+        if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
     end
     job.status = JOB_STATUS.CANCELLED
     jobQueue._hist(jobId, "cancelled", "")
@@ -2240,17 +2238,17 @@ function server.run()
                 -- Recall any turtle currently assigned to this job
                 if job.assignedTo and
                    (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
-                    -- Registry entries are left intact on purpose — see
-                    -- server.cancelJob. Both turtles are still flying home and
-                    -- self-report IDLE on arrival; clearing jobId here makes each
-                    -- one read its partner as "finished" and abandon the pair.
                     sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("jobs_cleared"))
+                    local tr = state.registry[job.assignedTo]
+                    if tr then tr.status = proto.STATUS.IDLE; tr.jobId = nil end
                     -- also recall the paired support turtle, otherwise it
                     -- keeps flying with no delivery partner.
                     if job.linkedJob then
                         local linked = state.jobs[job.linkedJob]
                         if linked and linked.assignedTo then
                             sendTo(linked.assignedTo, proto.MSG.RECALL, proto.payloadRecall("jobs_cleared"))
+                            local st = state.registry[linked.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
                         end
                     end
                 end
@@ -2298,8 +2296,8 @@ function server.run()
                         if linked and linked.assignedTo then
                             sendTo(linked.assignedTo, proto.MSG.RECALL,
                                 proto.payloadRecall("turtle_removed"))
-                            -- Registry left intact — see server.cancelJob. The
-                            -- support is still flying and self-reports on arrival.
+                            local st = state.registry[linked.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
                             linked.status = "CANCELLED"
                         end
                     end
@@ -2332,8 +2330,8 @@ function server.run()
                         if linked and linked.assignedTo then
                             sendTo(linked.assignedTo, proto.MSG.RECALL,
                                 proto.payloadRecall("partner_bay_reassigned"))
-                            -- Registry left intact — see server.cancelJob. The
-                            -- partner is still flying and self-reports on arrival.
+                            local st = state.registry[linked.assignedTo]
+                            if st then st.status = proto.STATUS.IDLE; st.jobId = nil end
                             linked.status = "CANCELLED"
                         end
                     end
