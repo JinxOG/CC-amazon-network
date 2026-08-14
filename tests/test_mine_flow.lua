@@ -39,19 +39,29 @@ local function freshModules()
     package.loaded["mine_flow"]    = nil
 end
 
--- A pump hook that delivers exactly one fresh LOADER_BEACON on its first
--- call and does nothing after. Models a loader that beacons immediately once
--- alive -- the common case every test that isn't specifically about the
--- beacon gate needs out of the way.
-local function beaconOnFirstPump(flow)
-    local delivered = false
-    return function()
-        if not delivered then
-            flow.noteBeacon({ type = "LOADER_BEACON" })
-            delivered = true
+-- A pump hook that delivers exactly one fresh LOADER_BEACON, reporting
+-- `position`, on its first call and does nothing after. Models a loader that
+-- beacons immediately once alive. `position` is nil to model a beacon sent
+-- with no GPS fix at all.
+local function beaconOnFirstPump(position)
+    return function(flow)
+        local delivered = false
+        return function()
+            if not delivered then
+                flow.noteBeacon({ type = "LOADER_BEACON", payload = { position = position } })
+                delivered = true
+            end
         end
     end
 end
+
+-- Every test below places from pos = {x=0,y=80,z=0,facing=0} at an anchor
+-- chunk of {cx=0,cz=-1}: aheadBlock(facing=0 => north) puts the loader at
+-- (0,80,-1). A pumpFactory built from beaconOnFirstPump(LOADER_LANDING)
+-- reports exactly that position -- the common "our loader answers correctly"
+-- case every test that isn't specifically about the position check needs out
+-- of the way.
+local LOADER_LANDING = { x = 0, y = 80, z = -1 }
 
 -- c.pos already carries facing (stub_cc defaults it to 0 and tracks it on
 -- every turn), so handing hooks.pos the same table satisfies mine_flow's
@@ -90,7 +100,7 @@ return {
 
     ["placeLoader places, confirms standing, waits for the beacon, swaps to pickaxe, then arms the fence"] = function(assert_eq)
         local flow, eq, gf = loadFlow(
-            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump)
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
         -- Miner at 0,0 facing north => loader lands at 0,-1, which is chunk 0,-1.
         local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
         assert_eq(ok, true, reason)
@@ -106,7 +116,7 @@ return {
 
     ["placeLoader refuses a target outside the sector's anchor chunk"] = function(assert_eq)
         local flow, eq, gf, ls = loadFlow(
-            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump)
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
         -- Demand a chunk the placement cannot reach from here.
         local ok, reason = flow.placeLoader(1, { cx = 5, cz = 5 })
         assert_eq(ok, false)
@@ -122,7 +132,7 @@ return {
     ["placeLoader refuses when the loader turtle is not carried"] = function(assert_eq)
         local inv = travelInv(); inv[2] = nil
         local flow, eq, gf, ls = loadFlow(
-            E_TRAVEL(), inv, nil, beaconOnFirstPump)
+            E_TRAVEL(), inv, nil, beaconOnFirstPump(LOADER_LANDING))
         local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
         assert_eq(ok, false)
         assert_eq(reason, "loader_turtle_missing")
@@ -135,7 +145,7 @@ return {
     ["placeLoader refuses when the target square ahead is already occupied"] = function(assert_eq)
         local world = { ["0,80,-1"] = "minecraft:stone" }
         local flow, eq, gf, ls = loadFlow(
-            E_TRAVEL(), travelInv(), world, beaconOnFirstPump)
+            E_TRAVEL(), travelInv(), world, beaconOnFirstPump(LOADER_LANDING))
         local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
         assert_eq(ok, false)
         assert_eq(reason, "placement_blocked")
@@ -150,7 +160,7 @@ return {
 
     ["a clean turtle.place() failure rolls back the loader_state record it just wrote"] = function(assert_eq)
         local flow, eq, gf, ls = loadFlow(
-            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump)
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
         assert_eq(ls.hasPlaced(), false)
         -- Force a definite, clean "not placed" answer from turtle.place()
         -- itself (distinct from the placement_blocked pre-check above),
@@ -169,7 +179,7 @@ return {
 
     ["placeLoader keeps the loader_state record when place() succeeds but standing can't be confirmed"] = function(assert_eq)
         local flow, eq, gf, ls = loadFlow(
-            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump)
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
         -- turtle.detect() always reports false, whatever the world holds:
         -- the pre-place check ("is it blocked ahead?") now passes vacuously,
         -- but so does the post-place confirmation, which is the failure this
@@ -203,12 +213,60 @@ return {
             "the loader really is standing there -- still recorded for recovery")
     end,
 
+    ["placeLoader accepts a beacon whose position matches exactly where the loader landed"] = function(assert_eq)
+        local flow, eq, gf = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, true, reason)
+        assert_eq(eq.sideOf("chunky"), nil)
+        assert_eq(gf.isActive(), true)
+    end,
+
+    ["placeLoader refuses with loader_beacon_mismatch when a beacon arrives from a different position"] = function(assert_eq)
+        -- Models a SECOND, unrelated loader in radio range -- a neighbouring
+        -- miner's sector, or an orphan left standing from an earlier failure
+        -- (Task 5b's loader_state exists precisely because that happens).
+        -- Proof that SOME loader is alive must never be mistaken for proof
+        -- that OURS is.
+        local foreign = { x = 999, y = 80, z = 999 }
+        local flow, eq, gf, ls = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(foreign))
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_beacon_mismatch")
+        assert_eq(eq.sideOf("chunky") ~= nil, true,
+            "chunky must stay on -- a foreign beacon proves nothing about OUR loader")
+        assert_eq(gf.isActive(), false)
+        assert_eq(ls.hasPlaced(), true,
+            "our loader really is standing there -- still recorded for recovery")
+    end,
+
+    ["placeLoader refuses with loader_beacon_no_position when the loader beacons with no GPS fix"] = function(assert_eq)
+        -- A beacon with position = nil (gps.locate timed out for the
+        -- loader) is not verification, even though it might genuinely be
+        -- our loader -- there's nothing to check it against. This makes GPS
+        -- coverage at the sector a hard requirement: a loader placed outside
+        -- GPS range can never be adopted, which is the safe direction to
+        -- fail in.
+        local flow, eq, gf, ls = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(nil))
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, false)
+        assert_eq(reason, "loader_beacon_no_position")
+        assert_eq(eq.sideOf("chunky") ~= nil, true)
+        assert_eq(gf.isActive(), false)
+        assert_eq(ls.hasPlaced(), true)
+    end,
+
     ["a beacon seen before this placement started does not satisfy the gate"] = function(assert_eq)
         -- Models a stale beacon left over from a PREVIOUS sector's (already
         -- retrieved) loader: it must not let a brand new placement skip
-        -- verifying that THIS loader is actually alive.
+        -- verifying that THIS loader is actually alive. Calling noteBeacon
+        -- before placeLoader has ever run is a no-op regardless of position,
+        -- since there is no _expectedLoaderPos yet to match against -- which
+        -- is a stronger guarantee than "stale", but exercises the same risk.
         local flow, eq = loadFlow(E_TRAVEL(), travelInv())
-        flow.noteBeacon({ type = "LOADER_BEACON" }) -- stale, before placeLoader is even called
+        flow.noteBeacon({ type = "LOADER_BEACON", payload = { position = LOADER_LANDING } })
         -- default pump is a no-op: no FRESH beacon ever arrives
         local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
         assert_eq(ok, false)
@@ -216,20 +274,24 @@ return {
         assert_eq(eq.sideOf("chunky") ~= nil, true)
     end,
 
-    ["noteBeacon ignores non-beacon messages"] = function(assert_eq)
+    ["noteBeacon ignores non-beacon messages and beacons with no placement to verify against"] = function(assert_eq)
         local flow = loadFlow(E_TRAVEL(), travelInv())
         flow.noteBeacon({ type = "HEARTBEAT" })
         assert_eq(flow.beaconSeenWithin(9999), false)
-        flow.noteBeacon({ type = "LOADER_BEACON" })
-        assert_eq(flow.beaconSeenWithin(9999), true)
+        -- Well-formed, correctly-positioned LOADER_BEACON, but no
+        -- placeLoader has ever run in this flow -- nothing to match against.
+        flow.noteBeacon({ type = "LOADER_BEACON", payload = { position = LOADER_LANDING } })
+        assert_eq(flow.beaconSeenWithin(9999), false)
     end,
 
-    ["beaconSeenWithin reports true inside the window and false once it elapses"] = function(assert_eq)
-        local flow = loadFlow(E_TRAVEL(), travelInv())
+    ["beaconSeenWithin reports true inside the window and false once it elapses, scoped to the placed loader"] = function(assert_eq)
         local fakeNow = 1000
         local origEpoch = os.epoch
         os.epoch = function() return fakeNow * 1000 end
-        flow.noteBeacon({ type = "LOADER_BEACON" })
+        local flow = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
+        local ok = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, true)
         assert_eq(flow.beaconSeenWithin(10), true)
         fakeNow = 1005
         assert_eq(flow.beaconSeenWithin(10), true)

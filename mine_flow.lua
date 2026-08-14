@@ -66,6 +66,14 @@ local mine_flow = {}
 --       BEACON_WAIT_ATTEMPTS * pollSeconds. A pump that never delivers a
 --       beacon is a safe default (fail closed): placeLoader will refuse
 --       rather than silently proceed.
+--
+--       IMPORTANT: pump must forward the message as proto.decode() produced
+--       it -- msg.payload.position intact, not stripped down to msg.type.
+--       noteBeacon verifies the beacon is from THIS placed loader by exact
+--       block-position match against where placeLoader put it, so a caller
+--       that discards the payload before calling noteBeacon silently
+--       disables the position check (every beacon would look "positionless"
+--       and get refused as loader_beacon_no_position).
 local _hooks = {
     reportPhase = function() end,
     log         = print,
@@ -101,41 +109,95 @@ end
 local BEACON_WAIT_ATTEMPTS = 15   -- ~15s of real time if pump() blocks ~1s/call
 local BEACON_POLL_SECONDS  = 1
 
-local _lastBeaconAt          = nil    -- os.epoch("utc")/1000 of the most recent beacon
-local _beaconArrivedSinceGate = false -- reset at the start of every wait; see waitForFreshBeacon
+local _lastBeaconAt           = nil    -- os.epoch("utc")/1000 of the most recent MATCHING beacon
+local _beaconArrivedSinceGate = false  -- reset at the start of every wait; see waitForFreshBeacon
+local _mismatchSinceGate      = false  -- a LOADER_BEACON arrived from the WRONG position
+local _nilPositionSinceGate   = false  -- a LOADER_BEACON arrived with no GPS fix at all
 
--- Call for every message the caller receives; harmless to call for anything
--- else (it is a no-op unless the message is actually a LOADER_BEACON).
-function mine_flow.noteBeacon(msg)
-    if type(msg) ~= "table" or msg.type ~= "LOADER_BEACON" then return end
-    _lastBeaconAt = os.epoch("utc") / 1000
-    _beaconArrivedSinceGate = true
+-- The position placeLoader expects ITS placed loader to report, set right
+-- before waitForFreshBeacon() runs and cleared once the loader is retrieved.
+-- Everything below is scoped to this: proof that SOME loader is alive is
+-- not proof that OURS is, and with more than one loader in radio range (a
+-- neighbouring miner's sector, or an orphan left standing from an earlier
+-- failure -- Task 5b's loader_state exists precisely because that happens)
+-- mistaking one for the other is exactly the unrecoverable freeze this
+-- module exists to prevent.
+local _expectedLoaderPos = nil
+
+local function samePosition(a, b)
+    return a ~= nil and b ~= nil and a.x == b.x and a.y == b.y and a.z == b.z
 end
 
--- General-purpose liveness query: has a beacon been seen in the last
--- `seconds` real seconds? Independent of the placement gate below.
+-- Call for every message the caller receives; harmless to call for anything
+-- else. A no-op unless the message is a LOADER_BEACON AND there is a placed
+-- loader in flight to verify it against (matching is impossible before
+-- placeLoader has computed where its loader landed, and the beacon itself
+-- carries no ID the miner can match against -- the loader is placed cargo
+-- with no known computer ID until after it's already down).
+--
+-- position comparison is exact-integer-block equality: the loader's own
+-- gps.locate() reports the block it is physically standing in, which is
+-- exactly the block placeLoader computed as "ahead of the miner" before
+-- placing it there.
+function mine_flow.noteBeacon(msg)
+    if type(msg) ~= "table" or msg.type ~= "LOADER_BEACON" then return end
+    if not _expectedLoaderPos then return end
+
+    local payload = msg.payload
+    local pos = payload and payload.position
+
+    if pos and samePosition(pos, _expectedLoaderPos) then
+        _lastBeaconAt = os.epoch("utc") / 1000
+        _beaconArrivedSinceGate = true
+    elseif pos then
+        -- A real beacon, just not from our loader.
+        _mismatchSinceGate = true
+    else
+        -- Our loader may well be the sender, but with no GPS fix in the
+        -- payload there is nothing to verify against -- an unverifiable
+        -- beacon is not verification.
+        _nilPositionSinceGate = true
+    end
+end
+
+-- General-purpose liveness query: has OUR placed loader's beacon been seen
+-- in the last `seconds` real seconds? Scoped to _expectedLoaderPos exactly
+-- like the placement gate below -- a mid-mining monitor (Task 8b) that
+-- silently followed a neighbouring loader's beacon would be the same bug in
+-- slower motion.
 function mine_flow.beaconSeenWithin(seconds)
     if not _lastBeaconAt then return false end
     return (os.epoch("utc") / 1000 - _lastBeaconAt) <= seconds
 end
 
--- Blocks (via repeated _hooks.pump calls) until a beacon arrives THAT WAS
--- NOTED AFTER THIS CALL STARTED, or BEACON_WAIT_ATTEMPTS run out.
+-- Blocks (via repeated _hooks.pump calls) until a MATCHING beacon arrives,
+-- or BEACON_WAIT_ATTEMPTS run out. Returns ok, reason -- reason distinguishes
+-- "nothing answered at all" from "something answered, but not our loader"
+-- from "our loader may have answered, but with no way to check", because an
+-- operator investigating a stuck miner needs to know which one happened: the
+-- first is a plain timeout, the other two mean a second loader (or a GPS
+-- coverage gap) needs attention.
 --
--- This deliberately does not reuse beaconSeenWithin's timestamp math: two
--- events a few real milliseconds apart can land in the same integer second
--- under os.epoch's precision, which would make a "was it seen since time T"
--- comparison unreliable right at a placement boundary -- exactly where it
--- matters most. A beacon from the PREVIOUS sector's (now-retrieved) loader
--- must never satisfy THIS sector's gate, so the flag is explicitly reset
--- before waiting rather than inferred from a clock reading.
+-- The gate uses its own flags rather than a timestamp comparison against
+-- when the wait started: two events a few real milliseconds apart can land
+-- in the same integer second under os.epoch's precision, which would make a
+-- "was it seen since time T" comparison unreliable right at a placement
+-- boundary -- exactly where it matters most. A beacon from the PREVIOUS
+-- sector's (now-retrieved) loader must never satisfy THIS sector's gate, so
+-- the flags are explicitly reset before waiting rather than inferred from a
+-- clock reading.
 local function waitForFreshBeacon()
     _beaconArrivedSinceGate = false
+    _mismatchSinceGate      = false
+    _nilPositionSinceGate   = false
     for _ = 1, BEACON_WAIT_ATTEMPTS do
         if _beaconArrivedSinceGate then return true end
         _hooks.pump(BEACON_POLL_SECONDS)
     end
-    return _beaconArrivedSinceGate
+    if _beaconArrivedSinceGate then return true end
+    if _mismatchSinceGate then return false, "loader_beacon_mismatch" end
+    if _nilPositionSinceGate then return false, "loader_beacon_no_position" end
+    return false, "loader_no_beacon"
 end
 
 -- Place the carried loader turtle ahead, confirm it is standing, wait for it
@@ -200,11 +262,17 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     end
     log("Loader placed and confirmed standing.")
 
+    -- Only a beacon reporting THIS exact block counts from here on.
+    _expectedLoaderPos = { x = tx, y = p.y, z = tz }
+
     log("Waiting for loader beacon before giving up chunk loading...")
-    if not waitForFreshBeacon() then
-        -- The loader is down (and recorded) but has not proven it is alive.
-        -- Never surrender our own chunk loading to an unconfirmed one.
-        return false, "loader_no_beacon"
+    local beaconOk, beaconErr = waitForFreshBeacon()
+    if not beaconOk then
+        -- The loader is down (and recorded) but has not proven -- or a
+        -- DIFFERENT loader has disproven -- that it is alive. Never
+        -- surrender our own chunk loading on anything less than exact
+        -- confirmation.
+        return false, beaconErr
     end
     log("Loader beacon confirmed.")
 
@@ -257,6 +325,8 @@ function mine_flow.retrieveLoader()
     loader_state.clear()
 
     geofence.clear()
+    -- No loader left to verify a beacon against until the next placeLoader.
+    _expectedLoaderPos = nil
     log("Loader retrieved; self-loading restored.")
     return true
 end
