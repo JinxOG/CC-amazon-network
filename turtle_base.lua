@@ -107,6 +107,19 @@ function base.setSkyReturn(v)    _self.inSkyReturn = v    end
 function base.setAutonomousReturn(v) _self.autonomousReturn = v end
 function base.isAutonomousReturn()   return _self.autonomousReturn end
 
+-- Optional predicate consulted by tryMove's serverDown hold, once per sleep
+-- cycle: returning true releases the hold for that move.
+--
+-- The hold exists so the server never loses track of a turtle it cannot talk
+-- to. For a solo miner with a chunk loader placed in the world that trade goes
+-- the other way: waiting out a long outage in the field leaves a chunk
+-- force-loaded and the turtle stranded, and the miner can navigate home
+-- perfectly well without the server (GPS comes from beacons). Nothing else
+-- installs one -- delivery, support and warehouse turtles leave it nil and
+-- their hold loop is exactly what it has always been.
+local _serverDownEscape = nil
+function base.setServerDownEscape(fn) _serverDownEscape = fn end
+
 -- Solo-miner phase telemetry piggy-backed onto the heartbeat, so the server
 -- keeps seeing the miner's phase/chunk between MINE_PHASE messages and can
 -- tell a deliberate comms gap from a failure even if the MINE_PHASE report
@@ -136,6 +149,16 @@ end
 
 local comms = {}
 
+-- The one definition of which channels this turtle listens on. comms.init and
+-- base.recoverModem both open exactly this list, so a re-acquired modem can
+-- never end up subscribed to a different set than the original.
+local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }
+
+-- Consecutive comms.toServer failures; reset by any successful send or by a
+-- successful modem recovery.
+local _sendFailures = 0
+local SEND_FAILURES_BEFORE_RECOVER = 3
+
 function comms.init()
     _self.modem = peripheral.find("modem")
     if not _self.modem then
@@ -157,8 +180,41 @@ function comms.init()
     if not _self.modem then
         error("No modem found. Attach a wireless or ender modem.")
     end
-    proto.openChannels(_self.modem, { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL })
+    proto.openChannels(_self.modem, CHANNELS)
     logInfo("Modem ready.")
+end
+
+-- Re-acquire the modem after an equipment swap moved it, and re-open the
+-- channels on it.
+--
+-- This is not optional bookkeeping. equipment.retrievalSwapIn puts chunky on
+-- the MODEM's side, and retrievalSwapOut puts the modem back on the side
+-- OPPOSITE chunky -- i.e. the side the pickaxe was on. So the modem changes
+-- side on every loader retrieval. _self.modem is a wrapper bound to a side
+-- name, set once in comms.init, and the channel list was opened on that
+-- instance: without this the miner would go permanently deaf and mute after
+-- its first retrieval (no HEARTBEAT_ACK -> serverDown, no SECTOR_ASSIGN, no
+-- RECALL, no LOADER_BEACON -> the next placeLoader fails closed on
+-- loader_no_beacon).
+--
+-- Unconditional by design. Re-finding the modem and re-opening channels that
+-- may already be open is a no-op, so this is correct whether or not a
+-- re-equipped modem counts as a new peripheral instance with its channels
+-- closed -- a distinction that cannot be verified outside a running world.
+function base.recoverModem()
+    local m = peripheral.find("modem")
+    if not m then
+        logWarn("recoverModem: no modem equipped")
+        return false
+    end
+    _self.modem = m
+    local ok, err = pcall(proto.openChannels, m, CHANNELS)
+    if not ok then
+        logWarn("recoverModem: could not open channels: " .. tostring(err))
+        return false
+    end
+    _sendFailures = 0
+    return true
 end
 
 local _lastSendWarn = 0
@@ -175,12 +231,23 @@ function comms.toServer(msgType, payload)
     -- listening. Throttled warn so a genuinely broken modem is still visible
     -- without a line every heartbeat during an expected gap.
     local ok, err = pcall(proto.send, _self.modem, proto.CH_SERVER, msg)
-    if not ok then
-        local now = os.epoch("utc")
-        if now - _lastSendWarn > 30000 then
-            _lastSendWarn = now
-            logWarn("Send failed (modem detached or missing?): " .. tostring(err))
-        end
+    if ok then
+        _sendFailures = 0
+        return
+    end
+    _sendFailures = _sendFailures + 1
+    local now = os.epoch("utc")
+    if now - _lastSendWarn > 30000 then
+        _lastSendWarn = now
+        logWarn("Send failed (modem detached or missing?): " .. tostring(err))
+    end
+    -- Escalate rather than warning forever: repeated failures mean the wrapper
+    -- is stale (a swap moved the modem to the other side) far more often than
+    -- they mean the radio is broken, and warning is not a fix. Cheap and
+    -- idempotent, so trying it costs nothing when the modem really is gone.
+    if _sendFailures >= SEND_FAILURES_BEFORE_RECOVER then
+        _sendFailures = 0
+        pcall(base.recoverModem)
     end
 end
 
@@ -494,6 +561,14 @@ local function tryMove(moveFn, digFn, dir)
     while _self.serverDown
           and not _self.inSkyReturn
           and not _self.autonomousReturn do
+        -- Escape hatch for a solo miner holding a placed loader (see
+        -- base.setServerDownEscape). nil for every other role, so their loop
+        -- body stays exactly `sleep(2)`. pcall'd so a faulty predicate can
+        -- never break movement for the whole fleet.
+        if _serverDownEscape then
+            local pok, escape = pcall(_serverDownEscape)
+            if pok and escape then break end
+        end
         sleep(2)
     end
 
@@ -1531,9 +1606,10 @@ function base.run(jobHandler)
                                 -- navigate or the two coroutines fight over movement.
                                 _self.recalled = true
                                 pendingJob = nil
-                                -- Miners coordinate via MINE_RECALL in recallReturn() —
-                                -- sendFailed here would fire JOB_ABORT to the support and
-                                -- clear partnerId before the coordinated return can happen.
+                                -- A miner's recallReturn() has to retrieve its placed
+                                -- chunk loader before it can come home, and it reports
+                                -- the failure itself once that is done. sendFailed here
+                                -- would end the job while the loader is still standing.
                                 if _self.role ~= proto.ROLE.MINER then
                                     base.sendFailed("recalled", true)
                                 end

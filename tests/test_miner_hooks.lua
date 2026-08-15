@@ -195,19 +195,107 @@ suite["base.getFacing tracks every turn primitive the miner uses"] = function(as
     assert_eq(base.getPos().x, -1, "facing 3 must be -x")
 end
 
-suite["a send with no usable modem is lost, not fatal"] = function(assert_eq)
-    -- The miner unequips its modem on purpose during the retrieval swap, which
-    -- detaches the wrapped peripheral: calling it RAISES. That error used to
-    -- come out of the heartbeat inside controlLoop and kill the whole
-    -- parallel.waitForAny runner -- i.e. the running job -- on every single
-    -- loader retrieval. base.init is never called here, so _self.modem is nil,
-    -- which reaches proto.send the same way a detached wrapper does.
-    local _, base = fresh()
-    local ok, err = pcall(base.sendProgress, "progress during a comms gap")
-    assert_eq(ok, true, "sendProgress raised: " .. tostring(err))
+-- ─── Modem recovery across an upgrade swap ──────────────────────────────────
+-- equipment.retrievalSwapIn takes the MODEM's side for chunky, and
+-- retrievalSwapOut puts the modem back on the side OPPOSITE chunky -- the
+-- pickaxe's old side. So the modem changes side on every loader retrieval,
+-- while turtle_base's _self.modem is a wrapper bound to a side name, acquired
+-- once in comms.init, with the channel list opened on that instance. Without
+-- re-acquisition the miner goes permanently deaf and mute after its first
+-- retrieval, and pcall'ing the send turns that from a loud crash into silence.
+--
+-- These drive base.recoverModem directly (comms.init cannot run headlessly --
+-- it registers, which blocks on a server reply), with peripheral.find replaced
+-- by a stand-in that hands out a DIFFERENT object each call, exactly as
+-- re-wrapping a peripheral on a new side does.
 
-    local ok2, err2 = pcall(base.sendToServer, "MINE_PHASE", { phase = "RETRIEVING" })
-    assert_eq(ok2, true, "sendToServer raised: " .. tostring(err2))
+local function withFakeModems(makers)
+    local calls = { n = 0 }
+    peripheral = peripheral or {}
+    peripheral.find = function(kind)
+        if kind ~= "modem" then return nil end
+        calls.n = calls.n + 1
+        return makers[math.min(calls.n, #makers)]
+    end
+    return calls
+end
+
+local function recordingModem()
+    local m = { opened = {}, sent = 0 }
+    m.open     = function(ch) table.insert(m.opened, ch) end
+    m.isOpen   = function() return true end
+    m.transmit = function() m.sent = m.sent + 1 end
+    return m
+end
+
+local function detachedModem()
+    local m = { opened = {} }
+    m.open     = function() error("peripheral detached", 0) end
+    m.isOpen   = function() return false end
+    -- What a wrapper bound to a side the modem no longer occupies does.
+    m.transmit = function() error("No peripheral attached", 0) end
+    return m
+end
+
+suite["recoverModem rebinds the wrapper and re-opens the listening channels"] =
+function(assert_eq)
+    local _, base = fresh()
+    local proto = require("protocol")
+    local first, second = recordingModem(), recordingModem()
+    local calls = withFakeModems({ first, second })
+
+    assert_eq(base.recoverModem(), true)
+    assert_eq(base.getModem() == first, true, "first acquisition")
+    -- Same channel set comms.init opens; both read it from one CHANNELS local.
+    assert_eq(#first.opened, 3)
+    local want = { [proto.CH_BROADCAST] = true, [proto.CH_PRIVATE] = true,
+                   [proto.CH_LOCAL] = true }
+    for _, ch in ipairs(first.opened) do
+        assert_eq(want[ch], true, "unexpected channel opened: " .. tostring(ch))
+    end
+
+    -- The swap moved the modem: a second call must take the NEW instance and
+    -- open the channels on it, not keep the stale wrapper.
+    assert_eq(base.recoverModem(), true)
+    assert_eq(base.getModem() == second, true, "wrapper was not rebound after the swap")
+    assert_eq(#second.opened, 3, "channels not re-opened on the new instance")
+    assert_eq(calls.n, 2)
+end
+
+suite["a send through a detached wrapper is lost, not fatal, and escalates to recovery"] =
+function(assert_eq)
+    local _, base = fresh()
+    local dead, live = detachedModem(), recordingModem()
+    -- First find hands out the stale/detached wrapper; every later find (i.e.
+    -- the recovery attempt) hands out the working one.
+    local calls = withFakeModems({ dead, live })
+
+    assert_eq(base.recoverModem(), false, "a modem whose open() raises is not recovered")
+    assert_eq(base.getModem() == dead, true)
+
+    -- Three consecutive failures must escalate to a re-acquire rather than
+    -- warning forever. None of them may raise: this is the heartbeat path
+    -- inside controlLoop, and an error there kills the parallel runner.
+    for i = 1, 3 do
+        local ok, err = pcall(base.sendProgress, "progress during a comms gap")
+        assert_eq(ok, true, "send " .. i .. " raised: " .. tostring(err))
+    end
+
+    assert_eq(calls.n, 2, "expected exactly one recovery attempt after 3 failures")
+    assert_eq(base.getModem() == live, true, "escalation did not rebind the modem")
+
+    -- And the next send actually goes out on the recovered modem.
+    local ok, err = pcall(base.sendToServer, "MINE_PHASE", { phase = "RETRIEVING" })
+    assert_eq(ok, true, tostring(err))
+    assert_eq(live.sent, 1, "send did not reach the recovered modem")
+end
+
+suite["a send with no modem at all is still lost, not fatal"] = function(assert_eq)
+    local _, base = fresh()
+    peripheral.find = function() return nil end
+    assert_eq(base.recoverModem(), false)
+    local ok, err = pcall(base.sendProgress, "no modem anywhere")
+    assert_eq(ok, true, "sendProgress raised: " .. tostring(err))
 end
 
 return suite

@@ -169,6 +169,43 @@ local function reportPhase(phase, detail)
     print(string.format("[MINER] phase %s%s", phase, detail and (" — " .. detail) or ""))
 end
 
+-- ── Autonomous return on a prolonged outage ──────────────────────────────────
+-- The 5-minute rule is only useful if it can fire while the miner is actually
+-- stuck, which is mid-sector: with the server unreachable the job coroutine is
+-- either blocked in tryMove's serverDown hold or looping in waitMsg with a
+-- deadline that resets every iteration. A check that only runs between sectors
+-- (which is what the 5b brief's placement amounts to) can never fire in the
+-- situation it exists for, because by then the loader is already retrieved.
+--
+-- So the condition is evaluated in three places: tryMove's hold (via the escape
+-- hook), waitMsg's freeze, and the two mining loops. The first two only release
+-- the wait; the mining loops are what actually turn it into a trip home.
+
+local _serverDownSince = nil
+
+-- Deliberately not latched: if the server comes back this goes false again by
+-- itself, so a recovered outage cannot abort a later sector.
+local function serverDownTooLong()
+    if not base.isServerDown() then
+        _serverDownSince = nil
+        return false
+    end
+    _serverDownSince = _serverDownSince or os.epoch("utc")
+    return (os.epoch("utc") - _serverDownSince) > SERVER_DOWN_LIMIT_MS
+end
+
+-- The state that makes waiting out an outage unacceptable rather than merely
+-- inconvenient: a chunk loader of ours standing in the world, force-loading a
+-- chunk, with the miner stranded beside it.
+local function autonomousReturnDue()
+    return serverDownTooLong() and loader_state.hasPlaced()
+end
+
+-- Only a miner with a placed loader may break turtle_base's serverDown movement
+-- hold. Delivery/support/warehouse never install an escape, so their hold is
+-- unchanged.
+base.setServerDownEscape(autonomousReturnDue)
+
 -- ── Messaging ────────────────────────────────────────────────────────────────
 
 -- mine_flow's beacon gate calls this. Contract: block for roughly pollSeconds
@@ -211,6 +248,9 @@ local function waitMsg(types, secs)
         if base.isServerDown() then
             -- Freeze deadline while server is unreachable so a crash doesn't
             -- trigger sector_request_timeout and dispatch a duplicate miner.
+            -- Not forever, though: past the autonomous-return limit the caller
+            -- has to be allowed to take the miner home.
+            if serverDownTooLong() then return nil end
             deadline = os.epoch("utc") / 1000 + secs
             sleep(2)
         end
@@ -265,6 +305,12 @@ end
 local function handleBeaconLoss()
     reportPhase(proto.PHASE.RETRIEVING, "loader beacon lost — restoring own chunk loading")
     base.sendProgress("loader_beacon_lost — restoring own chunk loading")
+    -- Comms go down on the next line and stay down until the retrieval swap-out,
+    -- with a possibly long climb back to the loader in between. Without this the
+    -- missed heartbeats set serverDown ~15s in and tryMove's hold blocks the
+    -- trip home forever — a permanent field hang in the very path that exists to
+    -- recover from a loader failure.
+    base.setAutonomousReturn(true)
     local ok, why = equipment.retrievalSwapIn()   -- modem -> chunky, pickaxe stays
     if ok then
         -- Self-loading again: the fence has nothing left to protect and would
@@ -290,6 +336,10 @@ local function restoreTravelMode()
     end
     if not equipment.sideOf("modem") then
         local ok, why = equipment.retrievalSwapOut()  -- pickaxe -> modem, chunky stays
+        -- The modem comes back on the side the PICKAXE was on, not the side it
+        -- left from, so the wrapper turtle_base holds is stale and its channels
+        -- belong to the old instance. Re-acquire before reporting anything.
+        base.recoverModem()
         if not ok then return false, why end
     end
     return true
@@ -323,6 +373,7 @@ local function withDigTool(what, fn)
     end
     local ok, err = pcall(fn)
     local back, why2 = equipment.retrievalSwapOut()   -- pickaxe -> modem
+    base.recoverModem()   -- the modem came back on the other side; rebind it
     if not back then
         print(string.format("[MINER] WARNING: modem not restored after %s: %s",
             what, tostring(why2)))
@@ -672,6 +723,12 @@ local function mineOreList(ores, jobId, sx, sz, sy)
             flushScanBatch()
             return mined, byType, "loader_beacon_lost"
         end
+        if autonomousReturnDue() then
+            -- Outage long enough that sitting here with a loader placed is the
+            -- worse option. The trip home is what actually retrieves it.
+            flushScanBatch()
+            return mined, byType, "server_unreachable_autonomous_return"
+        end
         local p = base.getPos()
         table.sort(remaining, function(a, b)
             local da = math.abs(a.x-p.x) + math.abs(a.y-p.y) + math.abs(a.z-p.z)
@@ -744,10 +801,26 @@ local function retrievePlacedLoader(stand)
         sx, sy, sz, facing = approachFor(rec, base.getPos())
     end
 
+    -- move.to is vertical-first. Climbing while still in the loader's OWN x/z
+    -- column would run straight into it from below: turtle_base sees a turtle
+    -- block, refuses to dig it, and waits out its 2-minute blocked deadline.
+    -- Stepping to the approach column at the current altitude first avoids the
+    -- loader entirely. Only done when we are actually in its column, so the
+    -- normal end-of-sector retrieval still ascends before travelling.
+    local here = base.getPos()
+    if here.x == rec.x and here.z == rec.z and here.y ~= sy then
+        base.move.to(sx, here.y, sz)
+    end
+
     local ok, err = base.move.to(sx, sy, sz)
     if not ok then return false, "approach_failed: " .. tostring(err) end
     base.move.face(facing)
-    return mine_flow.retrieveLoader()
+
+    local got, reason = mine_flow.retrieveLoader()
+    -- retrieveLoader ends in equipment.retrievalSwapOut on both its success and
+    -- most of its failure paths, which moves the modem to the other side.
+    base.recoverModem()
+    return got, reason
 end
 
 -- ── Boot recovery (Task 5b, deferred to here) ────────────────────────────────
@@ -826,10 +899,14 @@ local function recoverPlacedLoader()
     -- underground, where the pickaxe is what gets us out. On the success path
     -- retrieveLoader has already put the modem back, so this is a no-op there.
     local flyable, why2 = prepareToFly()
-    if not flyable then
+    if flyable then
+        geofence.clear()
+    else
+        -- Same rule as soloReturn: never trade an armed fence for an unloaded
+        -- flight. Boot recovery never arms one itself, so this only matters if
+        -- something else did.
         print("[MINER] WARNING: no chunk loading of our own for the trip home: " .. tostring(why2))
     end
-    geofence.clear()
 
     -- Come home under our own navigation; the server may not even be up.
     local p = base.getPos()
@@ -890,13 +967,23 @@ local function mineJob(job)
         -- here: a failed retrieval can leave us underground, where the pickaxe
         -- is what gets us out.
         local flyable, why = prepareToFly()
-        if not flyable then
+        if flyable then
+            -- Self-loading: the fence has nothing left to describe and would
+            -- only block the way home.
+            geofence.clear()
+        else
+            -- Chunky could not be restored. If a loader is still standing, that
+            -- fence is now the ONLY thing keeping us inside loaded chunks —
+            -- clearing it and flying is exactly "unloaded and outside the
+            -- loaded area". Stay fenced and let the movement below refuse at
+            -- the boundary; a miner parked inside a loaded footprint is
+            -- recoverable, one frozen in an unloaded chunk is not.
             print("[MINER] WARNING: no chunk loading of our own for the trip home: " .. tostring(why))
             base.sendProgress("returning_without_chunk_loading: " .. tostring(why))
+            if not geofence.isActive() then
+                print("[MINER] No fence and no chunky — flying home unprotected.")
+            end
         end
-        -- Released either way: with the loader gone there is nothing left for
-        -- the fence to describe, and leaving it armed only blocks the way home.
-        geofence.clear()
 
         checkFuel(jobId)
         local p = base.getPos()
@@ -966,22 +1053,19 @@ local function mineJob(job)
             return
         end
 
-        -- A server outage must not leave the miner parked in the field with a
-        -- loader force-loading a chunk. GPS comes from beacons, not the server,
-        -- so navigating home unaided is safe.
-        if base.isServerDown() then
-            _serverDownSince = _serverDownSince or os.epoch("utc")
-            if os.epoch("utc") - _serverDownSince > SERVER_DOWN_LIMIT_MS then
-                print("[MINER] Server unreachable 5min — autonomous return")
-                base.setAutonomousReturn(true)
-                soloReturn()
-                base.setAutonomousReturn(false)
-                base.sendFailed("server_unreachable_autonomous_return", true)
-                _jobId = nil
-                return
-            end
-        else
-            _serverDownSince = nil
+        -- Between-sectors case: no loader is placed here (it was retrieved
+        -- before SECTOR_DONE), so the elapsed check alone applies. The
+        -- mid-sector case — the one that matters, and the one a check in this
+        -- position can never catch — is handled by autonomousReturnDue() in the
+        -- mining loops and by the escape hook in tryMove's hold.
+        if serverDownTooLong() then
+            print("[MINER] Server unreachable 5min — autonomous return")
+            base.setAutonomousReturn(true)
+            soloReturn()
+            base.setAutonomousReturn(false)
+            base.sendFailed("server_unreachable_autonomous_return", true)
+            _jobId = nil
+            return
         end
 
         local sx         = msg.payload.sectorX
@@ -1058,6 +1142,10 @@ local function mineJob(job)
                 abort = "loader_beacon_lost"
                 break
             end
+            if autonomousReturnDue() then
+                abort = "server_unreachable_autonomous_return"
+                break
+            end
             checkFuel(jobId)
             base.move.to(sx, sy, sz)
             base.setStatus(proto.STATUS.WORKING, jobId)
@@ -1099,12 +1187,18 @@ local function mineJob(job)
         if count > 0 or inventoryFull() then dumpOres() end
         totalOre = totalOre + count
 
-        -- The loader stopped proving it was alive. Chunk loading is already
-        -- back on our own upgrade (handleBeaconLoss); take the loader home if
-        -- it is physically still there, then let the server re-dispatch.
+        -- Either the loader stopped proving it was alive (chunk loading is
+        -- already back on our own upgrade via handleBeaconLoss) or the server
+        -- has been unreachable too long to keep waiting. Both end the same way:
+        -- take the loader home and let the server re-dispatch.
         if abort then
             base.sendProgress("sector abandoned: " .. abort)
+            -- The trip home must not be held by tryMove's serverDown wait, and
+            -- on the beacon-loss path our modem is off until the retrieval
+            -- swap-out, so the hold would otherwise engage and never release.
+            base.setAutonomousReturn(true)
             soloReturn()
+            base.setAutonomousReturn(false)
             base.sendFailed(abort, true)
             _jobId = nil
             return
@@ -1140,6 +1234,14 @@ local function mineJob(job)
         if not msg then
             if base.isRecalled() then
                 recallReturn()
+            elseif serverDownTooLong() then
+                -- waitMsg gave up on the freeze rather than waiting out the
+                -- outage; go home unaided instead of reporting a timeout that
+                -- would never reach the server anyway.
+                print("[MINER] Server unreachable 5min — autonomous return")
+                base.setAutonomousReturn(true)
+                recallReturn("server_unreachable_autonomous_return", true)
+                base.setAutonomousReturn(false)
             else
                 recallReturn("sector_request_timeout", true)
             end
