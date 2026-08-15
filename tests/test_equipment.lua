@@ -159,6 +159,46 @@ return {
             "chunk safety genuinely was not restored")
     end,
 
+    -- Task 8a fix pass 3: the transition needed to reach retrieval mode
+    -- (chunky+pickaxe) from chunky+modem -- the state reconcile() leaves
+    -- behind after a reboot mid-retrieval with both sides full, since it
+    -- displaces the pickaxe, not the modem, there. Without this, nothing
+    -- could ever swap the modem back off to resume digging.
+    ["toRetrieveMode swaps modem out for pickaxe, keeping chunky on"] = function(assert_eq)
+        local eq = fresh({ left = MODEM, right = CHUNKY },
+                         fullInv({ [3] = { name = PICKAXE, count = 1 } }))
+        local ok, reason = eq.toRetrieveMode()
+        assert_eq(ok, true, reason)
+        assert_eq(eq.sideOf("pickaxe") ~= nil, true, "pickaxe should be equipped")
+        assert_eq(eq.sideOf("modem"), nil, "modem should be stowed")
+        assert_eq(eq.sideOf("chunky") ~= nil, true, "chunky must stay equipped throughout")
+    end,
+
+    ["toRetrieveMode refuses when no pickaxe is carried"] = function(assert_eq)
+        local eq = fresh({ left = MODEM, right = CHUNKY }, fullInv())
+        local ok, reason = eq.toRetrieveMode()
+        assert_eq(ok, false)
+        assert_eq(reason, "pickaxe_missing")
+        assert_eq(eq.sideOf("modem") ~= nil, true, "must not touch equipment on refusal")
+        assert_eq(eq.sideOf("chunky") ~= nil, true)
+    end,
+
+    ["toRetrieveMode refuses when modem is not equipped"] = function(assert_eq)
+        local eq = fresh({ left = nil, right = CHUNKY },
+                         fullInv({ [3] = { name = PICKAXE, count = 1 } }))
+        local ok, reason = eq.toRetrieveMode()
+        assert_eq(ok, false)
+        assert_eq(reason, "modem_not_equipped")
+    end,
+
+    ["toRetrieveMode is a no-op success when pickaxe is already equipped"] = function(assert_eq)
+        local eq = fresh(E_MINE(), fullInv({ [3] = { name = CHUNKY, count = 1 } }))
+        -- Already modem+pickaxe (no chunky equipped at all here, but that's
+        -- fine -- this only checks the "nothing to swap" early-return path).
+        local ok = eq.toRetrieveMode()
+        assert_eq(ok, true)
+    end,
+
     -- Task 4: comms.init() in turtle_base.lua calls peripheral.find("modem")
     -- to decide whether to attempt recovery, and re-checks the same call to
     -- decide whether recovery worked -- not eq.sideOf("modem"), which every

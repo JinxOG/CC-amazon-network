@@ -200,6 +200,29 @@ function equipment.retrievalSwapOut()
     return true
 end
 
+-- modem -> pickaxe, chunky stays on throughout. Reaches retrieval mode
+-- (chunky+pickaxe) from the chunky+modem state equipment.reconcile() leaves
+-- behind when a reboot lands mid-retrieval with both sides full: reconcile()
+-- displaces the pickaxe rather than the modem there (chunk safety outranks
+-- digging, correctly), but that leaves nothing able to swap the modem back
+-- off on its own. This is that missing transition, symmetric to
+-- retrievalSwapIn/retrievalSwapOut but starting from "chunky already on"
+-- instead of "modem+pickaxe already on".
+function equipment.toRetrieveMode()
+    local pSlot = pickaxeStowedSlot()
+    if not pSlot then
+        if equipment.sideOf("pickaxe") then return true end -- already there
+        return false, "pickaxe_missing"
+    end
+    local modemSide = equipment.sideOf("modem")
+    if not modemSide then return false, "modem_not_equipped" end
+    local ok, reason = swap(pSlot, modemSide)
+    if not ok then return false, reason end
+    if not equipment.sideOf("pickaxe") then return false, "pickaxe_equip_verify_failed" end
+    if not equipment.sideOf("chunky") then return false, "chunky_lost_during_swap" end
+    return true
+end
+
 -- Boot self-heal. A reboot inside the retrieval window leaves the modem in
 -- inventory and no comms; without this the turtle is stranded until a player
 -- intervenes. Chunk safety is restored before comms, because being unloaded is

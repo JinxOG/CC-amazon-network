@@ -9,9 +9,20 @@
 --                   LOADER's chunk)
 --   retrieveLoader: verify chunky carried (or already equipped)  ->  verify
 --                   the block ahead IS the recorded loader, by position AND
---                   identity  ->  modem->chunky (or skip if already done)
---                   ->  dig  ->  confirm the loader actually came back  ->
+--                   identity  ->  modem->chunky (or modem->pickaxe if chunky
+--                   is already on but pickaxe isn't -- see toRetrieveMode
+--                   below -- or skip entirely if both are already on)  ->
+--                   dig  ->  confirm the loader actually came back  ->
 --                   release the fence/record  ->  pickaxe->modem
+--
+-- Known, deliberately-not-fixed limitations (see the report for the full
+-- reasoning): the identity check (turtle.inspect() naming the block) cannot
+-- distinguish OUR loader from any other advanced turtle -- computercraft:
+-- turtle_advanced is the same registry name every advanced turtle uses, ours
+-- included as cargo -- the position check is what actually narrows it down
+-- to a specific block. And the post-dig recovery check is presence, not a
+-- count delta: a spare loader turtle already sitting in inventory for an
+-- unrelated reason would mask a genuinely lost dig.
 --
 -- Placement removes chunky only AFTER the loader is confirmed down AND has
 -- proven -- via a LOADER_BEACON reporting the exact block it landed on --
@@ -90,6 +101,17 @@ local mine_flow = {}
 --       pump is called), but Task 8b's pump implementation must wrap its own
 --       body in pcall if it wants placeLoader to return a reason string
 --       instead of raising.
+--
+-- Boot recovery -- NOT a hook, a function 8b's boot path calls INTO this
+-- module: if loader_state.hasPlaced() is true on boot (a loader was placed
+-- before the last reboot), call mine_flow.adoptRecordedLoader() once before
+-- relying on beaconSeenWithin() for anything. Without it, _expectedLoaderPos
+-- is empty after a reboot (it is in-memory only), so noteBeacon() silently
+-- ignores every beacon and beaconSeenWithin() reports false forever, even
+-- for a loader that is genuinely still standing and beaconing.
+-- retrieveLoader() does not need this itself -- it reads loader_state.get()
+-- directly -- this is only for liveness queries made before retrieveLoader
+-- is called.
 local _hooks = {
     reportPhase = function() end,
     log         = print,
@@ -390,6 +412,16 @@ function mine_flow.retrieveLoader()
         -- between it and the dig below.
         local ok, reason = equipment.retrievalSwapIn()
         if not ok then return false, reason end
+    elseif not equipment.sideOf("pickaxe") then
+        -- Chunky is on, but pickaxe isn't -- chunky+MODEM, not chunky+
+        -- pickaxe. This is the dead end equipment.reconcile() leaves behind
+        -- after a reboot mid-retrieval with both sides already full: it
+        -- displaces the pickaxe there, never the modem, because chunk
+        -- safety correctly outranks digging -- but that alone leaves
+        -- nothing able to finish the transition to retrieval mode.
+        -- equipment.toRetrieveMode() is exactly that missing step.
+        local ok, reason = equipment.toRetrieveMode()
+        if not ok then return false, reason end
     end
 
     -- Whichever path got us here, never dig without both upgrades
@@ -409,12 +441,24 @@ function mine_flow.retrieveLoader()
     end
 
     -- turtle.dig() succeeding proves SOMETHING was collected, not that it
-    -- was our loader turtle specifically (the checks above make this very
-    -- unlikely, but this module does not assume a scan-then-act race can't
-    -- happen). Confirm before trusting anything downstream of "we have it".
+    -- was our loader turtle specifically. In real CC:Tweaked, digging with
+    -- an inventory that has no room at all for the drop still returns true
+    -- -- the block is gone, but the item is destroyed rather than
+    -- collected -- so this is a real, reachable failure mode, not just
+    -- theoretical race-guarding.
     if not equipment.findSlot(equipment.ITEMS.LOADER_TURTLE) then
+        -- The chunk is DEFINITELY no longer held (the block really is
+        -- gone), and chunky is already equipped on every path that reaches
+        -- here, so it is correct to release the fence immediately -- there
+        -- is nothing left for it to protect. The persisted record must NOT
+        -- be cleared, though: a physical loader turtle is genuinely lost,
+        -- and that is exactly the kind of thing an operator needs to see,
+        -- not have silently erased.
         equipment.retrievalSwapOut()
-        return false, "loader_not_recovered"
+        geofence.clear()
+        _expectedLoaderPos = nil
+        _lastBeaconAt = nil
+        return false, "loader_lost_after_dig"
     end
 
     -- The loader is physically back in our inventory from here on, whatever
@@ -439,6 +483,21 @@ function mine_flow.retrieveLoader()
     end
 
     log("Loader retrieved; self-loading restored.")
+    return true
+end
+
+-- Re-establishes beacon tracking for an ALREADY-placed loader after a
+-- reboot. _expectedLoaderPos is in-memory only and does not survive a
+-- restart, so without this, noteBeacon() is a permanent no-op and
+-- beaconSeenWithin() is permanently false for a loader that may genuinely
+-- still be standing and beaconing -- retrieveLoader doesn't need this (it
+-- reads loader_state.get() directly), but a Task 8b boot-recovery path that
+-- wants to check liveness BEFORE deciding what to do does. Call once at
+-- boot when loader_state.hasPlaced() is true.
+function mine_flow.adoptRecordedLoader()
+    local recorded = loader_state.get()
+    if not recorded then return false, "no_loader_recorded" end
+    _expectedLoaderPos = { x = recorded.x, y = recorded.y, z = recorded.z }
     return true
 end
 
