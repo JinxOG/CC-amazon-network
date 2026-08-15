@@ -48,6 +48,12 @@ local _self = {
     recalled    = false,  -- set by RECALL handler; causes waitForAny to exit the job runner
     inSkyReturn = false,  -- true during sky return; bypasses serverDown freeze (path is fixed)
     autonomousReturn = false,  -- true while navigating home without the server (see setAutonomousReturn)
+    -- Solo-miner telemetry, carried on every heartbeat. nil for every other
+    -- role (nothing else calls base.setPhase), which is exactly the shape
+    -- proto.payloadHeartbeat's backward-compatibility contract requires.
+    phase       = nil,
+    chunk       = nil,   -- { cx=, cz= } the miner is working in
+    commsGap    = nil,   -- true while a deliberate modem-off window is expected
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -79,6 +85,12 @@ end
 function base.getSelfId()        return _self.id         end
 function base.getModem()         return _self.modem      end
 function base.getPos()           return { x=_self.pos.x, y=_self.pos.y, z=_self.pos.z } end
+-- Tracked heading: 0=north(-z) 1=east(+x) 2=south(+z) 3=west(-x).
+-- mine_flow's pos() hook REQUIRES this: turtle.place() drops the carried chunk
+-- loader one block AHEAD, and "ahead" cannot be derived from x/y/z alone. A
+-- wrong facing here puts the loader in the wrong chunk, which is the one
+-- placement error that cannot be undone without a pickaxe we aren't holding.
+function base.getFacing()        return _self.facing     end
 function base.getDock()          return _self.dock       end
 function base.getPartnerId()     return _self.partnerId  end
 function base.setPartnerId(id)   _self.partnerId = id    end
@@ -94,6 +106,18 @@ function base.setSkyReturn(v)    _self.inSkyReturn = v    end
 -- delivery/support/warehouse turtles.
 function base.setAutonomousReturn(v) _self.autonomousReturn = v end
 function base.isAutonomousReturn()   return _self.autonomousReturn end
+
+-- Solo-miner phase telemetry piggy-backed onto the heartbeat, so the server
+-- keeps seeing the miner's phase/chunk between MINE_PHASE messages and can
+-- tell a deliberate comms gap from a failure even if the MINE_PHASE report
+-- itself is the message that got lost. Only the miner calls this; every other
+-- role leaves all three nil, so payloadHeartbeat produces exactly the payload
+-- it always has for them (pinned by tests/test_mine_phase.lua).
+function base.setPhase(phase, chunk, commsGap)
+    _self.phase    = phase
+    _self.chunk    = chunk
+    _self.commsGap = commsGap
+end
 
 -- Exposed so the miner can set/clear the anchor around placed-loader work.
 -- nil on roles that don't ship geofence.lua (see the pcall require above).
@@ -137,9 +161,27 @@ function comms.init()
     logInfo("Modem ready.")
 end
 
+local _lastSendWarn = 0
 function comms.toServer(msgType, payload)
     local msg = proto.encode(msgType, _self.id, "server", payload)
-    proto.send(_self.modem, proto.CH_SERVER, msg)
+    -- A solo miner deliberately unequips its modem during the loader-retrieval
+    -- swap (equipment.retrievalSwapIn: chunk loading outranks comms). That
+    -- DETACHES this wrapped peripheral, and calling a detached peripheral's
+    -- method RAISES rather than returning false. Unprotected, that error came
+    -- out of sendHeartbeat inside controlLoop and killed the whole
+    -- parallel.waitForAny runner -- i.e. the running job -- every single time a
+    -- miner retrieved its loader. A send that cannot go out is not fatal for
+    -- any role: the message is simply lost, exactly as if the server were not
+    -- listening. Throttled warn so a genuinely broken modem is still visible
+    -- without a line every heartbeat during an expected gap.
+    local ok, err = pcall(proto.send, _self.modem, proto.CH_SERVER, msg)
+    if not ok then
+        local now = os.epoch("utc")
+        if now - _lastSendWarn > 30000 then
+            _lastSendWarn = now
+            logWarn("Send failed (modem detached or missing?): " .. tostring(err))
+        end
+    end
 end
 
 local function flushLogQueue()
@@ -1255,7 +1297,8 @@ local function sendHeartbeat()
         gpsSync()
     end
     comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
-        _self.status, fuel.level(), base.getPos(), _self.jobId))
+        _self.status, fuel.level(), base.getPos(), _self.jobId,
+        { phase = _self.phase, chunk = _self.chunk, commsGap = _self.commsGap }))
     _missedHeartbeats = _missedHeartbeats + 1
 
     -- If too many heartbeats go unacknowledged, server is unreachable.

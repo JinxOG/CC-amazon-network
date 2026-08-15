@@ -1,24 +1,51 @@
 -- ore_turtle.lua
 -- Rename to startup.lua on any miner turtle.
--- Paired with a SUPPORT turtle (SUPPORT_FOLLOW, fuelManage=true).
 --
--- Inventory layout:
---   Slot  1   advancedperipherals:geo_scanner  (placed, used, picked back up)
---   Slots 2-13  mining output  → dumped to ore E-chest after each sector
---   Slot 14   coal reserve     (slot-14 top-up before EC refuel)
---   Slot 15   fuel ender chest (self-refuel coal source)
---   Slot 16   ore ender chest  (→ RS storage)
+-- SOLO miner. It carries its own chunk-loader turtle as cargo, places it at
+-- each sector, swaps chunky -> pickaxe so it can mine inside that loader's
+-- footprint, then swaps back and takes the loader with it. Mining has no
+-- support partner any more. Delivery still does: signalPartner and the
+-- MINE_RECALL/MINE_CLEAR/RETURN_TO_DOCK message types stay in turtle_base.lua
+-- and protocol.lua untouched -- what was removed here is mining's *calls* into
+-- them, not the mechanism.
+--
+-- Inventory layout (equipment.SLOTS is the authority):
+--   Slot  1     advancedperipherals:geo_scanner (placed, used, picked back up)
+--   Slot  2     the carried chunk-loader turtle
+--   Slot  3     whichever of pickaxe/chunky is currently stowed
+--   Slot  4     the modem, only during the retrieval window
+--   Slots 5-13  mining output  -> dumped to the ore E-chest after each sector
+--   Slot 14     coal reserve   (slot-14 top-up before EC refuel)
+--   Slot 15     fuel ender chest (self-refuel coal source)
+--   Slot 16     ore ender chest  (-> RS storage)
 
-local base  = require("turtle_base")
-local proto = require("protocol")
-local W     = require("waypoints")
+local base         = require("turtle_base")
+local proto        = require("protocol")
+local W            = require("waypoints")
+local equipment    = require("equipment")
+local geofence     = require("geofence")
+local loader_state = require("loader_state")
+local mine_flow    = require("mine_flow")
 
 -- ── Slots ────────────────────────────────────────────────────────────────────
-local S_SCANNER = 1
-local S_COAL    = 14
-local S_FUEL_EC = 15
-local S_ORE_EC  = 16
-local PROTECTED = { [S_SCANNER]=true, [S_COAL]=true, [S_FUEL_EC]=true, [S_ORE_EC]=true }
+local S_SCANNER = equipment.SLOTS.SCANNER   -- 1
+local S_LOADER  = equipment.SLOTS.LOADER    -- 2
+local S_TOOL    = equipment.SLOTS.TOOL      -- 3
+local S_MODEM   = equipment.SLOTS.MODEM     -- 4
+local S_COAL    = equipment.SLOTS.COAL      -- 14
+local S_FUEL_EC = equipment.SLOTS.FUEL_EC   -- 15
+local S_ORE_EC  = equipment.SLOTS.ORE_EC    -- 16
+
+-- Mining output lives ONLY in these slots now. Slots 2-4 hold the carried
+-- loader turtle and whichever upgrades are not currently equipped; the old
+-- 2-13 output range would have shipped the miner's own hardware to storage on
+-- the first dump.
+local MINE_FIRST, MINE_LAST = 5, 13
+
+local PROTECTED = {
+    [S_SCANNER] = true, [S_LOADER] = true, [S_TOOL] = true, [S_MODEM] = true,
+    [S_COAL]    = true, [S_FUEL_EC] = true, [S_ORE_EC] = true,
+}
 
 -- Populated at startup: item name → home slot number.
 -- Used as a name-based safety net so protected items can't be dumped
@@ -30,11 +57,51 @@ local protectedSlotNames = {}
 
 -- ── Config ───────────────────────────────────────────────────────────────────
 local SKY_Y        = 200   -- altitude for inter-sector sky travel
-local SURVEY_TRAVEL_Y = 175  -- 5 below support FOLLOW_Y=180; avoids vertical collision during survey
+local SURVEY_TRAVEL_Y = 175  -- survey/first-sector travel altitude
 local FUEL_WARN    = 3000  -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
-local SCANNER_NAME = "advancedperipherals:geo_scanner"
+local SCANNER_NAME = equipment.ITEMS.SCANNER
 local MIN_ORE_Y    = -58   -- 1.18+ world: bedrock ends at Y=-60; safe floor is -58
+
+-- Footprint from docs/superpowers/specs/chunkloader-footprint.md. Measured in
+-- CHUNKS: 1 => the 3x3 chunks around the loader's own chunk, which covers the
+-- whole 33x33 sector. The pack loads 5x5 (chunkyTurtleRadius=2), so this leaves
+-- one chunk of slack on every side.
+--
+-- This is the only thing keeping the miner inside loaded chunks while its own
+-- chunky upgrade is stowed. Do NOT raise it without raising chunkyTurtleRadius
+-- in the Advanced Peripherals config first -- nothing checks that they agree,
+-- and a mismatch does not error, it freezes the turtle in an unloaded chunk.
+local FENCE_CHUNK_RADIUS = 1
+
+-- Where the miner stands to place its loader, as an offset from the sector
+-- centre. Sector centres are multiples of SECTOR_STEP=32 and therefore sit
+-- exactly ON a chunk boundary: placing from there would drop the loader into
+-- whichever neighbouring chunk we happened to be facing, and the fence would
+-- cover the wrong 3x3. From 8 blocks in, every facing keeps both the miner and
+-- the loader inside the sector's own anchor chunk.
+local STAND_OFFSET = 8
+-- Face south before placing so the loader lands on the +Z side of the stand,
+-- i.e. away from the sector centre the miner works and returns from. Facing is
+-- read back from base.getFacing() rather than assumed -- this only decides
+-- WHERE the loader goes, never where the code thinks it went.
+local PLACE_FACING = 2
+
+-- Loader liveness while mining. The loader beacons every 5s (loader_turtle.lua
+-- BEACON_INTERVAL), but the job coroutine only sees modem traffic while it is
+-- actually blocked in proto.receive: anything arriving while it is inside a
+-- turtle move is delivered to turtle_base's control loop instead and is gone
+-- before we look. So "no beacon" only means anything after we have deliberately
+-- listened, which costs mining time -- hence a long interval, a listen window
+-- comfortably wider than one beacon period, and a grace window spanning more
+-- than two checks so a single missed window never abandons a good sector.
+local BEACON_CHECK_EVERY = 90    -- seconds of mining between liveness polls
+local BEACON_LISTEN_SECS = 7     -- listen this long each poll (> one beacon period)
+local BEACON_GRACE_SECS  = 240   -- no matching beacon in this long => treat as dead
+
+-- A server outage must not leave the miner parked in the field with a loader
+-- force-loading a chunk. After this long, take ourselves home unaided.
+local SERVER_DOWN_LIMIT_MS = 300000   -- 5 minutes
 
 -- Y levels scanned per sector — each covers ±16 blocks vertically.
 -- 1.18+ ore peaks: iron/coal y=16, copper/gold y=0, redstone y=-32, diamond y=-52.
@@ -42,7 +109,98 @@ local SCAN_LEVELS = { 16, 0, -32, -52 }
 
 base.init(proto.ROLE.MINER)
 
+-- Forward declaration: checkFuel (defined below) calls rescueProtectedItems,
+-- which is a `local function` further down the file. Without this declaration
+-- that call compiled to a GLOBAL lookup and was nil at runtime — a latent
+-- "attempt to call a nil value" crash on the fuel-EC-displaced path.
+local rescueProtectedItems
+
+-- ── Phase reporting ──────────────────────────────────────────────────────────
+-- base has no job-id accessor, so the miner keeps its own copy for the phase
+-- payloads. Set on entry to a job, cleared when it ends.
+local _jobId = nil
+
+local function currentChunk()
+    local p = base.getPos()
+    local cx, cz = geofence.chunkOf(p.x, p.z)
+    return { cx = cx, cz = cz }
+end
+
+-- The block turtle.place() is about to fill, from the miner's own facing —
+-- same convention as mine_flow.aheadBlock and turtle_base.applyMove.
+local function aheadBlock()
+    local p  = base.getPos()
+    local f  = base.getFacing()
+    local dx, dz = 0, 0
+    if     f == 0 then dz = -1
+    elseif f == 1 then dx =  1
+    elseif f == 2 then dz =  1
+    else               dx = -1 end
+    return p.x + dx, p.y, p.z + dz
+end
+
+-- mine_flow reports PLACING_LOADER with no detail (it has no comms dependency
+-- at all). A LOADER_BEACON carries a position but no deployer — the placed
+-- loader has no way to learn which miner put it there — so the miner id plus
+-- the block the loader is about to occupy is the join key the server needs to
+-- attribute a beacon (or an orphan) to a placement.
+local function placingDetail()
+    local lx, ly, lz = aheadBlock()
+    return string.format("miner=%s loader=%d,%d,%d",
+        tostring(base.getSelfId()), lx, ly, lz)
+end
+
+local function reportPhase(phase, detail)
+    if phase == proto.PHASE.PLACING_LOADER and not detail then
+        detail = placingDetail()
+    end
+    -- RETRIEVING is the deliberate comms-gap window: the server suppresses
+    -- ghost/timeout detection while commsGap is set, so it must be set BEFORE
+    -- the modem comes off — which it is, because mine_flow reports RETRIEVING
+    -- before calling equipment.retrievalSwapIn().
+    --
+    -- DOCKED reports no chunk: the server clears the last worked chunk on that
+    -- phase, and a heartbeat that kept re-sending the dock's own chunk would
+    -- immediately undo it.
+    local chunk = (phase ~= proto.PHASE.DOCKED) and currentChunk() or nil
+    base.setPhase(phase, chunk, phase == proto.PHASE.RETRIEVING)
+    base.sendToServer(proto.MSG.MINE_PHASE,
+        proto.payloadMinePhase(_jobId, phase, detail))
+    print(string.format("[MINER] phase %s%s", phase, detail and (" — " .. detail) or ""))
+end
+
 -- ── Messaging ────────────────────────────────────────────────────────────────
+
+-- mine_flow's beacon gate calls this. Contract: block for roughly pollSeconds
+-- when nothing is arriving (proto.receive does, via os.pullEvent), hand every
+-- message straight to mine_flow.noteBeacon with msg.payload INTACT (noteBeacon
+-- verifies a beacon by exact block position out of msg.payload.position — a
+-- stripped payload silently disables that check), and never raise: mine_flow
+-- does not pcall this hook.
+--
+-- Messages drained here are not stolen from anything. turtle_base runs its
+-- control loop and the job coroutine under parallel.waitForAny, which delivers
+-- every event to both, so RECALL / JOB_ASSIGN still reach the control loop.
+local function pump(pollSeconds)
+    local ok, err = pcall(function()
+        local msg = proto.receive(base.getSelfId(), pollSeconds or 1)
+        if msg then mine_flow.noteBeacon(msg) end
+    end)
+    if not ok then print("[MINER] pump error: " .. tostring(err)) end
+end
+
+mine_flow.setHooks({
+    reportPhase = reportPhase,
+    log         = function(m) print("[MINER] " .. m) end,
+    -- facing is REQUIRED: placeLoader computes where the loader will land from
+    -- it, and a wrong facing puts the loader in the wrong chunk.
+    pos         = function()
+        local p = base.getPos()
+        p.facing = base.getFacing()
+        return p
+    end,
+    pump        = pump,
+})
 
 local function waitMsg(types, secs)
     local set = {}
@@ -52,7 +210,7 @@ local function waitMsg(types, secs)
         if base.isRecalled() then return nil end
         if base.isServerDown() then
             -- Freeze deadline while server is unreachable so a crash doesn't
-            -- trigger sector_request_timeout and dispatch a duplicate mining pair.
+            -- trigger sector_request_timeout and dispatch a duplicate miner.
             deadline = os.epoch("utc") / 1000 + secs
             sleep(2)
         end
@@ -60,20 +218,117 @@ local function waitMsg(types, secs)
         if remain <= 0 then break end
         local msg = proto.receive(base.getSelfId(), math.max(0.5, remain))
         if msg then
-            if msg.type == proto.MSG.JOB_ABORT
-                    and msg.from == base.getPartnerId() then
-                -- Support was recalled independently and signalled us.
-                -- Self-recall so existing isRecalled() checks fire recallReturn(),
-                -- which sends MINE_RECALL back to the waiting support.
-                print("[MINER] Support sent JOB_ABORT — self-recalling for coordinated return")
-                base.setRecalled(true)
-                return nil
-            elseif set[msg.type] then
-                return msg
-            end
+            -- Keep feeding the loader-liveness tracker even while waiting for
+            -- something else; a beacon seen here is as good as one seen in pump.
+            mine_flow.noteBeacon(msg)
+            if set[msg.type] then return msg end
         end
     end
     return nil
+end
+
+-- ── Loader liveness ──────────────────────────────────────────────────────────
+
+local _lastBeaconPoll = 0
+local _beaconLost     = false
+
+local function listenForBeacon(seconds)
+    local deadline = os.epoch("utc") / 1000 + seconds
+    while os.epoch("utc") / 1000 < deadline do
+        if mine_flow.beaconSeenWithin(BEACON_GRACE_SECS) then return true end
+        local remain = deadline - os.epoch("utc") / 1000
+        if remain <= 0 then break end
+        pump(math.max(0.5, remain))
+    end
+    return mine_flow.beaconSeenWithin(BEACON_GRACE_SECS)
+end
+
+-- False once the placed loader has stopped proving it is alive. Only meaningful
+-- while the fence is armed: the fence is active exactly when the miner has
+-- surrendered its own chunky upgrade and is depending on that loader.
+local function loaderStillAlive()
+    if not geofence.isActive() then return true end
+    if _beaconLost then return false end
+    local now = os.epoch("utc") / 1000
+    if now - _lastBeaconPoll < BEACON_CHECK_EVERY then return true end
+    _lastBeaconPoll = now
+    if listenForBeacon(BEACON_LISTEN_SECS) then return true end
+    _beaconLost = true
+    return false
+end
+
+-- The loader has gone quiet. Restoring our own chunk loading is the only thing
+-- that matters here — mining can wait, being unloaded cannot be undone — so
+-- take the modem's side for chunky rather than the pickaxe's: we may be deep
+-- underground and still need to dig our way back out to the loader. Comms stay
+-- down until the retrieval swap-out puts the modem back.
+local function handleBeaconLoss()
+    reportPhase(proto.PHASE.RETRIEVING, "loader beacon lost — restoring own chunk loading")
+    base.sendProgress("loader_beacon_lost — restoring own chunk loading")
+    local ok, why = equipment.retrievalSwapIn()   -- modem -> chunky, pickaxe stays
+    if ok then
+        -- Self-loading again: the fence has nothing left to protect and would
+        -- only stop us reaching the loader or getting home.
+        geofence.clear()
+        print("[MINER] Own chunk loading restored after beacon loss.")
+    else
+        -- Keep the fence armed: staying inside the (possibly still loaded)
+        -- footprint beats wandering out of it with no loading of our own.
+        print("[MINER] WARNING: could not restore chunky after beacon loss: " .. tostring(why))
+    end
+end
+
+-- ── Equipment helpers ────────────────────────────────────────────────────────
+
+-- Get back to travel mode (modem + chunky) from whatever state a failure left
+-- us in. Two sides, three upgrades, so exactly one of these applies.
+local function restoreTravelMode()
+    if not equipment.sideOf("chunky") then
+        reportPhase(proto.PHASE.SWAP_TO_CHUNKY)
+        local ok, why = equipment.toTravelMode()      -- pickaxe -> chunky
+        if not ok then return false, why end
+    end
+    if not equipment.sideOf("modem") then
+        local ok, why = equipment.retrievalSwapOut()  -- pickaxe -> modem, chunky stays
+        if not ok then return false, why end
+    end
+    return true
+end
+
+-- Never fly anywhere without our own chunk loading. If chunky is off, take the
+-- MODEM's side for it rather than the pickaxe's: the trip home may still have
+-- to dig up out of a half-mined shaft, and comms are the one thing that can be
+-- afforded (they come back with restoreTravelMode once we are home). Falls back
+-- to giving up the pickaxe instead if the modem swap is the one that fails —
+-- loaded and unable to dig still beats unloaded.
+local function prepareToFly()
+    if equipment.sideOf("chunky") then return true end
+    local ok = equipment.retrievalSwapIn()      -- modem -> chunky, pickaxe stays
+    if ok then return true end
+    return equipment.toTravelMode()             -- pickaxe -> chunky
+end
+
+-- Recovering an ender chest means digging it back up, and digging needs a
+-- pickaxe. In travel mode the tool side holds chunky, so borrow the MODEM's
+-- side for the duration — never chunky's: a comms gap is recoverable, being
+-- unloaded is not. A no-op (and zero behaviour change) whenever the pickaxe is
+-- already on, which is the whole of normal mining.
+local function withDigTool(what, fn)
+    if equipment.sideOf("pickaxe") then return fn() end
+    local swapped, why = equipment.toRetrieveMode()   -- modem -> pickaxe
+    if not swapped then
+        print(string.format("[MINER] %s skipped — cannot equip pickaxe: %s",
+            what, tostring(why)))
+        return nil
+    end
+    local ok, err = pcall(fn)
+    local back, why2 = equipment.retrievalSwapOut()   -- pickaxe -> modem
+    if not back then
+        print(string.format("[MINER] WARNING: modem not restored after %s: %s",
+            what, tostring(why2)))
+    end
+    if not ok then error(err, 0) end
+    return true
 end
 
 -- ── Ore detection ────────────────────────────────────────────────────────────
@@ -97,11 +352,17 @@ end
 
 -- Full refuel using the existing base.fuel.refuelFromChest() — already handles
 -- CHEST_SLOT=15, slot selection, direction finding, and chest recovery.
+-- refuelFromChest deploys the entangled chest and breaks it again to recover
+-- it, so it needs a pickaxe just like the dump does. FORCE_REFUEL arrives while
+-- the miner is docked and idle — i.e. in travel mode, with the pickaxe stowed.
 base.setRefuelFn(function()
-    while turtle.getFuelLevel() < turtle.getFuelLimit() do
-        if not base.fuel.refuelFromChest() then break end  -- EC empty or missing
-    end
-    print(string.format("[FUEL] Full refuel complete: %d/%d", turtle.getFuelLevel(), turtle.getFuelLimit()))
+    withDigTool("force refuel", function()
+        while turtle.getFuelLevel() < turtle.getFuelLimit() do
+            if not base.fuel.refuelFromChest() then break end  -- EC empty or missing
+        end
+        print(string.format("[FUEL] Full refuel complete: %d/%d",
+            turtle.getFuelLevel(), turtle.getFuelLimit()))
+    end)
 end)
 
 -- Estimate fuel required to fly home from the current position.
@@ -113,15 +374,11 @@ local function fuelToReturn()
     return math.ceil(ascent + lateral + 300)  -- 300 = descent + dock nav + margin
 end
 
-local function checkFuel(jobId)
-    if turtle.getFuelLevel() >= FUEL_WARN then return end
-
-    -- Step 1: burn slot-14 coal reserve
-    tryRefuelSlot14()
-    if turtle.getFuelLevel() >= FUEL_WARN then return end
-
-    -- Step 2: restore fuel EC to slot 15 if displaced or crowded out by overflow coal.
-    -- suckDown overflow and dumpOres can push the EC out of slot 15 into mining slots.
+-- Deploys the fuel ender chest, so it must be able to dig it back up: always
+-- called through withDigTool by checkFuel below.
+local function refuelFromEC(jobId)
+    -- Restore fuel EC to slot 15 if displaced or crowded out by overflow coal.
+    -- suckDown overflow and dumpOres can push the EC out of slot 15.
     do
         local slot15 = turtle.getItemDetail(S_FUEL_EC)
         local ecName = protectedSlotNames[S_FUEL_EC]
@@ -131,11 +388,10 @@ local function checkFuel(jobId)
                 turtle.select(S_FUEL_EC)
                 turtle.transferTo(S_COAL)
             end
-            rescueProtectedItems()  -- find EC in slots 2-13 and restore it to slot 15
+            rescueProtectedItems()  -- find EC in the mining slots and restore it
         end
     end
 
-    -- Step 3: try the fuel EC in slot 15
     local ecItem = turtle.getItemDetail(S_FUEL_EC)
     local ecName = protectedSlotNames[S_FUEL_EC]
     if ecItem and ecName and ecItem.name == ecName then
@@ -157,7 +413,7 @@ local function checkFuel(jobId)
             local s15 = turtle.getItemDetail(S_FUEL_EC)
             if s15 and s15.name ~= protectedSlotNames[S_FUEL_EC] then
                 turtle.select(S_FUEL_EC)
-                for free = 1, 13 do
+                for free = MINE_FIRST, MINE_LAST do
                     if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
                 end
             end
@@ -177,6 +433,17 @@ local function checkFuel(jobId)
         base.sendProgress("FUEL WARNING: EC missing from slot " .. S_FUEL_EC
                 .. ", fuel=" .. turtle.getFuelLevel())
     end
+end
+
+local function checkFuel(jobId)
+    if turtle.getFuelLevel() >= FUEL_WARN then return end
+
+    -- Step 1: burn slot-14 coal reserve (needs no tool)
+    tryRefuelSlot14()
+    if turtle.getFuelLevel() >= FUEL_WARN then return end
+
+    -- Step 2+3: deploy the fuel EC. Needs a pickaxe to pick the chest back up.
+    withDigTool("fuel EC refuel", function() refuelFromEC(jobId) end)
 
     -- Step 4: assess post-refuel fuel level
     local fuel   = turtle.getFuelLevel()
@@ -197,29 +464,45 @@ end
 
 -- ── Inventory ────────────────────────────────────────────────────────────────
 
--- Record item names in slots 1, 15, 16 so they can never be dumped even if
--- physically displaced into a mining slot (e.g. dug up during movement).
+-- Record item names in the protected slots so they can never be dumped even if
+-- physically displaced into a mining slot (e.g. dug up during movement, or a
+-- retrieved loader turtle landing in the first free slot).
 local function initProtectedSlots()
-    for _, s in ipairs({ S_SCANNER, S_FUEL_EC, S_ORE_EC }) do
+    for _, s in ipairs({ S_SCANNER, S_LOADER, S_TOOL, S_MODEM, S_FUEL_EC, S_ORE_EC }) do
         local item = turtle.getItemDetail(s)
         if item then
             protectedItemNames[item.name] = s   -- last-write-wins; used only for boolean "is protected?" checks
             protectedSlotNames[s] = item.name   -- slot → name; authoritative for rescue
             print(string.format("[INIT] Protected slot %d: %s", s, item.name))
+        elseif s == S_MODEM or s == S_TOOL then
+            -- Expected to be empty outside their swap windows: the modem is
+            -- only stowed during retrieval, and the tool slot is empty
+            -- whenever both upgrades happen to be equipped.
+            print(string.format("[INIT] Slot %d empty (swap slot) — ok", s))
         else
             print(string.format("[INIT] WARNING: slot %d is empty — expected protected item", s))
         end
     end
+    -- Name-based protection for the miner's own hardware, independent of which
+    -- slot it happens to be sitting in. dumpOres consults this table, so a
+    -- pickaxe/chunky/modem/loader displaced into a mining slot is never dropped
+    -- into the ore ender chest.
+    protectedItemNames[equipment.ITEMS.SCANNER]       = protectedItemNames[equipment.ITEMS.SCANNER]       or S_SCANNER
+    protectedItemNames[equipment.ITEMS.LOADER_TURTLE] = protectedItemNames[equipment.ITEMS.LOADER_TURTLE] or S_LOADER
+    protectedItemNames[equipment.ITEMS.PICKAXE]       = protectedItemNames[equipment.ITEMS.PICKAXE]       or S_TOOL
+    protectedItemNames[equipment.ITEMS.CHUNKY]        = protectedItemNames[equipment.ITEMS.CHUNKY]        or S_TOOL
+    protectedItemNames[equipment.ITEMS.MODEM]         = protectedItemNames[equipment.ITEMS.MODEM]         or S_MODEM
 end
 
 -- If a protected item was dug up and landed in a mining slot, move it home.
-local function rescueProtectedItems()
-    for s = 2, 13 do
+-- (Declared local at the top of the file: checkFuel is defined before this.)
+rescueProtectedItems = function()
+    for s = MINE_FIRST, MINE_LAST do
         local item = turtle.getItemDetail(s)
         if item then
             -- Check protected slots in priority order (15 before 16) so that when
             -- both ECs share the same item name, the fuel EC home wins.
-            for _, home in ipairs({ S_SCANNER, S_FUEL_EC, S_ORE_EC }) do
+            for _, home in ipairs({ S_SCANNER, S_LOADER, S_FUEL_EC, S_ORE_EC }) do
                 if protectedSlotNames[home] == item.name then
                     if turtle.getItemCount(home) == 0 then
                         turtle.select(s)
@@ -235,7 +518,7 @@ local function rescueProtectedItems()
 end
 
 local function sweepCoalToSlot14()
-    for s = 2, 13 do
+    for s = MINE_FIRST, MINE_LAST do
         local it = turtle.getItemDetail(s)
         if it and it.name:find("coal") then
             local space = turtle.getItemSpace(S_COAL)
@@ -247,64 +530,9 @@ local function sweepCoalToSlot14()
     end
 end
 
--- Place an EC from targetSlot, run fn() with it deployed, then recover it.
--- Handles EC slot drift by scanning all slots for the expected item name.
--- Ensures targetSlot is free before pickup so digDown always succeeds.
-local function withEC(targetSlot, fn)
-    local expectedName = protectedSlotNames[targetSlot]
-    if not expectedName then return false, "ec_unregistered" end
-
-    -- Find EC wherever it actually landed (by name, prefer its home slot)
-    local ecSlot = nil
-    for slot = 1, 16 do
-        local item = turtle.getItemDetail(slot)
-        if item and item.name == expectedName then
-            if slot == targetSlot or not protectedSlotNames[slot] then
-                ecSlot = slot; break
-            end
-        end
-    end
-    if not ecSlot then return false, "ec_lost" end
-
-    -- Restore EC to its home slot if it drifted
-    if ecSlot ~= targetSlot then
-        local occupant = turtle.getItemDetail(targetSlot)
-        if occupant then
-            turtle.select(targetSlot)
-            for tmp = 1, 13 do
-                if turtle.getItemCount(tmp) == 0 and tmp ~= ecSlot then
-                    turtle.transferTo(tmp); break
-                end
-            end
-        end
-        turtle.select(ecSlot)
-        turtle.transferTo(targetSlot)
-    end
-
-    turtle.select(targetSlot)
-    if turtle.detectDown() then
-        turtle.digDown()
-        rescueProtectedItems()
-        turtle.select(targetSlot)  -- re-select after rescue
-    end
-    if not turtle.placeDown() then return false, "ec_place_failed" end
-
-    fn()
-
-    -- Clear targetSlot if something from the chest landed there during fn()
-    local inSlot = turtle.getItemDetail(targetSlot)
-    if inSlot and inSlot.name ~= expectedName then
-        turtle.select(targetSlot)
-        for free = 1, 13 do
-            if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
-        end
-    end
-    turtle.select(targetSlot)
-    if not turtle.digDown() then return false, "ec_pickup_failed" end
-    return true
-end
-
-local function dumpOres()
+-- Deploys the ore ender chest, so it must be able to dig it back up: always
+-- called through withDigTool by dumpOres below.
+local function dumpToEC()
     sweepCoalToSlot14()
     turtle.select(S_ORE_EC)
     if turtle.detectDown() then
@@ -326,7 +554,7 @@ local function dumpOres()
     local inSlot = turtle.getItemDetail(S_ORE_EC)
     if inSlot and inSlot.name ~= protectedSlotNames[S_ORE_EC] then
         turtle.select(S_ORE_EC)
-        for free = 1, 13 do
+        for free = MINE_FIRST, MINE_LAST do
             if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
         end
     end
@@ -334,9 +562,14 @@ local function dumpOres()
     turtle.digDown()
 end
 
+local function dumpOres()
+    reportPhase(proto.PHASE.DUMPING)
+    withDigTool("ore dump", dumpToEC)
+end
+
 local function inventoryFull()
     local free = 0
-    for s = 2, 13 do
+    for s = MINE_FIRST, MINE_LAST do
         if turtle.getItemCount(s) == 0 then free = free + 1 end
     end
     return free < 2
@@ -405,6 +638,9 @@ local function navToOre(ore, jobId)
     return ok2
 end
 
+-- Returns mined, byType, abortReason. abortReason is non-nil only when the
+-- placed loader stopped beaconing: at that point mining is over for this
+-- sector regardless of what is left in the list.
 local function mineOreList(ores, jobId, sx, sz, sy)
     -- Greedy nearest-neighbour: re-sort after every mine so the miner stays
     -- in a vein until it's exhausted before jumping to a distant one.
@@ -431,6 +667,11 @@ local function mineOreList(ores, jobId, sx, sz, sy)
 
     while #remaining > 0 do
         if base.isRecalled() then break end
+        if not loaderStillAlive() then
+            handleBeaconLoss()
+            flushScanBatch()
+            return mined, byType, "loader_beacon_lost"
+        end
         local p = base.getPos()
         table.sort(remaining, function(a, b)
             local da = math.abs(a.x-p.x) + math.abs(a.y-p.y) + math.abs(a.z-p.z)
@@ -441,6 +682,9 @@ local function mineOreList(ores, jobId, sx, sz, sy)
         if inventoryFull() then dumpOres() end
         local reached = navToOre(ore, jobId)
         if not reached then
+            -- Includes geofence refusals: an ore outside the placed loader's
+            -- footprint is simply not minable this sector. Skipping it is
+            -- correct; chasing it would strand the turtle in an unloaded chunk.
             skipped = skipped + 1
         else
             byType[ore.name]    = (byType[ore.name]    or 0) + 1
@@ -454,9 +698,9 @@ local function mineOreList(ores, jobId, sx, sz, sy)
     end
     flushScanBatch()   -- send any remainder before SECTOR_DONE
     if skipped > 0 then
-        print(string.format("[MINER] Skipped %d unreachable ores (bedrock/blocked)", skipped))
+        print(string.format("[MINER] Skipped %d unreachable ores (bedrock/fenced/blocked)", skipped))
     end
-    return mined, byType
+    return mined, byType, nil
 end
 
 -- Wait for SECTOR_ASSIGN or MINE_COMPLETE. On timeout (server restart wiped
@@ -470,141 +714,246 @@ local function waitSectorResponse(jobId)
     return waitMsg({ proto.MSG.SECTOR_ASSIGN, proto.MSG.MINE_COMPLETE }, 30)
 end
 
+-- ── Placed loader: approach and retrieval ────────────────────────────────────
+
+-- The square to stand on to dig the loader back up, and the facing to do it
+-- from. mine_flow.retrieveLoader verifies the block ahead against the persisted
+-- record by exact position, so being anywhere else fails with
+-- loader_position_mismatch — this is what makes retrieval work after a reboot,
+-- when the standing square we used at placement time is no longer in memory.
+--
+-- Approach from the side we are already on so the leg in never has to pass
+-- through the loader itself.
+local function approachFor(rec, from)
+    if from.z > rec.z then return rec.x, rec.y, rec.z + 1, 0 end   -- stand south, face north
+    if from.z < rec.z then return rec.x, rec.y, rec.z - 1, 2 end   -- stand north, face south
+    if from.x > rec.x then return rec.x + 1, rec.y, rec.z, 3 end   -- stand east,  face west
+    return rec.x - 1, rec.y, rec.z, 1                              -- stand west,  face east
+end
+
+-- Fly to the placed loader and take it back. `stand` is the square we actually
+-- placed from when we still know it; otherwise one is derived from the record.
+local function retrievePlacedLoader(stand)
+    local rec = loader_state.get()
+    if not rec then return false, "no_loader_recorded" end
+
+    local sx, sy, sz, facing
+    if stand then
+        sx, sy, sz, facing = stand.x, stand.y, stand.z, stand.facing
+    else
+        sx, sy, sz, facing = approachFor(rec, base.getPos())
+    end
+
+    local ok, err = base.move.to(sx, sy, sz)
+    if not ok then return false, "approach_failed: " .. tostring(err) end
+    base.move.face(facing)
+    return mine_flow.retrieveLoader()
+end
+
+-- ── Boot recovery (Task 5b, deferred to here) ────────────────────────────────
+-- A reboot with a loader still placed would otherwise abandon it: the turtle is
+-- lost from the fleet and its chunk stays force-loaded with nothing recording
+-- why. Runs before base.run, so recovery always precedes accepting new work.
+--
+-- Deliberately does NOT call equipment.reconcile(). comms.init already runs it
+-- at boot for the one state it exists to fix (modem in inventory, not
+-- equipped), and calling it here would raise a false chunky_unrecoverable on
+-- every healthy mine-mode boot: a miner mid-sector legitimately carries the
+-- chunky item with both upgrade sides full, which is exactly reconcile's
+-- failure signature.
+--
+-- The approach mode is chunky + pickaxe (equipment's "retrieve" mode): loaded
+-- AND able to dig, which is the only combination that can climb out of a
+-- half-mined shaft without ever being unloaded. Comms are down for the flight —
+-- the RETRIEVING phase report goes out first so the server expects the gap —
+-- and come back when retrieveLoader swaps the modem in at the end.
+local function recoverPlacedLoader()
+    if not loader_state.hasPlaced() then return end
+    local s = loader_state.get()
+    print(string.format("[MINER] Boot: loader recorded at %d,%d,%d — recovering",
+        s.x, s.y, s.z))
+    base.sendProgress(string.format("recovering abandoned loader at %d,%d", s.x, s.z))
+
+    -- Re-establish beacon tracking: _expectedLoaderPos is in-memory only, so
+    -- without this every beacon from a loader that IS still alive is ignored.
+    mine_flow.adoptRecordedLoader()
+
+    -- Never fly (or dig) out of the depot. If a stale record survived a trip
+    -- home, an operator has to resolve it: leaving the building under our own
+    -- navigation would mean digging through the building itself.
+    if base.isInsideBuilding(base.getPos()) then
+        print("[MINER] Loader recorded but we are docked — NOT flying out. " ..
+              "Collect it by hand or clear loader_state.dat.")
+        base.sendProgress(string.format(
+            "orphan_loader_at %d,%d,%d (miner is docked)", s.x, s.y, s.z))
+        return
+    end
+
+    reportPhase(proto.PHASE.RETRIEVING,
+        string.format("boot recovery — loader at %d,%d,%d", s.x, s.y, s.z))
+    base.setAutonomousReturn(true)
+
+    -- Reach chunky + pickaxe from wherever the reboot left us. base.init
+    -- guarantees a modem is equipped by this point (comms.init errors out
+    -- otherwise), so exactly one of these two transitions applies.
+    local ready, why
+    if not equipment.sideOf("chunky") then
+        ready, why = equipment.retrievalSwapIn()   -- mine mode:   modem -> chunky
+    elseif not equipment.sideOf("pickaxe") then
+        ready, why = equipment.toRetrieveMode()    -- travel mode: modem -> pickaxe
+    else
+        ready = true                                -- already chunky + pickaxe
+    end
+    if not ready then
+        print("[MINER] Loader recovery blocked — cannot reach chunky+pickaxe: " .. tostring(why))
+        base.sendProgress("loader_recovery_blocked: " .. tostring(why))
+        base.setAutonomousReturn(false)
+        return
+    end
+
+    local ok, reason = retrievePlacedLoader(nil)
+    if ok then
+        print("[MINER] Loader recovered.")   -- mine_flow cleared the record
+        base.sendProgress("loader recovered on boot")
+    else
+        -- Report loudly and leave the record in place: an operator needs to
+        -- know a loader is standing out there, and the next boot retries.
+        print("[MINER] Loader recovery FAILED: " .. tostring(reason))
+        base.sendProgress("loader_recovery_failed: " .. tostring(reason))
+    end
+
+    -- Chunk loading first, comms later: a failed retrieval can leave us
+    -- underground, where the pickaxe is what gets us out. On the success path
+    -- retrieveLoader has already put the modem back, so this is a no-op there.
+    local flyable, why2 = prepareToFly()
+    if not flyable then
+        print("[MINER] WARNING: no chunk loading of our own for the trip home: " .. tostring(why2))
+    end
+    geofence.clear()
+
+    -- Come home under our own navigation; the server may not even be up.
+    local p = base.getPos()
+    base.setSkyReturn(true)
+    base.move.to(p.x, SKY_Y, p.z)
+    base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
+    base.returnToDockFromSky()
+    base.setSkyReturn(false)
+    base.setAutonomousReturn(false)
+
+    local restored, why3 = restoreTravelMode()
+    if not restored then
+        print("[MINER] WARNING: could not restore travel mode: " .. tostring(why3))
+    end
+    reportPhase(proto.PHASE.DOCKED)
+end
+
 -- ── Job handler ──────────────────────────────────────────────────────────────
 
 local function mineJob(job)
     local jobId    = job.id
     local totalOre = 0
+    _jobId         = jobId
 
-    -- Per-pair altitude slot: concurrent mine pairs each get a unique vertical
+    -- Per-miner altitude slot: concurrent miners each get a unique vertical
     -- band so they never occupy the same Y during inter-sector transit.
     -- Slot 0 (default) = baseline constants; slot N adds N*10 to each.
     local yOff           = (job.params.travelYOffset or 0)
     local SKY_Y          = 200 + yOff   -- shadows module-level constant
     local SURVEY_TRAVEL_Y = 175 + yOff  -- shadows module-level constant
 
-    -- Coordinated sky return: miner signals support to step east, waits for an
-    -- explicit MINE_CLEAR ACK before ascending through the column, then both
-    -- travel home together with the support chunk-loading the miner the whole way.
-    -- Falls back to solo return if the support is offline or unresponsive.
-    local function coordinatedSkyReturn()
+    -- The square this sector's loader was placed from, so retrieval can stand
+    -- exactly where mine_flow expects. nil whenever no loader is out.
+    local stand           = nil
+    local _serverDownSince = nil
+
+    -- Solo return. No partner to coordinate with, so this is just: take the
+    -- loader with us if one is still placed — leaving it behind loses a turtle
+    -- and permanently loads a chunk — make sure we are self-loading, then fly
+    -- home.
+    local function soloReturn()
+        reportPhase(proto.PHASE.RETURNING)
+        -- Dump first: the pickaxe is still on during a normal sector end, and
+        -- withDigTool covers the cases where it is not.
         dumpOres()
+
+        if loader_state.hasPlaced() then
+            local ok, reason = retrievePlacedLoader(stand)
+            if not ok then
+                print("[MINER] WARNING: could not retrieve loader: " .. tostring(reason))
+                base.sendProgress("loader_left_behind: " .. tostring(reason))
+            end
+            stand = nil
+        end
+
+        -- Restore our own chunk loading regardless of how the retrieval went,
+        -- so we can get home either way. The modem comes back at the dock, not
+        -- here: a failed retrieval can leave us underground, where the pickaxe
+        -- is what gets us out.
+        local flyable, why = prepareToFly()
+        if not flyable then
+            print("[MINER] WARNING: no chunk loading of our own for the trip home: " .. tostring(why))
+            base.sendProgress("returning_without_chunk_loading: " .. tostring(why))
+        end
+        -- Released either way: with the loader gone there is nothing left for
+        -- the fence to describe, and leaving it armed only blocks the way home.
+        geofence.clear()
+
         checkFuel(jobId)
-
-        local supportId = job.params.partnerId
-        local p         = base.getPos()
-
-        -- Near-surface shortcut: already at exit altitude; skip the deep-ascent
-        -- path and return via the arrivals shaft directly.
-        if p.y >= W.WORLD_EXIT.y then
-            if supportId then
-                base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-            end
-            base.setSkyReturn(true)
-            base.returnToDock()
-            base.setSkyReturn(false)
-            return
-        end
-
-        -- Check whether the support is reachable. Give it up to 60 s to come
-        -- back if it just rebooted. Beyond that, do a solo return.
-        local supportOnline = false
-        if supportId then
-            for _attempt = 1, 10 do
-                local si = base.queryTurtle(supportId, 10)
-                if si and si.online then supportOnline = true; break end
-                if base.isRecalled() then break end
-                sleep(5)
-            end
-            if not supportOnline then
-                print("[MINER] Support offline after 150s — solo sky return")
-                base.sendProgress("Support offline — solo return")
-            end
-        end
-
-        if supportOnline then
-            -- Retry MINE_RECALL every 5 s until the support explicitly ACKs with
-            -- MINE_CLEAR (it stepped 1 block east, column is clear) or 30 s pass.
-            -- This replaces the old blind 12 s sleep, which was shorter than the
-            -- support's 15 s receive cycle and caused timing-dependent collisions.
-            local cleared = false
-            for _retry = 1, 6 do
-                base.signalPartner(proto.MSG.MINE_RECALL, { pos = {x=p.x,y=p.y,z=p.z} })
-                -- Companion position update lets support immediately compute where
-                -- to step east without waiting for its next message-receive cycle.
-                base.signalPartner(proto.MSG.POSITION_UPDATE,
-                    { prev = {x=p.x, y=p.y, z=p.z, facing=0} })
-                local deadline = os.epoch("utc") / 1000 + 5
-                while os.epoch("utc") / 1000 < deadline do
-                    local m = proto.receive(base.getSelfId(), 1)
-                    if m and m.from == supportId
-                            and m.type == proto.MSG.MINE_CLEAR then
-                        print("[MINER] Support cleared column — ascending safely")
-                        cleared = true; break
-                    end
-                end
-                if cleared then break end
-                -- Recheck support online so we don't spin against a dead turtle
-                local si = base.queryTurtle(supportId, 2)
-                if not si or not si.online then
-                    print("[MINER] Support went offline mid-recall — solo return")
-                    supportOnline = false; break
-                end
-            end
-            if not cleared and supportOnline then
-                print("[MINER] No MINE_CLEAR after 30s — ascending with caution")
-                base.sendProgress("WARN: no column-clear ACK; ascending")
-            end
-        end
-
-        p = base.getPos()
+        local p = base.getPos()
         base.setSkyReturn(true)
-        base.move.to(p.x, 180, p.z)
-        sleep(5)
         base.move.to(p.x, SKY_Y, p.z)
-        -- Signal support NOW — both start the horizontal leg home at the same time.
-        -- Sending from SKY_Y (before horizontal flight) gives support a 5s head
-        -- start on shaft clearance while miner covers the horizontal leg.
-        if supportOnline then
-            base.signalPartner(proto.MSG.RETURN_TO_DOCK, {})
-        end
         base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
-        base.setPartnerId(nil)
         base.returnToDockFromSky()
         base.setSkyReturn(false)
+
+        local restored, why2 = restoreTravelMode()
+        if not restored then
+            print("[MINER] WARNING: could not restore travel mode: " .. tostring(why2))
+            base.sendProgress("travel_mode_not_restored: " .. tostring(why2))
+        end
+        reportPhase(proto.PHASE.DOCKED)
     end
 
     local function recallReturn(failReason, failRecoverable)
-        coordinatedSkyReturn()
+        soloReturn()
         base.sendFailed(failReason or "recalled", failRecoverable ~= nil and failRecoverable or false)
+        _jobId = nil
     end
 
-    base.setPartnerId(job.params.partnerId)
     local startPos = base.getPos()
     if not base.isInsideBuilding(startPos) then
-        base.sendProgress("Rebooted mid-job — coordinated sky return")
+        base.sendProgress("Rebooted mid-job — solo return")
         recallReturn("reboot_recovery", true)
         return
     end
     base.setStatus(proto.STATUS.TRAVELLING, jobId)
     base.sendProgress("Departing for mining zone")
+    reportPhase(proto.PHASE.DEPARTING)
 
     local ok, err = base.depart(true)  -- stay at floor level, ascend directly
     if not ok then
         base.sendFailed("departure_failed: " .. (err or "?"), true)
+        _jobId = nil
         return
     end
 
-    -- Ascend straight up — POSITION_UPDATEs fire on every step so support
-    -- can follow in real-time (prev is always the already-vacated block).
+    -- Everything below depends on being in travel mode with a loader aboard.
+    local eqOk, eqReason = equipment.validate("travel")
+    if not eqOk then
+        print("[MINER] Equipment check failed: " .. tostring(eqReason))
+        base.sendProgress("equipment_invalid: " .. tostring(eqReason))
+        base.sendFailed("equipment_invalid: " .. tostring(eqReason), false)
+        _jobId = nil
+        return
+    end
+
     checkFuel(jobId)
     local p = base.getPos()
     base.move.to(p.x, SKY_Y, p.z)
 
     -- ── Sector loop ──────────────────────────────────────────────────────────
-    -- Request first sector. Thereafter: mine → SECTOR_DONE → request next.
-    -- Only ascend to SKY_Y when a new sector is actually assigned, so there is
-    -- no wasteful sky climb on the final sector before returning home.
+    -- Request first sector. Thereafter: place loader → scan → mine → retrieve
+    -- loader → SECTOR_DONE → request next.
 
     base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
     local msg = waitSectorResponse(jobId)
@@ -617,6 +966,24 @@ local function mineJob(job)
             return
         end
 
+        -- A server outage must not leave the miner parked in the field with a
+        -- loader force-loading a chunk. GPS comes from beacons, not the server,
+        -- so navigating home unaided is safe.
+        if base.isServerDown() then
+            _serverDownSince = _serverDownSince or os.epoch("utc")
+            if os.epoch("utc") - _serverDownSince > SERVER_DOWN_LIMIT_MS then
+                print("[MINER] Server unreachable 5min — autonomous return")
+                base.setAutonomousReturn(true)
+                soloReturn()
+                base.setAutonomousReturn(false)
+                base.sendFailed("server_unreachable_autonomous_return", true)
+                _jobId = nil
+                return
+            end
+        else
+            _serverDownSince = nil
+        end
+
         local sx         = msg.payload.sectorX
         local sz         = msg.payload.sectorZ
         local surveyMode = msg.payload.surveyMode == true
@@ -624,45 +991,56 @@ local function mineJob(job)
 
         base.setStatus(proto.STATUS.TRAVELLING, jobId)
         base.sendProgress(string.format("%sTravelling to sector %d,%d", modeTag, sx, sz))
+        reportPhase(proto.PHASE.TRAVELLING, string.format("sector %d,%d", sx, sz))
 
-        -- Survey sectors and the first mine sector use SURVEY_TRAVEL_Y=95 so the
-        -- miner never ascends through FOLLOW_Y=100 where support hovers.
-        -- From mine sector 2 onwards, use SKY_Y=200 (full altitude).
+        -- Survey sectors and the first mine sector travel at SURVEY_TRAVEL_Y;
+        -- from mine sector 2 onwards, at SKY_Y.
         checkFuel(jobId)
         local travelY = (surveyMode or not useSkyTravel) and SURVEY_TRAVEL_Y or SKY_Y
         if not surveyMode then useSkyTravel = true end
-        -- Fly lateral-then-vertical when descending: reach sector X,Z at current
-        -- altitude first so the support (1 block below in phase-1 follow) is
-        -- horizontally offset before we descend. Without this, the support blocks
-        -- the first descent from SKY_Y=200 to SURVEY_TRAVEL_Y=95.
+
+        -- Every sector starts in travel mode with a loader aboard; anything
+        -- else and placement would fail with the loader already half-committed.
+        local tOk, tReason = equipment.validate("travel")
+        if not tOk then
+            print("[MINER] Equipment check failed: " .. tostring(tReason))
+            base.sendProgress("equipment_invalid: " .. tostring(tReason))
+            soloReturn()
+            base.sendFailed("equipment_invalid: " .. tostring(tReason), false)
+            _jobId = nil
+            return
+        end
+
+        -- Fly lateral-then-vertical when descending so the long horizontal leg
+        -- happens at the altitude we arrived at.
+        local standX, standZ = sx + STAND_OFFSET, sz + STAND_OFFSET
         local curPos = base.getPos()
         if curPos.y > travelY then
-            base.move.to(sx, curPos.y, sz)
+            base.move.to(standX, curPos.y, standZ)
         end
-        base.move.to(sx, travelY, sz)
+        base.move.to(standX, travelY, standZ)
+        base.move.face(PLACE_FACING)
 
-        -- Wait for support to reach this chunk before proceeding.
-        -- The support follows position updates reactively and can lag 1+ chunks
-        -- behind when the miner moves between sectors. Without this wait, the
-        -- miner enters the next sector's chunk before the support arrives —
-        -- the chunk unloads, heartbeats stop, and the server prunes the miner.
-        -- Applied in BOTH survey and mine modes: survey at SURVEY_TRAVEL_Y=175
-        -- is 5 blocks below FOLLOW_Y=180 which isn't close enough to guarantee
-        -- the support is in the same chunk after a long inter-sector transit.
-        if job.params.partnerId then
-            local supportId  = job.params.partnerId
-            local timeout    = surveyMode and 20 or 45  -- shorter wait OK during survey
-            local waitUntil  = os.epoch("utc") / 1000 + timeout
-            while os.epoch("utc") / 1000 < waitUntil do
-                if base.isRecalled() then break end
-                local info = base.queryTurtle(supportId, 5)
-                if not info or not info.online then break end
-                local sp = info.position
-                if sp and math.abs(sp.x - sx) <= 20 and math.abs(sp.z - sz) <= 20 then
-                    break
-                end
-                sleep(3)
-            end
+        -- Hand chunk duty to the placed loader before giving up our own. The
+        -- fence must end up on the LOADER's chunk, which is the sector's anchor
+        -- chunk: placing one chunk off would leave the sector's far edge
+        -- unloaded.
+        local acx, acz = geofence.chunkOf(sx, sz)
+        stand = { x = standX, y = travelY, z = standZ, facing = base.getFacing() }
+        _beaconLost     = false
+        _lastBeaconPoll = os.epoch("utc") / 1000
+
+        local placed, placeErr =
+            mine_flow.placeLoader(FENCE_CHUNK_RADIUS, { cx = acx, cz = acz })
+        if not placed then
+            print("[MINER] Cannot start sector: " .. tostring(placeErr))
+            base.sendProgress("sector_setup_failed: " .. tostring(placeErr))
+            -- soloReturn takes the loader back with us if it did go down before
+            -- the failure (loader_state is the authority, not the fence).
+            soloReturn()
+            base.sendFailed("sector_setup_failed: " .. tostring(placeErr), true)
+            _jobId = nil
+            return
         end
 
         -- Scan every depth level; only mine if not in survey mode.
@@ -673,12 +1051,19 @@ local function mineJob(job)
         local sectorFound = {}   -- {[name]=count} from geo scan (deduplicated)
         local sectorMined = {}   -- {[name]=count} actually mined (0 during survey)
         local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
+        local abort       = nil  -- non-nil once the sector must be abandoned
         for i, sy in ipairs(SCAN_LEVELS) do
+            if not loaderStillAlive() then
+                handleBeaconLoss()
+                abort = "loader_beacon_lost"
+                break
+            end
             checkFuel(jobId)
             base.move.to(sx, sy, sz)
             base.setStatus(proto.STATUS.WORKING, jobId)
             base.sendProgress(string.format("%sScanning %d,%d depth %d/%d (Y=%d)",
                 modeTag, sx, sz, i, #SCAN_LEVELS, sy))
+            reportPhase(proto.PHASE.SCANNING, string.format("%d,%d Y=%d", sx, sz, sy))
             local rawOres = scanSector()
             -- Deduplicate: only keep ore blocks not seen at a previous depth level.
             local ores      = {}
@@ -700,11 +1085,13 @@ local function mineJob(job)
             -- During survey: report ores found but do not mine them
             if #ores > 0 and not surveyMode then
                 base.sendProgress(string.format("Mining %d ores at Y=%d", #ores, sy))
-                local c, byType = mineOreList(ores, jobId, sx, sz, sy)
+                reportPhase(proto.PHASE.MINING, string.format("%d ores at Y=%d", #ores, sy))
+                local c, byType, mineAbort = mineOreList(ores, jobId, sx, sz, sy)
                 count = count + c
                 for name, n in pairs(byType) do
                     sectorMined[name] = (sectorMined[name] or 0) + n
                 end
+                if mineAbort then abort = mineAbort; break end
             end
             if base.isRecalled() then break end
         end
@@ -712,10 +1099,38 @@ local function mineJob(job)
         if count > 0 or inventoryFull() then dumpOres() end
         totalOre = totalOre + count
 
+        -- The loader stopped proving it was alive. Chunk loading is already
+        -- back on our own upgrade (handleBeaconLoss); take the loader home if
+        -- it is physically still there, then let the server re-dispatch.
+        if abort then
+            base.sendProgress("sector abandoned: " .. abort)
+            soloReturn()
+            base.sendFailed(abort, true)
+            _jobId = nil
+            return
+        end
+
         if base.isRecalled() then
             recallReturn()
             return
         end
+
+        -- Take the loader back BEFORE reporting the sector done: the next
+        -- SECTOR_ASSIGN arrives immediately and travel must start in travel
+        -- mode with the loader aboard.
+        local got, retErr = retrievePlacedLoader(stand)
+        if not got then
+            print("[MINER] Cannot retrieve loader: " .. tostring(retErr))
+            base.sendProgress("loader_retrieve_failed: " .. tostring(retErr))
+            -- Do not keep mining. soloReturn restores our own chunk loading,
+            -- releases the fence, and retries the retrieval once on the way
+            -- out (loader_state still records it as standing).
+            soloReturn()
+            base.sendFailed("loader_retrieve_failed: " .. tostring(retErr), false)
+            _jobId = nil
+            return
+        end
+        stand = nil
 
         -- Report done; server immediately replies with next SECTOR_ASSIGN or MINE_COMPLETE
         base.sendToServer(proto.MSG.SECTOR_DONE,
@@ -734,11 +1149,17 @@ local function mineJob(job)
 
     -- ── Return home ──────────────────────────────────────────────────────────
     base.sendProgress(string.format("All sectors done — %d ore mined. Returning.", totalOre))
-    coordinatedSkyReturn()
+    soloReturn()
     base.sendComplete({ oreCount = totalOre })
+    _jobId = nil
 end
 
 initProtectedSlots()
+-- Recover an abandoned loader before any job can be accepted.
+local rok, rerr = pcall(recoverPlacedLoader)
+if not rok then
+    print("[MINER] Loader recovery crashed: " .. tostring(rerr))
+end
 local ok, err = pcall(base.run, mineJob)
 if not ok then
     -- Unhandled crash. Print so it's visible on the terminal, then reboot
