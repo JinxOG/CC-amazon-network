@@ -14,6 +14,10 @@ local files = {
     "tests.test_miner_hooks",
     "tests.test_delivery_support",
     "tests.test_full_job",
+    -- Last: replaces os.epoch/os.startTimer/os.pullEvent/sleep/parallel to
+    -- drive the control loop. It restores them per test, but running last
+    -- means no other suite can be affected even if that ever regressed.
+    "tests.test_control_loop",
 }
 
 local passed, failed = 0, 0

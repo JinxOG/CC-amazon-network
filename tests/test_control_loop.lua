@@ -1,0 +1,342 @@
+-- Final-review fixes F1, F3, F4 (and the F2 ordering guard).
+--
+-- These drive turtle_base's control loop, boot registration and fuel path
+-- directly. turtle_base IS requirable; base.run's controlLoop is reachable by
+-- supplying a `parallel` that only runs the first coroutine and letting the
+-- event queue run dry to end it.
+--
+-- F2 lives in ore_turtle.lua's mineJob, which is NOT requirable under this
+-- harness (it self-executes base.init at load and pcall(base.run)/os.reboot at
+-- the bottom -- same limitation test_miner_hooks documents). The one honest
+-- thing available there is a source-ordering assertion, which is what the last
+-- test in this file is; it is explicitly weaker than the others and is labelled
+-- as such rather than pretending to exercise the flow.
+
+package.path = "./?.lua;" .. package.path
+
+local stub  = require("tests.stub_cc")
+local proto = require("protocol")
+
+local MODULES = { "turtle_base", "mine_flow", "equipment", "geofence", "loader_state" }
+
+-- ─── Deterministic clock / event pump ────────────────────────────────────────
+-- Only os.pullEvent advances the clock (by one heartbeat interval), so the
+-- number of control-loop iterations is exactly the number of queued events and
+-- every heartbeat boundary is hit precisely once per iteration.
+
+local HEARTBEAT_MS = 5000
+
+local function withFakeRuntime(body)
+    local savedEpoch      = os.epoch
+    local savedStartTimer = os.startTimer
+    local savedPullEvent  = os.pullEvent
+    local savedSleep      = sleep
+    local savedParallel   = parallel
+    local savedLabel      = os.getComputerLabel
+    local savedCompId     = os.getComputerID
+
+    local ok, err = pcall(body)
+
+    os.epoch            = savedEpoch
+    os.startTimer       = savedStartTimer
+    os.pullEvent        = savedPullEvent
+    sleep               = savedSleep
+    parallel            = savedParallel
+    os.getComputerLabel = savedLabel
+    os.getComputerID    = savedCompId
+    if not ok then error(err, 0) end
+end
+
+local function clearModules()
+    for _, m in ipairs(MODULES) do package.loaded[m] = nil end
+end
+
+-- ─── F1: only the server's own traffic proves the server is alive ────────────
+
+-- Runs base.run's control loop over `events`, returns the loaded base module.
+-- The loop ends when the queue runs dry (os.pullEvent raises), which the
+-- `parallel` stand-in below swallows exactly the way parallel.waitForAny ending
+-- a coroutine would.
+local function runControlLoop(events)
+    clearModules()
+    stub.install({ fuel = 100000 })
+
+    local clock   = 1000000
+    local timerId = 0
+    local queue   = events
+
+    os.epoch      = function() return clock end
+    os.startTimer = function() timerId = timerId + 1; return timerId end
+    os.pullEvent  = function()
+        clock = clock + HEARTBEAT_MS
+        local ev = table.remove(queue, 1)
+        if not ev then error("test: event queue exhausted", 0) end
+        return table.unpack(ev)
+    end
+    sleep    = function() end   -- deliberately does NOT advance the clock
+    parallel = { waitForAny = function(controlLoop) pcall(controlLoop) end }
+
+    gps = { locate = function() return 0, 64, 0 end }
+
+    local base = require("turtle_base")
+    base.recoverModem()          -- bind the stub's equipped modem so sends work
+    base.run(function() end)
+    return base
+end
+
+-- Both helpers below produce a message addressed to "broadcast" on CH_LOCAL.
+-- The ONLY difference between them is `from`, which is the whole point: a
+-- test where the two messages differed in any other way would not isolate the
+-- gate being fixed.
+local function beaconEvent()
+    -- Byte-for-byte the shape loader_turtle.lua:91-92 puts on CH_LOCAL.
+    local msg = proto.encode(proto.MSG.LOADER_BEACON, "loader_1", "broadcast",
+        proto.payloadLoaderBeacon({ x = 0, y = 64, z = 0 }, nil))
+    return { "modem_message", "left", proto.CH_LOCAL, proto.CH_SERVER, msg }
+end
+
+local function serverBroadcastEvent()
+    -- central_server.lua:80 sendBroadcast's shape: from = "server".
+    local msg = proto.encode(proto.MSG.HEARTBEAT_ACK, "server", "broadcast",
+        { ts = 1 })
+    return { "modem_message", "left", proto.CH_BROADCAST, proto.CH_SERVER, msg }
+end
+
+local function repeated(fn, n)
+    local out = {}
+    for _ = 1, n do out[#out + 1] = fn() end
+    return out
+end
+
+local suite = {}
+
+suite["a broadcast from a non-server sender does NOT reset the missed-heartbeat counter"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- Six loader beacons, one per control-loop iteration, i.e. one every
+        -- 5s -- exactly loader_turtle.lua's BEACON_INTERVAL. MAX_MISSED = 3 at a
+        -- 5s heartbeat needs 15s of silence to trip, so before the fix this
+        -- beacon stream held the counter at 0 forever and serverDown was
+        -- unreachable for EVERY turtle in ender-modem range (i.e. all of them),
+        -- delivery included.
+        local base = runControlLoop(repeated(beaconEvent, 6))
+        assert_eq(base.isServerDown(), true,
+            "loader beacons must not suppress server-down detection")
+    end)
+end
+
+suite["a broadcast from the server DOES reset the missed-heartbeat counter"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- Same cadence, same addressing, only `from` differs. Guards against
+        -- over-fixing F1 by deleting the reset outright: that would make the
+        -- turtle declare the server down while the server is plainly talking.
+        local base = runControlLoop(repeated(serverBroadcastEvent, 6))
+        assert_eq(base.isServerDown(), false,
+            "server traffic must still prove the server is alive")
+    end)
+end
+
+-- ─── F3: bounded boot registration for the miner, unbounded for everyone else ─
+
+-- Drives base.init with a server that never answers. proto.receive is made to
+-- time out immediately (os.pullEvent always returns the timer it just started),
+-- so one REGISTER attempt costs exactly one sleep(5) and one transmit.
+local function initWithDeadServer(role, sleepBudget)
+    clearModules()
+    local eq = require("equipment")
+    stub.install({
+        fuel     = 100000,
+        equipped = { left = eq.ITEMS.MODEM, right = eq.ITEMS.CHUNKY },
+    })
+
+    -- proto.selfId() needs these; stub_cc models turtle/peripheral/fs but not
+    -- the computer identity, and base.init calls it first thing.
+    os.getComputerLabel = function() return role:lower() .. "_test" end
+    os.getComputerID    = function() return 1 end
+
+    local sent, sleeps, lastTimer = 0, 0, 0
+
+    local modem = {
+        open     = function() end,
+        isOpen   = function() return true end,
+        transmit = function() sent = sent + 1 end,
+    }
+    peripheral = { find = function(k) return k == "modem" and modem or nil end,
+                   getType = function() return nil end,
+                   wrap = function() return nil end }
+
+    os.epoch      = function() return 1000000 end
+    os.startTimer = function() lastTimer = lastTimer + 1; return lastTimer end
+    os.pullEvent  = function() return "timer", lastTimer end
+    sleep = function()
+        sleeps = sleeps + 1
+        if sleeps > sleepBudget then
+            error("UNBOUNDED: register() never gave up", 0)
+        end
+    end
+
+    gps = { locate = function() return 0, 64, 0 end }
+
+    local base = require("turtle_base")
+    local ok, err = pcall(base.init, role)
+    return ok, err, sent, sleeps
+end
+
+suite["a miner's boot registration gives up so loader recovery can run"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- Invariant E: a miner that reboots in the field with a loader placed
+        -- must retrieve it and come home with no server contact at all.
+        -- ore_turtle's recoverPlacedLoader runs AFTER base.init returns, so an
+        -- unbounded register() here means it never runs. A budget of 100 sleeps
+        -- is ~16x the bound, so tripping it means "loops forever", not "slow".
+        local ok, err, sent = initWithDeadServer(proto.ROLE.MINER, 100)
+        assert_eq(ok, true, "base.init must return for a miner with no server: " .. tostring(err))
+        -- 1 REGISTER per attempt; the HEARTBEAT/log traffic base.init does not
+        -- send means every transmit here is a registration attempt.
+        assert_eq(sent, 6, "expected exactly BOOT_REGISTER_ATTEMPTS attempts")
+    end)
+end
+
+for _, role in ipairs({ proto.ROLE.DELIVERY, proto.ROLE.SUPPORT }) do
+    suite[string.format(
+        "%s boot registration still blocks forever (unchanged)", role)] =
+    function(assert_eq)
+        withFakeRuntime(function()
+            -- The delivery/support/warehouse no-op guard for F3: these roles
+            -- must keep the original behaviour of never proceeding past
+            -- registration, so tripping the sleep budget is the PASS condition.
+            local ok, err, sent = initWithDeadServer(role, 100)
+            assert_eq(ok, false, role .. " must not gain a registration bound")
+            assert_eq(tostring(err):find("UNBOUNDED") ~= nil, true,
+                "expected the unbounded-loop guard, got: " .. tostring(err))
+            assert_eq(sent > 6, true,
+                "the loop must keep retrying past the miner's bound")
+        end)
+    end
+end
+
+-- ─── F4: the control-loop refuel path is pickaxe-protected ───────────────────
+
+-- Sets up a miner in TRAVEL mode: modem + chunky equipped, pickaxe stowed in
+-- slot 3. This is the state in which refuelFromChest places the fuel ender
+-- chest and cannot dig it back up.
+local function travelModeMiner(fuelLevel)
+    clearModules()
+    local eq = require("equipment")
+    local c = stub.install({
+        fuel     = fuelLevel,
+        equipped = { left = eq.ITEMS.MODEM, right = eq.ITEMS.CHUNKY },
+        inv      = {
+            [3]  = { name = eq.ITEMS.PICKAXE, count = 1 },
+            [15] = { name = "enderstorage:ender_chest", count = 1 },
+            [16] = { name = "enderstorage:ender_chest", count = 1 },
+        },
+    })
+    gps = { locate = function() return 0, 64, 0 end }
+    return c, require("turtle_base"), eq
+end
+
+-- ore_turtle.lua's withDigTool, reproduced here over the same equipment
+-- primitives it uses. Reproduced rather than imported because ore_turtle.lua
+-- cannot be required; the assertion below is about turtle_base ROUTING through
+-- whatever wrapper is installed, which is the half that was missing.
+local function makeWrapper(eq)
+    local calls = { n = 0 }
+    return calls, function(what, fn)
+        calls.n = calls.n + 1
+        if eq.sideOf("pickaxe") then return fn() end
+        local swapped = eq.toRetrieveMode()          -- modem -> pickaxe
+        if not swapped then return nil end
+        local ok, err = pcall(fn)
+        eq.retrievalSwapOut()                        -- pickaxe -> modem
+        if not ok then error(err, 0) end
+        return true
+    end
+end
+
+suite["ensureFuel's chest refuel runs with a pickaxe when a wrapper is installed"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        sleep = function() end
+        local c, base, eq = travelModeMiner(100)   -- below FUEL_CRITICAL (200)
+        local calls, wrapper = makeWrapper(eq)
+        base.setDigToolWrapper(wrapper)
+
+        -- Stand in for the real chest deploy so the assertion is about the
+        -- equipped state at the moment the chest would be placed and dug up.
+        local sawPickaxe, ran = nil, 0
+        base.fuel.refuelFromChest = function()
+            ran = ran + 1
+            sawPickaxe = eq.sideOf("pickaxe") ~= nil
+            c.fuel = 100000
+            return true
+        end
+
+        assert_eq(base.fuel.ensureFuel(), true)
+        assert_eq(ran, 1, "refuelFromChest must still actually be called")
+        assert_eq(calls.n, 1, "ensureFuel must route through the installed wrapper")
+        assert_eq(sawPickaxe, true,
+            "the fuel ender chest would be placed and abandoned without a pickaxe")
+        -- And the miner is back in travel mode: chunk loading was never traded.
+        assert_eq(eq.sideOf("modem") ~= nil, true, "modem must be restored")
+        assert_eq(eq.sideOf("chunky") ~= nil, true, "chunky must never come off")
+    end)
+end
+
+suite["ensureFuel with no wrapper installed calls refuelFromChest directly (delivery no-op)"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        sleep = function() end
+        local c, base, eq = travelModeMiner(100)
+        -- No setDigToolWrapper: this is delivery/support/warehouse.
+        local ran, leftSide, rightSide = 0, eq.sideOf("modem"), eq.sideOf("chunky")
+        base.fuel.refuelFromChest = function()
+            ran = ran + 1
+            c.fuel = 100000
+            return true
+        end
+
+        assert_eq(base.fuel.ensureFuel(), true)
+        assert_eq(ran, 1, "refuelFromChest must be called exactly as before")
+        assert_eq(eq.sideOf("modem"), leftSide, "no equipment swap may happen")
+        assert_eq(eq.sideOf("chunky"), rightSide, "no equipment swap may happen")
+    end)
+end
+
+-- ─── F2: pre-departure preflight ordering (source assertion only) ────────────
+
+suite["mineJob checks for an outstanding loader and travel equipment BEFORE departing"] =
+function(assert_eq)
+    -- WEAKER THAN THE TESTS ABOVE, and deliberately so: ore_turtle.lua cannot
+    -- be required under this harness, so the dispatch/fail spin itself is not
+    -- reachable here. What this does pin is the ordering that caused it -- both
+    -- guards must precede base.depart, or a miner with a failed retrieval
+    -- departs, fails validation, is auto-respawned a replacement job, and spins
+    -- roughly once a minute forever. Anchored on exact code lines, not on the
+    -- bare identifiers, so a mention in a comment cannot satisfy it.
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local departAt = src:find("local ok, err = base%.depart%(true%)")
+    assert_eq(departAt ~= nil, true, "mineJob's base.depart call moved or vanished")
+
+    local validateAt = src:find("local eqOk, eqReason = equipment%.validate%(\"travel\"%)")
+    assert_eq(validateAt ~= nil, true, "the travel-equipment check vanished")
+    assert_eq(validateAt < departAt, true,
+        "equipment.validate('travel') must run BEFORE base.depart")
+
+    local loaderGuardAt = src:find("loader_outstanding")
+    assert_eq(loaderGuardAt ~= nil, true, "the outstanding-loader guard is missing")
+    assert_eq(loaderGuardAt < departAt, true,
+        "the outstanding-loader guard must run BEFORE base.depart")
+
+    -- The failure must be non-retryable, or the server re-queues it anyway.
+    local guardBlock = src:sub(loaderGuardAt, departAt)
+    assert_eq(guardBlock:find("base%.sendFailed%(detail, false%)") ~= nil, true,
+        "the outstanding-loader failure must be reported as non-recoverable")
+end
+
+return suite

@@ -46,17 +46,31 @@ end
 -- those coordinates and can clear it. The opposite ordering (place, then
 -- record) would let a crash right after placement lose the loader with no
 -- record at all, which is the failure this module exists to prevent.
+-- Returns true once the record is on disk, or false, reason if it could not be
+-- written (a full disk makes fs.open return nil). The caller MUST NOT place the
+-- loader on a false return: without the record on disk, a crash after placement
+-- abandons the loader with nothing recording why -- the exact failure this
+-- module exists to prevent. Raising here instead would abort placeLoader from
+-- inside, which is survivable, but only by luck of where the pcall happens to
+-- sit; a checked return makes the contract explicit.
 function loader_state.record(x, y, z, sector, radius)
-    _cache = {
+    local rec = {
         x = x, y = y, z = z,
         sector = sector,
         radius = radius,
         placedAt = os.epoch("utc"),
     }
-    _loaded = true
     local f = fs.open(PATH, "w")
-    f.write(textutils.serialise(_cache))
+    if not f then
+        -- Leave _cache/_loaded alone: claiming a placement we could not persist
+        -- would be a lie in memory as well as on disk.
+        return false, "loader_state_write_failed"
+    end
+    f.write(textutils.serialise(rec))
     f.close()
+    _cache  = rec
+    _loaded = true
+    return true
 end
 
 -- Call this only AFTER retrieval is confirmed (the loader is back in

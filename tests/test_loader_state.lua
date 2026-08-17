@@ -68,6 +68,68 @@ return {
         assert_eq(ls2.get().x, 0)
     end,
 
+    ["a record that cannot be written fails closed instead of raising"] = function(assert_eq)
+        -- A full disk makes fs.open return nil. record() ran f.write on that
+        -- nil, which raised from inside mine_flow.placeLoader. Now it reports
+        -- the failure so placeLoader can refuse to place -- with the loader
+        -- still in inventory, which is the recoverable direction. It must also
+        -- not claim in memory to have a placement it never persisted.
+        local ls = fresh()
+        local realOpen = fs.open
+        fs.open = function(path, mode)
+            if mode == "w" then return nil end
+            return realOpen(path, mode)
+        end
+        local ok, wrote, reason = pcall(ls.record, 10, 64, 20, { sx = 0, sz = 0 }, 24)
+        fs.open = realOpen
+        assert_eq(ok, true, "record must not raise on a full disk: " .. tostring(wrote))
+        assert_eq(wrote, false, "record must report the write failure")
+        assert_eq(reason, "loader_state_write_failed")
+        assert_eq(ls.hasPlaced(), false,
+            "an unpersisted record must not be reported as a placement")
+    end,
+
+    ["placeLoader refuses to place a loader it could not record"] = function(assert_eq)
+        -- The half that matters: record()'s return value must actually gate
+        -- the placement, or the fix is a no-op at the only call site.
+        local eq = require("equipment")
+        local c = stub.install({
+            equipped = { left = eq.ITEMS.MODEM, right = eq.ITEMS.CHUNKY },
+            inv      = { [1]  = { name = eq.ITEMS.SCANNER,       count = 1 },
+                         [2]  = { name = eq.ITEMS.LOADER_TURTLE, count = 1 },
+                         [3]  = { name = eq.ITEMS.PICKAXE,       count = 1 },
+                         [15] = { name = "enderstorage:ender_chest", count = 1 },
+                         [16] = { name = "enderstorage:ender_chest", count = 1 } },
+            pos      = { x = 0, y = 80, z = 0, facing = 2 },
+            world    = {},
+        })
+        for _, m in ipairs({ "loader_state", "mine_flow", "geofence" }) do
+            package.loaded[m] = nil
+        end
+        local flow = require("mine_flow")
+        local gf   = require("geofence")
+        flow.setHooks({
+            reportPhase = function() end,
+            log         = function() end,
+            pos         = function() return { x = 0, y = 80, z = 0, facing = 2 } end,
+            pump        = function() end,
+        })
+
+        local realOpen = fs.open
+        fs.open = function(path, mode)
+            if mode == "w" then return nil end
+            return realOpen(path, mode)
+        end
+        local ok, reason = flow.placeLoader(2, { cx = 0, cz = 0 })
+        fs.open = realOpen
+
+        assert_eq(ok, false, "placement must be refused when the record failed")
+        assert_eq(reason, "loader_state_write_failed")
+        assert_eq(c.inv[2] ~= nil, true, "the loader must still be in inventory")
+        assert_eq(eq.sideOf("chunky") ~= nil, true, "chunky must not be surrendered")
+        assert_eq(gf.isActive(), false, "no fence may be armed")
+    end,
+
     ["corrupt state file is treated as no loader, not a crash"] = function(assert_eq)
         local ls = fresh()
         local f = fs.open("loader_state.dat", "w")

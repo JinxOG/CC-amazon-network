@@ -139,6 +139,25 @@ base.geofence = _geofence
 local _customRefuelFn = nil
 function base.setRefuelFn(fn)    _customRefuelFn = fn    end
 
+-- Optional wrapper that guarantees a pickaxe is equipped for the duration of
+-- the function it is handed: wrapper(what, fn).
+--
+-- fuel.refuelFromChest PLACES the fuel ender chest and then digs it back up. A
+-- solo miner in travel mode has chunky where the pickaxe would be, so that dig
+-- silently fails and the chest is left standing in the world -- the miner can
+-- then never refuel again, which is a permanent field freeze, not "item loss".
+-- base.setRefuelFn already protects the FORCE_REFUEL path; this is the same
+-- protection for the fuel.ensureFuel path in the control loop, which is the
+-- critical one.
+--
+-- Only ore_turtle installs one (equipment.toRetrieveMode / retrievalSwapOut are
+-- miner-only concepts). Delivery, support and warehouse turtles leave this nil
+-- and ensureFuel calls refuelFromChest directly, exactly as before -- they carry
+-- a permanent pickaxe (or, for support, cannot dig at all, which this wrapper
+-- could not change anyway).
+local _digToolWrapper = nil
+function base.setDigToolWrapper(fn) _digToolWrapper = fn end
+
 function base.isInsideBuilding(pos)
     return pos.y >= CFG.FLOOR_Y
         and pos.x >= BUILDING.minX and pos.x <= BUILDING.maxX
@@ -1223,6 +1242,32 @@ function fuel.dockRefuel()
     return gained > 0
 end
 
+-- refuelFromChest, run through the installed dig-tool wrapper when there is one.
+-- With no wrapper installed (delivery / support / warehouse) this is literally
+-- `return fuel.refuelFromChest()`.
+--
+-- pcall'd because withDigTool re-raises anything the body threw after putting
+-- the modem back; ensureFuel runs inside controlLoop, and an error escaping here
+-- kills the whole parallel.waitForAny runner (i.e. the running job).
+function fuel.protectedRefuelFromChest()
+    if not _digToolWrapper then return fuel.refuelFromChest() end
+    local result = false
+    local ok, ran = pcall(_digToolWrapper, "critical refuel", function()
+        result = fuel.refuelFromChest()
+    end)
+    if not ok then
+        logWarn("Guarded refuel failed: " .. tostring(ran))
+        return false
+    end
+    -- The wrapper returns nil when it could not equip a pickaxe at all; it did
+    -- not run the body, so nothing was placed and nothing was abandoned.
+    if ran == nil then
+        logWarn("Guarded refuel skipped — no pickaxe available")
+        return false
+    end
+    return result
+end
+
 local MAX_FUEL_RETRIES = 5
 
 function fuel.ensureFuel()
@@ -1240,7 +1285,7 @@ function fuel.ensureFuel()
             comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
                 proto.STATUS.ERROR, fuel.level(), base.getPos(), _self.jobId))
         end
-        local ok = fuel.refuelFromChest()
+        local ok = fuel.protectedRefuelFromChest()
         if not ok or fuel.isCritical() then
             -- GPS resync before reporting ERROR position — corrects position if turtle
             -- was physically relocated (e.g. player moved it to dock while stuck).
@@ -1266,7 +1311,28 @@ base.fuel = fuel
 
 -- ─── Registration ────────────────────────────────────────────────────────────
 
-local function register()
+-- Attempts the MINER role's BOOT registration is allowed before base.init gives
+-- up and returns. ~6 * (REGISTER_TIMEOUT + 5s) = about a minute of trying.
+--
+-- Why only the miner, and only at boot: this loop blocking forever is correct
+-- for a turtle that cannot do anything useful without the server. A solo miner
+-- that reboots in the field with a chunk loader PLACED is the one exception --
+-- ore_turtle's recoverPlacedLoader runs after base.init returns, so an
+-- unbounded wait here means the loader is never retrieved and the miner never
+-- comes home, which is exactly the no-server-contact invariant. Every other
+-- role passes maxAttempts = nil and gets the original unbounded loop, so
+-- delivery/support/warehouse boot behaviour is byte-for-byte unchanged.
+local BOOT_REGISTER_ATTEMPTS = 6
+
+-- Returns true once the server ACKs. Returns false only when maxAttempts is set
+-- and exhausted; with maxAttempts nil it never returns false.
+--
+-- Deliberately does NOT set _self.serverDown on giving up. serverDown is only
+-- ever cleared inside this function's success branch, and sendHeartbeat only
+-- calls register() once _missedHeartbeats trips -- which never happens while
+-- the server is ACKing. Setting it here could therefore latch a turtle into a
+-- permanent serverDown that nothing clears if the server was in fact up.
+local function register(maxAttempts)
     -- Small delay so ender modem has time to connect after boot
     sleep(2)
 
@@ -1301,7 +1367,14 @@ local function register()
                 _self.serverDown = false
             end
             logInfo("Registered successfully.")
-            return
+            return true
+        end
+
+        if maxAttempts and attempt >= maxAttempts then
+            logWarn(string.format(
+                "No response from server after %d attempts — continuing unregistered. "
+                .. "Heartbeats will keep retrying.", attempt))
+            return false
         end
 
         -- Not connected yet — wait and retry automatically (no reboot needed)
@@ -1450,7 +1523,10 @@ function base.init(role)
     comms.init()
     initPosition()
     fuel.refuel()
-    register()
+    -- Miner only: bounded so a field reboot with a placed loader can get to
+    -- ore_turtle's recoverPlacedLoader without the server. nil (unbounded, the
+    -- original behaviour) for every other role.
+    register(role == proto.ROLE.MINER and BOOT_REGISTER_ATTEMPTS or nil)
     -- If not physically at assigned dock, home there now before accepting any jobs.
     -- This corrects position mismatches caused by crashes, reassignments, or reboots.
     -- Only runs when inside the building at floor level (safe to use internal taxiway).
@@ -1534,7 +1610,34 @@ function base.run(jobHandler)
                     local valid, msg = proto.decode(parsed)
                     if valid and (msg.to == _self.id or msg.to == "broadcast") then
 
-                        resetMissedHeartbeats()
+                        -- ONLY the server's own traffic is evidence the server
+                        -- is alive. Every server->turtle message carries
+                        -- from = "server" (central_server.lua sendTo/
+                        -- sendBroadcast are the only two senders), so this gate
+                        -- is exact.
+                        --
+                        -- Resetting on *any* addressed message was a fleet-wide
+                        -- fault, not a miner-only one: a placed chunk loader
+                        -- broadcasts LOADER_BEACON to "broadcast" on CH_LOCAL
+                        -- every 5s (loader_turtle.lua), every turtle opens
+                        -- CH_LOCAL, and the modems are ender modems with
+                        -- effectively unlimited range. MAX_MISSED=3 at a 5s
+                        -- heartbeat needs 15s to trip, so one loader standing
+                        -- anywhere in the world held _missedHeartbeats at 0 for
+                        -- EVERY turtle. That suppressed the missed-ACK
+                        -- re-registration path in sendHeartbeat -- which is the
+                        -- only way a running turtle rejoins the server's
+                        -- in-memory registry after a restart -- for delivery and
+                        -- support too, and made base.isServerDown() permanently
+                        -- false exactly when a loader was out.
+                        --
+                        -- Partner traffic (POSITION_UPDATE, SUPPORT_STAGED, ...)
+                        -- and warehouse traffic (from = "warehouse") are not
+                        -- evidence about the server either, so this gate is
+                        -- strictly more correct than resetting on all of them.
+                        if msg.from == "server" then
+                            resetMissedHeartbeats()
+                        end
 
                     if msg.type == proto.MSG.JOB_ASSIGN and not _self.busy then
                             local job = msg.payload

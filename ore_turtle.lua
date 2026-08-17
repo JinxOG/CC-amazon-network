@@ -406,6 +406,14 @@ end
 -- refuelFromChest deploys the entangled chest and breaks it again to recover
 -- it, so it needs a pickaxe just like the dump does. FORCE_REFUEL arrives while
 -- the miner is docked and idle — i.e. in travel mode, with the pickaxe stowed.
+-- The other refuel path: fuel.ensureFuel() in turtle_base's control loop calls
+-- refuelFromChest directly, and that PLACES the fuel ender chest and digs it
+-- back up. Unwrapped, a miner in travel mode (chunky on the tool side) places
+-- the chest, fails to dig it, and is left unable to ever refuel again. Handing
+-- base the same withDigTool used everywhere else here closes that path; roles
+-- that never install a wrapper keep calling refuelFromChest directly.
+base.setDigToolWrapper(withDigTool)
+
 base.setRefuelFn(function()
     withDigTool("force refuel", function()
         while turtle.getFuelLevel() < turtle.getFuelLimit() do
@@ -1013,13 +1021,27 @@ local function mineJob(job)
         recallReturn("reboot_recovery", true)
         return
     end
-    base.setStatus(proto.STATUS.TRAVELLING, jobId)
-    base.sendProgress("Departing for mining zone")
-    reportPhase(proto.PHASE.DEPARTING)
-
-    local ok, err = base.depart(true)  -- stay at floor level, ascend directly
-    if not ok then
-        base.sendFailed("departure_failed: " .. (err or "?"), true)
+    -- ── Pre-departure preflight ──────────────────────────────────────────────
+    -- Both checks below MUST run before base.depart, not after it.
+    --
+    -- A miner whose retrieval failed still has its loader standing in the world
+    -- and nothing in slot 2, so equipment.validate("travel") returns
+    -- loader_turtle_missing. Run after departing, that produced: FAILED job ->
+    -- server auto-respawns a replacement MINE job -> the dispatcher hands it
+    -- straight back to the same (now idle) miner -> repeat. Roughly once a
+    -- minute, forever, since no sector can ever complete -- and each cycle left
+    -- the miner parked at the dispatch hole instead of its dock, burning fuel on
+    -- the way there. Nothing cleared it: recoverPlacedLoader's docked branch
+    -- deliberately returns with the record intact.
+    --
+    -- Checking first means the miner never leaves its dock, and the distinct
+    -- non-retryable reasons tell an operator which of the two states it is in.
+    if loader_state.hasPlaced() then
+        local s = loader_state.get()
+        local detail = string.format("loader_outstanding at %d,%d,%d", s.x, s.y, s.z)
+        print("[MINER] Refusing job — " .. detail)
+        base.sendProgress(detail .. " — collect it by hand or clear loader_state.dat")
+        base.sendFailed(detail, false)
         _jobId = nil
         return
     end
@@ -1030,6 +1052,17 @@ local function mineJob(job)
         print("[MINER] Equipment check failed: " .. tostring(eqReason))
         base.sendProgress("equipment_invalid: " .. tostring(eqReason))
         base.sendFailed("equipment_invalid: " .. tostring(eqReason), false)
+        _jobId = nil
+        return
+    end
+
+    base.setStatus(proto.STATUS.TRAVELLING, jobId)
+    base.sendProgress("Departing for mining zone")
+    reportPhase(proto.PHASE.DEPARTING)
+
+    local ok, err = base.depart(true)  -- stay at floor level, ascend directly
+    if not ok then
+        base.sendFailed("departure_failed: " .. (err or "?"), true)
         _jobId = nil
         return
     end

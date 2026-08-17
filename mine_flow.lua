@@ -302,7 +302,13 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     -- Persist the "a loader is about to leave our inventory" fact BEFORE it
     -- actually does: a crash between here and the confirmed-standing check
     -- below must leave a record a recovery pass can act on, never silence.
-    loader_state.record(tx, p.y, tz, anchorChunk, chunkRadius)
+    -- A record we could not write is a loader we must not place: the whole
+    -- record-before-place ordering exists so a crash errs toward "we may have
+    -- one out there". Fail closed with the loader still in inventory.
+    local recorded, recErr = loader_state.record(tx, p.y, tz, anchorChunk, chunkRadius)
+    if not recorded then
+        return false, recErr or "loader_state_write_failed"
+    end
 
     if not turtle.place() then
         -- A known-clean failure, not a crash: the item never left the
