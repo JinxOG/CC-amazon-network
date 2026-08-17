@@ -12,6 +12,7 @@ local files = {
     "tests.test_mine_phase",
     "tests.test_mine_flow",
     "tests.test_miner_hooks",
+    "tests.test_delivery_support",
 }
 
 local passed, failed = 0, 0

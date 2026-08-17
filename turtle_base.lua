@@ -1050,15 +1050,6 @@ end
 -- Both roles: only use slots 1-BURN_MAX for fuel operations.
 local BURN_MAX = 14   -- updated to CHEST_SLOT-1 (min 14) in base.init()
 
--- Support turtle coal reserve slots — carried on-board for field self-refueling.
--- Support has no EC or pickaxe; coal slots replace the old FUEL_LOW handshake.
-local COAL_SLOTS = { 13, 14 }
-local COAL_ITEM_NAMES = {
-    ["minecraft:coal"]       = true,
-    ["minecraft:charcoal"]   = true,
-    ["minecraft:coal_block"] = true,
-}
-
 -- Quick scan of inventory slots 1-BURN_MAX for any loose burnable items (used on boot).
 -- Skips if already at max fuel to avoid wasting coal from previous runs.
 function fuel.refuel()
@@ -1230,45 +1221,6 @@ function fuel.dockRefuel()
         logWarn("Dock refuel: no coal found in station — check chest below dock!")
     end
     return gained > 0
-end
-
--- Burn coal from COAL_SLOTS (support self-refueling, no EC required).
--- Returns true if any fuel was gained, false if coal slots are empty.
-function fuel.selfRefuel()
-    local before = fuel.level()
-    for _, slot in ipairs(COAL_SLOTS) do
-        local item = turtle.getItemDetail(slot)
-        if item and COAL_ITEM_NAMES[item.name] then
-            turtle.select(slot)
-            turtle.refuel()
-        end
-    end
-    turtle.select(1)
-    local gained = fuel.level() - before
-    if gained > 0 then
-        logInfo(string.format("Self-refueled +%d from coal slots (now %d)", gained, fuel.level()))
-    end
-    return gained > 0
-end
-
--- Pre-fill COAL_SLOTS from the dock chest (called at mining support departure).
--- Sucks coal into slots 13 and 14 only; never touches slots 1-12 or 15-16.
-function fuel.dockFillCoal()
-    local suckFns = { turtle.suckDown, turtle.suckUp, turtle.suck }
-    local filled = 0
-    for _, slot in ipairs(COAL_SLOTS) do
-        if turtle.getItemCount(slot) == 0 then
-            turtle.select(slot)
-            for _, suckFn in ipairs(suckFns) do
-                if suckFn(64) then filled = filled + 1; break end
-            end
-        else
-            filled = filled + 1  -- already has coal
-        end
-    end
-    turtle.select(1)
-    logInfo(string.format("Coal pre-fill: %d/%d slot(s) loaded", filled, #COAL_SLOTS))
-    return filled > 0
 end
 
 local MAX_FUEL_RETRIES = 5
