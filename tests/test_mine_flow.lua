@@ -881,4 +881,123 @@ return {
         assert_eq(ok, false)
         assert_eq(reason, "no_loader_recorded")
     end,
+
+    -- ─── retrieveLoader: normalising the loader back into slot 2 ──────────
+    -- Field defect: turtle.dig() deposits the retrieved loader into whatever
+    -- slot real CC:Tweaked's inventory-add algorithm picks (typically the
+    -- currently-selected tool slot, or the first free slot it can find) --
+    -- never necessarily equipment.SLOTS.LOADER (slot 2). Left uncorrected,
+    -- the loader permanently occupies a mining slot (reducing ore capacity)
+    -- while slot 2 sits empty, and the next boot's initProtectedSlots can no
+    -- longer populate protectedSlotNames[S_LOADER], degrading rescue.
+
+    ["retrieveLoader normalises the loader into slot 2 when the dig lands it in a mining slot"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = nil -- loader placed, not carried
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        -- Force the dug loader to land in a mining slot (6) rather than its
+        -- home slot (2), reproducing the field-observed outcome directly
+        -- rather than depending on exactly which slot the stub's own
+        -- dig()-collection scan happens to pick.
+        local origDig = turtle.dig
+        turtle.dig = function()
+            local ok = origDig()
+            if ok then
+                for s = 1, 16 do
+                    local it = turtle.getItemDetail(s)
+                    if it and it.name == eqm.ITEMS.LOADER_TURTLE and s ~= 6 then
+                        turtle.select(s)
+                        turtle.transferTo(6)
+                        break
+                    end
+                end
+            end
+            return ok
+        end
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, true, reason)
+        local home = turtle.getItemDetail(eq.SLOTS.LOADER)
+        assert_eq(home ~= nil and home.name, eqm.ITEMS.LOADER_TURTLE,
+            "loader must be normalised back into equipment.SLOTS.LOADER")
+        assert_eq(turtle.getItemDetail(6), nil,
+            "the mining slot it landed in must be empty once normalised")
+    end,
+
+    ["retrieveLoader leaves the loader alone when it already dug straight into slot 2"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = nil -- loader placed, not carried
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        -- The stub's own dig()-collection scan already lands the loader in
+        -- slot 2 here (it is the lowest empty slot at dig time), so this
+        -- exercises the true no-op path. Proven by making any transferTo
+        -- call an error: normalisation must not even attempt to move
+        -- anything once the loader is already home.
+        turtle.transferTo = function()
+            error("transferTo must not be called -- the loader is already in slot 2")
+        end
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, true, reason)
+        local home = turtle.getItemDetail(eq.SLOTS.LOADER)
+        assert_eq(home ~= nil and home.name, eqm.ITEMS.LOADER_TURTLE)
+    end,
+
+    ["retrieveLoader relocates an occupant already sitting in slot 2 rather than destroying it, then moves the loader home"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = { name = "minecraft:cobblestone", count = 5 } -- occupies the loader's home slot
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        -- Force the dug loader to land somewhere other than slot 2 (which
+        -- is unavailable anyway, since it's occupied), landing in slot 6.
+        local origDig = turtle.dig
+        turtle.dig = function()
+            local ok = origDig()
+            if ok then
+                for s = 1, 16 do
+                    local it = turtle.getItemDetail(s)
+                    if it and it.name == eqm.ITEMS.LOADER_TURTLE and s ~= 6 then
+                        turtle.select(s)
+                        turtle.transferTo(6)
+                        break
+                    end
+                end
+            end
+            return ok
+        end
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, true, reason)
+
+        local home = turtle.getItemDetail(eq.SLOTS.LOADER)
+        assert_eq(home ~= nil and home.name, eqm.ITEMS.LOADER_TURTLE,
+            "loader must end up in its home slot even though something else was sitting there")
+
+        -- The displaced cobblestone must survive somewhere, never be
+        -- dropped or overwritten.
+        local foundCobble, cobbleCount = false, 0
+        for s = 1, 16 do
+            local it = turtle.getItemDetail(s)
+            if it and it.name == "minecraft:cobblestone" then
+                foundCobble = true
+                cobbleCount = cobbleCount + it.count
+            end
+        end
+        assert_eq(foundCobble, true, "the slot-2 occupant must be relocated, not destroyed")
+        assert_eq(cobbleCount, 5, "not a single item of the occupant may be lost")
+    end,
 }

@@ -370,6 +370,52 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     return true
 end
 
+-- After a retrieval has confirmed the loader is physically back in
+-- inventory, move it into its home slot (equipment.SLOTS.LOADER) so it never
+-- permanently occupies a mining slot and so ore_turtle.lua's
+-- initProtectedSlots finds it where it expects on the next boot.
+-- turtle.dig()'s real inventory-add algorithm deposits into whatever slot it
+-- picks (typically the currently-selected tool slot, or the first free
+-- slot) -- never necessarily slot 2 -- so this cannot be assumed to have
+-- already happened.
+--
+-- Never destroys anything: if slot 2 is occupied by something else (most
+-- plausibly the upgrade the retrieval swap stowed there), that occupant is
+-- relocated to any other free/compatible slot first, never overwritten or
+-- dropped. If there's nowhere to put either item, this gives up quietly --
+-- the caller must treat that as non-fatal, since the loader is already
+-- safe in inventory by the time this runs.
+local function normalizeLoaderSlot()
+    local home = equipment.SLOTS.LOADER
+    local loaderSlot = equipment.findSlot(equipment.ITEMS.LOADER_TURTLE)
+    if not loaderSlot then return false, "loader_not_found_for_normalise" end
+    if loaderSlot == home then return true end -- already home; no-op
+
+    if turtle.getItemDetail(home) then
+        -- Home slot is taken by something else -- move IT out of the way
+        -- first. transferTo merges into a matching stack if one exists, or
+        -- lands in the first slot that will take it otherwise; either way
+        -- nothing is destroyed.
+        turtle.select(home)
+        local relocated = false
+        for s = 1, 16 do
+            if s ~= home and turtle.transferTo(s) then
+                relocated = turtle.getItemDetail(home) == nil
+                if relocated then break end
+            end
+        end
+        if not relocated then
+            return false, "loader_home_slot_occupied"
+        end
+    end
+
+    turtle.select(loaderSlot)
+    if not turtle.transferTo(home) then
+        return false, "loader_normalise_transfer_failed"
+    end
+    return true
+end
+
 -- Restore self-loading, then take the loader back. Never dig it up first,
 -- and never dig on trust: turtle.detect() alone only proves SOMETHING is in
 -- front of the miner, not that it's our loader. A block that happens to be
@@ -476,6 +522,14 @@ function mine_flow.retrieveLoader()
     geofence.clear()
     _expectedLoaderPos = nil
     _lastBeaconAt = nil
+
+    -- Tidy-up only, never a retrieval failure: the loader is already
+    -- physically recovered above, so a problem here just gets logged.
+    local normalised, normErr = normalizeLoaderSlot()
+    if not normalised then
+        log("Could not return loader to its home slot: " .. tostring(normErr) ..
+            " -- loader is safely in inventory, continuing.")
+    end
 
     local restored, why = equipment.retrievalSwapOut()
     if not restored then
