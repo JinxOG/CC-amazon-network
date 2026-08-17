@@ -134,9 +134,24 @@ function equipment.validate(mode)
 end
 
 -- Swap the item in `slot` onto `side`. Returns ok, reason.
+--
+-- Written as a plain if/else, NOT as `(side == "left") and turtle.equipLeft()
+-- or turtle.equipRight()`. That idiom is broken for anything that can return
+-- false: when equipLeft() fails, the `and` yields false and the `or` then runs
+-- equipRight(), silently equipping onto the OPPOSITE side and reporting
+-- success. In retrievalSwapOut (modem back onto the tool side) that fall-through
+-- lands the modem on CHUNKY's side instead -- the miner is unloaded, in the
+-- field, with the loader already dug up. Found by tests/test_full_job.lua.
+-- The idiom also truncated `err` to one value, so every failure reported
+-- "equip_failed:nil".
 local function swap(slot, side)
     turtle.select(slot)
-    local ok, err = (side == "left") and turtle.equipLeft() or turtle.equipRight()
+    local ok, err
+    if side == "left" then
+        ok, err = turtle.equipLeft()
+    else
+        ok, err = turtle.equipRight()
+    end
     if not ok then return false, "equip_failed:" .. tostring(err) end
     return true
 end
