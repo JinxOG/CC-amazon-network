@@ -4,9 +4,10 @@
 --   pastebin run <install_id> delivery
 --   pastebin run <install_id> support
 --   pastebin run <install_id> miner
+--   pastebin run <install_id> loader
 --
 -- Or copy install.lua to the computer and run:
---   install server | install delivery | install support | install miner
+--   install server | install delivery | install support | install miner | install loader
 
 local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
 
@@ -23,6 +24,11 @@ local FILES = {
     admin_ui        = "admin_ui.lua",
     warehouse       = "warehouse.lua",
     warehouse_test  = "warehouse_test.lua",
+    equipment       = "equipment.lua",
+    geofence        = "geofence.lua",
+    loader_state    = "loader_state.lua",
+    mine_flow       = "mine_flow.lua",
+    loader_turtle   = "loader_turtle.lua",
 }
 
 local PROFILES = {
@@ -59,11 +65,20 @@ local PROFILES = {
         { src = FILES.support_turtle, name = "startup.lua"     },
     },
     miner = {
-        { src = FILES.protocol,    name = "protocol.lua"    },
-        { src = FILES.updater,     name = "updater.lua"     },
-        { src = FILES.waypoints,   name = "waypoints.lua"   },
-        { src = FILES.turtle_base, name = "turtle_base.lua" },
-        { src = FILES.ore_turtle,  name = "startup.lua"     },
+        { src = FILES.protocol,     name = "protocol.lua"     },
+        { src = FILES.updater,      name = "updater.lua"      },
+        { src = FILES.waypoints,    name = "waypoints.lua"    },
+        { src = FILES.turtle_base,  name = "turtle_base.lua"  },
+        { src = FILES.equipment,    name = "equipment.lua"    },
+        { src = FILES.geofence,     name = "geofence.lua"     },
+        { src = FILES.loader_state, name = "loader_state.lua" },
+        { src = FILES.mine_flow,    name = "mine_flow.lua"    },
+        { src = FILES.ore_turtle,   name = "startup.lua"      },
+    },
+    loader = {
+        { src = FILES.protocol,      name = "protocol.lua" },
+        { src = FILES.updater,       name = "updater.lua"  },
+        { src = FILES.loader_turtle, name = "startup.lua"  },
     },
 }
 
@@ -79,14 +94,14 @@ end
 
 local role = arg and arg[1]
 if not role then
-    io.write("Install as [server/delivery/support/miner]: ")
+    io.write("Install as [server/delivery/support/miner/loader]: ")
     role = io.read()
 end
 role = role:lower():gsub("%s+", "")
 
 local files = PROFILES[role]
 if not files then
-    print("Unknown role '" .. role .. "'. Use: server, delivery, support, or miner")
+    print("Unknown role '" .. role .. "'. Use: server, delivery, support, miner, or loader")
     return
 end
 

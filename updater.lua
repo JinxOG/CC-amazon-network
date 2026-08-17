@@ -6,6 +6,7 @@
 --   DELIVERY   (delivery turtle)
 --   SUPPORT    (support/chunk-loader turtle)
 --   MINER      (ore mining turtle)
+--   LOADER     (placed chunk-loader turtle, solo-mining sector flow)
 --   WAREHOUSE  (warehouse computer)
 --   SERVER     (central server computer)
 --   ADMIN      (admin UI monitor computer)
@@ -33,7 +34,14 @@ local ROLE_FILES = {
     },
     MINER     = {
         "turtle_base.lua",
+        "equipment.lua",
+        "geofence.lua",
+        "loader_state.lua",
+        "mine_flow.lua",
         { src = "ore_turtle.lua", dst = "startup.lua" },
+    },
+    LOADER    = {
+        { src = "loader_turtle.lua", dst = "startup.lua" },
     },
     WAREHOUSE = {
         { src = "warehouse.lua", dst = "startup.lua" },
@@ -70,13 +78,13 @@ end
 if not role then
     print("ERROR: No role.txt found!")
     print("Usage: updater <ROLE>  or create role.txt manually")
-    print("Valid roles: DELIVERY SUPPORT MINER WAREHOUSE SERVER ADMIN")
+    print("Valid roles: DELIVERY SUPPORT MINER LOADER WAREHOUSE SERVER ADMIN")
     return
 end
 
 if not ROLE_FILES[role] then
     print("ERROR: Unknown role '" .. tostring(role) .. "'")
-    print("Valid roles: DELIVERY SUPPORT MINER WAREHOUSE SERVER ADMIN")
+    print("Valid roles: DELIVERY SUPPORT MINER LOADER WAREHOUSE SERVER ADMIN")
     return
 end
 
