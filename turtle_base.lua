@@ -1259,12 +1259,10 @@ function fuel.protectedRefuelFromChest()
         logWarn("Guarded refuel failed: " .. tostring(ran))
         return false
     end
-    -- The wrapper returns nil when it could not equip a pickaxe at all; it did
-    -- not run the body, so nothing was placed and nothing was abandoned.
-    if ran == nil then
-        logWarn("Guarded refuel skipped — no pickaxe available")
-        return false
-    end
+    -- `result` is initialised to false and only ever set inside the injected
+    -- body, so it already carries the right answer for both of withDigTool's
+    -- paths: false if the body never ran (no pickaxe available, nothing
+    -- placed), or whatever fuel.refuelFromChest() actually returned if it did.
     return result
 end
 

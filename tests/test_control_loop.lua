@@ -238,6 +238,26 @@ local function travelModeMiner(fuelLevel)
     return c, require("turtle_base"), eq
 end
 
+-- Sets up a miner in MINE mode: modem + pickaxe equipped, chunky stowed in
+-- slot 3. This is the dominant state whenever ensureFuel fires mid-sector --
+-- withDigTool short-circuits here (`if equipment.sideOf("pickaxe") then
+-- return fn() end`) instead of taking the swap path.
+local function mineModeMiner(fuelLevel)
+    clearModules()
+    local eq = require("equipment")
+    local c = stub.install({
+        fuel     = fuelLevel,
+        equipped = { left = eq.ITEMS.MODEM, right = eq.ITEMS.PICKAXE },
+        inv      = {
+            [3]  = { name = eq.ITEMS.CHUNKY, count = 1 },
+            [15] = { name = "enderstorage:ender_chest", count = 1 },
+            [16] = { name = "enderstorage:ender_chest", count = 1 },
+        },
+    })
+    gps = { locate = function() return 0, 64, 0 end }
+    return c, require("turtle_base"), eq
+end
+
 -- ore_turtle.lua's withDigTool, reproduced here over the same equipment
 -- primitives it uses. Reproduced rather than imported because ore_turtle.lua
 -- cannot be required; the assertion below is about turtle_base ROUTING through
@@ -302,6 +322,38 @@ function(assert_eq)
         assert_eq(ran, 1, "refuelFromChest must be called exactly as before")
         assert_eq(eq.sideOf("modem"), leftSide, "no equipment swap may happen")
         assert_eq(eq.sideOf("chunky"), rightSide, "no equipment swap may happen")
+    end)
+end
+
+suite["protectedRefuelFromChest reports true when a pickaxe is already equipped (mine mode)"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        sleep = function() end
+        -- Mine mode: withDigTool's `if equipment.sideOf("pickaxe") then return
+        -- fn() end` short-circuit fires, so the wrapper itself returns fn()'s
+        -- return value -- which is nil, because the injected body
+        -- (`function() result = fuel.refuelFromChest() end`) returns nothing.
+        -- The bug: protectedRefuelFromChest mistook that nil for "could not
+        -- equip a pickaxe at all" and reported false even though the refuel
+        -- underneath had already succeeded.
+        local c, base, eq = mineModeMiner(100)
+        local calls, wrapper = makeWrapper(eq)
+        base.setDigToolWrapper(wrapper)
+
+        local ran = 0
+        base.fuel.refuelFromChest = function()
+            ran = ran + 1
+            c.fuel = 100000
+            return true
+        end
+
+        assert_eq(base.fuel.protectedRefuelFromChest(), true,
+            "a refuel that actually succeeded while a pickaxe was already equipped must report true")
+        assert_eq(ran, 1, "refuelFromChest must have actually run")
+        assert_eq(calls.n, 1, "must route through the installed wrapper")
+        -- The short-circuit path never swaps: still in mine mode afterward.
+        assert_eq(eq.sideOf("pickaxe") ~= nil, true, "pickaxe must remain equipped")
+        assert_eq(eq.sideOf("modem") ~= nil, true, "modem must remain equipped")
     end)
 end
 
