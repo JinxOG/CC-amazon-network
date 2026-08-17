@@ -121,11 +121,28 @@
         }
         .tcard.is-new { animation:cardIn .2s ease forwards; }
         .tcard.offline { opacity:.45; }
+        /* A critical disconnect (stuck swap / lost mid-phase) must stay legible,
+           not fade with the plain-offline treatment above — it needs eyes on it. */
+        .tcard.alert-critical { border-color:#ff444455; box-shadow:0 0 8px #ff444422; }
         .tcard-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
         .tcard-name { font-size:14px; letter-spacing:1px; margin-bottom:2px; }
         .tcard-name.d { color:#00ff88; text-shadow:0 0 6px #00ff8833; }
         .tcard-name.s { color:#4488ff; text-shadow:0 0 6px #4488ff33; }
+        .tcard-name.l { color:#ffaa44; text-shadow:0 0 6px #ffaa4433; }
         .tcard-sub { font-size:10px; color:#6a7a8a; letter-spacing:1px; }
+        .tc-conn.neutral  { color:#8899aa; }
+        .tc-conn.critical { color:#ff4444; text-shadow:0 0 4px #ff444455; }
+        .tc-conn.offline  { color:#555; }
+        .tc-phase-row { margin-top:-2px; }
+        .tc-fence { color:#4a5a6a; margin-left:4px; }
+        /* ── Loader (chunk-anchor) cards — inventory, not a worker; never a
+           fleet-capacity number, never a fuel/offline alarm ── */
+        .tc-loader-status {
+            font-size:10px; letter-spacing:1px; margin-top:8px; padding:5px 8px;
+            border-radius:2px; border:1px solid #2a2a4a; color:#7a8a9a; background:#0a0a14;
+        }
+        .tc-loader-status.warn { color:#ffaa44; background:#1a1200; border-color:#ffaa4433; }
+        .tc-loader-status.dim  { color:#5a6a7a; }
         .fuel-track { background:#040407; height:3px; border-radius:2px; margin:6px 0; }
         .fuel-fill { height:100%; border-radius:2px; transition:width .6s ease; }
         .fuel-fill.ok   { background:linear-gradient(90deg,#00ff88,#00ccaa); box-shadow:0 0 4px #00ff8844; }
@@ -145,6 +162,7 @@
         .sbadge.RETURNING  { background:#1a0a2a; color:#aa66ff; border-color:#aa66ff22; animation:badgeGlowPurple 1.8s ease-in-out infinite; }
         .sbadge.ERROR      { background:#2a0a0a; color:#ff4444; border-color:#ff444422; animation:critBlink 1s ease-in-out infinite; }
         .sbadge.OFFLINE, .sbadge.UNKNOWN { background:#1a1a2a; color:#555; border-color:#2a2a3a; }
+        .sbadge.LOADER     { background:#1a1200; color:#ffaa44; border-color:#ffaa4422; }
 
         /* ── Shared buttons ── */
         .pbtn {
@@ -1447,13 +1465,17 @@ function renderAll(d){
     const turtles=d.turtles||{};
     const jobs=Array.isArray(d.jobs)?d.jobs:Object.values(d.jobs||{});
     const tarr=Object.values(turtles);
-    const activeCount=tarr.filter(t=>t.online&&t.status!=='IDLE').length;
+    // Placed chunk loaders are inventory, not workers: LOADER_BEACON registers
+    // them with status/dock/fuel = nil and they never heartbeat, so they must
+    // never count toward fleet capacity in the idle/busy/online tallies.
+    const fleetArr=tarr.filter(t=>t.role!=='LOADER');
+    const activeCount=fleetArr.filter(t=>t.online&&t.status!=='IDLE').length;
     const jobsActive=jobs.filter(j=>j.status!=='COMPLETE'&&j.status!=='FAILED'&&j.status!=='CANCELLED').length;
-    document.getElementById('s-online').textContent=tarr.filter(t=>t.online).length;
+    document.getElementById('s-online').textContent=fleetArr.filter(t=>t.online).length;
     document.getElementById('s-active').textContent=activeCount;
     document.getElementById('s-jobs').textContent=jobsActive;
     document.getElementById('sb-items').textContent=(d.storage||[]).length;
-    document.getElementById('sb-turtles').textContent=tarr.length;
+    document.getElementById('sb-turtles').textContent=fleetArr.length;
     document.getElementById('sb-active').textContent=activeCount;
     document.getElementById('sb-jobs').textContent=jobsActive;
     document.getElementById('sb-done').textContent=jobs.filter(j=>j.status==='COMPLETE').length;
@@ -1485,17 +1507,59 @@ function renderFleet(turtles){
     const seen=new Set();
     arr.forEach(([id,t])=>{
         seen.add(id);
+        const isLoader=t.role==='LOADER';
         let card=el.querySelector(`.tcard[data-id="${id}"]`);
+        if(card&&card.dataset.loader!==String(isLoader)){card.remove();card=null;}
         if(!card){
             const w=document.createElement('div');
-            w.innerHTML=_buildTcard(id,t,sysVer);
+            w.innerHTML=isLoader?_buildLoaderCard(id,t,turtles):_buildTcard(id,t,sysVer);
             card=w.firstElementChild;
             el.appendChild(card);
+        }else if(isLoader){
+            _patchLoaderCard(card,t,turtles);
         }else{
             _patchTcard(card,t,sysVer);
         }
     });
     el.querySelectorAll('.tcard').forEach(c=>{if(!seen.has(c.dataset.id))c.remove();});
+}
+
+// ── Solo-miner telemetry helpers (phase / chunk / disconnect attribution) ──
+
+// A dropped connection must be attributable, not ambiguous:
+//  - commsGap true (modem deliberately unequipped for the loader dig-up) and
+//    under the server's 60s grace window  -> expected, not an alert.
+//  - commsGap true past that window       -> the swap (normally ~1s) failed
+//    mid-dance; likely needs manual recovery.
+//  - offline with a known phase           -> dropped mid-phase, attributable.
+//  - offline with no phase                -> today's plain "Offline".
+// commsGap/phaseAt are nil for every non-miner role, so this degrades to the
+// old online/offline behaviour for delivery and support turtles for free.
+const COMMS_GAP_GRACE_MS=60000;
+function _connAttribution(t){
+    if(t.commsGap){
+        const elapsed=t.phaseAt?Date.now()-t.phaseAt:Infinity;
+        return elapsed<COMMS_GAP_GRACE_MS
+            ?{label:'Swapping loader (expected)',kind:'neutral'}
+            :{label:'Stuck in loader swap',kind:'critical'};
+    }
+    if(!t.online){
+        return t.phase
+            ?{label:`Lost during ${t.phase}`,kind:'critical'}
+            :{label:'Offline',kind:'offline'};
+    }
+    return null;
+}
+
+function _phaseChunkText(t){
+    const elapsedSec=t.phaseAt?Math.max(0,Math.round((Date.now()-t.phaseAt)/1000)):null;
+    const phaseText=t.phase?`${t.phase}${elapsedSec!=null?' · '+_fmtEta(elapsedSec):''}`:'—';
+    const hasChunk=t.chunkX!=null&&t.chunkZ!=null;
+    const chunkText=hasChunk?`${t.chunkX},${t.chunkZ}`:'—';
+    // The geofence anchor: the 16x16 column the miner's loader is holding, so
+    // it's visible at a glance whether the miner's position is inside it.
+    const fenceText=hasChunk?`fence ${t.chunkX*16}..${t.chunkX*16+15}, ${t.chunkZ*16}..${t.chunkZ*16+15}`:'';
+    return{phaseText,chunkText,fenceText};
 }
 
 function _buildTcard(id,t,sysVer){
@@ -1505,11 +1569,22 @@ function _buildTcard(id,t,sysVer){
     const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.z)}`:'—';
     const roleCls=t.role==='DELIVERY'?'d':'s';
     const idleBtn=st!=='IDLE'?`<button class="pbtn amber" onclick="setTurtleIdle('${eid}')">IDLE</button>`:'';
-    return `<div class="tcard is-new${!t.online?' offline':''}" data-id="${eid}">
+    const conn=_connAttribution(t);
+    const connSpan=conn?` · <span class="tc-conn ${conn.kind}">${escapeHtml(conn.label)}</span>`:'';
+    const isMiner=t.role==='MINER';
+    let phaseRow='';
+    if(isMiner){
+        const{phaseText,chunkText,fenceText}=_phaseChunkText(t);
+        phaseRow=`<div class="tcard-row tc-phase-row">
+            <span>PHASE <span class="v tc-phase">${escapeHtml(phaseText)}</span></span>
+            <span>CHUNK <span class="v tc-chunk">${escapeHtml(chunkText)}</span><span class="tc-fence">${escapeHtml(fenceText)}</span></span>
+        </div>`;
+    }
+    return `<div class="tcard is-new${conn&&conn.kind==='offline'?' offline':''}${conn&&conn.kind==='critical'?' alert-critical':''}" data-id="${eid}" data-loader="false">
         <div class="tcard-top">
             <div>
                 <div class="tcard-name ${roleCls}">${eid}</div>
-                <div class="tcard-sub">${erole} · ${escapeHtml(t.dock||'?')}${!t.online?' · OFFLINE':''}</div>
+                <div class="tcard-sub">${erole} · ${escapeHtml(t.dock||'?')}${connSpan}</div>
             </div>
             <span class="sbadge ${escapeHtml(st)}">${escapeHtml(st)}</span>
         </div>
@@ -1520,6 +1595,7 @@ function _buildTcard(id,t,sysVer){
             <span class="tc-job">${t.jobId?`JOB <span style="color:#4488ff88;">${escapeHtml(t.jobId)}</span>`:''}</span>
             ${verOld?`<span style="color:#ff4444">v${escapeHtml(tVer)} !</span>`:''}
         </div>
+        ${phaseRow}
         <div class="tcard-btns">
             <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
             ${idleBtn}
@@ -1553,12 +1629,24 @@ function _patchTcard(card,t,sysVer){
             jobEl.innerHTML=nj?`JOB <span style="color:#4488ff88;">${escapeHtml(nj)}</span>`:'';
         }
     }
-    card.classList.toggle('offline',!t.online);
-    // Sub line: role · dock · OFFLINE — update only when changed
+    const conn=_connAttribution(t);
+    card.classList.toggle('offline',!!(conn&&conn.kind==='offline'));
+    card.classList.toggle('alert-critical',!!(conn&&conn.kind==='critical'));
+    // Sub line: role · dock · attribution — update only when changed
     const sub=card.querySelector('.tcard-sub');
     if(sub){
-        const ns=`${escapeHtml(t.role||'?')} · ${escapeHtml(t.dock||'?')}${!t.online?' · OFFLINE':''}`;
-        if(sub.textContent!==ns)sub.textContent=ns;
+        const connSpan=conn?` · <span class="tc-conn ${conn.kind}">${escapeHtml(conn.label)}</span>`:'';
+        const ns=`${escapeHtml(t.role||'?')} · ${escapeHtml(t.dock||'?')}${connSpan}`;
+        if(sub.innerHTML!==ns)sub.innerHTML=ns;
+    }
+    // Phase/Chunk row (miners only) — elapsed time changes every poll, so
+    // recompute unconditionally rather than trying to diff it.
+    const phaseEl=card.querySelector('.tc-phase'),chunkEl=card.querySelector('.tc-chunk'),fenceEl=card.querySelector('.tc-fence');
+    if(phaseEl&&chunkEl){
+        const{phaseText,chunkText,fenceText}=_phaseChunkText(t);
+        if(phaseEl.textContent!==phaseText)phaseEl.textContent=phaseText;
+        if(chunkEl.textContent!==chunkText)chunkEl.textContent=chunkText;
+        if(fenceEl&&fenceEl.textContent!==fenceText)fenceEl.textContent=fenceText;
     }
     // IDLE button: show when not idle, hide when idle
     const btns=card.querySelector('.tcard-btns');
@@ -1581,6 +1669,68 @@ function _patchTcard(card,t,sysVer){
 function _fuel(t){
     const pct=Math.min(100,Math.round((t.fuel||0)/(t.fuelMax||100000)*100));
     return{pct,fc:fuelClass(pct/100)};
+}
+
+// ── Loader cards ─────────────────────────────────────────────────────────
+// Chunk loaders register via LOADER_BEACON: status/dock/fuel are nil and they
+// never heartbeat. They are inventory anchoring a chunk, not a worker — no
+// fuel bar, no "offline" alarm. A loader beaconing with no owning miner
+// working its chunk is flagged as an orphan so it can be collected by hand.
+//
+// Ownership can't be read directly off /state — LOADER entries carry no
+// jobId (LOADER_BEACON never sets one) and deployedBy isn't on the wire — so
+// this is a heuristic: does any online MINER currently report working the
+// same chunk the loader sits in. It can false-negative (e.g. briefly, between
+// a miner's phase updates) and false-positive if two loaders ever shared a
+// chunk, but it's the only signal /state actually exposes.
+function _loaderOrphanInfo(t,turtles){
+    if(t.x==null||t.z==null)return null;
+    const cx=Math.floor(t.x/16),cz=Math.floor(t.z/16);
+    const claimed=Object.values(turtles||{}).some(o=>
+        o.role==='MINER'&&o.online&&o.chunkX===cx&&o.chunkZ===cz);
+    return{orphan:!claimed,cx,cz};
+}
+
+function _loaderStatus(t,turtles){
+    const info=_loaderOrphanInfo(t,turtles);
+    if(!info)return{cls:'tc-loader-status dim',text:"Ownership can't be determined — no position reported"};
+    if(info.orphan)return{cls:'tc-loader-status warn',text:`ORPHAN — no active miner claims chunk ${info.cx},${info.cz}. Collect by hand.`};
+    return{cls:'tc-loader-status',text:`Claimed — a miner is working chunk ${info.cx},${info.cz}`};
+}
+
+function _buildLoaderCard(id,t,turtles){
+    const eid=escapeHtml(id);
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.z)}`:'—';
+    const st=_loaderStatus(t,turtles);
+    return `<div class="tcard is-new" data-id="${eid}" data-loader="true">
+        <div class="tcard-top">
+            <div>
+                <div class="tcard-name l">${eid}</div>
+                <div class="tcard-sub">LOADER · chunk-force-load anchor</div>
+            </div>
+            <span class="sbadge LOADER">LOADER</span>
+        </div>
+        <div class="tcard-row">
+            <span>POS <span class="v tc-pos">${pos}</span></span>
+        </div>
+        <div class="${st.cls}">${escapeHtml(st.text)}</div>
+        <div class="tcard-btns">
+            <button class="pbtn" onclick="focusTurtle('${eid}')">LOCATE</button>
+            <button class="pbtn red" onclick="deleteTurtle('${eid}')">DEL</button>
+        </div>
+    </div>`;
+}
+
+function _patchLoaderCard(card,t,turtles){
+    const pos=t.x!=null?`${Math.round(t.x)}, ${Math.round(t.y)}, ${Math.round(t.z)}`:'—';
+    const posEl=card.querySelector('.tc-pos');if(posEl&&posEl.textContent!==pos)posEl.textContent=pos;
+    const st=_loaderStatus(t,turtles);
+    const el=card.querySelector('.tc-loader-status');
+    if(el){
+        if(el.textContent!==st.text)el.textContent=st.text;
+        if(el.className!==st.cls)el.className=st.cls;
+    }
+    card.classList.remove('is-new');
 }
 
 // ── Jobs: keyed DOM updates ───────────────────────────────────────────────
