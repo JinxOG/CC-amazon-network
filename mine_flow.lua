@@ -329,6 +329,23 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     end
     log("Loader placed and confirmed standing.")
 
+    -- A turtle placed by turtle.place() is powered OFF. It exists as a block
+    -- and its chunky upgrade holds the chunk immediately -- that part is
+    -- hardware -- but the computer never boots, so startup.lua never runs and
+    -- it never beacons. Confirmed in-world: hand-placing the loader and NOT
+    -- right-clicking it produced no beacons, while right-clicking (which
+    -- powers it on) produced them immediately. Without this the gate below
+    -- always times out with loader_no_beacon on a perfectly good loader.
+    --
+    -- pcall'd because a failure here must not crash placement, and turnOn on
+    -- an already-running turtle is a no-op. A failure is not fatal on its own:
+    -- the beacon gate is the real check, and it will refuse the sector anyway
+    -- if the loader stays silent.
+    local poweredOk = pcall(peripheral.call, "front", "turnOn")
+    if not poweredOk then
+        log("WARNING: could not power on the placed loader — it may never beacon")
+    end
+
     -- Only a beacon reporting THIS exact block counts from here on.
     _expectedLoaderPos = { x = tx, y = p.y, z = tz }
 

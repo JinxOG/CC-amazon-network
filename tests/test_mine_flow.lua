@@ -168,6 +168,46 @@ return {
         assert_eq(a.cz, -1, "fence anchors on the LOADER's chunk, not the miner's position")
     end,
 
+    -- A turtle placed by turtle.place() is powered OFF: the chunky upgrade
+    -- holds the chunk immediately (hardware), but the computer never boots,
+    -- so startup.lua never runs and it never beacons. Confirmed in-world --
+    -- hand-placing without right-clicking produced no beacons at all. Without
+    -- the turnOn the gate always times out with loader_no_beacon on a
+    -- perfectly good loader, which is exactly what the first live trials hit.
+    ["placeLoader powers on the loader it just placed"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(
+            E_TRAVEL(), travelInv(), nil, beaconOnFirstPump(LOADER_LANDING))
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, true, reason)
+        assert_eq(c.placedTurtleOn, true,
+            "the placed loader must be turned on, or it never boots and never beacons")
+        local sawFrontTurnOn = false
+        for _, call in ipairs(c.peripheralCalls) do
+            if call.side == "front" and call.method == "turnOn" then sawFrontTurnOn = true end
+        end
+        assert_eq(sawFrontTurnOn, true, "turnOn must target the block ahead (the loader)")
+    end,
+
+    -- Powering on is best-effort: the beacon gate is the real proof of life,
+    -- so a failed turnOn must not crash placement or bypass the gate.
+    ["a failing turnOn does not crash placement"] = function(assert_eq)
+        freshModules()
+        local c = stub.install({
+            equipped = E_TRAVEL(), inv = travelInv(), world = {},
+            pos = { x = 0, y = 80, z = 0, facing = 0 },
+            peripheralCallFails = true,
+        })
+        require("equipment"); require("geofence")
+        local ls = require("loader_state"); ls.clear()
+        local flow = require("mine_flow")
+        flow.setHooks({
+            pos  = function() return c.pos end,
+            pump = beaconOnFirstPump(LOADER_LANDING)(flow),
+        })
+        local ok, reason = flow.placeLoader(1, { cx = 0, cz = -1 })
+        assert_eq(ok, true, reason or "placement must still succeed if turnOn fails")
+    end,
+
     -- ─── placeLoader: refusal paths must never surrender chunky or the loader ──
 
     ["placeLoader refuses a target outside the sector's anchor chunk"] = function(assert_eq)

@@ -25,6 +25,13 @@ function M.install(opts)
         events   = opts.events or {},       -- queue of {name, ...}
         selected = 1,
         fuel     = opts.fuel or 100000,
+        -- peripheral.call bookkeeping: every call is recorded here so a test
+        -- can assert the miner powers on the loader it just placed, and
+        -- peripheralCallFails forces the call to throw so the caller's
+        -- failure handling is exercisable.
+        peripheralCalls    = {},
+        placedTurtleOn     = false,
+        peripheralCallFails = opts.peripheralCallFails or false,
         -- Forces equipLeft/equipRight to fail on the given side regardless
         -- of what's selected, e.g. { right = true }. Added for equipment.lua
         -- reconcile() coverage: M._equip's only real failure path is "item
@@ -206,6 +213,18 @@ function M.install(opts)
             return nil
         end,
         wrap = function() return nil end,
+
+        -- Records every call so tests can assert the miner powers on the
+        -- turtle it just placed. Real CC:Tweaked exposes an adjacent
+        -- computer/turtle as a peripheral with turnOn/shutdown/reboot/isOn;
+        -- a placed turtle starts OFF, so without turnOn it never boots and
+        -- never runs startup.lua.
+        call = function(side, method, ...)
+            c.peripheralCalls[#c.peripheralCalls + 1] = { side = side, method = method }
+            if c.peripheralCallFails then error("stub-forced peripheral.call failure", 0) end
+            if method == "turnOn" then c.placedTurtleOn = true end
+            return true
+        end,
     }
 
     -- os already exists as a real Lua table (os.exit, os.time, ...); add
