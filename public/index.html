@@ -1767,6 +1767,20 @@ function getMineJobStep(job,turtles,mineZones){
     if(job.status==='PENDING')return 0;
     const t=Object.values(turtles||{}).find(x=>x.jobId===job.id&&x.role==='MINER');
     if(!t)return 1;
+    // Prefer the per-miner phase telemetry over the coarse status field. status
+    // stays WORKING for the whole homeward leg, so a miner reporting phase
+    // RETURNING/DOCKED used to leave this stuck on MINE until the job ended —
+    // the turtle card knew it was on the way home and the job card didn't.
+    if(t.phase==='RETURNING'||t.phase==='DOCKED')return 4;
+    if(t.phase==='DEPARTING'||t.phase==='TRAVELLING')return 1;
+    if(t.phase==='SCANNING')return(((mineZones||{})[job.id]||{}).phase==='SURVEY')?2:3;
+    if(t.phase==='MINING'||t.phase==='DUMPING'||t.phase==='PLACING_LOADER'
+       ||t.phase==='SWAP_TO_PICKAXE'||t.phase==='SWAP_TO_CHUNKY'||t.phase==='RETRIEVING'){
+        const z=(mineZones||{})[job.id];
+        return(z&&z.phase==='SURVEY')?2:3;
+    }
+    // No phase reported (older miner build, or a non-solo role) — fall back to
+    // the pre-1.9 behaviour so nothing regresses.
     if(t.status==='TRAVELLING')return 1;
     if(t.status==='WORKING'){
         const z=(mineZones||{})[job.id];

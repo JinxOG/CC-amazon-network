@@ -1624,8 +1624,20 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         end
     end
 
+    -- Count DISTINCT sectors, not SECTOR_DONE messages. A sector that fails and
+    -- is re-dispatched (loader_no_beacon, a timeout, a crash mid-sector) reports
+    -- done again, and counting messages made the dashboard show more sectors
+    -- finished than the zone contains — 8/4 after two rounds of retries.
+    -- Keyed by phase as well as position: the same sector is legitimately
+    -- reported done once during SURVEY and again during MINE, and those are
+    -- two different counters.
+    zone.doneKeys = zone.doneKeys or {}
+    local sectorKey = (zone.phase or "MINE") .. ":" .. p.sectorX .. "," .. p.sectorZ
+    local alreadyCounted = zone.doneKeys[sectorKey]
+    zone.doneKeys[sectorKey] = true
+
     if zone.phase == "SURVEY" then
-        zone.surveyDone = zone.surveyDone + 1
+        if not alreadyCounted then zone.surveyDone = zone.surveyDone + 1 end
         logInfo(string.format("Survey (%d,%d) done by %s [%s: %d/%d surveyed]",
             p.sectorX, p.sectorZ, msg.from, p.jobId, zone.surveyDone, zone.surveyTotal))
 
@@ -1648,7 +1660,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             p.jobId, zone.rescanDone, zone.rescanTotal or 0))
 
     else  -- MINE phase
-        zone.done = zone.done + 1
+        if not alreadyCounted then zone.done = zone.done + 1 end
         local job = state.jobs[p.jobId]
         if not job or job.status ~= JOB_STATUS.CANCELLED then
             mergeToPersistentZone(p.jobId, p.sectorX, p.sectorZ, p.foundOres)
