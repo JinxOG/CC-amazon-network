@@ -237,8 +237,30 @@ function registry.autoRefuelIdle()
     end
 end
 
+-- A loader beacons every 5s while it is standing and powered. Once a miner digs
+-- it up it is an item again and goes silent instantly, so a few missed beacons
+-- is conclusive — unlike a turtle, which may simply be in a comms gap and will
+-- come back. Stale entries are dropped from /state and deleted here, so the map
+-- stops drawing a loader that is back in a miner's inventory. Re-placing the
+-- same turtle just re-registers it at its new position on the next beacon.
+local LOADER_STALE_SEC = 30
+
+local function loaderIsStale(t, now)
+    return t.role == proto.ROLE.LOADER
+       and t.lastSeen
+       and (now - t.lastSeen) > (LOADER_STALE_SEC * 1000)
+end
+
 function registry.checkTimeouts()
     local now = os.epoch("utc")
+    for id, t in pairs(state.registry) do
+        -- Retrieved loaders are deleted outright rather than marked offline:
+        -- an offline row keeps its last position and the map keeps drawing a
+        -- loader that no longer exists.
+        if loaderIsStale(t, now) then
+            state.registry[id] = nil
+        end
+    end
     for id, t in pairs(state.registry) do
         -- A miner in RETRIEVING has deliberately unequipped its modem; missed
         -- heartbeats there are expected, not evidence of a failure. See
@@ -1429,6 +1451,14 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
             end
             if p.chunk    then t.chunk    = p.chunk    end
             if p.commsGap ~= nil then t.commsGap = p.commsGap end
+            -- Receiving a heartbeat at all is proof the planned comms gap is
+            -- over: during a real one the miner's modem is physically off, so
+            -- nothing can arrive. Without this, commsGap stays set from the
+            -- RETRIEVING report until the NEXT MINE_PHASE — and on the homeward
+            -- path that is the whole flight, with no phase report in between,
+            -- so the dashboard showed a healthy heartbeating miner as "Stuck
+            -- in loader swap" until it docked.
+            t.commsGap = false
         end
         -- Deliver any staged update now that the turtle is idle
         if t and t.pendingUpdate and t.status == proto.STATUS.IDLE then
@@ -2608,7 +2638,12 @@ function server.run()
     -- http_failure event handlers in the main loop — no parallel.waitForAny.
     local function buildBridgePayload()
         local turtles = {}
+        local nowMs = os.epoch("utc")
         for id, t in pairs(state.registry) do
+            -- Skip retrieved loaders. checkTimeouts deletes them too, but it
+            -- runs on the health timer; filtering here clears them from the map
+            -- within one bridge push instead of up to a health cycle later.
+            if loaderIsStale(t, nowMs) then goto next_turtle end
             turtles[id] = {
                 role    = t.role,
                 status  = t.status,
@@ -2639,6 +2674,7 @@ function server.run()
                 y       = t.position and t.position.y or nil,
                 z       = t.position and t.position.z or nil,
             }
+            ::next_turtle::
         end
         -- Serialize jobs per-entry. If an individual entry fails, sanitize it
         -- field-by-field, dropping any value that is a non-serialisable table.

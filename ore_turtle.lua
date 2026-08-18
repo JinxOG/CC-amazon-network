@@ -968,6 +968,11 @@ local function mineJob(job)
                 base.sendProgress("loader_left_behind: " .. tostring(reason))
             end
             stand = nil
+            -- Re-report RETURNING now that the modem is back. Without this the
+            -- last phase the server heard was RETRIEVING, and nothing else is
+            -- reported until DOCKED — so the whole flight home displayed as a
+            -- comms gap, and past the grace window as "Stuck in loader swap".
+            reportPhase(proto.PHASE.RETURNING)
         end
 
         -- Restore our own chunk loading regardless of how the retrieval went,
