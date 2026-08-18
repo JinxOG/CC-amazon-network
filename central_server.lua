@@ -1009,6 +1009,12 @@ local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors 
 
 local SCAN_RADIUS = 16  -- must match ore_turtle.lua SCAN_RADIUS
 
+-- Miners dispatched per mine order: one turtle per this many sectors, rounded
+-- UP, so a 5-sector zone gets 2 and nothing is left with no one assigned to it.
+-- Mirrored in public/index.html as SECTORS_PER_MINER so the dashboard's preview
+-- matches what actually gets dispatched -- change both together.
+local SECTORS_PER_MINER = 3
+
 -- ─── Mine trip fuel estimate ─────────────────────────────────────────────────
 -- CFG.MIN_DISPATCH_FUEL (500) and turtle_base's CFG.FUEL_RESERVE (500) are flat
 -- constants sized for "a full warehouse run" -- a delivery turtle moving around
@@ -2648,15 +2654,21 @@ function server.run()
             -- This used to be floor(sectorCount / 4), which silently capped the
             -- fleet at one miner per four sectors: a 5-sector order got exactly
             -- ONE turtle however many were idle, and 8 sectors were needed before
-            -- a second was ever created. minerCount was only ever a ceiling on
-            -- that, so asking for more had no effect. The dashboard does not send
-            -- minerCount at all, so every order hit the default.
+            -- a second was ever created. p.minerCount was only a ceiling on that
+            -- result, so asking for more had no effect -- and the dashboard never
+            -- sent it, so every order hit the default.
             --
-            -- Now the requested count is honoured, capped only by the number of
-            -- sectors there are to work -- more jobs than sectors would just pop
-            -- an empty queue and come straight home.
-            local maxMiners   = math.max(1, tonumber(p.minerCount) or 4)
-            local minerCount  = math.max(1, math.min(maxMiners, sectorCount))
+            -- Now: one miner per SECTORS_PER_MINER sectors rounded up, capped by
+            -- the size of the miner fleet. Dispatching more jobs than there are
+            -- miners would just leave them PENDING and clutter the job board,
+            -- since a shared zone's sector queue drains just as fast either way.
+            local fleetMiners = 0
+            for _, t in pairs(state.registry) do
+                if t.role == proto.ROLE.MINER then fleetMiners = fleetMiners + 1 end
+            end
+            local byRatio    = math.ceil(sectorCount / SECTORS_PER_MINER)
+            local ceiling    = tonumber(p.minerCount) or fleetMiners
+            local minerCount = math.max(1, math.min(byRatio, ceiling, math.max(fleetMiners, 1)))
             local zoneKey     = computeZoneKey(bx1, bz1, bx2, bz2)
             for i = 1, minerCount do
                 local id = server.submitJob(proto.JOB.MINE, {
@@ -2666,8 +2678,9 @@ function server.run()
                     sharedZoneKey = zoneKey,
                 }, 5)
                 logInfo(string.format(
-                    "Dashboard mine %s [%d/%d] → (%d,%d)→(%d,%d) sectorCount=%d",
-                    id, i, minerCount, x1, z1, x2, z2, sectorCount))
+                    "Dashboard mine %s [%d/%d] → (%d,%d)→(%d,%d) sectorCount=%d (1 miner per %d sectors, fleet=%d)",
+                    id, i, minerCount, x1, z1, x2, z2, sectorCount,
+                    SECTORS_PER_MINER, fleetMiners))
             end
 
         elseif t == "ORDER_SURVEY" then

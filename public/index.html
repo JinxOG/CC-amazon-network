@@ -2339,6 +2339,26 @@ function startPickCorner2(){
     document.getElementById('mine-c2-hint').style.display='';
     _awaitingMineCorner2=true;
 }
+// One miner per this many sectors, rounded UP. Mirrors SECTORS_PER_MINER in
+// central_server.lua, which is what actually decides how many jobs get created —
+// change both together or this preview starts lying.
+const SECTORS_PER_MINER=3;
+
+// How many miners a mine order of `sectors` sectors will actually dispatch.
+// Capped by the miner fleet, exactly as the server does it: dispatching more
+// jobs than there are miners would just leave them PENDING.
+function minerFleetSize(){
+    return Object.values(lastState.turtles||{}).filter(t=>t.role==='MINER').length;
+}
+function minersForSectors(sectors){
+    const fleet=minerFleetSize();
+    const byRatio=Math.ceil(sectors/SECTORS_PER_MINER);
+    // fleet 0 means state hasn't arrived yet, not "there are no miners" — show
+    // the ratio rather than pretending the fleet caps it at zero.
+    if(fleet===0) return Math.max(1,byRatio);
+    return Math.max(1,Math.min(byRatio,fleet));
+}
+
 function updateMineAreaInfo(){
     const x1=parseInt(document.getElementById('mm-x1').value);
     const z1=parseInt(document.getElementById('mm-z1').value);
@@ -2349,7 +2369,15 @@ function updateMineAreaInfo(){
     const dx=Math.abs(x2-x1)||1, dz=Math.abs(z2-z1)||1;
     const nsX=(Math.ceil(Math.max(x1,x2)/32)*32-Math.floor(Math.min(x1,x2)/32)*32)/32+1;
     const nsZ=(Math.ceil(Math.max(z1,z2)/32)*32-Math.floor(Math.min(z1,z2)/32)*32)/32+1;
-    el.textContent=`${dx}×${dz} blocks · ${nsX*nsZ} sectors`;
+    const sectors=nsX*nsZ;
+    const miners=minersForSectors(sectors);
+    const fleet=minerFleetSize();
+    // Say so when the fleet is the binding constraint, rather than silently
+    // showing a smaller number than the 1-per-3 rule implies.
+    const byRatio=Math.ceil(sectors/SECTORS_PER_MINER);
+    const capped=(fleet>0&&byRatio>miners)
+        ? ` (fleet limit — 1 per ${SECTORS_PER_MINER} sectors wants ${byRatio})` : '';
+    el.textContent=`${dx}×${dz} blocks · ${sectors} sectors · ${miners} miner${miners===1?'':'s'}${capped}`;
 }
 async function deleteMineZone(zoneKey){
     if(!confirm('Delete this mining site? All progress data will be lost and cannot be recovered.'))return;
@@ -2384,7 +2412,12 @@ async function submitMine(){
     if(isNaN(x1)||isNaN(z1)){toast('Enter valid Corner 1 coordinates',true);return;}
     if(isNaN(x2)||isNaN(z2)){toast('Enter valid Corner 2 coordinates',true);return;}
     await sendCmd('ORDER_MINE',{x1,z1,x2,z2});
-    closeMineModal();toast(`Mine job dispatched — (${x1},${z1}) to (${x2},${z2})`);switchTab('jobs');
+    const nsX=(Math.ceil(Math.max(x1,x2)/32)*32-Math.floor(Math.min(x1,x2)/32)*32)/32+1;
+    const nsZ=(Math.ceil(Math.max(z1,z2)/32)*32-Math.floor(Math.min(z1,z2)/32)*32)/32+1;
+    const miners=minersForSectors(nsX*nsZ);
+    closeMineModal();
+    toast(`Mine job dispatched — ${miners} miner${miners===1?'':'s'} over ${nsX*nsZ} sectors`);
+    switchTab('jobs');
 }
 
 function openSurveyModal(x1,z1,x2,z2){
