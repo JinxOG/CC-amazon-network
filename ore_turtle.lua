@@ -424,6 +424,61 @@ base.setRefuelFn(function()
     end)
 end)
 
+-- ── Pre-departure preflight ──────────────────────────────────────────────────
+-- The server gained a distance-aware dispatch gate in 1.9.8, but it reasons from
+-- zone bounds and cannot see this turtle's real position or what is actually in
+-- its inventory. These are the authoritative checks, and the dock is the last
+-- point at which refusing a job costs nothing.
+--
+-- On 1.9.7 a miner departed on 2965 fuel, self-recalled seconds later, and a
+-- second stranded mid-air at 0. Both were already doomed when they left.
+
+local MINE_DEEPEST_Y      = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS  -- -52 - 16
+local MINE_WORK_ALLOWANCE = 3000  -- in-sector navigation, loader place/retrieve, dumps
+
+-- Round-trip fuel for the whole zone: climb to travel altitude, fly to the
+-- farthest corner, drop to the deepest scan level, and the same again home.
+-- Mirrors mineTripFuel() in central_server.lua; both are deliberately
+-- conservative, since being wrong high costs a dispatch hold and being wrong
+-- low costs a turtle.
+local function fuelForZone(params, skyY)
+    if not (params and params.x1 and params.z1 and params.x2 and params.z2) then
+        return 0   -- no bounds to reason about; in-field checkFuel still applies
+    end
+    local p  = base.getPos()
+    local dx = math.max(math.abs(params.x1 - p.x), math.abs(params.x2 - p.x))
+    local dz = math.max(math.abs(params.z1 - p.z), math.abs(params.z2 - p.z))
+    local oneWay = (dx + dz) + math.max(0, skyY - p.y) + (skyY - MINE_DEEPEST_Y)
+    return math.ceil(2 * oneWay + MINE_WORK_ALLOWANCE)
+end
+
+-- Both ender chests share one item name (EnderStorage separates them by colour
+-- frequency, not registry id), so this cannot tell the fuel chest from the ore
+-- chest -- only that a chest is present where one is required. That is still
+-- enough to catch the layout mistakes that actually happen: a chest sitting in
+-- the coal buffer slot, or a missing chest. initProtectedSlots only printed a
+-- warning for these and let the miner fly out regardless.
+local function looksLikeEnderChest(item)
+    if not item then return false end
+    return item.name:find("ender") ~= nil or item.name:find("entangled") ~= nil
+end
+
+local function preflightSlots()
+    if not looksLikeEnderChest(turtle.getItemDetail(S_FUEL_EC)) then
+        return false, "slot_" .. S_FUEL_EC .. "_must_hold_the_fuel_ender_chest"
+    end
+    if not looksLikeEnderChest(turtle.getItemDetail(S_ORE_EC)) then
+        return false, "slot_" .. S_ORE_EC .. "_must_hold_the_ore_ender_chest"
+    end
+    -- Slot 14 is the buffer coal is sucked INTO. A chest parked there means the
+    -- whole layout is shifted down one, and every fuel path would then read the
+    -- ore chest instead of the coal chest.
+    if looksLikeEnderChest(turtle.getItemDetail(S_COAL)) then
+        return false, "slot_" .. S_COAL .. "_must_be_free_for_coal_not_a_chest"
+    end
+    return true
+end
+
 -- Estimate fuel required to fly home from the current position.
 local function fuelToReturn()
     local p  = base.getPos()
@@ -1057,6 +1112,40 @@ local function mineJob(job)
         print("[MINER] Equipment check failed: " .. tostring(eqReason))
         base.sendProgress("equipment_invalid: " .. tostring(eqReason))
         base.sendFailed("equipment_invalid: " .. tostring(eqReason), false)
+        _jobId = nil
+        return
+    end
+
+    -- Slot and fuel preflight. Both MUST run before base.depart, for the same
+    -- reason the two checks above do: a refusal after departing produces a
+    -- FAILED job, an auto-respawned replacement, and a miner parked at the
+    -- dispatch hole burning fuel on every cycle.
+    local slotOk, slotReason = preflightSlots()
+    if not slotOk then
+        print("[MINER] Refusing job — " .. slotReason)
+        base.sendProgress(slotReason .. " — fix the inventory layout")
+        base.sendFailed(slotReason, false)
+        _jobId = nil
+        return
+    end
+
+    local needFuel = fuelForZone(job.params, SKY_Y)
+    if turtle.getFuelLevel() < needFuel then
+        -- Try to top up first. dockRefuel falls back to the coal ender chest as
+        -- of 1.9.8, so a miner sitting on a dry dock chest can still recover
+        -- here instead of being stuck low forever.
+        print(string.format("[MINER] Need ~%d fuel for this zone, have %d — refuelling",
+            needFuel, turtle.getFuelLevel()))
+        base.fuel.dockRefuel()
+    end
+    if turtle.getFuelLevel() < needFuel then
+        local detail = string.format("insufficient_fuel_for_zone: have %d, need ~%d",
+            turtle.getFuelLevel(), needFuel)
+        print("[MINER] Refusing job — " .. detail)
+        base.sendProgress(detail .. " — stock the coal ender chest")
+        -- Recoverable: the job returns to PENDING, and the server's own
+        -- distance-aware gate holds it until some miner can actually afford it.
+        base.sendFailed(detail, true)
         _jobId = nil
         return
     end

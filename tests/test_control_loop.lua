@@ -391,4 +391,41 @@ function(assert_eq)
         "the outstanding-loader failure must be reported as non-recoverable")
 end
 
+-- Same technique, same limitation, for the 1.9.8 fuel/slot preflight. On 1.9.7
+-- two miners were dispatched on fuel they could not finish a trip with; one
+-- stranded mid-air at 0. The preflight is only worth anything if it runs while
+-- the turtle is still on its dock, so ordering is the property to pin.
+suite["the fuel and slot preflight runs before departure (SOURCE-ORDERING, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local departAt = src:find("local ok, err = base%.depart%(true%)")
+    assert_eq(departAt ~= nil, true, "mineJob's base.depart call moved or vanished")
+
+    local slotAt = src:find("local slotOk, slotReason = preflightSlots%(%)")
+    assert_eq(slotAt ~= nil, true, "the slot preflight vanished")
+    assert_eq(slotAt < departAt, true, "preflightSlots() must run BEFORE base.depart")
+
+    local fuelAt = src:find("local needFuel = fuelForZone%(job%.params, SKY_Y%)")
+    assert_eq(fuelAt ~= nil, true, "the zone fuel preflight vanished")
+    assert_eq(fuelAt < departAt, true, "fuelForZone() must run BEFORE base.depart")
+
+    -- A wrong inventory layout is not fixable by retrying, so it must be
+    -- non-recoverable; being short of fuel IS fixable once the coal chest is
+    -- stocked, so that one must be recoverable or the zone is abandoned.
+    local slotBlock = src:sub(slotAt, fuelAt)
+    assert_eq(slotBlock:find("base%.sendFailed%(slotReason, false%)") ~= nil, true,
+        "a bad slot layout must be reported as non-recoverable")
+    local fuelBlock = src:sub(fuelAt, departAt)
+    assert_eq(fuelBlock:find("base%.sendFailed%(detail, true%)") ~= nil, true,
+        "insufficient fuel must be reported as recoverable")
+
+    -- It must attempt a top-up before refusing, otherwise a miner on a dry dock
+    -- chest can never recover on its own.
+    assert_eq(fuelBlock:find("base%.fuel%.dockRefuel%(%)") ~= nil, true,
+        "the fuel preflight must try dockRefuel before refusing the job")
+end
+
 return suite

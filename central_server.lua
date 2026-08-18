@@ -1009,6 +1009,39 @@ local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors 
 
 local SCAN_RADIUS = 16  -- must match ore_turtle.lua SCAN_RADIUS
 
+-- ─── Mine trip fuel estimate ─────────────────────────────────────────────────
+-- CFG.MIN_DISPATCH_FUEL (500) and turtle_base's CFG.FUEL_RESERVE (500) are flat
+-- constants sized for "a full warehouse run" -- a delivery turtle moving around
+-- the depot. Mining distance is unbounded, so both gates happily released
+-- miners onto trips costing thousands. On 1.9.7 that stranded a miner mid-air
+-- at 0 fuel: with two jobs pending, the first took the best-fuelled turtle and
+-- the second took whatever was next, which only had to clear 500.
+--
+-- Deliberately conservative -- it costs a short dispatch hold to be wrong high,
+-- and a stranded turtle to be wrong low. Mirrors the geometry of the miner's
+-- own fuelToReturn(): climb to travel altitude, fly out, drop to the deepest
+-- scan level, and the same again coming home.
+local MINE_TRAVEL_Y     = 200   -- SKY_Y in ore_turtle.lua
+local MINE_DEEPEST_Y    = -68   -- deepest SCAN_LEVELS entry (-52) minus SCAN_RADIUS
+local MINE_WORK_ALLOWANCE = 3000  -- in-sector navigation, loader place/retrieve, dumps
+
+local function mineTripFuel(params)
+    if not (params and params.x1 and params.z1 and params.x2 and params.z2) then
+        return CFG.MIN_DISPATCH_FUEL
+    end
+    local hole    = W.DISPATCH_HOLE
+    local travelY = MINE_TRAVEL_Y + (params.travelYOffset or 0)
+    -- Farthest corner, not nearest: the miner works every sector in the zone.
+    local dx = math.max(math.abs(params.x1 - hole.x), math.abs(params.x2 - hole.x))
+    local dz = math.max(math.abs(params.z1 - hole.z), math.abs(params.z2 - hole.z))
+    local oneWay = (dx + dz)
+                 + (travelY - hole.y)          -- climb out of the depot
+                 + (travelY - MINE_DEEPEST_Y)  -- drop to the deepest scan level
+    local needed = math.ceil(2 * oneWay + MINE_WORK_ALLOWANCE)
+    if needed < CFG.MIN_DISPATCH_FUEL then needed = CFG.MIN_DISPATCH_FUEL end
+    return needed
+end
+
 -- Build a flat list of {x,z} sector centres covering the rectangle x1,z1 → x2,z2.
 -- Also returns the true covered bounds (sector centres snapped to grid ± scan radius)
 -- so the dashboard overlay exactly matches where the miner will work.
@@ -1309,6 +1342,24 @@ function dispatcher.tick()
         local role     = JOB_ROLE[job.type]
         local workers  = registry.getIdle(role)
         local supports = registry.getIdle(proto.ROLE.SUPPORT)
+
+        -- Distance-aware fuel gate for MINE jobs. registry.getIdle sorts by
+        -- fuel descending, so if the best-fuelled miner cannot afford this
+        -- zone's round trip, none can: hold the job instead of dispatching a
+        -- turtle that will either self-recall on fuel the moment it clears the
+        -- dock or strand in the air on the way home.
+        if isMine and #workers > 0 then
+            local need = mineTripFuel(job.params)
+            if (workers[1].fuel or 0) < need then
+                if (now - lastDispatchHoldLog) >= 60000 then
+                    logWarn(string.format(
+                        "Dispatch hold: %s needs ~%d fuel for this zone; best idle miner has %d — stock the coal ender chest",
+                        job.id, need, workers[1].fuel or 0))
+                    lastDispatchHoldLog = now
+                end
+                workers = {}   -- falls through to the existing hold path below
+            end
+        end
 
         -- MINE jobs are solo since v1.9.0: the miner carries its own chunk
         -- loader, so dispatch never needs an idle SUPPORT turtle for one.
