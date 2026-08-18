@@ -231,10 +231,20 @@ entry rather than a rewrite of the swap dance.
 **This model is specified now; the extra tools are not committed until V4
 resolves.** A diamond pickaxe in CC:Tweaked already breaks logs, dirt, sand, and
 gravel with correct drops, so for vanilla materials extra tools may buy nothing.
-They matter for modded blocks with tool requirements, drop correctness, and
-shears for leaves→saplings. Each additional tool costs an inventory slot and
-another state in the most defect-prone code in the project, so the cost is only
-paid once the benefit is measured.
+
+**Speed is not a factor and must not be used as an argument for extra tools.**
+`turtle.dig()` breaks a block in a single action and then waits out a fixed
+action cooldown; neither block hardness nor tool type scales it — a turtle digs
+obsidian as fast as dirt. Turtle tools also take no durability damage. A pickaxe
+and an axe dig a log at identical speed.
+
+The tool decides only two things: **whether the block breaks at all** (harvest
+level / tool-type check) and **what it drops**. So extra tools are justified only
+by drop correctness — modded blocks that gate drops behind a tool type, and
+shears for leaves→saplings if sustainable forestry is ever wanted rather than
+stripping a site bare. Each additional tool costs an inventory slot and another
+state in the most defect-prone code in the project, so the cost is only paid once
+the benefit is measured.
 
 ---
 
@@ -663,7 +673,7 @@ built on an assumption about their answer.**
 | **V1 / Probe C** | What block states can a *turtle* actually place, versus an Android's `useBlock`? | The builder class. Highest decision weight of any open item. **Run first.** |
 | **V2 / Probe A** | Can an Android hold and place a loader turtle? Does `chunk_controller` fit a pocket slot? | Whether builds need a turtle bootstrap step |
 | **V3 / Probe B** | Does a static loader blanket keep an Android ticking across distance? | §12.4 |
-| **V4** | Does this modpack require an axe/shovel for the drops we want, or does a diamond pickaxe suffice? | Whether extra tool slots are worth their cost (§6.5) |
+| **V4** | Does this modpack require an axe/shovel for the **drops** we want, or does a diamond pickaxe suffice? Speed is settled and is not part of this question (§6.5). Test: dig a modded log with a pickaxe turtle, check the inventory. | Whether extra tool slots are worth their cost (§6.5) |
 | **V5 / Probe D** | Android failure modes: chunk unload, death, inventory, clean reboot and re-register | Whether unattended overnight builds are realistic |
 | **V6** | Single modem message ceiling — an unfiltered ~8 KB assign payload is the largest thing on the wire | Whether chunked transfer is needed |
 
