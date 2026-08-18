@@ -1353,8 +1353,21 @@ function dispatcher.tick()
             if (workers[1].fuel or 0) < need then
                 if (now - lastDispatchHoldLog) >= 60000 then
                     logWarn(string.format(
-                        "Dispatch hold: %s needs ~%d fuel for this zone; best idle miner has %d — stock the coal ender chest",
+                        "Dispatch hold: %s needs ~%d fuel for this zone; best idle miner has %d",
                         job.id, need, workers[1].fuel or 0))
+                    -- Holding alone would deadlock. dockRefuel only runs from
+                    -- base.depart and on arrival at dock, so a miner held here is
+                    -- never dispatched, never departs, and therefore never
+                    -- refuels -- it would sit at its dock below the gate forever.
+                    -- FORCE_REFUEL makes an idle miner top up from its own coal
+                    -- ender chest where it stands, which is the only fuel source
+                    -- it has at the dock.
+                    for _, m in ipairs(workers) do
+                        sendTo(m.id, proto.MSG.FORCE_REFUEL, {})
+                        logInfo(string.format(
+                            "FORCE_REFUEL → %s (fuel %d, needs ~%d for %s)",
+                            m.id, m.fuel or 0, need, job.id))
+                    end
                     lastDispatchHoldLog = now
                 end
                 workers = {}   -- falls through to the existing hold path below
@@ -2630,8 +2643,20 @@ function server.run()
             local allSectors, bx1, bz1, bx2, bz2 = buildSectorGrid(
                 math.floor(x1), math.floor(z1), math.floor(x2), math.floor(z2))
             local sectorCount = #allSectors
+            -- One job per miner; they share the zone's sector queue by reference.
+            --
+            -- This used to be floor(sectorCount / 4), which silently capped the
+            -- fleet at one miner per four sectors: a 5-sector order got exactly
+            -- ONE turtle however many were idle, and 8 sectors were needed before
+            -- a second was ever created. minerCount was only ever a ceiling on
+            -- that, so asking for more had no effect. The dashboard does not send
+            -- minerCount at all, so every order hit the default.
+            --
+            -- Now the requested count is honoured, capped only by the number of
+            -- sectors there are to work -- more jobs than sectors would just pop
+            -- an empty queue and come straight home.
             local maxMiners   = math.max(1, tonumber(p.minerCount) or 4)
-            local minerCount  = math.max(1, math.min(math.floor(sectorCount / 4), maxMiners))
+            local minerCount  = math.max(1, math.min(maxMiners, sectorCount))
             local zoneKey     = computeZoneKey(bx1, bz1, bx2, bz2)
             for i = 1, minerCount do
                 local id = server.submitJob(proto.JOB.MINE, {
