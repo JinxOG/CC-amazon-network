@@ -26,9 +26,15 @@ local CFG = {
     -- Gives the previous pair time to clear the dispatch hole and taxiway
     -- before the next pair starts their departure route.
     DISPATCH_STAGGER  = 60,
-    -- Minimum fuel a MINER must have before it will be dispatched.
-    -- Prevents turtles from being assigned when they can't complete departure.
+    -- Absolute floor before a MINER is considered for dispatch at all. The real
+    -- gate is mineTripFuel(), which is distance-aware; this only stops a turtle
+    -- that cannot even complete its departure route from being picked.
     MIN_DISPATCH_FUEL = 500,
+    -- Fuel level below which an IDLE miner is told to top up from its own coal
+    -- ender chest. Must sit comfortably ABOVE any realistic mineTripFuel()
+    -- result, or a miner can be too low to dispatch yet too full to refuel --
+    -- the dead band that stranded two miners at their docks on 1.9.8-1.9.11.
+    MINER_IDLE_FUEL_TARGET = 20000,
     -- Web dashboard bridge
     BRIDGE_URL        = "http://127.0.0.1:3000/update",
     BRIDGE_INTERVAL   = 3,      -- seconds between state pushes
@@ -226,13 +232,38 @@ function registry.markOffline(id)
     end
 end
 
+-- Keep idle miners topped up.
+--
+-- This used to trigger only below CFG.MIN_DISPATCH_FUEL (500). When the mine
+-- dispatch gate became distance-aware in 1.9.8 that left a dead band: a miner
+-- above 500 but below what a real trip costs was never refuelled here AND never
+-- dispatched, so it sat at its dock indefinitely. Two miners were stuck in it at
+-- 2961 and 4079 fuel against a ~7200 requirement.
+--
+-- The threshold is now a flat comfortable target rather than anything derived
+-- from a specific zone, which is what removes the dead band for good: a turtle
+-- idling at its dock has no reason to be anything other than full, and coal is
+-- effectively unlimited through the ender chest. A miner's FORCE_REFUEL handler
+-- fills to capacity, so this only decides WHEN to trigger, not how much.
+local FORCE_REFUEL_COOLDOWN_MS = 300000   -- 5 min per turtle
+
 function registry.autoRefuelIdle()
+    local now = os.epoch("utc")
     for id, t in pairs(state.registry) do
         if t.online and t.status == proto.STATUS.IDLE
                     and t.role == proto.ROLE.MINER
-                    and (t.fuel or 0) < CFG.MIN_DISPATCH_FUEL then
-            logInfo(string.format("Auto-FORCE_REFUEL: %s is idle with only %d fuel", id, t.fuel or 0))
-            sendTo(id, proto.MSG.FORCE_REFUEL, {})
+                    and (t.fuel or 0) < CFG.MINER_IDLE_FUEL_TARGET then
+            -- Cooldown: a miner whose coal chest is empty cannot reach the
+            -- target, and without this it would be told to deploy and dig up
+            -- its chest on every health tick forever.
+            local last = t.lastForceRefuel or 0
+            if (now - last) >= FORCE_REFUEL_COOLDOWN_MS then
+                t.lastForceRefuel = now
+                logInfo(string.format(
+                    "Auto-FORCE_REFUEL: %s is idle with %d fuel (target %d)",
+                    id, t.fuel or 0, CFG.MINER_IDLE_FUEL_TARGET))
+                sendTo(id, proto.MSG.FORCE_REFUEL, {})
+            end
         end
     end
 end
@@ -1361,21 +1392,14 @@ function dispatcher.tick()
                     logWarn(string.format(
                         "Dispatch hold: %s needs ~%d fuel for this zone; best idle miner has %d",
                         job.id, need, workers[1].fuel or 0))
-                    -- Holding alone would deadlock. dockRefuel only runs from
-                    -- base.depart and on arrival at dock, so a miner held here is
-                    -- never dispatched, never departs, and therefore never
-                    -- refuels -- it would sit at its dock below the gate forever.
-                    -- FORCE_REFUEL makes an idle miner top up from its own coal
-                    -- ender chest where it stands, which is the only fuel source
-                    -- it has at the dock.
-                    for _, m in ipairs(workers) do
-                        sendTo(m.id, proto.MSG.FORCE_REFUEL, {})
-                        logInfo(string.format(
-                            "FORCE_REFUEL → %s (fuel %d, needs ~%d for %s)",
-                            m.id, m.fuel or 0, need, job.id))
-                    end
                     lastDispatchHoldLog = now
                 end
+                -- Refuelling is NOT done here. 1.9.10 sent FORCE_REFUEL from this
+                -- branch, which was both the wrong place and the wrong condition:
+                -- it only fired when the BEST idle miner was short, so the common
+                -- case -- one healthy miner plus several starved ones -- never
+                -- refuelled the starved ones at all. registry.autoRefuelIdle()
+                -- owns it instead, keyed on each turtle's own fuel level.
                 workers = {}   -- falls through to the existing hold path below
             end
         end
