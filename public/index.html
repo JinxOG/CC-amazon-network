@@ -1679,23 +1679,37 @@ function _fuel(t){
 //
 // Ownership can't be read directly off /state — LOADER entries carry no
 // jobId (LOADER_BEACON never sets one) and deployedBy isn't on the wire — so
-// this is a heuristic: does any online MINER currently report working the
-// same chunk the loader sits in. It can false-negative (e.g. briefly, between
-// a miner's phase updates) and false-positive if two loaders ever shared a
-// chunk, but it's the only signal /state actually exposes.
+// this is a heuristic: is any online MINER inside this loader's geofence.
+// It stays a heuristic in both directions: a genuinely abandoned loader reads
+// as claimed if some other miner happens to be working within one chunk of it,
+// and a loader reads as orphaned during the moments its miner has no chunk
+// reported. Treat a single tick of ORPHAN as noise; a loader that holds the
+// warning while every miner moves away is the real thing.
+// The miner does NOT sit in its loader's chunk — it roams the geofenced area
+// around it, which is FENCE_CHUNK_RADIUS=1, i.e. the 3x3 chunks centred on the
+// loader (docs/superpowers/specs/chunkloader-footprint.md). Matching the
+// loader's chunk exactly therefore flagged working loaders as orphans whenever
+// the miner had wandered one chunk off the anchor — which is most of the time.
+// Observed live: all four loaders were correctly paired, yet two were reported
+// ORPHAN with a "collect by hand" prompt.
+//
+// Chebyshev distance in chunk space, the same comparison geofence.contains()
+// makes, so this agrees with the rule the miner is actually held to.
+const LOADER_FENCE_CHUNK_RADIUS=1;
 function _loaderOrphanInfo(t,turtles){
     if(t.x==null||t.z==null)return null;
     const cx=Math.floor(t.x/16),cz=Math.floor(t.z/16);
-    const claimed=Object.values(turtles||{}).some(o=>
-        o.role==='MINER'&&o.online&&o.chunkX===cx&&o.chunkZ===cz);
-    return{orphan:!claimed,cx,cz};
+    const claimant=Object.values(turtles||{}).find(o=>
+        o.role==='MINER'&&o.online&&o.chunkX!=null&&o.chunkZ!=null
+        &&Math.max(Math.abs(o.chunkX-cx),Math.abs(o.chunkZ-cz))<=LOADER_FENCE_CHUNK_RADIUS);
+    return{orphan:!claimant,cx,cz};
 }
 
 function _loaderStatus(t,turtles){
     const info=_loaderOrphanInfo(t,turtles);
     if(!info)return{cls:'tc-loader-status dim',text:"Ownership can't be determined — no position reported"};
     if(info.orphan)return{cls:'tc-loader-status warn',text:`ORPHAN — no active miner claims chunk ${info.cx},${info.cz}. Collect by hand.`};
-    return{cls:'tc-loader-status',text:`Claimed — a miner is working chunk ${info.cx},${info.cz}`};
+    return{cls:'tc-loader-status',text:`Claimed — a miner is working inside the fence around chunk ${info.cx},${info.cz}`};
 }
 
 function _buildLoaderCard(id,t,turtles){
