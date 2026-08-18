@@ -18,6 +18,7 @@ local files = {
     -- drive the control loop. It restores them per test, but running last
     -- means no other suite can be affected even if that ever regressed.
     "tests.test_control_loop",
+    "tests.test_dock_refuel",
 }
 
 local passed, failed = 0, 0

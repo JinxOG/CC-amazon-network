@@ -2420,7 +2420,23 @@ function server.run()
             end
             state.jobs = {}
             saveJobs()
-            logInfo(string.format("Dashboard: cleared %d job(s)", count))
+            -- Mining zones are a separate table keyed by jobId. Wiping
+            -- state.jobs without them stranded the zone: observed live as
+            -- job_0666 reporting status=ACTIVE phase=MINE done=1/8 with no job
+            -- record and its miner idle at the dock. Nothing could clear it --
+            -- DELETE_MINE_ZONE refuses while a miningZones entry references the
+            -- key, and loadMiningZones only drops it on the next restart.
+            state.miningZones = {}
+            saveMiningZones()
+            -- Release every turtle still pointing at a cleared job. The loop
+            -- above only resets turtles whose job was ASSIGNED or IN_PROGRESS,
+            -- so a miner whose job had already FAILED kept a stale jobId
+            -- indefinitely and showed a job on the dashboard while idle
+            -- (observed live on two miners).
+            for _, tr in pairs(state.registry) do
+                if tr.jobId then tr.jobId = nil end
+            end
+            logInfo(string.format("Dashboard: cleared %d job(s), zones and turtle job refs", count))
 
         elseif t == "DELETE_MINE_ZONE" then
             local key = p.key

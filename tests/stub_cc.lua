@@ -15,6 +15,14 @@ local PERIPHERAL_TYPE_BY_NAME = {
     ["computercraft:wireless_modem_advanced"] = "modem",
 }
 
+-- Fuel values per item, matching CC:Tweaked. Only consulted when a stub is
+-- installed with realFuel = true.
+local FUEL_PER_ITEM = {
+    ["minecraft:coal"]       = 80,
+    ["minecraft:charcoal"]   = 80,
+    ["minecraft:coal_block"] = 800,
+}
+
 function M.install(opts)
     opts = opts or {}
     local c = {
@@ -40,12 +48,26 @@ function M.install(opts)
         -- a *failed* equip call without this. Defaults to {}, so no existing
         -- test observes any change.
         equipFail = opts.equipFail or {},
+        -- Container contents keyed by BLOCK NAME, each a list of {name, count}
+        -- stacks: { ["enderstorage:ender_chest"] = {{name="minecraft:coal",
+        -- count=64}} }. Keying by block name rather than position is what lets
+        -- a test model an empty dock station chest below the turtle and a
+        -- stocked ender chest it deploys itself -- the two are different blocks
+        -- but both are reached through the same turtle.suck* calls. nil means
+        -- "no containers", so suck* returns false exactly as it always has and
+        -- no existing test observes any change.
+        containers = opts.containers,
+        -- Opt-in fuel realism. Default false keeps turtle.refuel() a no-op
+        -- returning true, which is what the existing suite relies on; the fuel
+        -- tests set it so refuel actually consumes coal and raises the level.
+        realFuel  = opts.realFuel or false,
     }
     -- facing lives only on c.pos; c.facing would drift out of sync with it
     -- the moment either got written independently, so there's one owner.
 
     local function key(x, y, z) return x .. "," .. y .. "," .. z end
     local function below() return key(c.pos.x, c.pos.y - 1, c.pos.z) end
+    local function above() return key(c.pos.x, c.pos.y + 1, c.pos.z) end
     local function ahead()
         local dx, dz = 0, 0
         if     c.pos.facing == 0 then dz = -1
@@ -89,10 +111,22 @@ function M.install(opts)
         getItemSpace  = function(s) local i = c.inv[s or c.selected]; return 64 - (i and i.count or 0) end,
         getFuelLevel  = function() return c.fuel end,
         getFuelLimit  = function() return 100000 end,
-        refuel        = function() return true end,
+        refuel        = function(n)
+            if not c.realFuel then return true end
+            local i = c.inv[c.selected]
+            if not i then return false, "No items to combust" end
+            local per = FUEL_PER_ITEM[i.name]
+            if not per then return false, "Items not combustible" end
+            local burn = math.min(i.count, n or i.count)
+            c.fuel = math.min(c.fuel + burn * per, 100000)
+            i.count = i.count - burn
+            if i.count <= 0 then c.inv[c.selected] = nil end
+            return true
+        end,
 
         detect     = function() return c.world[ahead()] ~= nil end,
         detectDown = function() return c.world[below()] ~= nil end,
+        detectUp   = function() return c.world[above()] ~= nil end,
         inspect    = function()
             local b = c.world[ahead()]
             if b then return true, { name = b, tags = {} } end
@@ -189,8 +223,44 @@ function M.install(opts)
         end,
         dropDown = function() c.inv[c.selected] = nil; return true end,
         drop     = function() c.inv[c.selected] = nil; return true end,
-        suckDown = function() return false end,
+
+        -- suck* pull from c.container into the selected slot. Real CC fills the
+        -- selected slot first and returns false when the container is empty,
+        -- which is what refuelFromChest's `pulled == 0` branch keys off.
+        suckDown = function(n) return M._suck(c, c.world[below()], n) end,
+        suckUp   = function(n) return M._suck(c, c.world[above()], n) end,
+        suck     = function(n) return M._suck(c, c.world[ahead()], n) end,
     }
+
+    -- placeDown/placeUp/digUp mirror their front/down counterparts exactly.
+    turtle.placeDown = function()
+        local i = c.inv[c.selected]
+        if not i then return false, "Nothing to place" end
+        if c.world[below()] then return false, "Cannot place block here" end
+        c.world[below()] = i.name
+        i.count = i.count - 1
+        if i.count <= 0 then c.inv[c.selected] = nil end
+        return true
+    end
+    turtle.placeUp = function()
+        local i = c.inv[c.selected]
+        if not i then return false, "Nothing to place" end
+        if c.world[above()] then return false, "Cannot place block here" end
+        c.world[above()] = i.name
+        i.count = i.count - 1
+        if i.count <= 0 then c.inv[c.selected] = nil end
+        return true
+    end
+    turtle.digUp = function()
+        if c.equipped.left ~= "minecraft:diamond_pickaxe" and c.equipped.right ~= "minecraft:diamond_pickaxe" then
+            return false, "No tool to dig with"
+        end
+        local b = c.world[above()]
+        if not b then return false, "Nothing to dig here" end
+        if not collectDug(b) then return false, "No space for item" end
+        c.world[above()] = nil
+        return true
+    end
 
     peripheral = {
         -- Only the modem registers as a peripheral type; the pickaxe and
@@ -287,6 +357,28 @@ end
 -- one item becomes the equipped upgrade) -- unmodelled here because every
 -- upgrade in this system is only ever held as count 1, so the gap never
 -- gets exercised.
+-- Pull one stack out of the container block named `blockName` into the selected
+-- slot. Returns false when there is no such block, it holds no contents, or it
+-- is empty -- which is the signal refuelFromChest uses to decide the chest had
+-- no coal.
+function M._suck(c, blockName, n)
+    if not blockName or not c.containers then return false end
+    local contents = c.containers[blockName]
+    if not contents or #contents == 0 then return false end
+    local stack = contents[1]
+    local dest  = c.inv[c.selected]
+    if dest and dest.name ~= stack.name then return false end
+    local room  = 64 - (dest and dest.count or 0)
+    if room <= 0 then return false end
+    local moved = math.min(stack.count, room, n or 64)
+    if moved <= 0 then return false end
+    if dest then dest.count = dest.count + moved
+    else c.inv[c.selected] = { name = stack.name, count = moved } end
+    stack.count = stack.count - moved
+    if stack.count <= 0 then table.remove(contents, 1) end
+    return true
+end
+
 function M._equip(c, side)
     local item = c.inv[c.selected]
     local cur  = c.equipped[side]

@@ -1236,10 +1236,46 @@ function fuel.dockRefuel()
 
     if gained > 0 then
         logInfo(string.format("Dock refuel +%d (now %d/%d)", gained, fuel.level(), fuel.max()))
-    else
-        logWarn("Dock refuel: no coal found in station — check chest below dock!")
+        return true
     end
-    return gained > 0
+
+    logWarn("Dock refuel: no coal found in station — check chest below dock!")
+
+    -- Fall back to the turtle's own fuel ender chest.
+    --
+    -- dockRefuel only ever sucked from the dock station chest, so a miner
+    -- carrying a full coal ender chest could not top itself up at the dock. It
+    -- then cleared the flat 500-fuel pre-departure gate and flew out on fuel
+    -- that could not bring it home. On 1.9.7 that stranded one miner mid-air at
+    -- 0 fuel and brought a second home nearly empty.
+    --
+    -- MINER only, deliberately: delivery and support must stay behaviourally
+    -- identical, and they are not the roles that strand thousands of blocks out.
+    if _self.role ~= proto.ROLE.MINER then return false end
+
+    -- Never dig here. refuelFromChest falls back to digging when down, up and
+    -- front are all blocked, and at a dock the blocked space below is the
+    -- station chest itself. Bailing out is better than breaking it.
+    if turtle.detectDown() and turtle.detectUp() and turtle.detect() then
+        logWarn("Fuel EC fallback skipped — no free space to deploy without digging")
+        return false
+    end
+
+    logInfo("Dock chest dry — falling back to the fuel ender chest")
+    local ecBefore = fuel.level()
+    local target   = fuel.max() * 0.8   -- same 80% mark dockRefuel considers "full"
+    for _ = 1, 8 do
+        if fuel.level() >= target then break end
+        if not fuel.protectedRefuelFromChest() then break end
+    end
+    local ecGained = fuel.level() - ecBefore
+    if ecGained > 0 then
+        logInfo(string.format("Fuel EC refuel +%d (now %d/%d)",
+            ecGained, fuel.level(), fuel.max()))
+        return true
+    end
+    logWarn("Fuel EC refuel yielded nothing — is the coal ender chest stocked?")
+    return false
 end
 
 -- refuelFromChest, run through the installed dig-tool wrapper when there is one.
