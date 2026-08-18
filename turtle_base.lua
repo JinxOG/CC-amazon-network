@@ -1183,15 +1183,44 @@ function fuel.refuelFromChest()
         turtle.refuel()   -- burns coal; EC is not burnable so this is safe
     end
 
-    -- Find chest in any slot (1-16) and move to CHEST_SLOT
-    for slot = 1, 16 do
-        local item = turtle.getItemDetail(slot)
-        if item and item.name == CHEST_ITEM then
-            if slot ~= CHEST_SLOT then
-                turtle.select(slot)
-                turtle.transferTo(CHEST_SLOT)
+    -- Recover the deployed chest into CHEST_SLOT, taking exactly ONE item.
+    --
+    -- Both of this turtle's ender chests share a single item name (EnderStorage
+    -- separates them by colour frequency, not registry id), so neither this
+    -- search nor getItemDetail can tell the fuel chest from the ore/delivery
+    -- chest in the slot above. Two consequences, both observed:
+    --
+    --   * Scanning all 16 slots could "recover" the chest out of slot 16, which
+    --     leaves a miner with nowhere to dump ore for the rest of the job.
+    --   * The dug chest can merge into that slot's existing chest stack, and
+    --     transferTo with no count then moves BOTH, emptying slot 16. Probing
+    --     the field refuel showed exactly that: slot 15 ended with 2 chests and
+    --     slot 16 with none.
+    --
+    -- So: prefer the working slots, and only ever draw from a reserved slot when
+    -- it holds 2+ chests (proof ours merged in), never a lone one.
+    local function chestAt(s)
+        local i = turtle.getItemDetail(s)
+        if i and i.name == CHEST_ITEM then return i end
+        return nil
+    end
+    if not chestAt(CHEST_SLOT) then
+        local from
+        for slot = 1, CHEST_SLOT - 1 do
+            if chestAt(slot) then from = slot; break end
+        end
+        if not from then
+            for slot = CHEST_SLOT + 1, 16 do
+                local i = chestAt(slot)
+                if i and i.count >= 2 then from = slot; break end
             end
-            break
+        end
+        if from then
+            turtle.select(from)
+            turtle.transferTo(CHEST_SLOT, 1)
+        else
+            logWarn(string.format(
+                "Entangled chest not recovered into slot %d — check inventory", CHEST_SLOT))
         end
     end
     turtle.select(1)
