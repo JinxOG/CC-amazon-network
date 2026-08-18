@@ -219,7 +219,7 @@ The dispatcher uses this to decide whether a given worker can take a given job.
 | `MINE` | pickaxe equipped + chunk coverage (own chunky or placed loader) |
 | `SCAN` | geo scanner in inventory (placed and picked up per scan) |
 | `DELIVER` | payload ender chest in slot 16 |
-| `HARVEST` | pickaxe — plus possibly axe/shovel, **pending V4** |
+| `HARVEST` | pickaxe + sapling stock for replanting (§6.6) — plus possibly axe/shovel, **pending V4** |
 | `BUILD` | builder class TBD — **pending Probe C** |
 
 ### 6.5 Generalised tool carry
@@ -240,11 +240,30 @@ and an axe dig a log at identical speed.
 
 The tool decides only two things: **whether the block breaks at all** (harvest
 level / tool-type check) and **what it drops**. So extra tools are justified only
-by drop correctness — modded blocks that gate drops behind a tool type, and
-shears for leaves→saplings if sustainable forestry is ever wanted rather than
-stripping a site bare. Each additional tool costs an inventory slot and another
-state in the most defect-prone code in the project, so the cost is only paid once
-the benefit is measured.
+by drop correctness — modded blocks that gate drops behind a tool type. Each
+additional tool costs an inventory slot and another state in the most
+defect-prone code in the project, so the cost is only paid once the benefit is
+measured.
+
+**Shears are not required for sustainable forestry, and would work against it.**
+Leaves drop saplings (chance-based) when broken by *anything except* shears or
+Silk Touch; with shears the leaf **block** drops instead and no sapling. The
+worker therefore breaks leaves with the pickaxe it already carries. Shears are
+justified only if leaf blocks are separately wanted as a building material — it
+is either/or per leaf block, never both — and are gated on **V7**.
+
+### 6.6 Sustainable forestry
+
+Harvest sites **regrow**. A `HARVEST` job targeting trees carries a **replant
+obligation**: collect saplings from broken leaves and replant before leaving.
+
+Two consequences that reach beyond the harvest job itself:
+
+- **The worker must carry sapling stock** (one inventory slot per species in
+  play), seeded from RS if the site's own drops are insufficient.
+- **A forestry site is a renewable stock, not a finite one** (§7.3). Its census
+  recovers over time, so it must not be treated as depleted after harvest the way
+  a mined-out ore sector is.
 
 ---
 
@@ -285,6 +304,11 @@ filter and deciding what to keep.**
 This policy is already designed for ore and generalises to logs and dirt
 unchanged.
 
+**Renewable resources regrow.** Ore is finite: a mined-out sector stays
+mined-out. A replanted forestry site (§6.6) recovers, so its census must age
+*upward*, not merely decay in confidence. A site must never be marked permanently
+depleted on the strength of one post-harvest scan.
+
 ### 7.4 Storage constraint
 
 Coordinates **never** enter `state.persistentZones`, **never** enter the `/state`
@@ -303,7 +327,7 @@ the approval gate.
 |---|---|---|
 | `RS_CRAFT` | Refined Storage resolves it, including machine chains | **Auto-detected live** via `listCraftableItems()` |
 | `GEO_MINE` | Ore, coordinate-indexed | Built |
-| `HARVEST` | Surface resources at indexed coordinates — logs, specific dirt | Not built |
+| `HARVEST` | Surface resources at indexed coordinates — logs, specific dirt. **Tree harvests carry a replant obligation** (§6.6) | Not built |
 | `EXCAVATE` | Bulk region dig | Not built, optional |
 | `HUMAN_SUPPLY` | The player | Flagged at plan time |
 
@@ -676,6 +700,7 @@ built on an assumption about their answer.**
 | **V4** | Does this modpack require an axe/shovel for the **drops** we want, or does a diamond pickaxe suffice? Speed is settled and is not part of this question (§6.5). Test: dig a modded log with a pickaxe turtle, check the inventory. | Whether extra tool slots are worth their cost (§6.5) |
 | **V5 / Probe D** | Android failure modes: chunk unload, death, inventory, clean reboot and re-register | Whether unattended overnight builds are realistic |
 | **V6** | Single modem message ceiling — an unfiltered ~8 KB assign payload is the largest thing on the wire | Whether chunked transfer is needed |
+| **V7** | Can a turtle equip **shears** as an upgrade in this pack? CC:Tweaked ships upgrades for the diamond tools; shears may need a datapack. | Only whether leaf **blocks** are obtainable as a material. Sustainable forestry does **not** depend on this (§6.5) |
 
 ---
 
