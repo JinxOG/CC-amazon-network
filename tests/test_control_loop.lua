@@ -428,4 +428,43 @@ function(assert_eq)
         "the fuel preflight must try dockRefuel before refusing the job")
 end
 
+-- The `stand` square must be FACTUAL, not aspirational (SOURCE-ONLY, weaker).
+--
+-- placeLoader records the loader from the turtle's actual position, so if
+-- `stand` is built from the coordinates the turtle was merely told to fly to,
+-- the two describe different squares whenever the approach falls short --
+-- another miner in the way being the common cause. The loader then goes down
+-- where the turtle really is, retrieval flies to where it meant to be, and the
+-- record check fails with loader_position_mismatch. That is non-recoverable, so
+-- the miner goes home and leaves its loader standing, which in turn blocks it
+-- from every future job through the loader_outstanding guard. Two miners were
+-- lost that way in a single four-miner run.
+suite["the placement stand square comes from the real position (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    -- The exact buggy form: intended coordinates captured as if they were fact.
+    assert_eq(src:find("stand%s*=%s*{%s*x%s*=%s*standX,%s*y%s*=%s*travelY,%s*z%s*=%s*standZ") == nil, true,
+        "stand must not be built from the intended coordinates")
+
+    -- It must be read back from the turtle instead.
+    local standAt = src:find("stand%s*=%s*{%s*x%s*=%s*standPos%.x")
+    assert_eq(standAt ~= nil, true, "stand must be built from a position read back via base.getPos()")
+    local posAt = src:find("local standPos%s*=%s*base%.getPos%(%)")
+    assert_eq(posAt ~= nil, true, "standPos must come from base.getPos()")
+    assert_eq(posAt < standAt, true, "the position must be read before stand is built from it")
+
+    -- And the approach itself must be checked, or the turtle places a loader
+    -- from wherever it happened to stop.
+    local moveAt = src:find("local mOk, mErr = base%.move%.to%(standX, travelY, standZ%)")
+    assert_eq(moveAt ~= nil, true, "the approach to the placement square must capture its result")
+    local guard = src:sub(moveAt, standAt)
+    assert_eq(guard:find("if not mOk then") ~= nil, true,
+        "a failed approach must be handled before anything is placed")
+    assert_eq(guard:find("base%.sendFailed") ~= nil, true,
+        "a failed approach must fail the job rather than placing anyway")
+end
+
 return suite

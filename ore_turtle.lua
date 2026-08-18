@@ -1229,7 +1229,25 @@ local function mineJob(job)
         if curPos.y > travelY then
             base.move.to(standX, curPos.y, standZ)
         end
-        base.move.to(standX, travelY, standZ)
+        -- The result MUST be checked. placeLoader records the loader from the
+        -- turtle's ACTUAL position, while `stand` below used to record the
+        -- intended one -- so a move that ran out of retries (another miner in
+        -- the way, most often) left the two describing different squares. The
+        -- loader went down wherever the turtle really was, retrieval flew to
+        -- where it meant to be, and the block ahead failed the record check
+        -- with loader_position_mismatch. That is a non-recoverable failure, so
+        -- the miner went home and left its loader standing -- which then
+        -- blocked it from taking any further job via the loader_outstanding
+        -- guard. Two miners were lost that way in one run.
+        local mOk, mErr = base.move.to(standX, travelY, standZ)
+        if not mOk then
+            print("[MINER] Cannot reach the placement square: " .. tostring(mErr))
+            base.sendProgress("sector_setup_failed: approach_failed: " .. tostring(mErr))
+            soloReturn()
+            base.sendFailed("sector_setup_failed: approach_failed: " .. tostring(mErr), true)
+            _jobId = nil
+            return
+        end
         base.move.face(PLACE_FACING)
 
         -- Hand chunk duty to the placed loader before giving up our own. The
@@ -1237,7 +1255,13 @@ local function mineJob(job)
         -- chunk: placing one chunk off would leave the sector's far edge
         -- unloaded.
         local acx, acz = geofence.chunkOf(sx, sz)
-        stand = { x = standX, y = travelY, z = standZ, facing = base.getFacing() }
+        -- Taken from where the turtle ACTUALLY is, never from where it was told
+        -- to go. placeLoader records the loader relative to base.getPos() too,
+        -- so both now describe the same square by construction and cannot drift
+        -- apart even if the move above ever succeeds only partially.
+        local standPos = base.getPos()
+        stand = { x = standPos.x, y = standPos.y, z = standPos.z,
+                  facing = base.getFacing() }
         _beaconLost     = false
         _lastBeaconPoll = os.epoch("utc") / 1000
 

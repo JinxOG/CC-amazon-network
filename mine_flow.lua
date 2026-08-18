@@ -464,7 +464,16 @@ function mine_flow.retrieveLoader()
     local p = _hooks.pos()
     local ax, az = aheadBlock(p)
     if ax ~= recorded.x or p.y ~= recorded.y or az ~= recorded.z then
-        return false, "loader_position_mismatch"
+        -- Carry the delta, not just the verdict. When this fired in the field
+        -- the reason alone said a mismatch happened but not by how much, and
+        -- the size and axis of the gap is what distinguishes "the approach
+        -- stopped short" from "the facing is wrong" from "the record is stale".
+        -- Reconstructing it cost a round of live polling that this makes
+        -- unnecessary.
+        return false, string.format(
+            "loader_position_mismatch: ahead=%d,%d,%d recorded=%d,%d,%d (at %d,%d,%d facing %d)",
+            ax, p.y, az, recorded.x, recorded.y, recorded.z,
+            p.x, p.y, p.z, p.facing or -1)
     end
     local inspected, block = turtle.inspect()
     if not inspected or block.name ~= equipment.ITEMS.LOADER_TURTLE then

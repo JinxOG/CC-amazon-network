@@ -802,7 +802,16 @@ return {
 
         local ok, reason = flow.retrieveLoader()
         assert_eq(ok, false)
-        assert_eq(reason, "loader_position_mismatch")
+        assert_eq(reason:match("^loader_position_mismatch") ~= nil, true,
+            "must still be reported as a position mismatch, got: " .. tostring(reason))
+        -- The reason carries the delta as well as the verdict. In the field the
+        -- bare string said a mismatch happened but not by how much, and the
+        -- axis and size of the gap is exactly what separates "the approach
+        -- stopped short" from "the facing is wrong" from "the record is stale".
+        assert_eq(reason:find("ahead=0,80,1", 1, true) ~= nil, true,
+            "must report the block actually ahead, got: " .. reason)
+        assert_eq(reason:find("recorded=0,80,-1", 1, true) ~= nil, true,
+            "must report the recorded loader position, got: " .. reason)
         assert_eq(world["0,80,1"], "minecraft:stone", "the stone must never be dug")
         assert_eq(world["0,80,-1"], eqm.ITEMS.LOADER_TURTLE, "the real loader must be left alone")
         assert_eq(ls.hasPlaced(), true, "the real loader is still out there -- the record must survive")
