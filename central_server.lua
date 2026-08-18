@@ -35,6 +35,10 @@ local CFG = {
     -- result, or a miner can be too low to dispatch yet too full to refuel --
     -- the dead band that stranded two miners at their docks on 1.9.8-1.9.11.
     MINER_IDLE_FUEL_TARGET = 20000,
+    -- How long a turtle is held back from dispatch after refusing a job for a
+    -- reason retrying cannot fix. Long enough that the rest of the fleet gets
+    -- the work, short enough that a turtle fixed by hand returns on its own.
+    DISPATCH_BLOCK_SEC = 600,
     -- Web dashboard bridge
     BRIDGE_URL        = "http://127.0.0.1:3000/update",
     BRIDGE_INTERVAL   = 3,      -- seconds between state pushes
@@ -97,6 +101,16 @@ local registry = {}
 -- from the ACK before receiving the job assignment.
 function registry.register(id, role, fuel, fuelMax, position, midJob)
     local isNew = state.registry[id] == nil
+
+    -- Registering means the turtle has just booted, so whatever made it unfit
+    -- for dispatch (an outstanding loader, a missing chest) has either been
+    -- fixed or will re-assert itself on the next attempt. Either way the stale
+    -- hold must not outlive the reboot.
+    local prev = state.registry[id]
+    if prev then
+        prev.dispatchBlockedUntil = nil
+        prev.dispatchBlockReason  = nil
+    end
 
     -- Assign or recover a dock
     local dockRole = (role == proto.ROLE.SUPPORT) and "SUPPORT" or "DELIVERY"
@@ -199,6 +213,7 @@ function registry.update(id, status, fuel, position, jobId, version)
 end
 
 function registry.getIdle(role)
+    local now = os.epoch("utc")
     local result = {}
     for _, t in pairs(state.registry) do
         local fuelOk = (t.fuel or 0) > 0
@@ -207,9 +222,20 @@ function registry.getIdle(role)
         if t.role == proto.ROLE.MINER and (t.fuel or 0) < CFG.MIN_DISPATCH_FUEL then
             fuelOk = false
         end
+        -- A turtle that just refused a job for a reason retrying cannot fix --
+        -- an outstanding loader, a missing ender chest, a bad slot layout -- is
+        -- held back briefly so it stops swallowing dispatches.
+        --
+        -- getIdle sorts by fuel descending, so the fullest turtle is always
+        -- offered work first. A miner with a stale loader_state record was
+        -- therefore picked for every job in turn, refused each one instantly,
+        -- and three healthy miners never got a look in. Observed live: jobs
+        -- 0680, 0681 and 0682 all went to the same turtle and all failed with
+        -- loader_outstanding, so a four-miner order put exactly one miner out.
+        local blockedOk = not (t.dispatchBlockedUntil and now < t.dispatchBlockedUntil)
         if t.online and t.status == proto.STATUS.IDLE
                     and (role == nil or t.role == role)
-                    and fuelOk then
+                    and fuelOk and blockedOk then
             table.insert(result, t)
         end
     end
@@ -883,7 +909,24 @@ function jobQueue.fail(jobId, reason, recoverable)
     jobQueue._hist(jobId, "failed", reason or "unknown")
 
     local t = state.registry[job.assignedTo or ""]
-    if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
+    if t then
+        t.status = proto.STATUS.IDLE; t.jobId = nil
+        -- A non-recoverable refusal means the turtle itself is unfit -- an
+        -- outstanding loader, a missing ender chest, a wrong slot layout --
+        -- and handing it the next job changes nothing. Hold it back so the
+        -- rest of the fleet gets the work, and record why for the dashboard.
+        -- Time-boxed rather than permanent: the operator fixing the turtle is
+        -- the normal resolution and must not need a server restart to land.
+        -- Cleared outright when the turtle re-registers, since a reboot is the
+        -- other way these get fixed.
+        if recoverable == false then
+            t.dispatchBlockedUntil = os.epoch("utc") + (CFG.DISPATCH_BLOCK_SEC * 1000)
+            t.dispatchBlockReason  = reason or "unrecoverable failure"
+            logWarn(string.format(
+                "%s held back from dispatch for %ds — %s",
+                job.assignedTo, CFG.DISPATCH_BLOCK_SEC, t.dispatchBlockReason))
+        end
+    end
 
     -- Track sector fail count before clearing the zone.
     -- After 3 failures the sector is blacklisted in ensureMineZone.
@@ -2826,6 +2869,12 @@ function server.run()
                 -- turtle's chunk field.
                 phase    = t.phase,
                 phaseAt  = t.phaseAt or 0,
+                -- Why an idle turtle is not being given work. Without this a
+                -- miner held back after refusing a job looks identical to one
+                -- that simply has not been picked yet, which is what made
+                -- "only one turtle went out" so hard to explain.
+                blockReason = t.dispatchBlockReason or nil,
+                blockedUntil = t.dispatchBlockedUntil or nil,
                 commsGap = t.commsGap and true or false,
                 chunkX   = t.chunk and t.chunk.cx or nil,
                 chunkZ   = t.chunk and t.chunk.cz or nil,
