@@ -276,6 +276,12 @@ end
 -- same turtle just re-registers it at its new position on the next beacon.
 local LOADER_STALE_SEC = 30
 
+-- How often to repeat the "heartbeat from unknown node" warning per sender.
+-- The log is a 500-line ring buffer and only its last 100 lines reach /state,
+-- so one un-throttled repeating warning erases the operator's entire view.
+local UNKNOWN_HEARTBEAT_LOG_INTERVAL_MS = 300000   -- 5 min per sender
+local _unknownHeartbeatLogged = {}
+
 local function loaderIsStale(t, now)
     return t.role == proto.ROLE.LOADER
        and t.lastSeen
@@ -1561,8 +1567,24 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
             logInfo("UPDATE_ALL: delivered to " .. msg.from .. " (now idle)")
         end
     else
-        -- Unknown turtle (server restarted) — no ACK means missed counter runs up → auto re-registers
-        logWarn("Heartbeat from unknown turtle: " .. msg.from .. " (will re-register shortly)")
+        -- Unknown sender (server restarted) — no ACK means its missed counter
+        -- runs up and turtle_base re-registers on its own.
+        --
+        -- Throttled per sender. A node that never re-registers -- android_01 in
+        -- practice, which heartbeats but does not run turtle_base's
+        -- re-registration path -- logged one WARN per heartbeat and filled the
+        -- 500-line ring buffer. Observed live: ~80 of the last 100 lines were
+        -- this one message, which pushed every dispatch, fuel and failure line
+        -- out of the /state log window and left both the dashboard and any
+        -- diagnosis blind exactly when miners were misbehaving.
+        local nowMs = os.epoch("utc")
+        local last  = _unknownHeartbeatLogged[msg.from] or 0
+        if (nowMs - last) >= UNKNOWN_HEARTBEAT_LOG_INTERVAL_MS then
+            _unknownHeartbeatLogged[msg.from] = nowMs
+            logWarn(string.format(
+                "Heartbeat from unknown node: %s (not registered; further warnings suppressed for %ds)",
+                msg.from, UNKNOWN_HEARTBEAT_LOG_INTERVAL_MS / 1000))
+        end
     end
 end
 
