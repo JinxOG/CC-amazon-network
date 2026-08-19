@@ -467,4 +467,71 @@ function(assert_eq)
         "a failed approach must fail the job rather than placing anyway")
 end
 
+-- Boot must survive a missing modem (SOURCE-ONLY, weaker).
+--
+-- comms.init() calls error() when it cannot equip a modem, and reconcile cannot
+-- recover one that is not in the inventory -- reachable in the field because
+-- turtle_base's refuelFromChest drops slots 1-14 on the ground, and slot 4 is
+-- the modem. Unprotected, that error escaped module load and everything below
+-- it never ran, including recoverPlacedLoader(), so a turtle that lost its modem
+-- also permanently abandoned its chunk loader. Loader recovery needs no comms
+-- (Invariant E), so it must still happen.
+suite["a missing modem must not abort boot before loader recovery (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local guarded = src:find("pcall%(base%.init, proto%.ROLE%.MINER%)")
+    assert_eq(guarded ~= nil, true, "base.init must be pcall-protected at boot")
+
+    -- The bare call must be gone, not merely accompanied by a guarded one.
+    assert_eq(src:find("\nbase%.init%(") == nil, true,
+        "an unprotected base.init call must not remain")
+
+    -- Loader recovery must still be reached after a failed init.
+    local recoverAt = src:find("pcall%(recoverPlacedLoader%)")
+    assert_eq(recoverAt ~= nil, true, "recoverPlacedLoader must still run at boot")
+    assert_eq(guarded < recoverAt, true,
+        "boot must reach loader recovery after the guarded init, not before it")
+end
+
+-- The miner must empty its ore before any refuel (SOURCE-ONLY, weaker).
+--
+-- refuelFromChest clears "debris" by dropping slots 1-14 on the ground when
+-- fewer than 4 are free. On a miner that is the scanner, the carried loader, the
+-- stowed tool and the modem. Dumping first means the count is never low enough
+-- to trigger it.
+suite["ore is dumped before every refuel path (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    -- Path 1: the in-field fuel check.
+    local checkAt = src:find("local function checkFuel%(jobId%)")
+    assert_eq(checkAt ~= nil, true, "checkFuel moved or vanished")
+    local dumpAt  = src:find("dumpBeforeRefuel%(\"refuel\"%)", checkAt)
+    local burnAt  = src:find("tryRefuelSlot14%(%)", checkAt)
+    assert_eq(dumpAt ~= nil, true, "checkFuel must dump before refuelling")
+    assert_eq(dumpAt < burnAt, true, "the dump must precede the first refuel step")
+
+    -- Path 2: FORCE_REFUEL, which lands straight in refuelFromChest.
+    local forceAt = src:find("base%.setRefuelFn%(function%(%)")
+    assert_eq(forceAt ~= nil, true, "the FORCE_REFUEL handler moved or vanished")
+    local fDumpAt = src:find("dumpBeforeRefuel%(\"force refuel\"%)", forceAt)
+    local fChestAt = src:find("base%.fuel%.refuelFromChest%(%)", forceAt)
+    assert_eq(fDumpAt ~= nil, true, "FORCE_REFUEL must dump before refuelling")
+    assert_eq(fDumpAt < fChestAt, true,
+        "the dump must precede refuelFromChest on the FORCE_REFUEL path")
+
+    -- The dump must never dig to make room: docked, the block below is the
+    -- station chest, and destroying it to dump ore is worse than not dumping.
+    local defAt = src:find("dumpBeforeRefuel = function%(why%)")
+    assert_eq(defAt ~= nil, true, "dumpBeforeRefuel definition moved or vanished")
+    local body = src:sub(defAt, defAt + 1400)
+    assert_eq(body:find("turtle%.detectDown%(%)") ~= nil, true,
+        "dumpBeforeRefuel must refuse to dump when the space below is occupied")
+end
+
 return suite

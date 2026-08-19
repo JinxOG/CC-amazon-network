@@ -107,13 +107,42 @@ local SERVER_DOWN_LIMIT_MS = 300000   -- 5 minutes
 -- 1.18+ ore peaks: iron/coal y=16, copper/gold y=0, redstone y=-32, diamond y=-52.
 local SCAN_LEVELS = { 16, 0, -32, -52 }
 
-base.init(proto.ROLE.MINER)
+-- base.init is allowed to fail without killing the whole program.
+--
+-- comms.init() calls error("No modem found") when it cannot equip a modem, and
+-- equipment.reconcile() cannot recover one that is not in the inventory. That is
+-- reachable in the field: turtle_base's refuelFromChest drops slots 1-14 on the
+-- ground when the inventory is nearly full, and slot 4 is the modem (reported to
+-- W3, 2026-08-18).
+--
+-- Unprotected, that error propagated out of module load and everything below
+-- this line never ran -- including recoverPlacedLoader(), so a turtle that lost
+-- its modem also permanently abandoned its placed chunk loader, and the
+-- os.reboot() at the bottom never fired either. The turtle simply stopped, deaf
+-- and motionless, with an error on screen. One was found only because it
+-- happened to be near the warehouse.
+--
+-- Booting on is strictly better: loader recovery does not need comms (Invariant
+-- E -- a worker must reach its dock with no server contact at all), so a miner
+-- that cannot talk can still retrieve its loader and stop being a lost turtle
+-- plus a permanently force-loaded chunk.
+local _commsOk, _commsErr = pcall(base.init, proto.ROLE.MINER)
+if not _commsOk then
+    print("[MINER] BOOT DEGRADED: " .. tostring(_commsErr))
+    print("[MINER] Continuing without comms so the loader can still be recovered.")
+    print("[MINER] Check slots: 1 scanner, 2 loader, 3 tool, 15 fuel EC, 16 ore EC.")
+end
 
 -- Forward declaration: checkFuel (defined below) calls rescueProtectedItems,
 -- which is a `local function` further down the file. Without this declaration
 -- that call compiled to a GLOBAL lookup and was nil at runtime — a latent
 -- "attempt to call a nil value" crash on the fuel-EC-displaced path.
 local rescueProtectedItems
+
+-- Forward declaration: checkFuel and the FORCE_REFUEL handler both run before
+-- dumpOres is defined, and both must empty the ore first. See its definition
+-- below for why.
+local dumpBeforeRefuel
 
 -- ── Phase reporting ──────────────────────────────────────────────────────────
 -- base has no job-id accessor, so the miner keeps its own copy for the phase
@@ -415,6 +444,10 @@ end
 base.setDigToolWrapper(withDigTool)
 
 base.setRefuelFn(function()
+    -- FORCE_REFUEL arrives while docked and idle, and goes straight into
+    -- refuelFromChest — the call that drops slots 1-14 when the inventory is
+    -- tight. Empty the ore first for the same reason checkFuel does.
+    dumpBeforeRefuel("force refuel")
     withDigTool("force refuel", function()
         while turtle.getFuelLevel() < turtle.getFuelLimit() do
             if not base.fuel.refuelFromChest() then break end  -- EC empty or missing
@@ -552,6 +585,11 @@ end
 local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
 
+    -- Step 0: make room BEFORE any refuel touches the inventory. See
+    -- dumpBeforeRefuel — a refuel with full mining slots makes refuelFromChest
+    -- drop the scanner, loader, tool and modem on the ground.
+    dumpBeforeRefuel("refuel")
+
     -- Step 1: burn slot-14 coal reserve (needs no tool)
     tryRefuelSlot14()
     if turtle.getFuelLevel() >= FUEL_WARN then return end
@@ -679,6 +717,50 @@ end
 local function dumpOres()
     reportPhase(proto.PHASE.DUMPING)
     withDigTool("ore dump", dumpToEC)
+end
+
+-- Mining slots that must be free before a refuel is allowed to start.
+--
+-- turtle_base's refuelFromChest triggers its debris clear at fewer than 4 free
+-- slots counted across 1-14. On a miner, slots 1-3 are permanently occupied and
+-- 14 usually holds coal, so essentially the whole margin is the mining slots.
+local REFUEL_FREE_SLOTS = 4
+
+-- Empty the ore before any refuel.
+--
+-- refuelFromChest clears "debris" by DROPPING slots 1-14 on the ground when
+-- fewer than 4 are free (turtle_base.lua, W3-owned; reported 2026-08-18). On a
+-- miner that range holds the geo scanner, the carried chunk loader, the stowed
+-- tool and the modem, so a refuel with a full inventory throws the turtle's own
+-- hardware away -- and once the modem is gone, equipment.reconcile() cannot
+-- recover it and the turtle goes permanently silent.
+--
+-- Dumping first means the count is never low enough for that branch to run.
+-- It is also correct on its own terms: refuelling with a full inventory is
+-- pointless, because the coal has nowhere to land.
+--
+-- This narrows the window. It does not close it -- the drop can still happen
+-- before the miner reaches a dump point, and it does nothing for other roles.
+-- The whitelist in refuelFromChest is the real fix and belongs to W3.
+dumpBeforeRefuel = function(why)
+    local free = 0
+    for s = MINE_FIRST, MINE_LAST do
+        if turtle.getItemCount(s) == 0 then free = free + 1 end
+    end
+    if free >= REFUEL_FREE_SLOTS then return end
+
+    -- Never dig to make room for the chest here. dumpToEC digs whatever is
+    -- below it, and when the miner is docked that block is the dock station
+    -- chest. Skipping is always safe; destroying the station chest is not.
+    if turtle.detectDown() then
+        print(string.format(
+            "[MINER] Pre-refuel dump skipped — no free space below (%d free slots)", free))
+        return
+    end
+
+    print(string.format("[MINER] Dumping ore before %s — only %d free mining slot(s)",
+        why, free))
+    dumpOres()
 end
 
 local function inventoryFull()
