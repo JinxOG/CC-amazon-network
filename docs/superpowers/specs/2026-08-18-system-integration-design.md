@@ -926,18 +926,143 @@ Four things that cost nothing today and are painful retrofits later.
 
 ## 16. Roadmap
 
-Each phase unblocks the next. Nothing is parallel-blocked on a phase above it
-once §11 contracts are fixed.
+**This roadmap sequences risk, not features.** An earlier version ordered the
+work by capability — index, then planner, then building. That ordering assumed a
+greenfield project. This one does not: **the system is live, with workers in the
+field, and it is currently hard to diagnose.** You cannot safely build on
+something you cannot see failing.
 
-| Phase | Work | Unblocks |
-|---|---|---|
-| **0 — now** | Finish mining consolidation; ore coordinate index | The index pattern everything copies |
-| **1** | Resource index generalisation: census tier, survey job, non-ore classes | Knowing what the world has |
-| **2** | `planner` computer: project lifecycle, BOM, stock check, approval | The whole autonomous loop |
-| **3** | Build execution: placement sets, column protocol, staging | Actually building things |
-| **4** | Worker consolidation; harvest workers | One worker type (P2) |
-| **5** | Road generator + Dynmap drawing | Parametric builds |
-| **6** | Auth, subaccounts, quotas, permissions | Other people |
+Each stage has an **exit gate**. Do not start the next stage until the gate is
+true. Stages list every workstream that acts in them; anything not listed is
+idle or continuing prior work.
+
+### Stage 0 — Make the system diagnosable
+
+**Owner: W3 alone. Nothing else starts.**
+
+| Task | Why it is first |
+|---|---|
+| Failed jobs keep their reason in `/state` | **High.** Three incidents read as "dispatch is broken" when one turtle was refusing work. Every later stage is debugged through this payload. |
+| Bound the retrieval comms gap; make a worker in it recallable | **High.** If the modem swap-out fails, the worker is permanently deaf with no remote recovery. |
+| Make `central_server.lua` requireable under the test harness | It runs its main loop at load. This blocked five of W1's tests in two days, and W3's own stage-1 work is untestable until it is fixed. |
+| Invariant J logging on the `tryMove` block wait | A queued worker and a dead worker are currently indistinguishable for 120 seconds. |
+
+**Exit gate:** you can tell *why* a job failed from `/state` alone, without
+reading turtle logs, and a blocked worker says so.
+
+### Stage 1 — Foundations others build against
+
+**Owners: W3 and W6, in parallel.** They share no files.
+
+| Owner | Task |
+|---|---|
+| W3 | The four §15 hooks: `owner`, `priority`, `capabilities[]`, placement set as sole build input |
+| W3 | Capability-matched assignment (§6.4) |
+| W3 | The shared inbox — retires the Invariant G grandfather clause |
+| W6 | The §11.7 stock-and-craft interface: `STOCK_QUERY`, `CRAFT_REQUEST`, `CRAFT_STATUS` with `missing[]` |
+| W6 | `FUEL_CHEST` / `PAYLOAD_CHEST` in `equipment.ITEMS` — with §6.1's slot-position caveat |
+
+**Exit gate:** W2 and W4 can build against real fields rather than guesses, and
+`missing[]` returns something truthful.
+
+### Stage 2 — World knowledge, and the probe that gates two streams
+
+**Owners: W1, W4, W5, in parallel.**
+
+| Owner | Task |
+|---|---|
+| W1 | Ore coordinate index (`oreindex.lua`, `oreindex_store.lua`, packed codec, per-sector store) |
+| W1 | Census tier — remove the `isOre` filter at `ore_turtle.lua:730`, store name→count for every block type |
+| W1 | Extended `SECTOR_ASSIGN` / `SECTOR_SCAN` payloads per §11.3 |
+| W4 | **Run Probe C.** Short, and unblocks both W4's builder role and W5's parser |
+| W4 | Fix the two `android_base.lua` defects: refuel mechanism, and the inbox split before any builder role |
+| W5 | Bridge auto-start as a Windows service (§4.2) |
+| W5 | Placement set format (§11.6) |
+
+**Exit gate:** V6 (modem message ceiling) answered, V1 (Probe C) answered, and a
+surveyed sector returns coordinates a second miner can consume without rescanning.
+
+### Stage 3 — The planner
+
+**Owner: W2 alone.** First point at which "push a task" means anything.
+
+| Task |
+|---|
+| Project lifecycle state machine (§9) |
+| Placement set → BOM aggregation, with the world-drift buffer |
+| Deficit calculation against W6's stock |
+| Acquisition method assignment (§8), including live capability query |
+| Feasibility check — `HUMAN_SUPPLY` and no-capable-worker blockers |
+| The approval screen payload (§11.1 `PROJECT_PLAN`) |
+| `JOB_SUBMIT` emission to W3 |
+
+**Exit gate:** submitting a project produces a correct, complete plan with an
+honest blocker list — even if nothing executes it yet.
+
+### Stage 4 — Building, then the vertical slice
+
+**Owners: W4 and W5, then everyone.**
+
+| Owner | Task |
+|---|---|
+| W4 | Column protocol (§11.4), reassignable per P5 |
+| W4 | Builder implementation — class decided by Probe C |
+| W4 | Static loader blanket at build sites (§12.1) |
+| W5 | `.litematic` → placement set converter |
+| W6 | Build staging: materials into a chest at the site |
+
+**Then, before anything else: drive one trivial project end to end.** A 3×3
+stone platform. Plan it, approve it, let the system mine or craft the deficit,
+stage it, build it, verify it.
+
+**This is the single highest-value task in the roadmap and it must not be
+deferred.** It is the first time all six contracts touch each other. It will find
+more integration defects than any amount of unit testing, because the failure
+mode being hunted is *contracts that were never exercised together* — and this
+project has direct evidence of that class of failure: the shared inbox was
+believed shipped for a week while no part of it existed in the code.
+
+**Exit gate — this is what "done" means.** A request submitted by a human is
+planned, approved, sourced, delivered, and built with no further intervention.
+The north star works. Everything after this stage widens a pipeline already
+proven to carry traffic.
+
+### Stage 5 — Scale
+
+**Owners: W3, W1.**
+
+| Owner | Task |
+|---|---|
+| W3 | Worker consolidation — one general-purpose `WORKER` (P2); retire `SUPPORT` |
+| W3 | Invariant I: dispatch/arrivals chokepoint throughput, ordering, bounded wait |
+| W1 | Harvest workers, replant obligation (§6.6), renewable site semantics (§7.3) |
+| W1 | `FUEL_WARN` scaled to distance rather than a flat 3000 |
+
+These pair deliberately: **consolidation increases traffic through the same
+single dispatch hole.** Growing the fleet and fixing the bottleneck belong in one
+stage, or the second problem is discovered by traffic jam.
+
+**Exit gate:** no worker is idle because of what it is, and fleet growth does not
+degrade throughput at the depot.
+
+### Stage 6 — Parametric builds, then other people
+
+**Owner: W5.**
+
+| Task |
+|---|
+| Road generator — cross-section profile extruded along a path |
+| Dynmap drawing UI feeding the generator |
+| Auth, subaccounts, quotas, permissions (§4.2, §15 `owner` field) |
+
+Auth is last deliberately: it is the only work in the roadmap with **no
+dependents**.
+
+### Staffing
+
+**Two to three concurrent workstreams is the honest ceiling**, not six. There is
+one working tree, no branch isolation, and the §13 owner column is the only thing
+preventing collisions (§14.1). Stages 0 and 3 are single-stream regardless.
 
 ---
 
