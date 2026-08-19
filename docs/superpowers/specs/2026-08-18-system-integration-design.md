@@ -1,8 +1,8 @@
 # System Integration Spec — the shared vision
 
-**Date:** 2026-08-18
-**Status:** Design approved; implementation plans not yet written
-**Protocol version at time of writing:** 1.9.13
+- **Date:** 2026-08-18
+- **Status:** Design approved; implementation plans not yet written
+- **Protocol version at time of writing:** 1.9.13
 
 ---
 
@@ -427,7 +427,7 @@ agreement; they may not be diverged from silently (P6).
 
 | Message | Direction | Payload |
 |---|---|---|
-| `PROJECT_SUBMIT` | bridge → planner | `{ projectId, kind, owner, priority, placementSetRef | goalSpec, autoApprove }` |
+| `PROJECT_SUBMIT` | bridge → planner | `{ projectId, kind, owner, priority, autoApprove }` plus either `placementSetRef` or `goalSpec` |
 | `PROJECT_PLAN` | planner → bridge | `{ projectId, bom, stock, deficits[], methods{}, blockers[], estimate }` |
 | `PROJECT_APPROVE` | bridge → planner | `{ projectId, owner }` |
 | `PROJECT_CANCEL` | bridge → planner | `{ projectId, owner, reason }` |
