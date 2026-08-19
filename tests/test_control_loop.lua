@@ -772,4 +772,38 @@ function(assert_eq)
         "the coal buffer slot must be exempt from the foreign-item dump")
 end
 
+-- The refuel make-room hook is installed (SOURCE-ONLY, weaker).
+--
+-- W3's base.setMakeRoomFn fires just before the debris sweep, and is inert until
+-- a role installs one. It is the ONLY thing covering fuel.ensureFuel() from the
+-- control loop, which reaches refuelFromChest with no W1 code in front of it --
+-- guarding the entrances could never have caught that path.
+suite["the refuel make-room hook is installed (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local installAt = src:find(
+        'base%.setMakeRoomFn%(function%(%) dumpIfInventoryTight%("refuel sweep"%) end%)')
+    assert_eq(installAt ~= nil, true,
+        "the make-room hook must be installed, or the sweep still drops ore on the ground")
+
+    -- The closure is built here but dumpIfInventoryTight is assigned much later,
+    -- so the forward declaration is load-bearing: without it the name compiles
+    -- to a GLOBAL lookup and is nil when the hook fires. This file already
+    -- carries that exact bug's scar for rescueProtectedItems.
+    local declAt = src:find("\nlocal dumpIfInventoryTight\n")
+    assert_eq(declAt ~= nil, true,
+        "dumpIfInventoryTight must be forward-declared as a local")
+    assert_eq(declAt < installAt, true,
+        "the forward declaration must precede the hook closure or it captures a nil global")
+
+    local assignAt = src:find("\ndumpIfInventoryTight = function%(why%)")
+    assert_eq(assignAt ~= nil, true,
+        "dumpIfInventoryTight must be assigned to the forward-declared local, not redeclared")
+    assert_eq(installAt < assignAt, true,
+        "precondition: the hook really is built before the function is assigned")
+end
+
 return suite

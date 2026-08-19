@@ -443,6 +443,26 @@ end
 -- that never install a wrapper keep calling refuelFromChest directly.
 base.setDigToolWrapper(withDigTool)
 
+-- Bank ore to the ore ender chest when turtle_base's refuel debris sweep is
+-- about to run, so it has nothing left to throw on the ground (W3, 1.9.26).
+--
+-- This is the only thing that covers fuel.ensureFuel() firing from the control
+-- loop: that path reaches refuelFromChest with no W1 code in front of it, so
+-- guarding the entrances with dumpIfInventoryTight never could have caught it.
+--
+-- dumpIfInventoryTight rather than dumpOres, because the two thresholds are
+-- provably compatible and this avoids pointless work. The sweep counts free
+-- slots across 1-14 and fires below 4; the dump counts free MINING slots 5-13
+-- and fires below 4. free(1..14) >= free(5..13) always, so free(5..13) >= 4
+-- implies free(1..14) >= 4 and the sweep would not have fired at all. Whenever
+-- the sweep fires, the dump fires too -- while dumpOres unconditionally would
+-- deploy and recover a chest on refuels that do not need one.
+--
+-- Safe to call from inside the dig-tool wrapper, which is where refuelFromChest
+-- normally runs: withDigTool short-circuits to fn() when a pickaxe is already
+-- equipped, so no nested upgrade swap happens. Verified, not assumed.
+base.setMakeRoomFn(function() dumpIfInventoryTight("refuel sweep") end)
+
 base.setRefuelFn(function()
     -- FORCE_REFUEL arrives while docked and idle, and goes straight into
     -- refuelFromChest — the call that drops slots 1-14 when the inventory is
