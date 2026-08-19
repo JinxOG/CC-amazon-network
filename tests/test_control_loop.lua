@@ -737,4 +737,33 @@ function(assert_eq)
         "the IDLE reset must come after the return that set RETURNING")
 end
 
+-- Ore squatting in a reserved slot is dumped (SOURCE-ONLY, weaker).
+--
+-- While the loader stands in the world its home slot is EMPTY, and turtle.dig()
+-- puts drops in the first free slot -- so ore lands in slot 2. dumpToEC used to
+-- skip every reserved slot, so that ore was never dumped: it sat there
+-- permanently and on retrieval the loader could not be returned home, landing in
+-- a mining slot instead. Seen in-world.
+suite["ore that lands in a reserved slot is still dumped (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("local function dumpToEC%(%)")
+    assert_eq(fnAt ~= nil, true, "dumpToEC moved or vanished")
+    local endAt = src:find("\nlocal function ", fnAt + 10) or #src
+    local body  = src:sub(fnAt, endAt)
+
+    assert_eq(body:find("foreignInReserved") ~= nil, true,
+        "dumpToEC must dump foreign items out of reserved slots")
+    -- Hardware must still be exempt wherever it sits.
+    assert_eq(body:find("protectedItemNames%[item%.name%]") ~= nil, true,
+        "hardware must stay exempt from dumping")
+    -- The coal buffer must NOT be emptied: coal in slot 14 is working as
+    -- intended, and dumping it would throw away the fuel just drawn from the EC.
+    assert_eq(body:find("s ~= S_COAL") ~= nil, true,
+        "the coal buffer slot must be exempt from the foreign-item dump")
+end
+
 return suite

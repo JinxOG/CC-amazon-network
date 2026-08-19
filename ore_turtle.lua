@@ -703,11 +703,30 @@ local function dumpToEC()
     turtle.placeDown()
     for s = 1, 16 do
         local item = turtle.getItemDetail(s)
-        if not PROTECTED[s]
-                and turtle.getItemCount(s) > 0
-                and not (item and protectedItemNames[item.name]) then
-            turtle.select(s)
-            turtle.dropDown()
+        if turtle.getItemCount(s) > 0 then
+            local isHardware = item and protectedItemNames[item.name] ~= nil
+            local reserved   = PROTECTED[s] == true
+
+            -- Foreign items squatting in a reserved slot must be dumped too.
+            --
+            -- While the loader is standing in the world its home slot is EMPTY,
+            -- and turtle.dig() puts drops in the first free slot -- so ore lands
+            -- in slot 2. Skipping every reserved slot meant that ore was never
+            -- dumped: it sat there permanently, costing capacity, and on
+            -- retrieval normalizeLoaderSlot() could not return the loader home,
+            -- so it ended up in a mining slot instead. Observed in-world.
+            --
+            -- The same reasoning covers slots 3 and 4, which are also empty
+            -- during their swap windows. S_COAL is excluded because coal in it
+            -- is the fuel buffer working exactly as intended, and hardware is
+            -- excluded wherever it sits -- that is what protectedItemNames is
+            -- for, and rescueProtectedItems puts it back afterwards.
+            local foreignInReserved = reserved and s ~= S_COAL and not isHardware
+
+            if (not reserved and not isHardware) or foreignInReserved then
+                turtle.select(s)
+                turtle.dropDown()
+            end
         end
     end
     -- Clear slot 16 if something (from a full EC) landed there during the dump
