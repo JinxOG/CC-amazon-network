@@ -142,7 +142,7 @@ local rescueProtectedItems
 -- Forward declaration: checkFuel and the FORCE_REFUEL handler both run before
 -- dumpOres is defined, and both must empty the ore first. See its definition
 -- below for why.
-local dumpBeforeRefuel
+local dumpIfInventoryTight
 
 -- ── Phase reporting ──────────────────────────────────────────────────────────
 -- base has no job-id accessor, so the miner keeps its own copy for the phase
@@ -447,7 +447,7 @@ base.setRefuelFn(function()
     -- FORCE_REFUEL arrives while docked and idle, and goes straight into
     -- refuelFromChest — the call that drops slots 1-14 when the inventory is
     -- tight. Empty the ore first for the same reason checkFuel does.
-    dumpBeforeRefuel("force refuel")
+    dumpIfInventoryTight("force refuel")
     withDigTool("force refuel", function()
         while turtle.getFuelLevel() < turtle.getFuelLimit() do
             if not base.fuel.refuelFromChest() then break end  -- EC empty or missing
@@ -594,9 +594,9 @@ local function checkFuel(jobId)
     if turtle.getFuelLevel() >= FUEL_WARN then return end
 
     -- Step 0: make room BEFORE any refuel touches the inventory. See
-    -- dumpBeforeRefuel — a refuel with full mining slots makes refuelFromChest
+    -- dumpIfInventoryTight — a refuel with full mining slots makes refuelFromChest
     -- drop the scanner, loader, tool and modem on the ground.
-    dumpBeforeRefuel("refuel")
+    dumpIfInventoryTight("refuel")
 
     -- Step 1: burn slot-14 coal reserve (needs no tool)
     tryRefuelSlot14()
@@ -750,7 +750,7 @@ local REFUEL_FREE_SLOTS = 4
 -- This narrows the window. It does not close it -- the drop can still happen
 -- before the miner reaches a dump point, and it does nothing for other roles.
 -- The whitelist in refuelFromChest is the real fix and belongs to W3.
-dumpBeforeRefuel = function(why)
+dumpIfInventoryTight = function(why)
     local free = 0
     for s = MINE_FIRST, MINE_LAST do
         if turtle.getItemCount(s) == 0 then free = free + 1 end
@@ -762,7 +762,7 @@ dumpBeforeRefuel = function(why)
     -- chest. Skipping is always safe; destroying the station chest is not.
     if turtle.detectDown() then
         print(string.format(
-            "[MINER] Pre-refuel dump skipped — no free space below (%d free slots)", free))
+            "[MINER] Pre-op dump skipped — no free space below (%d free slots)", free))
         return
     end
 
@@ -1058,6 +1058,24 @@ local function retrievePlacedLoader(stand)
     local rec = loader_state.get()
     if not rec then return false, "no_loader_recorded" end
 
+    -- Make room BEFORE digging the loader up, on every path.
+    --
+    -- turtle.dig() with no room for the drop still returns TRUE: the block is
+    -- destroyed and the item is simply lost. mine_flow documents this and
+    -- detects it afterwards as loader_lost_after_dig -- but detection is too
+    -- late, because by then a physical loader turtle no longer exists.
+    --
+    -- Observed live after a server restart: four miners resumed boot recovery
+    -- carrying a full load of ore from the interrupted job, dug up their
+    -- loaders, and TWO of the four destroyed them outright. A third had partial
+    -- room and the loader landed in a mining slot rather than its home slot.
+    --
+    -- soloReturn already dumped first; boot recovery and the sector-end
+    -- retrieval did not. Putting it here rather than at the call sites means no
+    -- future path can forget it -- the dig is the thing that needs the room, so
+    -- the guard belongs next to the dig.
+    dumpIfInventoryTight("loader retrieval")
+
     local sx, sy, sz, facing
     if stand then
         sx, sy, sz, facing = stand.x, stand.y, stand.z, stand.facing
@@ -1228,6 +1246,19 @@ local function recoverPlacedLoader()
     if not restored then
         print("[MINER] WARNING: could not restore travel mode: " .. tostring(why3))
     end
+
+    -- Hand the turtle back as dispatchable. base.returnToDockFromSky() above
+    -- sets STATUS.RETURNING, and the ONLY things that reset it to IDLE are
+    -- sendComplete and sendFailed -- both of which report the outcome of a JOB.
+    -- Boot recovery is not a job, so neither is ever called, and without this
+    -- line the turtle finishes recovery parked at its dock, fully healthy, in a
+    -- state registry.getIdle() rejects. It can then never be dispatched again.
+    --
+    -- Observed live: all four miners recovered their loaders after a server
+    -- restart, flew home correctly, and then sat at the dock showing RETURNING
+    -- while their four jobs stayed PENDING behind "idle=0 fuel>=500". The
+    -- recovery worked perfectly and the fleet was still deadlocked.
+    base.setStatus(proto.STATUS.IDLE)
     reportPhase(proto.PHASE.DOCKED)
 end
 

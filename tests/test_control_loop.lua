@@ -511,7 +511,7 @@ function(assert_eq)
     -- Path 1: the in-field fuel check.
     local checkAt = src:find("local function checkFuel%(jobId%)")
     assert_eq(checkAt ~= nil, true, "checkFuel moved or vanished")
-    local dumpAt  = src:find("dumpBeforeRefuel%(\"refuel\"%)", checkAt)
+    local dumpAt  = src:find("dumpIfInventoryTight%(\"refuel\"%)", checkAt)
     local burnAt  = src:find("tryRefuelSlot14%(%)", checkAt)
     assert_eq(dumpAt ~= nil, true, "checkFuel must dump before refuelling")
     assert_eq(dumpAt < burnAt, true, "the dump must precede the first refuel step")
@@ -519,7 +519,7 @@ function(assert_eq)
     -- Path 2: FORCE_REFUEL, which lands straight in refuelFromChest.
     local forceAt = src:find("base%.setRefuelFn%(function%(%)")
     assert_eq(forceAt ~= nil, true, "the FORCE_REFUEL handler moved or vanished")
-    local fDumpAt = src:find("dumpBeforeRefuel%(\"force refuel\"%)", forceAt)
+    local fDumpAt = src:find("dumpIfInventoryTight%(\"force refuel\"%)", forceAt)
     local fChestAt = src:find("base%.fuel%.refuelFromChest%(%)", forceAt)
     assert_eq(fDumpAt ~= nil, true, "FORCE_REFUEL must dump before refuelling")
     assert_eq(fDumpAt < fChestAt, true,
@@ -527,11 +527,11 @@ function(assert_eq)
 
     -- The dump must never dig to make room: docked, the block below is the
     -- station chest, and destroying it to dump ore is worse than not dumping.
-    local defAt = src:find("dumpBeforeRefuel = function%(why%)")
-    assert_eq(defAt ~= nil, true, "dumpBeforeRefuel definition moved or vanished")
+    local defAt = src:find("dumpIfInventoryTight = function%(why%)")
+    assert_eq(defAt ~= nil, true, "dumpIfInventoryTight definition moved or vanished")
     local body = src:sub(defAt, defAt + 1400)
     assert_eq(body:find("turtle%.detectDown%(%)") ~= nil, true,
-        "dumpBeforeRefuel must refuse to dump when the space below is occupied")
+        "dumpIfInventoryTight must refuse to dump when the space below is occupied")
 end
 
 -- The geo scanner gets Invariant D's treatment (SOURCE-ONLY, weaker).
@@ -664,6 +664,63 @@ function(assert_eq)
     local guardAt = src:find("clearStaleLoaderRecord%(%)\n    if loader_state%.hasPlaced%(%) then")
     assert_eq(guardAt ~= nil, true,
         "the pre-departure guard must consult it before refusing the job")
+end
+
+-- Room is made before the loader is dug up (SOURCE-ONLY, weaker).
+--
+-- turtle.dig() with no room for the drop returns TRUE and destroys the item.
+-- mine_flow detects that afterwards as loader_lost_after_dig, but by then a
+-- physical loader turtle is gone. Observed live: four miners resumed boot
+-- recovery carrying a full load of ore, dug up their loaders, and two of the
+-- four destroyed them; a third had partial room and it landed in a mining slot.
+suite["room is made before the loader is dug up (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("local function retrievePlacedLoader%(stand%)")
+    assert_eq(fnAt ~= nil, true, "retrievePlacedLoader moved or vanished")
+    local endAt = src:find("\nlocal function ", fnAt + 10) or #src
+    local body  = src:sub(fnAt, endAt)
+
+    local dumpAt = body:find('dumpIfInventoryTight%("loader retrieval"%)')
+    assert_eq(dumpAt ~= nil, true,
+        "retrievePlacedLoader must make room before digging the loader up")
+
+    -- It must come before the approach, so every path gets it -- not tucked
+    -- after a move that can return early.
+    local moveAt = body:find("local ok, err = base%.move%.to%(sx, sy, sz%)")
+    assert_eq(moveAt ~= nil, true, "the approach move moved or vanished")
+    assert_eq(dumpAt < moveAt, true, "the dump must precede the approach")
+end
+
+-- Boot recovery must hand the turtle back as dispatchable (SOURCE-ONLY, weaker).
+--
+-- returnToDockFromSky sets STATUS.RETURNING, and only sendComplete/sendFailed
+-- reset it to IDLE -- both of which report the outcome of a JOB. Boot recovery
+-- is not a job, so it called neither. Observed live: four miners recovered their
+-- loaders, flew home correctly, and then sat at the dock in RETURNING while
+-- their jobs stayed PENDING behind "idle=0". Recovery worked and the fleet was
+-- still deadlocked.
+suite["boot recovery leaves the turtle dispatchable (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("local function recoverPlacedLoader%(%)")
+    assert_eq(fnAt ~= nil, true, "recoverPlacedLoader moved or vanished")
+    local endAt = src:find("\nlocal function ", fnAt + 10) or #src
+    local body  = src:sub(fnAt, endAt)
+
+    local returnAt = body:find("base%.returnToDockFromSky%(%)")
+    assert_eq(returnAt ~= nil, true, "boot recovery must still fly home")
+    local idleAt = body:find("base%.setStatus%(proto%.STATUS%.IDLE%)")
+    assert_eq(idleAt ~= nil, true,
+        "boot recovery must reset status to IDLE or the turtle is never dispatched again")
+    assert_eq(returnAt < idleAt, true,
+        "the IDLE reset must come after the return that set RETURNING")
 end
 
 return suite
