@@ -776,12 +776,19 @@ dumpIfInventoryTight = function(why)
     end
     if free >= REFUEL_FREE_SLOTS then return end
 
-    -- Never dig to make room for the chest here. dumpToEC digs whatever is
-    -- below it, and when the miner is docked that block is the dock station
-    -- chest. Skipping is always safe; destroying the station chest is not.
-    if turtle.detectDown() then
+    -- dumpToEC digs whatever is below to place the ore chest. That is fine in
+    -- the field -- it is one block of stone -- but when the miner is docked the
+    -- block below is the dock station chest, and destroying it to bank ore is
+    -- not a trade worth making.
+    --
+    -- So the guard is scoped to the depot rather than to "anything below".
+    -- Previously it skipped on ANY obstruction, which meant a miner refuelling
+    -- in a tunnel skipped the dump and then let turtle_base's debris sweep
+    -- throw that ore on the ground, where it is lost rather than banked to RS.
+    if base.isInsideBuilding(base.getPos()) and turtle.detectDown() then
         print(string.format(
-            "[MINER] Pre-op dump skipped — no free space below (%d free slots)", free))
+            "[MINER] Pre-op dump skipped — docked with the station chest below (%d free slots)",
+            free))
         return
     end
 

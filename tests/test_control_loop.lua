@@ -531,7 +531,13 @@ function(assert_eq)
     assert_eq(defAt ~= nil, true, "dumpIfInventoryTight definition moved or vanished")
     local body = src:sub(defAt, defAt + 1400)
     assert_eq(body:find("turtle%.detectDown%(%)") ~= nil, true,
-        "dumpIfInventoryTight must refuse to dump when the space below is occupied")
+        "the guard must still check what is below before digging")
+    -- Scoped to the depot, NOT to any obstruction. Skipping on anything below
+    -- meant a miner refuelling in a tunnel skipped the dump and then let
+    -- turtle_base's debris sweep throw that ore on the ground, where it is lost
+    -- instead of banked to RS through the slot-16 chest.
+    assert_eq(body:find("base%.isInsideBuilding") ~= nil, true,
+        "the no-dig guard must apply only at the dock, where the station chest is below")
 end
 
 -- The geo scanner gets Invariant D's treatment (SOURCE-ONLY, weaker).
