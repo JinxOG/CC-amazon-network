@@ -534,4 +534,96 @@ function(assert_eq)
         "dumpBeforeRefuel must refuse to dump when the space below is occupied")
 end
 
+-- The geo scanner gets Invariant D's treatment (SOURCE-ONLY, weaker).
+--
+-- The scanner is placed as a world block by the same pattern as the chunk
+-- loader, and had no record at all -- so any interruption between placeDown()
+-- and digDown() abandoned it. One went missing in the field on 2026-08-18.
+-- Losing it is not cosmetic: scanSector refuses to run without a scanner in
+-- slot 1 and returns an empty ore list, so the miner works whole sectors and
+-- silently finds nothing.
+suite["the placed geo scanner is recorded before it is placed (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local scanAt = src:find("local function scanSector%(%)")
+    assert_eq(scanAt ~= nil, true, "scanSector moved or vanished")
+
+    -- Record BEFORE place, the whole point of Invariant D's ordering: a crash
+    -- the other way round loses the scanner with nothing on disk to find it.
+    local recordAt = src:find("scannerRecord%(p0%.x, p0%.y %- 1, p0%.z%)", scanAt)
+    local placeAt  = src:find("turtle%.placeDown%(%)", scanAt)
+    assert_eq(recordAt ~= nil, true, "scanSector must persist the placement")
+    assert_eq(placeAt ~= nil, true, "scanSector must still place the scanner")
+    assert_eq(recordAt < placeAt, true,
+        "the placement must be recorded BEFORE the scanner is placed")
+
+    -- A refused write must abort the placement rather than placing unrecorded.
+    local guard = src:sub(recordAt, placeAt)
+    assert_eq(guard:find("refusing to place") ~= nil, true,
+        "a failed record write must stop the placement")
+
+    -- The scan must not be able to skip the recovery by throwing.
+    local pcallAt = src:find("pcall%(sc%.scan, SCAN_RADIUS%)", scanAt)
+    assert_eq(pcallAt ~= nil, true, "sc.scan must be pcall'd so the dig still runs")
+    local digAt = src:find("turtle%.digDown%(%)", pcallAt)
+    assert_eq(digAt ~= nil and digAt > pcallAt, true,
+        "the recovery dig must follow the guarded scan")
+end
+
+suite["scanner recovery runs at boot and verifies identity (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    -- Must actually be wired into boot, not merely defined.
+    local callAt = src:find("pcall%(recoverPlacedScanner%)")
+    assert_eq(callAt ~= nil, true, "recoverPlacedScanner must run at boot")
+    local runAt = src:find("pcall%(base%.run, mineJob%)")
+    assert_eq(runAt ~= nil and callAt < runAt, true,
+        "scanner recovery must run before any job is accepted")
+
+    -- Identity before digging. detectDown() alone is how the loader retrieval
+    -- used to destroy the wrong block.
+    local defAt = src:find("local function recoverPlacedScanner%(%)")
+    assert_eq(defAt ~= nil, true, "recoverPlacedScanner definition moved or vanished")
+
+    -- Bound the window to the function itself. A fixed +N char slice overran
+    -- into scanSector, which also mentions SCANNER_NAME, so the identity
+    -- assertion below passed even with the check deleted -- a green test
+    -- proving nothing, caught only because the mutation run is mandatory.
+    local endAt = src:find("local function scanSector%(%)", defAt)
+    assert_eq(endAt ~= nil and endAt > defAt, true,
+        "could not bound recoverPlacedScanner's body")
+    local body = src:sub(defAt, endAt - 1)
+
+    local inspectAt = body:find("turtle%.inspectDown%(%)")
+    local bodyDigAt = body:find("turtle%.digDown%(%)")
+    assert_eq(inspectAt ~= nil, true, "recovery must inspect before digging")
+    assert_eq(bodyDigAt ~= nil and inspectAt < bodyDigAt, true,
+        "the identity check must precede the dig")
+    -- Assert the comparison, not the bare identifier: the identifier alone is
+    -- satisfied by any incidental mention.
+    assert_eq(body:find("block%.name == SCANNER_NAME") ~= nil, true,
+        "recovery must confirm the block below is actually the geo scanner")
+end
+
+suite["a miner without a geo scanner refuses to depart (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local preAt = src:find("local function preflightSlots%(%)")
+    assert_eq(preAt ~= nil, true, "preflightSlots moved or vanished")
+    local body = src:sub(preAt, preAt + 1600)
+    assert_eq(body:find("SCANNER_NAME") ~= nil, true,
+        "the preflight must check for the geo scanner")
+    assert_eq(body:find("must_hold_the_geo_scanner") ~= nil, true,
+        "the refusal reason must name the scanner so an operator can act on it")
+end
+
 return suite

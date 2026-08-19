@@ -497,6 +497,14 @@ local function looksLikeEnderChest(item)
 end
 
 local function preflightSlots()
+    -- Without a scanner the miner is not broken, which is the problem: scanSector
+    -- prints an error, returns an empty ore list, and the sector completes having
+    -- found nothing. It would work its way through a whole zone reporting zero
+    -- ore. Refusing at the dock is far cheaper than a silently useless survey.
+    local scanner = turtle.getItemDetail(S_SCANNER)
+    if not scanner or scanner.name ~= SCANNER_NAME then
+        return false, "slot_" .. S_SCANNER .. "_must_hold_the_geo_scanner"
+    end
     if not looksLikeEnderChest(turtle.getItemDetail(S_FUEL_EC)) then
         return false, "slot_" .. S_FUEL_EC .. "_must_hold_the_fuel_ender_chest"
     end
@@ -773,6 +781,91 @@ end
 
 -- ── Geo Scanner ──────────────────────────────────────────────────────────────
 
+-- ── Placed geo scanner: persistence and recovery ─────────────────────────────
+--
+-- Invariant D exists for the chunk loader: "placement is persisted to disk
+-- before placing and cleared only after confirmed retrieval, so a crash at any
+-- instant errs toward 'we may have one out there'." The geo scanner is placed as
+-- a world block by exactly the same pattern and had no record at all, so any
+-- interruption between placeDown() and digDown() abandoned it silently. A
+-- scanner went missing in the field on 2026-08-18.
+--
+-- Losing it is not cosmetic: scanSector refuses to run without a scanner in
+-- slot 1 and returns an empty ore list, so the miner keeps working sectors and
+-- silently finds nothing.
+
+local SCANNER_STATE_FILE = "scanner_state.dat"
+
+local function scannerRecord(x, y, z)
+    local ok = pcall(function()
+        local f = fs.open(SCANNER_STATE_FILE, "w")
+        if not f then error("open failed", 0) end
+        f.write(textutils.serialise({ x = x, y = y, z = z }))
+        f.close()
+    end)
+    return ok
+end
+
+local function scannerClear()
+    pcall(function()
+        if fs.exists(SCANNER_STATE_FILE) then fs.delete(SCANNER_STATE_FILE) end
+    end)
+end
+
+local function scannerRecorded()
+    local ok, rec = pcall(function()
+        if not fs.exists(SCANNER_STATE_FILE) then return nil end
+        local f = fs.open(SCANNER_STATE_FILE, "r")
+        if not f then return nil end
+        local raw = f.readAll(); f.close()
+        local t = textutils.unserialise(raw)
+        if type(t) ~= "table" then return nil end
+        return t
+    end)
+    if ok then return rec end
+    return nil
+end
+
+-- Called at boot, before any job is accepted. The scanner is placed directly
+-- below the turtle and picked straight back up, so the turtle has not moved
+-- between the two: recovery is verify-and-dig, with no navigation at all.
+local function recoverPlacedScanner()
+    local rec = scannerRecorded()
+    if not rec then return end
+    print(string.format("[SCAN] Boot: scanner recorded at %d,%d,%d — recovering",
+        rec.x, rec.y, rec.z))
+
+    -- Identity check before digging, never turtle.detectDown() alone: digging
+    -- whatever happens to be underneath is how the loader retrieval used to
+    -- destroy the wrong block.
+    local seen, block = turtle.inspectDown()
+    if seen and block and block.name == SCANNER_NAME then
+        turtle.select(S_SCANNER)
+        if turtle.digDown() then
+            print("[SCAN] Scanner recovered to slot 1.")
+            scannerClear()
+        else
+            print("[SCAN] WARNING: scanner is below but could not be dug up.")
+        end
+        return
+    end
+
+    -- Nothing of ours below. If we are standing where we placed it, it is
+    -- genuinely gone and the record has done its job -- keeping it would warn
+    -- forever with no action available. If we are somewhere else, the scanner is
+    -- still out there at the recorded position, so the record must survive.
+    local p = base.getPos()
+    if p.x == rec.x and p.y == rec.y + 1 and p.z == rec.z then
+        print("[SCAN] No scanner below and we are at the placement square — "
+            .. "it is gone. Put one in slot 1.")
+        scannerClear()
+    else
+        print(string.format("[SCAN] Scanner still recorded at %d,%d,%d and we are "
+            .. "elsewhere — collect it by hand or clear %s",
+            rec.x, rec.y, rec.z, SCANNER_STATE_FILE))
+    end
+end
+
 local function scanSector()
     local item = turtle.getItemDetail(S_SCANNER)
     if not item or item.name ~= SCANNER_NAME then
@@ -782,7 +875,20 @@ local function scanSector()
 
     turtle.select(S_SCANNER)
     if turtle.detectDown() then turtle.digDown() end
+
+    -- Record BEFORE placing, exactly as loader_state does: a crash between the
+    -- write and the place leaves a false positive that recovery resolves
+    -- harmlessly, while a crash the other way round loses the scanner for good.
+    local p0 = base.getPos()
+    if not scannerRecord(p0.x, p0.y - 1, p0.z) then
+        print("[SCAN] ERROR: could not persist scanner placement — refusing to place")
+        return {}
+    end
+
     if not turtle.placeDown() then
+        -- A clean failure: turtle.place() only consumes the item on success, so
+        -- nothing is out there and the record just written is a false positive.
+        scannerClear()
         print("[SCAN] ERROR: failed to place geo scanner below")
         return {}
     end
@@ -792,14 +898,27 @@ local function scanSector()
     local sc = peripheral.wrap("bottom")
     if not sc then
         print("[SCAN] ERROR: peripheral.wrap('bottom') returned nil")
-        turtle.select(S_SCANNER); turtle.digDown(); return {}
+        turtle.select(S_SCANNER)
+        if turtle.digDown() then scannerClear() end
+        return {}
     end
     print("[SCAN] Scanning radius " .. SCAN_RADIUS .. "...")
 
-    local raw = sc.scan(SCAN_RADIUS)
+    -- pcall'd so a scanner fault cannot skip the recovery below and abandon the
+    -- block. The scan is the one call here that talks to a peripheral and can
+    -- throw for reasons outside this program.
+    local scanOk, raw = pcall(sc.scan, SCAN_RADIUS)
     turtle.select(S_SCANNER)
-    turtle.digDown()
+    if turtle.digDown() then
+        scannerClear()
+    else
+        print("[SCAN] WARNING: scanner left placed — record kept for boot recovery")
+    end
 
+    if not scanOk then
+        print("[SCAN] ERROR: sc.scan() threw: " .. tostring(raw))
+        return {}
+    end
     if not raw then
         print("[SCAN] ERROR: sc.scan() returned nil")
         return {}
@@ -1494,6 +1613,13 @@ initProtectedSlots()
 local rok, rerr = pcall(recoverPlacedLoader)
 if not rok then
     print("[MINER] Loader recovery crashed: " .. tostring(rerr))
+end
+-- Same for the geo scanner. Runs after the loader because the loader is the
+-- expensive one -- a whole turtle plus a permanently force-loaded chunk -- and
+-- both are pcall'd separately so a failure in either still lets the other run.
+local sok, serr = pcall(recoverPlacedScanner)
+if not sok then
+    print("[MINER] Scanner recovery crashed: " .. tostring(serr))
 end
 local ok, err = pcall(base.run, mineJob)
 if not ok then
