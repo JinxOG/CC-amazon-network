@@ -171,7 +171,21 @@ Binding across every turtle type.
 | **16** | Payload ender chest — ore chest on a miner, delivery chest on a delivery turtle. Only ever the payload chest. |
 
 - Item registry names are pinned in `equipment.ITEMS` and are **never hardcoded
-  elsewhere**. Verified in-world 2026-08-13.
+  elsewhere**. Verified in-world 2026-08-13. **Gap:** `equipment.ITEMS` has no
+  ender chest entry, while `turtle_base.lua:1020` hardcodes
+  `CHEST_ITEM = "enderstorage:ender_chest"` and `ore_turtle.lua:463` matches the
+  substring `"ender"`. W3 adds `FUEL_CHEST` and `PAYLOAD_CHEST` so the rule
+  becomes followable — but read the next bullet first.
+- **Slot position is the only way to tell the two ender chests apart.**
+  EnderStorage separates chests by *colour frequency, not item id*: the fuel
+  chest in slot 15 and the payload chest in slot 16 report the **same registry
+  name**, and `turtle.getItemDetail` returns no NBT that distinguishes them. A
+  named constant makes the rule followable; it does **not** make the chests
+  identifiable. Any code that searches slots *by name* for "the fuel chest" is
+  defective by construction. This is not theoretical — it caused a live defect
+  fixed in 1.9.9, where in-field refuel recovery searched all 16 slots by name
+  and dragged the ore chest from slot 16 into slot 15, leaving miners with two
+  fuel chests and nowhere to put ore.
 - **Two upgrade slots, three or more needs.** No turtle holds modem + chunky +
   pickaxe simultaneously. Capability is therefore *phase-dependent*, and
   `equipment.lua` owns every transition. This is the most misunderstood
@@ -415,6 +429,13 @@ Rejected: **priority preemption.** Pausing a build cleanly is hard and risks
 several half-built structures. A `priority` field ships now (§15) so this can be
 added later without migration.
 
+**Scheduling has a physical dimension too.** Everything above arbitrates *logical*
+access to the fleet. It does not arbitrate *physical* access to the depot, where
+every worker passes through a single dispatch hole and a single arrivals hole.
+Job-level fairness does not prevent a traffic jam at a shared block. See
+Invariant I — that bottleneck is W3's to own, and it gets worse as the fleet
+consolidates and grows.
+
 ---
 
 ## 11. Message contracts
@@ -449,12 +470,27 @@ talks to a worker directly.
 
 ### 11.3 Survey and index
 
-Extends the existing `SECTOR_*` family rather than replacing it.
+**Corrected 2026-08-18.** This section previously said it "extends the existing
+`SECTOR_*` family" while introducing two new names — a self-contradiction, and
+W1's approved ore-index design extends the existing names rather than adding new
+ones. Two parallel families would have meant two sets of server handlers.
 
-| Message | Direction | Payload |
+**Resolution: extend the payloads, do not add a family.** The miner already runs
+`SECTOR_REQUEST` / `SECTOR_ASSIGN` / `SECTOR_SCAN` / `SECTOR_DONE`. Survey data
+rides on those:
+
+| Message | Direction | Payload change |
 |---|---|---|
-| `SURVEY_ASSIGN` | server → worker | `{ jobId, site, sector, watchlist[] }` |
-| `SURVEY_DONE` | worker → server | `{ jobId, sector, census{}, packedIndex, ts }` |
+| `SECTOR_ASSIGN` | server → worker | gains `watchlist[]`, and `packedIndex` when a prior survey exists |
+| `SECTOR_SCAN` | worker → server | gains `census{}` (all block types) and `packedIndex` (watchlisted coordinates), alongside today's `foundOres` |
+
+`SURVEY_*` is reserved and **unused for now**. Introduce it only if a standalone
+survey job appears that is not attached to a mining assignment — at which point
+it is additive (P6), not a rename.
+
+**W1 + W3 may overrule this jointly** if implementation shows the shared payload
+is worse than a separate family. Until then it is the decision, and W1 is
+unblocked to write the upload path.
 
 ### 11.4 Build
 
@@ -529,10 +565,62 @@ it must never strand a worker in the field.
 **G — ACK on every worker↔worker signal.** Any new worker-to-worker message ships
 with an ACK loop. `parallel.waitForAny` shares one OS event queue between
 coroutines; direct `proto.receive` calls in a multi-loop program silently steal
-events. Use `base.receive` (the shared inbox), never `proto.receive`.
+events.
+
+> **G is a target state, not a present constraint. Corrected 2026-08-18.**
+> This invariant originally read "use `base.receive` (the shared inbox), never
+> `proto.receive`." **`base.receive` does not exist.** There is no such function
+> and no inbox in `turtle_base.lua`; `ore_turtle.lua:223` and `:259` call
+> `proto.receive` directly, inside exactly the multi-loop program G exists to
+> protect. The spec mandated an API that had been rolled back or never landed.
+>
+> Until the inbox exists: **existing `proto.receive` callers are grandfathered**
+> and no workstream is non-compliant for them. **New** worker↔worker signals
+> still ship with ACK loops — that half of G is binding today.
+>
+> **But ACK loops make loss visible, not absent.** The hazard lives in the
+> *receiver*: the control loop silently discards message types it does not
+> handle. An ACK loop lives in the *sender* and cannot stop that. Each retry
+> re-rolls the same race, so N retries buy a delivery *probability*, not
+> delivery — and the odds worsen under load, because a busy queue is exactly
+> when the control loop wins the race more often. ACK+retry converts a silent
+> hang into a logged failure, which is worth having and is why it stays
+> mandatory. It is **not** correctness. Do not read a signal that ACKed in
+> testing as safe to ship. **Deterministic delivery requires the inbox (W3).**
+>
+> **Building the shared inbox is a W3 deliverable** (§14 W3). Once it lands, G
+> becomes binding in full and the grandfathered callers migrate. The underlying
+> hazard is real and has caused confirmed field hangs; this note relaxes the
+> rule, not the risk.
 
 **H — `delivery_turtle.lua` is frozen.** Standing constraint. Delivery behaviour
 does not change as a side effect of other work.
+
+**I — Shared physical chokepoints are a scheduling resource.** The entire fleet
+departs through **one** dispatch hole and returns through **one** arrivals hole.
+A worker occupying a chokepoint blocks every worker behind it, and from outside
+the jam is indistinguishable from a crash (see J). This has already cost real
+debugging time: one support turtle parked on the hole stalled every pair behind
+it.
+
+Sequencing through a chokepoint is **dispatch's responsibility (W3)**, not
+something individual workers negotiate between themselves. Any design that adds
+workers to the fleet without accounting for hole throughput is incomplete.
+
+**P2 makes this structurally worse over time.** Consolidating to general-purpose
+workers, and adding androids and builders, means *more* workers funnelling
+through the *same* block. The fix is not to slow the fleet down but to own the
+bottleneck explicitly — throughput, ordering, and a bounded wait.
+
+**J — No silent blocking.** No blocking wait may exceed **10 seconds** without
+logging what it is waiting for and how long it has waited so far.
+
+`turtle_base.lua:613` currently sets a 120-second `turtleDeadline` and the wait
+loop logs nothing for the entire two minutes, so a queued worker and a dead
+worker look identical from outside. That single gap caused two wrong diagnoses in
+one session and was only resolved when a log line finally printed both positions.
+This invariant is cheap to satisfy and converts the whole class of "a turtle is
+just sitting there" from an investigation into a glance.
 
 ### 12.1 Build sites use a static loader blanket
 
@@ -568,6 +656,9 @@ workstream that does not own it** — raise a request with the owner instead.
 | Resource index | `oreindex.lua`, `oreindex_store.lua` | **W1** | New. Pure functions, fully testable |
 | Android runtime | `android_base.lua` | **W4** | |
 | Bridge & dashboard | `server.js`, `public/` | **W5** | Never load-bearing |
+| Depot layout & routing | `waypoints.lua` | **W3** | Owns the dispatch/arrivals chokepoints (Invariant I) |
+| Test harness | `tests/run.lua`, `tests/stub_cc.lua` | **W3** | Shared infrastructure |
+| Tests | `tests/test_*.lua`, `tests/inworld/` | **per-file owner** | Each stream owns tests covering files it owns |
 
 `protocol.lua` is the one shared file. Every workstream will need to add message
 types to it, so changes there are announced, additive (P6), and version-bumped.
@@ -587,9 +678,21 @@ restarts all turtles and interrupts active miners.
 There is **no Lua runtime for the live fleet on the development machine.**
 Nothing may be claimed verified without the headless harness or an in-world test.
 
-New tests are **mutation-tested** — break the code beneath the assertion and
-confirm the test fails. Seven existing tests have already proven unable to fail
-against the defect they were written for.
+### Mutation testing is a merge gate, not a guideline
+
+**No test is accepted until it has been demonstrated failing.** Break the code
+beneath the assertion, watch the test go red, restore the code, watch it go
+green. Record that you did it. This belongs in every task's definition of done,
+not in an engineer's memory.
+
+**Seven existing tests in this codebase have already proven unable to fail
+against the defect they were written for.** A test that cannot fail is worse than
+no test: it produces confidence without evidence. That is precisely how eight
+broken versions shipped while being believed checked.
+
+This is stated as a gate because a single sentence of guidance will not survive
+five parallel workstreams working under time pressure. If a task lands new tests
+without a demonstrated failure, the tests are not done.
 
 ---
 
@@ -654,6 +757,17 @@ letting it starve behind planner work.
 **Must not touch:** `delivery_turtle.lua` (Invariant H).
 **First deliverable:** `capabilities` on `REGISTER`; `owner` and `priority`
 fields; capability-matched assignment.
+**Also owns, raised by W1's conformance review:**
+
+- **The shared inbox (`base.receive`).** Invariant G mandates it and it does not
+  exist. Until W3 ships it, G is a target state and every other stream is
+  grandfathered on `proto.receive`. This blocks nobody now, but the hazard is
+  live.
+- **`FUEL_CHEST` / `PAYLOAD_CHEST` in `equipment.ITEMS`** — read §6.1's
+  slot-position bullet first; a constant does not make the chests identifiable.
+- **`central_server.lua` cannot be `require`d under the test harness** — it runs
+  its main loop at load. W1 reports this blocked five tests in two days. Fixing
+  it is a prerequisite for testing anything inside that file.
 
 ### W4 — Construction
 
