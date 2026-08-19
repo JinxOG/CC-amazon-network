@@ -535,6 +535,27 @@ anyway — and drives the static loader blanket (§12.4).
 
 ---
 
+### 11.7 Planning ↔ Storage
+
+**Added 2026-08-18 with W6.** The planner cannot compute a deficit without asking
+storage what exists, and no contract covered it. W2 never calls `rsBridge`
+directly; it asks here.
+
+| Message | Direction | Payload |
+|---|---|---|
+| `STOCK_QUERY` | planner → storage | `{ items[] }` |
+| `STOCK_RESULT` | storage → planner | `{ stock{}, craftable{}, ts }` |
+| `CRAFT_REQUEST` | planner → storage | `{ projectId, item, count }` |
+| `CRAFT_ACCEPTED` | storage → planner | `{ projectId, item, count, craftId }` |
+| `CRAFT_STATUS` | storage → planner | `{ craftId, state, produced, missing[] }` |
+
+`missing[]` is the load-bearing field: it is how "RS cannot finish this craft"
+becomes a mining or harvest deficit, and it is what §9.1 step 5 consumes when
+assigning acquisition methods.
+
+`STOCK_RESULT.ts` carries staleness so the planner can refuse to plan against a
+stale snapshot rather than silently under-ordering.
+
 ## 12. Standing invariants
 
 Lifted from the solo-miner plan and the Android feasibility study, promoted to
@@ -649,7 +670,7 @@ workstream that does not own it** — raise a request with the owner instead.
 | Shared protocol | `protocol.lua` | **all** | Coordinate before editing; version bump required |
 | Dispatch | `central_server.lua` | **W3** | At scale limits — new logic goes elsewhere by default |
 | Planning | `planner.lua` | **W2** | New |
-| Storage | `warehouse.lua` | **W2** | May need no changes; see §14 W2 |
+| Storage | `warehouse.lua` | **W6** | Sole authority on Refined Storage access |
 | Worker runtime | `turtle_base.lua`, `equipment.lua`, `geofence.lua`, `loader_state.lua` | **W3** | |
 | Mining execution | `ore_turtle.lua`, `mine_flow.lua` | **W1** | Scan and survey paths only; dispatch stays W3 |
 | Delivery | `delivery_turtle.lua`, `support_turtle.lua` | **none** | **Frozen** (Invariant H) |
@@ -698,7 +719,7 @@ without a demonstrated failure, the tests are not done.
 
 ## 14. Engineer workstreams
 
-Five streams. Each depends on **contracts in §11**, not on another stream's code
+Six streams. Each depends on **contracts in §11**, not on another stream's code
 — that is what makes real parallelism possible.
 
 ### 14.0 Feature areas → workstreams
@@ -712,7 +733,7 @@ area like "mining" deliberately has more than one owner. Use this table to answe
 | **Mining** | **W1 + W3** | W1 finds ore (survey, index, scan paths). W3 dispatches miners (sectors, registry, recovery). |
 | **Building** | **W4 + W5 + W2** | W4 places blocks. W5 turns blueprints and roads into placement sets. W2 works out the materials. |
 | **Delivery / logistics** | **W3** | Dispatch and worker consolidation. `delivery_turtle.lua` itself is frozen. |
-| **Storage / Refined Storage** | **W2** | Stock checks, autocraft calls, `warehouse.lua`. |
+| **Storage / Refined Storage** | **W6** | Stock truth, craftability, autocrafting, item movement, `warehouse.lua`. |
 | **Surveying / world knowledge** | **W1** | Census, coordinate index, staleness. |
 | **Dashboard / web / auth** | **W5** | Submission, approval UI, Dynmap drawing, later multi-user. |
 
@@ -732,22 +753,18 @@ and `mine_flow.lua`.
 **First deliverable:** ore coordinate index (already specced), then the census
 tier and `SURVEY_ASSIGN`/`SURVEY_DONE`.
 
-### W2 — Planner & Storage
+### W2 — Planner
 
-**Mission:** Turn a request into a plan and then into jobs, and own everything
-Refined Storage touches.
-**Owns:** `planner.lua`, `warehouse.lua`.
-**Depends on:** §11.1, §11.2 contracts. W1's census by contract only.
-**Must not touch:** `central_server.lua`; anything worker-side.
-**First deliverable:** planner computer with BOM, RS stock check, deficit
-calculation, and the approval screen.
+**Mission:** Turn a request into a plan and then into jobs.
+**Owns:** `planner.lua`.
+**Depends on:** §11.1, §11.2, §11.7 contracts. W1's census and W6's stock by
+contract only.
+**Must not touch:** `central_server.lua`; `warehouse.lua`; anything worker-side.
+**First deliverable:** planner computer with BOM, deficit calculation, and the
+approval screen.
 
-Planning and storage are one stream because both are the RS-facing half of the
-system, and because `warehouse.lua` likely needs **little or no change**: the
-planner can hold its own `rsBridge` handle (`central_server.lua:2206` already
-does), and staging materials to a build site reuses existing delivery jobs. If
-storage work turns out larger than expected, split it out as W6 rather than
-letting it starve behind planner work.
+The planner **never calls `rsBridge` itself.** It asks W6 over §11.7. Storage was
+originally folded into this stream; it is now W6 (below).
 
 ### W3 — Fleet & Dispatch
 
@@ -796,6 +813,49 @@ which block states the chosen builder can reach.
 (§11.6); dashboard project submission and approval UI. Then the road generator,
 then the parser once Probe C resolves.
 
+### W6 — Storage & Refined Storage
+
+**Mission:** Be the single authority on what the system *has* and what it can
+*make*. Everything Refined Storage touches.
+**Owns:** `warehouse.lua`.
+**Depends on:** nothing — `warehouse.lua` exists and works today.
+**Must not touch:** `central_server.lua` (W3); `planner.lua` (W2);
+`delivery_turtle.lua` (Invariant H).
+**First deliverable:** the §11.7 stock-and-craft interface — answer "how much of
+X", "can RS make X", and "make N of X, tell me when it's done or what it lacks."
+
+**Where it fits.** W6 owns the **Storage layer** in §4 outright. It sits between
+the planner and the physical world of items: W2 decides *what is needed*, W6
+answers *what exists and what can be made*, W3 moves everything that has to be
+fetched from the world. The planner cannot plan without W6, and W6 needs nothing
+from the planner — so W6 can start immediately and W2 builds against its
+contract.
+
+**Scope:**
+
+- **Stock truth.** `listItems()`, `getItem()`. The `/state` payload already
+  carries ~428 item entries with a `storageTs`; W6 owns that surface and its
+  staleness.
+- **Craftability.** `listCraftableItems()` is what makes `RS_CRAFT` in §8
+  self-maintaining — add a machine chain in-world and it becomes available with
+  no code change. W6 owns that detection.
+- **Autocrafting.** `craftItem()`, `isItemCrafting()`. Track a craft to
+  completion, and report **what RS lacks** when it cannot finish — that shortfall
+  is what becomes a mining or harvest deficit.
+- **Item movement.** The existing warehouse state machine (IDLE → WAIT_ARRIVE →
+  WAIT_PLACED → SEND_BATCH → WAIT_BATCH → WAIT_DONE) and ender-chest handling.
+- **Staging for builds.** Materials landing in a chest at a build site.
+- **Stock-keeping thresholds.** The ore demand watchdog at
+  `central_server.lua:2135` is the ancestor of this and is **outdated** (§10).
+  Bringing it under the new model is W6's, in coordination with W3 since the code
+  currently lives in W3's file.
+
+**One RS authority, not three.** `warehouse.lua` holds an `rsBridge`, and
+`central_server.lua:2206` holds another. Adding a third in the planner would mean
+no single component knows what has already been requested — two callers could
+both fire `craftItem` for the same shortfall. W6 is the authority; the
+`central_server.lua` usage migrates to W6 as part of the watchdog work.
+
 ### 14.1 Coordination rules
 
 - One engineer per file, per the owner column in §13.
@@ -807,6 +867,19 @@ then the parser once Probe C resolves.
   branch isolation to catch a collision — two streams editing the same file
   interleave on disk. The §13 owner column is the only thing preventing this.
 
+**Ruling — W1's pre-spec edits are adopted, not reverted (2026-08-18).** W1
+disclosed ten commits totalling ~363 lines in W3's files (`central_server.lua`,
+`turtle_base.lua`) and W5's (`public/index.html`), made during live debugging
+**before this spec existed**. They are adopted, because they are tested, live
+in-world, and reverting them would re-break turtles in the field to satisfy a
+rule written afterwards. Two are load-bearing: `335cf17` stops a single unfit
+turtle swallowing every dispatch, and `24ccdbe` is the only reason the next
+server crash will be attributable.
+
+**This is not a precedent.** The ownership rule binds from the date of this
+document. The cost is real and lands on W3: it inherits ~363 lines it did not
+write, inside its own files, and must read them before building on top.
+
 ### 14.2 Start order and what is unblocked today
 
 | Stream | Can start now? | If blocked, what it does meanwhile |
@@ -814,6 +887,7 @@ then the parser once Probe C resolves.
 | **W3** | Yes | — |
 | **W1** | Yes | — |
 | **W2** | Yes — contracts are fixed | — |
+| **W6** | Yes — `warehouse.lua` exists and works | — |
 | **W4** | Partly | Run **Probe C**; fix the two `android_base.lua` defects |
 | **W5** | Partly | Bridge auto-start as a service; placement-set format; dashboard UI |
 
@@ -827,7 +901,11 @@ collide in the most load-bearing file in the project.
 is the single highest-value task available at any given moment. Run it even if
 W4 is otherwise unstaffed.
 
-**If running fewer than five**, the highest-value three are **W3 → W1 → W5**:
+**W6 is a good early start despite W2 depending on it.** It has no upstream
+dependency, and until §11.7 exists the planner cannot compute a deficit against
+real stock. A W2 that has to stub storage will stub it wrong.
+
+**If running fewer than six**, the highest-value three are **W3 → W1 → W5**:
 W3 unblocks everyone, W1 has an approved spec ready to execute, W5 fixes the
 bridge restart problem. Add W4 as a short-lived instance purely to run Probe C.
 
