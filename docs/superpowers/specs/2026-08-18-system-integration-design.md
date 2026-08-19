@@ -1,5 +1,6 @@
-# System Integration Spec — the shared vision
+# Turtle OS — System Integration Spec
 
+- **Product name:** Turtle OS
 - **Date:** 2026-08-18
 - **Status:** Design approved; implementation plans not yet written
 - **Protocol version at time of writing:** 1.9.13
@@ -27,6 +28,25 @@ Three things it settles:
 2. **The contracts between subsystems**, so two engineers can build against each
    other before either side exists.
 3. **Who owns what**, so parallel work does not collide in the same file.
+
+### 1.1 The name
+
+The software is called **Turtle OS**. Use it in user-facing surfaces — the
+dashboard, the order terminal, documentation, and anything a person reads.
+
+**Turtle OS names the whole system**, not one component: all six workstreams, the
+five layers of §4, the fleet, the planner, the bridge, and storage together. No
+single file or computer is "Turtle OS."
+
+**It is not an operating system, and it does not replace CraftOS.** CC:Tweaked
+already provides the OS layer that every computer and turtle boots into; Turtle
+OS is the distributed automation platform running *on top* of it. When precision
+matters in engineering discussion — a boot sequence, a `startup.lua`, a shell —
+"CraftOS" means the ComputerCraft layer and "Turtle OS" means our system.
+
+Internal identifiers do not churn for this. `protocol.lua`, role names, message
+types, and the repository keep their current names; renaming live protocol
+constants would break every deployed computer for no functional gain.
 
 ---
 
@@ -154,6 +174,8 @@ Fixed terms. Use these exactly; do not introduce synonyms.
 | **BOM** | Bill of materials — aggregated item counts a project needs. |
 | **Capability** | Something a worker can do right now, given its equipment and cargo. |
 | **Acquisition Method** | How a material is obtained (§8). |
+| **Turtle OS** | The whole system — every layer, fleet, and workstream together (§1.1). Not a file, not a computer, and not CraftOS. |
+| **CraftOS** | The ComputerCraft operating system every computer boots into. Turtle OS runs on top of it. |
 | **Census** | Per-sector name→count of every block type. Tier 1 of the index. |
 | **Coordinate Index** | Packed exact coordinates for watchlisted materials. Tier 2. |
 
