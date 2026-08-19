@@ -553,18 +553,24 @@ decision.
 
 One engineer per file. Coordinate before crossing a boundary.
 
-| Area | Files | Note |
-|---|---|---|
-| Shared protocol | `protocol.lua` | Coordinate before editing; version bump required |
-| Dispatch | `central_server.lua` | At scale limits — new logic goes elsewhere by default |
-| Planning | `planner.lua` | New |
-| Storage | `warehouse.lua` | |
-| Worker runtime | `turtle_base.lua`, `equipment.lua`, `geofence.lua`, `loader_state.lua` | |
-| Mining execution | `ore_turtle.lua`, `mine_flow.lua` | |
-| Delivery | `delivery_turtle.lua`, `support_turtle.lua` | **Frozen** (Invariant H) |
-| Resource index | `oreindex.lua`, `oreindex_store.lua` | New. Pure functions, fully testable |
-| Android runtime | `android_base.lua` | |
-| Bridge & dashboard | `server.js`, `public/` | Never load-bearing |
+Every file has exactly one owning workstream. **No file may be edited by a
+workstream that does not own it** — raise a request with the owner instead.
+
+| Area | Files | Owner | Note |
+|---|---|---|---|
+| Shared protocol | `protocol.lua` | **all** | Coordinate before editing; version bump required |
+| Dispatch | `central_server.lua` | **W3** | At scale limits — new logic goes elsewhere by default |
+| Planning | `planner.lua` | **W2** | New |
+| Storage | `warehouse.lua` | **W2** | May need no changes; see §14 W2 |
+| Worker runtime | `turtle_base.lua`, `equipment.lua`, `geofence.lua`, `loader_state.lua` | **W3** | |
+| Mining execution | `ore_turtle.lua`, `mine_flow.lua` | **W1** | Scan and survey paths only; dispatch stays W3 |
+| Delivery | `delivery_turtle.lua`, `support_turtle.lua` | **none** | **Frozen** (Invariant H) |
+| Resource index | `oreindex.lua`, `oreindex_store.lua` | **W1** | New. Pure functions, fully testable |
+| Android runtime | `android_base.lua` | **W4** | |
+| Bridge & dashboard | `server.js`, `public/` | **W5** | Never load-bearing |
+
+`protocol.lua` is the one shared file. Every workstream will need to add message
+types to it, so changes there are announced, additive (P6), and version-bumped.
 
 ### 13.1 Push protocol
 
@@ -592,6 +598,27 @@ against the defect they were written for.
 Five streams. Each depends on **contracts in §11**, not on another stream's code
 — that is what makes real parallelism possible.
 
+### 14.0 Feature areas → workstreams
+
+The streams are split by **architectural layer, not by feature**, so a feature
+area like "mining" deliberately has more than one owner. Use this table to answer
+"who owns X?"
+
+| Feature area | Owner(s) | How it splits |
+|---|---|---|
+| **Mining** | **W1 + W3** | W1 finds ore (survey, index, scan paths). W3 dispatches miners (sectors, registry, recovery). |
+| **Building** | **W4 + W5 + W2** | W4 places blocks. W5 turns blueprints and roads into placement sets. W2 works out the materials. |
+| **Delivery / logistics** | **W3** | Dispatch and worker consolidation. `delivery_turtle.lua` itself is frozen. |
+| **Storage / Refined Storage** | **W2** | Stock checks, autocraft calls, `warehouse.lua`. |
+| **Surveying / world knowledge** | **W1** | Census, coordinate index, staleness. |
+| **Dashboard / web / auth** | **W5** | Submission, approval UI, Dynmap drawing, later multi-user. |
+
+**Why mining is split.** Finding ore and dispatching miners touch different files
+and would collide in `central_server.lua` if one person did both while another
+worked the fleet. Splitting them is what lets two engineers work on mining at
+once. If you would rather staff "mining" as one coherent area, W1 + W3 merged is
+a valid single assignment — just a large one.
+
 ### W1 — Resource Intelligence
 
 **Mission:** Know what the world has and where.
@@ -602,14 +629,22 @@ and `mine_flow.lua`.
 **First deliverable:** ore coordinate index (already specced), then the census
 tier and `SURVEY_ASSIGN`/`SURVEY_DONE`.
 
-### W2 — Planner
+### W2 — Planner & Storage
 
-**Mission:** Turn a request into a plan and then into jobs.
-**Owns:** `planner.lua`.
+**Mission:** Turn a request into a plan and then into jobs, and own everything
+Refined Storage touches.
+**Owns:** `planner.lua`, `warehouse.lua`.
 **Depends on:** §11.1, §11.2 contracts. W1's census by contract only.
 **Must not touch:** `central_server.lua`; anything worker-side.
 **First deliverable:** planner computer with BOM, RS stock check, deficit
 calculation, and the approval screen.
+
+Planning and storage are one stream because both are the RS-facing half of the
+system, and because `warehouse.lua` likely needs **little or no change**: the
+planner can hold its own `rsBridge` handle (`central_server.lua:2206` already
+does), and staging materials to a build site reuses existing delivery jobs. If
+storage work turns out larger than expected, split it out as W6 rather than
+letting it starve behind planner work.
 
 ### W3 — Fleet & Dispatch
 
@@ -649,11 +684,38 @@ then the parser once Probe C resolves.
 
 ### 14.1 Coordination rules
 
-- One engineer per file.
+- One engineer per file, per the owner column in §13.
 - `protocol.lua` changes are **announced** and version-bumped.
 - Every cross-stream integration point is defined as a message contract in §11
   **first**.
 - If your design contradicts this document, raise it. Do not diverge silently.
+- **All instances share one working tree and commit to `master`.** There is no
+  branch isolation to catch a collision — two streams editing the same file
+  interleave on disk. The §13 owner column is the only thing preventing this.
+
+### 14.2 Start order and what is unblocked today
+
+| Stream | Can start now? | If blocked, what it does meanwhile |
+|---|---|---|
+| **W3** | Yes | — |
+| **W1** | Yes | — |
+| **W2** | Yes — contracts are fixed | — |
+| **W4** | Partly | Run **Probe C**; fix the two `android_base.lua` defects |
+| **W5** | Partly | Bridge auto-start as a service; placement-set format; dashboard UI |
+
+**Start W3 first, or have it land the §15 hooks before the others get far.** All
+four required-now hooks live in `protocol.lua` and `central_server.lua`, which is
+W3's territory. W2 and W4 build against fields that do not exist until W3 ships
+them. If W3 lags, the other streams either stall or invent their own versions and
+collide in the most load-bearing file in the project.
+
+**Probe C gates two streams.** It blocks W4's builder role and W5's parser, so it
+is the single highest-value task available at any given moment. Run it even if
+W4 is otherwise unstaffed.
+
+**If running fewer than five**, the highest-value three are **W3 → W1 → W5**:
+W3 unblocks everyone, W1 has an approved spec ready to execute, W5 fixes the
+bridge restart problem. Add W4 as a short-lived instance purely to run Probe C.
 
 ---
 
