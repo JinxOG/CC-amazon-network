@@ -377,6 +377,11 @@ end
 local JOB_SAVE_FILE        = "jobs.dat"
 local ZONE_SAVE_FILE       = "mine_zones.dat"
 local ACTIVE_ZONES_FILE    = "active_zones.dat"
+-- Crash reasons, appended before the auto-reboot and replayed into the live log
+-- on the next boot. The in-memory log does not survive a restart, so this is the
+-- only record of WHY the server went down.
+local CRASH_LOG_FILE       = "crash.log"
+local CRASH_LOG_MAX_LINES  = 50
 local ORE_THRESHOLDS_FILE  = "ore_thresholds.dat"
 local oreThresholds = {}  -- [name] = minimum_count
 
@@ -3068,6 +3073,31 @@ function server.run()
     end
 
     logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
+
+    -- Replay the last crash into the live log so it reaches /state and the
+    -- dashboard. Without this the reason exists only in a file nobody opens,
+    -- and the operator sees turtles re-registering with no explanation.
+    pcall(function()
+        if not fs.exists(CRASH_LOG_FILE) then return end
+        local f = fs.open(CRASH_LOG_FILE, "r")
+        if not f then return end
+        local lines = {}
+        for line in f.readLine do table.insert(lines, line) end
+        f.close()
+        if #lines == 0 then return end
+        logWarn("Restarted after a crash — last: " .. lines[#lines])
+        if #lines > 1 then
+            logWarn(string.format("%d crashes recorded in %s so far", #lines, CRASH_LOG_FILE))
+        end
+        -- Keep the file bounded; the disk is shared with zones.dat and jobs.dat.
+        if #lines > CRASH_LOG_MAX_LINES then
+            local w = fs.open(CRASH_LOG_FILE, "w")
+            if w then
+                for i = #lines - CRASH_LOG_MAX_LINES + 1, #lines do w.writeLine(lines[i]) end
+                w.close()
+            end
+        end
+    end)
     W.loadDockAssignments()
     loadJobs()
     loadPersistentZones()
@@ -3300,6 +3330,24 @@ end
 while true do
     local ok, err = pcall(server.run)
     if not ok then
+        -- Persist BEFORE rebooting. state.log lives in memory and dies with the
+        -- reboot, so print() alone means the reason survives only as a line on
+        -- a screen nobody was watching -- and a crash LOOP is then completely
+        -- invisible. Every turtle re-registering afterwards also reads as
+        -- "the turtles rebooted", which sends diagnosis the wrong way.
+        -- Wrapped so a failure to write the log can never stop the reboot.
+        pcall(function()
+            local stamp = os.epoch("utc")
+            local human = ""
+            local okd, d = pcall(os.date, "%Y-%m-%d %H:%M:%S")
+            if okd and d then human = " " .. tostring(d) end
+            local f = fs.open(CRASH_LOG_FILE, "a")
+            if f then
+                f.writeLine(string.format("[%d%s] server.run crashed: %s",
+                    stamp, human, tostring(err)))
+                f.close()
+            end
+        end)
         print("[FATAL] server.run crashed: " .. tostring(err))
         print("Rebooting in 5 seconds...")
         sleep(5)
