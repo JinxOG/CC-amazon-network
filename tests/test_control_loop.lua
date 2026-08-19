@@ -626,4 +626,44 @@ function(assert_eq)
         "the refusal reason must name the scanner so an operator can act on it")
 end
 
+-- A carried loader clears a stale placement record (SOURCE-ONLY, weaker).
+--
+-- Invariant D clears the record "only after confirmed retrieval", and C4
+-- correctly refused to infer absence from beacon silence -- a loader placed by
+-- turtle.place() is powered off and beacons nothing, so silence proves nothing.
+-- Possession is a different kind of evidence: the same physical loader cannot be
+-- carried and standing in the world at once. Two miners sat benched on stale
+-- records on 2026-08-18, each needing a hand-deleted file to work again.
+suite["a carried loader clears a stale placement record (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local defAt = src:find("local function clearStaleLoaderRecord%(%)")
+    assert_eq(defAt ~= nil, true, "clearStaleLoaderRecord moved or vanished")
+    local endAt = src:find("local function recoverPlacedLoader%(%)", defAt)
+    assert_eq(endAt ~= nil and endAt > defAt, true, "could not bound the helper")
+    local body = src:sub(defAt, endAt - 1)
+
+    -- The test must be possession, not silence: assert the actual lookup.
+    assert_eq(body:find("equipment%.findSlot%(equipment%.ITEMS%.LOADER_TURTLE%)") ~= nil, true,
+        "staleness must be decided by carrying a loader, not by beacon silence")
+    assert_eq(body:find("loader_state%.clear%(%)") ~= nil, true,
+        "a proven-stale record must actually be cleared")
+    -- It must stay visible: the one case this gets wrong is a replacement
+    -- supplied while the original is still standing, and the coordinates are
+    -- what let the orphan check catch that.
+    assert_eq(body:find("stale_loader_record_cleared") ~= nil, true,
+        "clearing must be reported to the server, not done silently")
+
+    -- Both entry points must use it, or a docked miner handed a replacement
+    -- still needs a reboot to notice.
+    local bootAt = src:find("if clearStaleLoaderRecord%(%) then return end")
+    assert_eq(bootAt ~= nil, true, "boot recovery must consult the staleness check")
+    local guardAt = src:find("clearStaleLoaderRecord%(%)\n    if loader_state%.hasPlaced%(%) then")
+    assert_eq(guardAt ~= nil, true,
+        "the pre-departure guard must consult it before refusing the job")
+end
+
 return suite

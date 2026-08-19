@@ -1104,9 +1104,52 @@ end
 -- half-mined shaft without ever being unloaded. Comms are down for the flight —
 -- the RETRIEVING phase report goes out first so the server expects the gap —
 -- and come back when retrieveLoader swaps the modem in at the end.
+-- Returns true when a recorded loader placement was provably stale and has been
+-- cleared. Used both at boot and at the pre-departure guard, so a turtle handed
+-- a replacement loader recovers without needing a reboot to notice.
+local function clearStaleLoaderRecord()
+    if not loader_state.hasPlaced() then return false end
+    local s = loader_state.get()
+
+    -- Possession settles the record before anything else is attempted.
+    --
+    -- Invariant D says the record is "cleared only after confirmed retrieval",
+    -- and a loader turtle sitting in this turtle's inventory IS that
+    -- confirmation: the same physical object cannot be carried and standing in
+    -- the world at once. That makes this positive evidence, not the
+    -- beacon-silence INFERENCE that D rules out -- and the distinction is real,
+    -- because a loader placed by turtle.place() is powered off and beacons
+    -- nothing at all. Silence proves nothing; possession proves it.
+    --
+    -- The case this gets wrong is an operator supplying a REPLACEMENT loader
+    -- while the original is still standing somewhere. That is no worse than the
+    -- remedy it replaces -- deleting loader_state.dat by hand, which an operator
+    -- does in exactly those circumstances -- and unlike the manual delete it
+    -- leaves the coordinates in the log and reports them to the server, so the
+    -- dashboard's orphan check can still flag a loader that really is out there.
+    --
+    -- Searches the whole inventory rather than slot 2 alone: a loader displaced
+    -- into a mining slot is still a loader we are carrying, and the operator's
+    -- intent when they drop one in is unambiguous either way.
+    local carried = equipment.findSlot(equipment.ITEMS.LOADER_TURTLE)
+    if carried then
+        print(string.format(
+            "[MINER] Loader recorded at %d,%d,%d, but one is carried in slot %d — "
+            .. "record is stale, clearing.", s.x, s.y, s.z, carried))
+        base.sendProgress(string.format(
+            "stale_loader_record_cleared at %d,%d,%d (loader carried in slot %d)",
+            s.x, s.y, s.z, carried))
+        loader_state.clear()
+        return true
+    end
+    return false
+end
+
 local function recoverPlacedLoader()
+    if clearStaleLoaderRecord() then return end
     if not loader_state.hasPlaced() then return end
     local s = loader_state.get()
+
     print(string.format("[MINER] Boot: loader recorded at %d,%d,%d — recovering",
         s.x, s.y, s.z))
     base.sendProgress(string.format("recovering abandoned loader at %d,%d", s.x, s.z))
@@ -1297,11 +1340,16 @@ local function mineJob(job)
     --
     -- Checking first means the miner never leaves its dock, and the distinct
     -- non-retryable reasons tell an operator which of the two states it is in.
+    -- A loader we are demonstrably carrying cannot also be standing out there.
+    -- Checked here as well as at boot so an operator who drops a replacement
+    -- into a docked miner does not additionally have to reboot it.
+    clearStaleLoaderRecord()
     if loader_state.hasPlaced() then
         local s = loader_state.get()
         local detail = string.format("loader_outstanding at %d,%d,%d", s.x, s.y, s.z)
         print("[MINER] Refusing job — " .. detail)
-        base.sendProgress(detail .. " — collect it by hand or clear loader_state.dat")
+        base.sendProgress(detail .. " — put a loader turtle in slot "
+            .. S_LOADER .. " and it will clear itself, or delete loader_state.dat")
         base.sendFailed(detail, false)
         _jobId = nil
         return
