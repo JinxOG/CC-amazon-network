@@ -1234,10 +1234,32 @@ local function recoverPlacedLoader()
     end
 
     -- Come home under our own navigation; the server may not even be up.
+    --
+    -- Report each leg explicitly. Position reaches the dashboard on heartbeats,
+    -- heartbeats are sent only by the control loop, and the control loop does
+    -- not start until base.run() -- which is AFTER this entire recovery. So for
+    -- the whole retrieval and flight the dashboard holds whatever position the
+    -- turtle last reported, and an operator cannot tell a turtle flying home
+    -- from one that has died in the field. Observed live: four miners appeared
+    -- frozen at their loader coordinates for several minutes and only jumped to
+    -- the dock on arrival.
+    --
+    -- base.sendProgress is the only public call that carries base.getPos(), so
+    -- the legs report through it. Coarse -- three fixes for the trip rather than
+    -- one every five seconds -- but it distinguishes moving from stopped, which
+    -- is the question actually being asked. A no-op if the retrieval left comms
+    -- down; that case is reported as loader_recovered_comms_down above.
+    local function legReport(what)
+        base.sendProgress("boot recovery: " .. what)
+    end
+
     local p = base.getPos()
     base.setSkyReturn(true)
+    legReport("ascending to the sky lane")
     base.move.to(p.x, SKY_Y, p.z)
+    legReport("flying to arrivals")
     base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
+    legReport("descending to dock")
     base.returnToDockFromSky()
     base.setSkyReturn(false)
     base.setAutonomousReturn(false)

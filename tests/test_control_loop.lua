@@ -716,6 +716,20 @@ function(assert_eq)
 
     local returnAt = body:find("base%.returnToDockFromSky%(%)")
     assert_eq(returnAt ~= nil, true, "boot recovery must still fly home")
+
+    -- Position reaches the dashboard on heartbeats, and the control loop that
+    -- sends them does not start until base.run -- after this whole recovery. So
+    -- the flight legs must report position explicitly, or a turtle flying home
+    -- is indistinguishable from one that died in the field.
+    local legAt = body:find("local function legReport%(what%)")
+    assert_eq(legAt ~= nil, true, "the flight home must report its legs")
+    local ascAt = body:find('legReport%("ascending to the sky lane"%)')
+    local flyAt = body:find('legReport%("flying to arrivals"%)')
+    local descAt = body:find('legReport%("descending to dock"%)')
+    assert_eq(ascAt ~= nil and flyAt ~= nil and descAt ~= nil, true,
+        "each leg of the flight home must report")
+    assert_eq(ascAt < flyAt and flyAt < descAt, true,
+        "leg reports must be in flight order")
     local idleAt = body:find("base%.setStatus%(proto%.STATUS%.IDLE%)")
     assert_eq(idleAt ~= nil, true,
         "boot recovery must reset status to IDLE or the turtle is never dispatched again")
