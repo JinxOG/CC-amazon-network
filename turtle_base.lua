@@ -1095,6 +1095,35 @@ function base.setProtectedSlots(slots, names)
     for _, n in ipairs(names or {}) do _protectedNames[n] = true end
 end
 
+-- Role-installed hook that makes room for coal WITHOUT throwing anything away.
+--
+-- The debris sweep below is a last resort: it drops on the ground, where items
+-- despawn. A role that has somewhere better to put its cargo installs it here,
+-- and when the hook frees enough slots the sweep never runs at all.
+--
+-- This is deliberately a callback rather than a chest slot for turtle_base to
+-- deploy itself. Banking cargo means placing an ender chest and digging it back
+-- up, and this file already carries hard-won evidence of how badly that goes:
+-- see the recovery comment further down, where both of a turtle's ender chests
+-- share ONE registry name (EnderStorage separates them by colour frequency, not
+-- item id), so nothing here can tell the fuel chest from the payload chest.
+-- Deploying a second, name-identical chest inside this same function -- while a
+-- loose one may already be in flight -- walks straight into the failure that
+-- comment records: slot 15 ending with two chests and slot 16 with none.
+--
+-- The miner already solves all of this in ore_turtle's dumpToEC, which banks to
+-- the ore chest, preserves coal, rescues displaced hardware, and guards the dock
+-- station chest. The hook reaches that code from the one refuel path that does
+-- not otherwise pass through it: fuel.ensureFuel() firing asynchronously from
+-- the control loop.
+--
+-- The installed function must be safe to call with the pickaxe already held,
+-- since refuelFromChest normally runs inside the dig-tool wrapper.
+--
+-- nil by default: delivery and support keep exactly the behaviour they have.
+local _makeRoomFn = nil
+function base.setMakeRoomFn(fn) _makeRoomFn = fn end
+
 -- Quick scan of inventory slots 1-BURN_MAX for any loose burnable items (used on boot).
 -- Skips if already at max fuel to avoid wasting coal from previous runs.
 function fuel.refuel()
@@ -1136,6 +1165,18 @@ function fuel.refuelFromChest()
             if turtle.getItemCount(s) == 0 then n = n + 1 end
         end
         return n
+    end
+
+    -- Bank the cargo first if the role knows how, so the sweep has nothing left
+    -- to throw away. Guarded by pcall: a hook that fails must not take the
+    -- refuel down with it, because a turtle that cannot refuel is a worse
+    -- outcome than a stack of cobblestone on the floor.
+    if freeCount() < 4 and _makeRoomFn then
+        local ok, err = pcall(_makeRoomFn)
+        if not ok then
+            logWarn("Make-room hook failed (" .. tostring(err)
+                .. ") — falling back to the debris sweep")
+        end
     end
 
     if freeCount() < 4 then

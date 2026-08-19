@@ -319,6 +319,76 @@ return {
             string.format("the sweep must still clear debris (9 stacks in, %d left)", cobbleLeft))
     end,
 
+    -- Debris on the ground despawns, and on a miner it is mined ore. A role that
+    -- can bank its cargo installs a make-room hook; when that hook frees enough
+    -- slots the sweep must not run at all, so nothing is dropped.
+    ["a make-room hook that frees slots stops the sweep dropping anything"] =
+    function(assert_eq)
+        local c, base, eq, calls, containers, restore = fieldMiner()
+        base.setDigToolWrapper(nil)
+
+        -- Two free slots to start (4 and 14), so the hook fires.
+        c.inv[1] = { name = eq.ITEMS.SCANNER,       count = 1 }
+        c.inv[2] = { name = eq.ITEMS.LOADER_TURTLE, count = 1 }
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:iron_ore", count = 64 } end
+        c.inv[14] = nil
+
+        -- Stands in for ore_turtle's dumpToEC: banks the cargo somewhere real.
+        -- It clears the DEEP slots (11-13) on purpose. The sweep works upward
+        -- from slot 1 and stops at four free, so it would have taken 5 and 6 --
+        -- slots the hook never touches. Those two are therefore the discriminator:
+        -- they survive only if the hook's work meant the sweep never ran.
+        local banked = 0
+        base.setMakeRoomFn(function()
+            for s = 11, 13 do
+                if c.inv[s] then banked = banked + 1; c.inv[s] = nil end
+            end
+        end)
+
+        base.fuel.refuelFromChest()
+        local slot5, slot6 = turtle.getItemDetail(5), turtle.getItemDetail(6)
+        restore()
+        base.setMakeRoomFn(nil)
+
+        assert_eq(banked, 3, "the hook must be given the chance to bank the cargo")
+        assert_eq(slot5 ~= nil and slot5.name == "minecraft:iron_ore", true,
+            "ore in slot 5 must survive — the hook already made room")
+        assert_eq(slot6 ~= nil and slot6.name == "minecraft:iron_ore", true,
+            "ore in slot 6 must survive — the hook already made room")
+    end,
+
+    -- The hook is an optimisation, not a dependency. A miner that cannot bank --
+    -- boxed in, chest missing, dump raising -- must still refuel, because a
+    -- turtle stuck at zero fuel is worse than a stack of cobblestone on the floor.
+    ["a failing make-room hook still lets the refuel proceed"] = function(assert_eq)
+        local c, base, eq, calls, containers, restore = fieldMiner()
+        base.setDigToolWrapper(nil)
+
+        -- Slots 1 and 2 loaded so only 4 and 14 are free: the hook fires only
+        -- below four, and a fixture that starts AT four never reaches it.
+        c.inv[1] = { name = eq.ITEMS.SCANNER,       count = 1 }
+        c.inv[2] = { name = eq.ITEMS.LOADER_TURTLE, count = 1 }
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        c.inv[14] = nil
+
+        local fired = false
+        base.setMakeRoomFn(function()
+            fired = true
+            error("cannot deploy the ore chest")
+        end)
+
+        local before = c.fuel
+        base.fuel.refuelFromChest()
+        local after = c.fuel
+        restore()
+        base.setMakeRoomFn(nil)
+
+        assert_eq(fired, true, "precondition: the hook must actually have been reached")
+        assert_eq(after > before, true,
+            string.format("the refuel must survive a failing hook (was %d, now %d)",
+                before, after))
+    end,
+
     -- An empty chest in the field is the genuinely unrecoverable case, and it
     -- must be reported as failure so ensureFuel escalates to ERROR rather than
     -- looping as though it had succeeded.
