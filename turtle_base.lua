@@ -1069,6 +1069,32 @@ end
 -- Both roles: only use slots 1-BURN_MAX for fuel operations.
 local BURN_MAX = 14   -- updated to CHEST_SLOT-1 (min 14) in base.init()
 
+-- Slots and item names the debris sweep in refuelFromChest must never drop.
+--
+-- That sweep was written for support turtles, which accumulate road debris in
+-- slots 1..BURN_MAX and keep nothing else there. A miner keeps its entire kit in
+-- that range -- scanner, carried loader, stowed tool, and the modem during the
+-- retrieval window -- so the sweep was throwing the turtle's own hardware on the
+-- ground. Losing the modem is the one that bricks it: equipment.reconcile looks
+-- for the modem in the inventory it was just dropped from, so Invariant B cannot
+-- hold, comms.init errors, and base.init takes ore_turtle's module load down
+-- with it -- skipping recoverPlacedLoader() and abandoning the placed loader.
+--
+-- Empty by default, so delivery and support keep exactly the behaviour they had.
+local _protectedSlots = {}
+local _protectedNames = {}
+
+-- Slots are each protected item's declared home; names cover the same item after
+-- it has been physically displaced into a mining slot -- dug up during movement,
+-- or a retrieved loader turtle landing in the first free slot. ore_turtle
+-- already learned it needs both (see its rescueProtectedItems), so the sweep
+-- honours both rather than trusting slot position alone.
+function base.setProtectedSlots(slots, names)
+    _protectedSlots, _protectedNames = {}, {}
+    for _, s in ipairs(slots or {}) do _protectedSlots[s] = true end
+    for _, n in ipairs(names or {}) do _protectedNames[n] = true end
+end
+
 -- Quick scan of inventory slots 1-BURN_MAX for any loose burnable items (used on boot).
 -- Skips if already at max fuel to avoid wasting coal from previous runs.
 function fuel.refuel()
@@ -1121,14 +1147,25 @@ function fuel.refuelFromChest()
                 local n = item.name
                 local isFuel = (n == "minecraft:coal" or n == "minecraft:charcoal"
                                 or n == "minecraft:coal_block" or n == CHEST_ITEM)
-                if not isFuel then
+                if not isFuel and not _protectedSlots[s] and not _protectedNames[n] then
                     turtle.select(s)
                     -- Prefer dropping down; fall back to forward
                     if not turtle.dropDown() then turtle.drop() end
                 end
             end
         end
-        logInfo(string.format("Debris cleared — %d free slot(s) now available", freeCount()))
+        -- Protected hardware can hold the count below the target. That is the
+        -- correct outcome -- less coal this trip beats a miner that has thrown
+        -- away its scanner -- but it must not pass silently, because a miner
+        -- that never frees a slot draws no coal and will be back here shortly.
+        local free = freeCount()
+        if free < 4 then
+            logWarn(string.format(
+                "Debris sweep freed only %d slot(s) — protected items left in place; "
+                .. "this refuel will draw less coal than usual", free))
+        else
+            logInfo(string.format("Debris cleared — %d free slot(s) now available", free))
+        end
     end
 
     local placeFn, digFn, suckFn = findFreeSpace()
@@ -1582,6 +1619,27 @@ function base.init(role)
     -- Always cap at 14 so slots 15 and 16 are never touched by fuel ops.
     BURN_MAX = math.min(CHEST_SLOT - 1, 14)
     logInfo("Fuel burn range: slots 1-" .. BURN_MAX)
+    -- A miner's kit lives in slots 1-4, inside the debris sweep's range, so it
+    -- must be protected before anything can refuel. Registered here rather than
+    -- left to ore_turtle for two reasons: it has to hold on every boot including
+    -- one where comms.init below fails and ore_turtle's module load never gets
+    -- past base.init, and turtle_base owns the sweep so it owns the guard.
+    --
+    -- equipment.lua does not ship to delivery or support (see install.lua
+    -- PROFILES), so this is deliberately optional -- those roles keep the
+    -- unprotected sweep, which is correct for them.
+    if role == proto.ROLE.MINER then
+        local okEq, eq = pcall(require, "equipment")
+        if okEq and eq then
+            base.setProtectedSlots(
+                { eq.SLOTS.SCANNER, eq.SLOTS.LOADER, eq.SLOTS.TOOL, eq.SLOTS.MODEM },
+                { eq.ITEMS.SCANNER, eq.ITEMS.LOADER_TURTLE,
+                  eq.ITEMS.PICKAXE, eq.ITEMS.CHUNKY, eq.ITEMS.MODEM })
+            logInfo("Protected slots 1-4 — the debris sweep will not drop miner hardware")
+        else
+            logWarn("equipment.lua unavailable — debris sweep is UNPROTECTED on this miner")
+        end
+    end
     print(string.format("=== %s [%s] v%s booting ===", _self.id, role, proto.VERSION))
     comms.init()
     initPosition()

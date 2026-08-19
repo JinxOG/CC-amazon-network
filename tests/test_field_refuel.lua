@@ -192,6 +192,133 @@ return {
         assert_eq(modem ~= nil, true, "the modem must be restored after the refuel")
     end,
 
+    -- The debris sweep at the top of refuelFromChest exists for support turtles,
+    -- which pick up road rubbish in slots 1..BURN_MAX and keep nothing else
+    -- there. A miner keeps its whole kit in that range, so the sweep was
+    -- throwing the turtle's own hardware on the ground -- observed in-world as
+    -- missing loader turtles and a missing geo scanner.
+    --
+    -- The modem is the one that turns item loss into a brick: equipment.reconcile
+    -- looks for it in the inventory it was just dropped from, so Invariant B
+    -- cannot hold and base.init errors out at ore_turtle.lua's module load,
+    -- skipping recoverPlacedLoader() and abandoning the placed chunk loader too.
+    --
+    -- No wrapper here on purpose: called directly, refuelFromChest does no
+    -- equipment swapping, so slots 1-4 hold still and the sweep is the only
+    -- thing that can empty them.
+    ["the debris sweep must not drop the miner's own hardware"] = function(assert_eq)
+        local c, base, eq, calls, containers, restore = fieldMiner()
+        base.setDigToolWrapper(nil)
+
+        -- The full kit in its declared slots, and every mining slot loaded, so
+        -- freeCount() is 1 (slot 14 only) -- well under the sweep's threshold of 4.
+        c.inv[1] = { name = eq.ITEMS.SCANNER,       count = 1 }
+        c.inv[2] = { name = eq.ITEMS.LOADER_TURTLE, count = 1 }
+        c.inv[3] = { name = eq.ITEMS.PICKAXE,       count = 1 }
+        c.inv[4] = { name = eq.ITEMS.MODEM,         count = 1 }
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        c.inv[14] = nil
+
+        base.fuel.refuelFromChest()
+
+        local scanner = turtle.getItemDetail(1)
+        local loader  = turtle.getItemDetail(2)
+        local tool    = turtle.getItemDetail(3)
+        local modem   = turtle.getItemDetail(4)
+        restore()
+
+        assert_eq(scanner ~= nil and scanner.name == eq.ITEMS.SCANNER, true,
+            "the geo scanner must survive the debris sweep")
+        assert_eq(loader ~= nil and loader.name == eq.ITEMS.LOADER_TURTLE, true,
+            "the carried chunk loader must survive the debris sweep")
+        assert_eq(tool ~= nil and tool.name == eq.ITEMS.PICKAXE, true,
+            "the stowed pickaxe must survive the debris sweep")
+        assert_eq(modem ~= nil and modem.name == eq.ITEMS.MODEM, true,
+            "the modem must survive the debris sweep — losing it bricks the miner")
+    end,
+
+    -- Slot protection alone is not enough. Hardware gets physically displaced
+    -- into a mining slot -- dug up during movement, or a retrieved loader turtle
+    -- landing in the first free slot -- which is the whole reason ore_turtle
+    -- carries rescueProtectedItems. A sweep that trusted slot position would
+    -- drop a displaced loader while congratulating itself on protecting slot 2.
+    ["hardware displaced into a mining slot is still not dropped"] = function(assert_eq)
+        local c, base, eq, calls, containers, restore = fieldMiner()
+        base.setDigToolWrapper(nil)
+
+        -- Slot 2 empty, the loader turtle sitting in a mining slot instead.
+        -- It goes in slot 5 specifically: the sweep stops the moment it has
+        -- freed 4 slots, so a displaced item parked deeper in the range is never
+        -- reached and the test would pass without proving anything.
+        c.inv[1] = { name = eq.ITEMS.SCANNER, count = 1 }
+        c.inv[2] = nil
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        c.inv[5]  = { name = eq.ITEMS.LOADER_TURTLE, count = 1 }
+        c.inv[14] = nil
+
+        base.fuel.refuelFromChest()
+
+        local found = false
+        for s = 1, 14 do
+            local i = turtle.getItemDetail(s)
+            if i and i.name == eq.ITEMS.LOADER_TURTLE then found = true end
+        end
+        restore()
+
+        assert_eq(found, true,
+            "a loader turtle displaced into a mining slot must survive the sweep")
+    end,
+
+    -- The other half of the pair: a declared home slot is protected by position,
+    -- whatever is sitting in it. Name protection cannot cover this, because it
+    -- depends on equipment.ITEMS matching the pack -- and those registry names
+    -- are the thing most likely to drift (the spec dates its verification for
+    -- exactly that reason). If the modem's registry name changes under us, the
+    -- name table silently stops matching and slot position is all that is left
+    -- standing between the sweep and the miner's hardware.
+    ["a declared home slot is protected whatever is sitting in it"] = function(assert_eq)
+        local c, base, eq, calls, containers, restore = fieldMiner()
+        base.setDigToolWrapper(nil)
+
+        -- Slot 2 is the loader's home, holding an item whose name we do not know.
+        c.inv[1] = { name = eq.ITEMS.SCANNER, count = 1 }
+        c.inv[2] = { name = "somemod:renamed_chunk_loader", count = 1 }
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        c.inv[14] = nil
+
+        base.fuel.refuelFromChest()
+
+        local slot2 = turtle.getItemDetail(2)
+        restore()
+
+        assert_eq(slot2 ~= nil and slot2.name == "somemod:renamed_chunk_loader", true,
+            "an unrecognised item in a protected home slot must not be dropped")
+    end,
+
+    -- The sweep's purpose is still served: genuine debris goes, hardware stays.
+    -- Without this, "protect everything" would pass the test above and quietly
+    -- break refuelling for the support turtles the sweep was written for.
+    ["the debris sweep still clears genuine debris"] = function(assert_eq)
+        local c, base, eq, calls, containers, restore = fieldMiner()
+        base.setDigToolWrapper(nil)
+
+        c.inv[1] = { name = eq.ITEMS.SCANNER, count = 1 }
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        c.inv[14] = nil
+
+        base.fuel.refuelFromChest()
+
+        local cobbleLeft = 0
+        for s = 1, 14 do
+            local i = turtle.getItemDetail(s)
+            if i and i.name == "minecraft:cobblestone" then cobbleLeft = cobbleLeft + 1 end
+        end
+        restore()
+
+        assert_eq(cobbleLeft < 9, true,
+            string.format("the sweep must still clear debris (9 stacks in, %d left)", cobbleLeft))
+    end,
+
     -- An empty chest in the field is the genuinely unrecoverable case, and it
     -- must be reported as failure so ensureFuel escalates to ERROR rather than
     -- looping as though it had succeeded.
