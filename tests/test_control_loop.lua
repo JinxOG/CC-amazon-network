@@ -694,6 +694,24 @@ function(assert_eq)
     assert_eq(dumpAt ~= nil, true,
         "retrievePlacedLoader must make room before digging the loader up")
 
+    -- A true position before the approach is computed. The stand square and the
+    -- recorded loader position were captured when the loader went down;
+    -- everything since is dead reckoning across a sector of mining, and it
+    -- drifts. move.to cannot catch that -- it loops until its OWN tracked
+    -- position matches, so a drifted turtle arrives "successfully" at the wrong
+    -- block. Two miners lost their jobs and stranded their loaders that way.
+    -- Anchored on newline + indentation, NOT the bare identifier. The bare form
+    -- also matches the explanatory comment a few lines above the call, so
+    -- deleting the call left this assertion green -- caught only because the
+    -- mutation run is mandatory. Prose cannot satisfy "\n    base.gpsSync()".
+    local syncAt = body:find("\n    base%.gpsSync%(%)")
+    assert_eq(syncAt ~= nil, true,
+        "retrievePlacedLoader must resync GPS before working out the approach")
+    local approachAt = body:find("approachFor%(rec, base%.getPos%(%)%)")
+    assert_eq(approachAt ~= nil, true, "the approach derivation moved or vanished")
+    assert_eq(syncAt < approachAt, true,
+        "the resync must precede the approach, or it is derived from a drifted position")
+
     -- It must come before the approach, so every path gets it -- not tucked
     -- after a move that can return early.
     local moveAt = body:find("local ok, err = base%.move%.to%(sx, sy, sz%)")

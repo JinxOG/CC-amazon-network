@@ -1104,6 +1104,29 @@ local function retrievePlacedLoader(stand)
     local rec = loader_state.get()
     if not rec then return false, "no_loader_recorded" end
 
+    -- Get a true position before working out the approach.
+    --
+    -- The stand square and the loader's recorded position were both captured at
+    -- the moment the loader went down. Everything since is dead reckoning across
+    -- a whole sector of mining, and it drifts. Observed in-world: two miners came
+    -- back believing they stood one block west of where they actually were,
+    -- walked to that belief, found something other than their loader in front of
+    -- them, and correctly refused to dig. Both jobs died and both loaders were
+    -- left standing.
+    --
+    -- move.to cannot catch this on its own: it loops until its own tracked
+    -- position equals the target, so a drifted turtle arrives "successfully" at
+    -- the wrong block. One GPS fix puts the turtle back in the same frame the
+    -- record was written in, so the approach lands on the real square.
+    --
+    -- Fails soft by contract -- base.gpsSync() logs and returns false without
+    -- raising, leaving the dead-reckoned position, which is exactly today's
+    -- behaviour. So this can only improve the odds, never make them worse.
+    --
+    -- This does NOT fix the drift itself, only stop it costing a job and a
+    -- stranded loader. The source of the lost block is still unknown.
+    base.gpsSync()
+
     -- Make room BEFORE digging the loader up, on every path.
     --
     -- turtle.dig() with no room for the drop still returns TRUE: the block is
