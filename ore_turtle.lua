@@ -1452,7 +1452,7 @@ local function recoverPlacedLoader()
     legReport("flying to arrivals")
     base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
     legReport("descending to dock")
-    base.returnToDockFromSky()
+    local docked, dockErr = base.returnToDockFromSky()
     base.setSkyReturn(false)
     base.setAutonomousReturn(false)
 
@@ -1472,6 +1472,23 @@ local function recoverPlacedLoader()
     -- restart, flew home correctly, and then sat at the dock showing RETURNING
     -- while their four jobs stayed PENDING behind "idle=0 fuel>=500". The
     -- recovery worked perfectly and the fleet was still deadlocked.
+    --
+    -- ONLY when the dock was actually reached, though. returnToDockFromSky sets
+    -- STATUS.ERROR and returns false when the descent or the return route fails
+    -- -- which is what happens to the LAST miner home when the others are still
+    -- queued at the single-block arrivals hole. Forcing IDLE unconditionally
+    -- overwrote that ERROR and reported DOCKED, so a turtle stranded above the
+    -- arrivals hole announced itself parked at its bay and was dispatched again
+    -- from the wrong place. That was this line's fault, added in 1.9.22.
+    --
+    -- On failure the ERROR status is left standing: a miner sitting in the
+    -- arrivals chokepoint must be visible and must NOT be handed more work,
+    -- because flying it out from there is how the hole stays blocked.
+    if docked == false then
+        print("[MINER] Boot recovery did NOT reach the dock: " .. tostring(dockErr))
+        base.sendProgress("dock_not_reached: " .. tostring(dockErr))
+        return
+    end
     base.setStatus(proto.STATUS.IDLE)
     reportPhase(proto.PHASE.DOCKED)
 end
@@ -1547,13 +1564,28 @@ local function mineJob(job)
         base.setSkyReturn(true)
         base.move.to(p.x, SKY_Y, p.z)
         base.move.to(W.ARRIVALS_HOLE.x, SKY_Y, W.ARRIVALS_HOLE.z)
-        base.returnToDockFromSky()
+        local docked, dockErr = base.returnToDockFromSky()
         base.setSkyReturn(false)
 
         local restored, why2 = restoreTravelMode()
         if not restored then
             print("[MINER] WARNING: could not restore travel mode: " .. tostring(why2))
             base.sendProgress("travel_mode_not_restored: " .. tostring(why2))
+        end
+
+        -- Do not claim DOCKED when the dock was not reached. The failure is
+        -- reachable and routine: the last miner home finds the single-block
+        -- arrivals hole still occupied by the others, the return route fails,
+        -- and returnToDockFromSky sets STATUS.ERROR. Reporting DOCKED over that
+        -- told the dashboard a stranded turtle was parked at its bay.
+        --
+        -- sendComplete/sendFailed will follow this and set IDLE either way --
+        -- this job really is over -- but the operator gets told where the turtle
+        -- actually is rather than where it was supposed to end up.
+        if docked == false then
+            print("[MINER] Did NOT reach the dock: " .. tostring(dockErr))
+            base.sendProgress("dock_not_reached: " .. tostring(dockErr))
+            return
         end
         reportPhase(proto.PHASE.DOCKED)
     end

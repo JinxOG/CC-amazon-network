@@ -759,6 +759,24 @@ function(assert_eq)
         "boot recovery must reset status to IDLE or the turtle is never dispatched again")
     assert_eq(returnAt < idleAt, true,
         "the IDLE reset must come after the return that set RETURNING")
+
+    -- ...but ONLY when the dock was actually reached. returnToDockFromSky sets
+    -- STATUS.ERROR and returns false when the return route fails -- routine for
+    -- the last miner home, with the others still queued at the single-block
+    -- arrivals hole. Forcing IDLE unconditionally overwrote that ERROR and
+    -- reported DOCKED, so a turtle stranded above the hole announced itself
+    -- parked at its bay and got dispatched again from the wrong place.
+    assert_eq(body:find("local docked, dockErr = base%.returnToDockFromSky%(%)") ~= nil, true,
+        "the dock result must be captured, not discarded")
+    local guardAt = body:find("if docked == false then")
+    assert_eq(guardAt ~= nil, true, "a failed dock must be handled")
+    assert_eq(guardAt < idleAt, true,
+        "the failed-dock guard must come BEFORE the IDLE reset, or it masks the ERROR")
+    local guard = body:sub(guardAt, idleAt)
+    assert_eq(guard:find("dock_not_reached") ~= nil, true,
+        "a failed dock must be reported to the server, not swallowed")
+    assert_eq(guard:find("\n        return") ~= nil, true,
+        "a failed dock must return before claiming IDLE and DOCKED")
 end
 
 -- Ore squatting in a reserved slot is dumped (SOURCE-ONLY, weaker).
