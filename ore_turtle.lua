@@ -686,7 +686,23 @@ end
 -- If a protected item was dug up and landed in a mining slot, move it home.
 -- (Declared local at the top of the file: checkFuel is defined before this.)
 rescueProtectedItems = function()
-    for s = MINE_FIRST, MINE_LAST do
+    -- Scans slots 1..14, not just the mining slots.
+    --
+    -- turtle.dig() puts drops in the first FREE slot, and slots 2, 3 and 4 are
+    -- all empty during their swap windows -- the loader while it stands in the
+    -- world, the tool and modem while equipped. So displaced hardware can land
+    -- anywhere in that range, not only in 5-13, and a loader sitting in slot 4
+    -- was invisible to this.
+    --
+    -- An item already in its own home is skipped for free: the home is then
+    -- occupied by the item itself, so the getItemCount(home) == 0 guard below
+    -- fails and nothing moves.
+    --
+    -- 15 and 16 are deliberately NOT scanned. Both hold ender chests with the
+    -- same registry name, so a scan that reached them could "rescue" the ore
+    -- chest out of 16 into an empty 15 -- the cannibalisation this codebase has
+    -- already been bitten by once.
+    for s = 1, S_COAL do
         local item = turtle.getItemDetail(s)
         if item then
             -- Check protected slots in priority order (15 before 16) so that when
@@ -768,6 +784,28 @@ local function dumpToEC()
     end
     turtle.select(S_ORE_EC)
     turtle.digDown()
+
+    -- Put displaced hardware back in its home slot, on EVERY dump.
+    --
+    -- This used to run only inside the `if turtle.detectDown()` branch at the
+    -- top -- i.e. only when a block happened to need digging before the chest
+    -- could be placed. On the ordinary path it never ran at all, even though
+    -- the comment in the drop loop above promises it does.
+    --
+    -- The consequence reached the dock: node_138 finished a job carrying its
+    -- chunk loader in a mining slot instead of slot 2. turtle.dig() puts drops
+    -- in the first free slot, so a retrieved loader lands wherever there was
+    -- room; mine_flow's normalizeLoaderSlot is explicitly tidy-up-only and gives
+    -- up if the home slot is occupied at that instant -- which it often was,
+    -- because ore squatted there while the loader was standing in the world.
+    --
+    -- Running it here, after the drop loop has cleared foreign items out of the
+    -- reserved slots and after the ore chest is back in hand, means the home
+    -- slot is free by the time we try. Dumps happen whenever the mining slots
+    -- fill, at sector end, and on the way home, so this is the periodic
+    -- inventory tidy rather than a one-off.
+    rescueProtectedItems()
+    turtle.select(S_ORE_EC)   -- rescueProtectedItems leaves its own slot selected
 end
 
 local function dumpOres()

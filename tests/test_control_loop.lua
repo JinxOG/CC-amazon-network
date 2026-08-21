@@ -890,4 +890,59 @@ function(assert_eq)
         "placing a new loader must clear any near-miss position from the previous one")
 end
 
+-- Displaced hardware is put back on every dump (SOURCE-ONLY, weaker).
+--
+-- node_138 finished a job at the dock carrying its chunk loader in a mining slot
+-- instead of slot 2. turtle.dig() puts drops in the first free slot, so a
+-- retrieved loader lands wherever there is room, and mine_flow's
+-- normalizeLoaderSlot is tidy-up-only -- it gives up if the home slot is
+-- occupied at that instant. rescueProtectedItems existed to fix exactly this but
+-- ran only inside dumpToEC's dig-first branch, so on the ordinary path it never
+-- ran at all.
+suite["displaced hardware is rescued on every dump (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("local function dumpToEC%(%)")
+    assert_eq(fnAt ~= nil, true, "dumpToEC moved or vanished")
+    local endAt = src:find("\nlocal function ", fnAt + 10) or #src
+    local body  = src:sub(fnAt, endAt)
+
+    -- Must run unconditionally at the end, not only in the dig-first branch.
+    -- Anchored on newline + 4 spaces: the conditional call inside the branch is
+    -- indented deeper, and the identifier also appears in the prose above it.
+    local tailCall = body:find("\n    rescueProtectedItems%(%)")
+    assert_eq(tailCall ~= nil, true,
+        "dumpToEC must rescue displaced hardware on every dump, not only when it digs first")
+
+    -- It has to come after the drop loop frees the reserved slots, or the home
+    -- slot is still occupied and the rescue silently does nothing.
+    local dropAt = body:find("turtle%.dropDown%(%)")
+    assert_eq(dropAt ~= nil and dropAt < tailCall, true,
+        "the rescue must run after the drop loop has cleared the reserved slots")
+end
+
+suite["the rescue scans the swap slots, not just mining slots (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("rescueProtectedItems = function%(%)")
+    assert_eq(fnAt ~= nil, true, "rescueProtectedItems moved or vanished")
+    local endAt = src:find("\nlocal function ", fnAt + 10) or #src
+    local body  = src:sub(fnAt, endAt)
+
+    -- Slots 2, 3 and 4 are empty during their swap windows, so a drop can land
+    -- there. Scanning only MINE_FIRST..MINE_LAST missed a loader in slot 4.
+    assert_eq(body:find("for s = 1, S_COAL do") ~= nil, true,
+        "the rescue must scan the swap slots as well as the mining slots")
+    -- 15 and 16 must stay out of range: both hold same-named ender chests, and
+    -- scanning them could pull the ore chest out of 16 into an empty 15.
+    assert_eq(body:find("for s = 1, 16 do") == nil, true,
+        "the rescue must NOT scan the ender chest slots")
+end
+
 return suite
