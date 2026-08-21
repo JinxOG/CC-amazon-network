@@ -157,6 +157,14 @@ local _beaconArrivedSinceGate = false  -- reset at the start of every wait; see 
 local _mismatchSinceGate      = false  -- a LOADER_BEACON arrived from the WRONG position
 local _nilPositionSinceGate   = false  -- a LOADER_BEACON arrived with no GPS fix at all
 
+-- How far a beacon may sit from the recorded position and still be believed to
+-- be OUR loader. Sectors are 32 blocks apart, so nothing else can beacon this
+-- close to where we recorded ours; the gap being corrected is a block or two of
+-- dead-reckoning drift.
+local NEAR_MISS_RADIUS = 4
+local _nearMissBeaconPos = nil  -- our loader's OWN reported position, when it
+                                -- disagrees with the record by less than that
+
 -- The position placeLoader expects ITS placed loader to report, set right
 -- before waitForFreshBeacon() runs and cleared once the loader is retrieved.
 -- Everything below is scoped to this: proof that SOME loader is alive is
@@ -195,6 +203,26 @@ function mine_flow.noteBeacon(msg)
     elseif pos then
         -- A real beacon, just not from our loader.
         _mismatchSinceGate = true
+
+        -- ...but keep it if it is close enough that it can only BE our loader.
+        --
+        -- The recorded position is written from the miner's own dead-reckoned
+        -- belief at placement time, and that belief drifts. The loader reports
+        -- its OWN gps.locate() fix, so when the two disagree by a block or two
+        -- the beacon is the truthful one and the record is the stale one.
+        -- Retrieval was failing on exactly that gap and throwing this position
+        -- away every time.
+        --
+        -- Safe against confusing another miner's loader: sectors are 32 blocks
+        -- apart, so nothing but our own loader can beacon within NEAR_MISS of
+        -- where we recorded ours. Anything further away is left as a plain
+        -- mismatch, exactly as before.
+        local dx = math.abs(pos.x - _expectedLoaderPos.x)
+        local dy = math.abs(pos.y - _expectedLoaderPos.y)
+        local dz = math.abs(pos.z - _expectedLoaderPos.z)
+        if dx <= NEAR_MISS_RADIUS and dy <= NEAR_MISS_RADIUS and dz <= NEAR_MISS_RADIUS then
+            _nearMissBeaconPos = { x = pos.x, y = pos.y, z = pos.z }
+        end
     else
         -- Our loader may well be the sender, but with no GPS fix in the
         -- payload there is nothing to verify against -- an unverifiable
@@ -212,6 +240,18 @@ end
 -- _lastBeaconAt is technically still recent -- a stale "yes" surviving into
 -- the NEXT sector, when nothing is even placed yet, is exactly the failure
 -- this scoping exists to prevent.
+-- Our loader's OWN reported position, when it disagrees with what we recorded
+-- by less than NEAR_MISS_RADIUS. nil when no such beacon has been heard.
+--
+-- The loader reports its own gps.locate() fix; the record is written from the
+-- miner's dead-reckoned belief at placement, which drifts. When they disagree by
+-- a block or two the beacon is the truthful one, and this is how a caller gets
+-- at it to correct the record and re-approach.
+function mine_flow.nearbyBeaconPos()
+    if not _nearMissBeaconPos then return nil end
+    return { x = _nearMissBeaconPos.x, y = _nearMissBeaconPos.y, z = _nearMissBeaconPos.z }
+end
+
 function mine_flow.beaconSeenWithin(seconds)
     if not _expectedLoaderPos then return false end
     if not _lastBeaconAt then return false end
@@ -348,6 +388,7 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
 
     -- Only a beacon reporting THIS exact block counts from here on.
     _expectedLoaderPos = { x = tx, y = p.y, z = tz }
+    _nearMissBeaconPos = nil
 
     log("Waiting for loader beacon before giving up chunk loading...")
     local beaconOk, beaconErr = waitForFreshBeacon()
@@ -584,6 +625,7 @@ function mine_flow.adoptRecordedLoader()
     local recorded = loader_state.get()
     if not recorded then return false, "no_loader_recorded" end
     _expectedLoaderPos = { x = recorded.x, y = recorded.y, z = recorded.z }
+    _nearMissBeaconPos = nil
     return true
 end
 

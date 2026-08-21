@@ -81,6 +81,15 @@ local FENCE_CHUNK_RADIUS = 1
 -- cover the wrong 3x3. From 8 blocks in, every facing keeps both the miner and
 -- the loader inside the sector's own anchor chunk.
 local STAND_OFFSET = 8
+
+-- Retrieval retries. A mismatch is usually a block or two of dead-reckoning
+-- drift, which a fresh GPS fix plus the loader's own broadcast position
+-- corrects. Three is enough for that and small enough that a genuinely missing
+-- loader still fails quickly rather than burning a job's worth of time.
+local RETRIEVE_ATTEMPTS    = 3
+-- Loaders beacon every 5s, so one interval plus margin. Kept under Invariant J's
+-- 10-second silent-wait limit, and the wait logs what it is waiting for anyway.
+local RETRIEVE_BEACON_WAIT = 7
 -- Face south before placing so the loader lands on the +Z side of the stand,
 -- i.e. away from the sector centre the miner works and returns from. Facing is
 -- read back from base.getFacing() rather than assumed -- this only decides
@@ -1145,33 +1154,109 @@ local function retrievePlacedLoader(stand)
     -- the guard belongs next to the dig.
     dumpIfInventoryTight("loader retrieval")
 
-    local sx, sy, sz, facing
-    if stand then
-        sx, sy, sz, facing = stand.x, stand.y, stand.z, stand.facing
-    else
-        sx, sy, sz, facing = approachFor(rec, base.getPos())
+    -- Approach, and retry on a position mismatch rather than giving up.
+    --
+    -- A single attempt cannot be made reliable. The record is written from the
+    -- miner's dead-reckoned belief at placement, that belief drifts over a
+    -- sector of mining, and move.to loops until its OWN tracked position matches
+    -- the target -- so a drifted turtle arrives "successfully" at the wrong
+    -- block and the mismatch check correctly refuses to dig. Resyncing before
+    -- the approach did not fix it (1.9.28): the approach is itself a long
+    -- flight, and turtle_base resyncs every 50 moves, so a correction can land
+    -- after move.to has already declared victory.
+    --
+    -- So make the operation self-correcting instead, using the one authority
+    -- that is not guessing: the loader broadcasts its own gps.locate() fix every
+    -- 5 seconds. On a mismatch we resync, listen for that beacon, believe it
+    -- over our record, and go again.
+    local lastReason
+    for attempt = 1, RETRIEVE_ATTEMPTS do
+        if attempt > 1 then
+            -- Fresh fix first: cheap, and corrects the common case where only
+            -- our own position was wrong.
+            base.gpsSync()
+
+            -- Then ask the loader where IT thinks it is. The modem is still on
+            -- at this point -- retrieveLoader's position check runs before
+            -- retrievalSwapIn -- so beacons can still reach us. Only beacons
+            -- within NEAR_MISS_RADIUS of the record are believed, and sectors
+            -- are 32 blocks apart, so nothing but our own loader can qualify.
+            print(string.format(
+                "[MINER] Retrieval attempt %d/%d — listening %ds for the loader's own position",
+                attempt, RETRIEVE_ATTEMPTS, RETRIEVE_BEACON_WAIT))
+            local deadline = os.epoch("utc") / 1000 + RETRIEVE_BEACON_WAIT
+            while os.epoch("utc") / 1000 < deadline do
+                if mine_flow.nearbyBeaconPos() then break end
+                pump(1)
+            end
+
+            local beaconPos = mine_flow.nearbyBeaconPos()
+            if beaconPos then
+                print(string.format(
+                    "[MINER] Loader reports %d,%d,%d — record said %d,%d,%d; believing the loader",
+                    beaconPos.x, beaconPos.y, beaconPos.z, rec.x, rec.y, rec.z))
+                base.sendProgress(string.format(
+                    "loader_record_corrected to %d,%d,%d from %d,%d,%d",
+                    beaconPos.x, beaconPos.y, beaconPos.z, rec.x, rec.y, rec.z))
+                loader_state.record(beaconPos.x, beaconPos.y, beaconPos.z,
+                    rec.sector, rec.radius)
+                rec = loader_state.get() or rec
+                -- The stand square was derived from the stale record, so it is
+                -- stale too. Derive a fresh one from the corrected position.
+                stand = nil
+            else
+                print("[MINER] No loader beacon heard — retrying on the resynced position alone")
+            end
+        end
+
+        local sx, sy, sz, facing
+        if stand then
+            sx, sy, sz, facing = stand.x, stand.y, stand.z, stand.facing
+        else
+            sx, sy, sz, facing = approachFor(rec, base.getPos())
+        end
+
+        -- move.to is vertical-first. Climbing while still in the loader's OWN
+        -- x/z column would run straight into it from below: turtle_base sees a
+        -- turtle block, refuses to dig it, and waits out its 2-minute blocked
+        -- deadline. Stepping to the approach column at the current altitude
+        -- first avoids the loader entirely. Only done when we are actually in
+        -- its column, so the normal end-of-sector retrieval still ascends
+        -- before travelling.
+        local here = base.getPos()
+        if here.x == rec.x and here.z == rec.z and here.y ~= sy then
+            base.move.to(sx, here.y, sz)
+        end
+
+        local ok, err = base.move.to(sx, sy, sz)
+        if not ok then return false, "approach_failed: " .. tostring(err) end
+        base.move.face(facing)
+
+        local got, reason = mine_flow.retrieveLoader()
+        -- retrieveLoader ends in equipment.retrievalSwapOut on both its success
+        -- and most of its failure paths, which moves the modem to the other
+        -- side.
+        base.recoverModem()
+        if got then
+            if attempt > 1 then
+                print(string.format("[MINER] Loader recovered on attempt %d.", attempt))
+            end
+            return true
+        end
+
+        lastReason = reason
+        -- Only a position mismatch is worth another go. Everything else --
+        -- chunky missing, nothing in front, the dig failing -- is a different
+        -- problem that a fresh position cannot solve, and retrying would just
+        -- burn fuel and time before failing the same way.
+        if not (reason and tostring(reason):match("^loader_position_mismatch")) then
+            return false, reason
+        end
+        print(string.format("[MINER] Attempt %d/%d: %s",
+            attempt, RETRIEVE_ATTEMPTS, tostring(reason)))
     end
 
-    -- move.to is vertical-first. Climbing while still in the loader's OWN x/z
-    -- column would run straight into it from below: turtle_base sees a turtle
-    -- block, refuses to dig it, and waits out its 2-minute blocked deadline.
-    -- Stepping to the approach column at the current altitude first avoids the
-    -- loader entirely. Only done when we are actually in its column, so the
-    -- normal end-of-sector retrieval still ascends before travelling.
-    local here = base.getPos()
-    if here.x == rec.x and here.z == rec.z and here.y ~= sy then
-        base.move.to(sx, here.y, sz)
-    end
-
-    local ok, err = base.move.to(sx, sy, sz)
-    if not ok then return false, "approach_failed: " .. tostring(err) end
-    base.move.face(facing)
-
-    local got, reason = mine_flow.retrieveLoader()
-    -- retrieveLoader ends in equipment.retrievalSwapOut on both its success and
-    -- most of its failure paths, which moves the modem to the other side.
-    base.recoverModem()
-    return got, reason
+    return false, lastReason
 end
 
 -- ── Boot recovery (Task 5b, deferred to here) ────────────────────────────────

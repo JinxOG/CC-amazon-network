@@ -824,4 +824,70 @@ function(assert_eq)
         "precondition: the hook really is built before the function is assigned")
 end
 
+-- Retrieval retries and believes the loader over the record (SOURCE-ONLY, weaker).
+--
+-- A single attempt cannot be made reliable: the record is written from the
+-- miner's dead-reckoned belief at placement, that belief drifts over a sector,
+-- and move.to loops until its OWN tracked position matches -- so a drifted
+-- turtle arrives "successfully" at the wrong block. Resyncing before the
+-- approach did not fix it (1.9.28), because the approach is itself a long
+-- flight and turtle_base resyncs every 50 moves. The loader broadcasts its own
+-- gps.locate() fix, which is the one position in play that is not a guess.
+suite["retrieval retries and believes the loader's own position (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("local function retrievePlacedLoader%(stand%)")
+    assert_eq(fnAt ~= nil, true, "retrievePlacedLoader moved or vanished")
+    local endAt = src:find("\nlocal function ", fnAt + 10) or #src
+    local body  = src:sub(fnAt, endAt)
+
+    -- Anchored on newline + indentation throughout: the bare identifiers all
+    -- appear in the explanatory comments in this same function, and matching
+    -- those made an earlier version of this suite pass against deleted code.
+    assert_eq(body:find("for attempt = 1, RETRIEVE_ATTEMPTS do") ~= nil, true,
+        "the approach must retry rather than failing on the first mismatch")
+    assert_eq(body:find("\n            base%.gpsSync%(%)") ~= nil, true,
+        "each retry must take a fresh GPS fix")
+    -- Anchored on the ASSIGNMENT, not the bare call: nearbyBeaconPos() also
+    -- appears in the wait loop just above, and matching that left this green
+    -- when the assignment was stubbed to nil.
+    assert_eq(body:find("\n            local beaconPos = mine_flow%.nearbyBeaconPos%(%)") ~= nil, true,
+        "a retry must ask the loader where it thinks it is")
+    assert_eq(body:find("\n                loader_state%.record%(beaconPos%.x") ~= nil, true,
+        "a corrected position must be written back to the record")
+    assert_eq(body:find("\n                stand = nil") ~= nil, true,
+        "the stand square derived from the stale record must be discarded")
+
+    -- Only a position mismatch is retryable. Retrying a missing loader or a
+    -- failed dig just burns fuel before failing identically.
+    assert_eq(body:find('tostring%(reason%):match%("%^loader_position_mismatch"%)') ~= nil, true,
+        "only a position mismatch may be retried")
+end
+
+-- mine_flow must keep the near-miss beacon rather than discarding it.
+suite["a near-miss loader beacon is kept, not discarded (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("mine_flow.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    assert_eq(src:find("\nlocal NEAR_MISS_RADIUS = %d") ~= nil, true,
+        "a near-miss radius must be defined")
+    assert_eq(src:find("\n            _nearMissBeaconPos = { x = pos%.x") ~= nil, true,
+        "a beacon close to the record must be captured, not thrown away")
+    assert_eq(src:find("\nfunction mine_flow%.nearbyBeaconPos%(%)") ~= nil, true,
+        "the captured position must be readable by the caller")
+
+    -- It must be cleared when a NEW loader is placed, or a stale correction
+    -- from the previous sector's loader could be applied to this one.
+    local placeAt = src:find("\n    _expectedLoaderPos = { x = tx, y = p%.y, z = tz }")
+    assert_eq(placeAt ~= nil, true, "placement no longer records the expected position")
+    local clearAt = src:find("\n    _nearMissBeaconPos = nil", placeAt)
+    assert_eq(clearAt ~= nil and clearAt - placeAt < 200, true,
+        "placing a new loader must clear any near-miss position from the previous one")
+end
+
 return suite
