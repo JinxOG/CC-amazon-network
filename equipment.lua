@@ -85,6 +85,91 @@ local function findSlot(itemName)
 end
 equipment.findSlot = findSlot
 
+-- ─── Loader identity ─────────────────────────────────────────────────────────
+--
+-- ITEMS.LOADER_TURTLE names a CLASS OF HARDWARE, not a role. Every miner, every
+-- loader, and every delivery turtle in this fleet is computercraft:turtle_advanced,
+-- so a mined-up fleet member matches a loader exactly and nothing downstream can
+-- tell them apart. Observed 2026-08-22: node_139 returned to the dock carrying
+-- node_119 -- a miner -- and ore_turtle's rescueProtectedItems filed the corpse
+-- into the loader slot as recovered hardware, because slot 2 is always empty
+-- while the real loader is standing in the world.
+--
+-- This is the same collision as the two ender chests sharing
+-- enderstorage:ender_chest, which this codebase has already been bitten by. The
+-- precedent there was to stop trusting the item name on its own; that is what
+-- this section does for turtles.
+--
+-- Two independent signals, because neither is sufficient alone:
+--
+--   LABEL -- an unlabelled chunky loader comes back from place -> break as
+--   "Advanced Chunky Turtle" (verified in-world 2026-08-13, see
+--   chunkloader-footprint.md), so displayName does survive the operations that
+--   matter. A labelled fleet turtle shows its label instead. Set LOADER_LABEL
+--   once the fleet's loaders actually carry a distinguishing name.
+--
+--   STATE -- a loader that loader_state says is standing in the world cannot at
+--   the same instant be in this turtle's inventory. That is a logical certainty
+--   rather than an item-identity guess, needs no unverified API, and closes the
+--   observed case on its own.
+--
+-- LOADER_LABEL is nil by default and that is deliberate: asserting a label the
+-- loaders do not yet carry would reject every real loader and ground the whole
+-- mining fleet. Unconfigured, this behaves exactly as the old name-only check.
+equipment.LOADER_LABEL = nil
+
+-- Detailed item queries cost more than plain ones, so only pay for them when a
+-- label is actually configured and there is something to read.
+local function itemDetail(s)
+    return turtle.getItemDetail(s, equipment.LOADER_LABEL ~= nil)
+end
+
+function equipment.isLoaderItem(detail)
+    if not detail or detail.name ~= I.LOADER_TURTLE then return false end
+    if equipment.LOADER_LABEL == nil then return true end
+    return detail.displayName == equipment.LOADER_LABEL
+end
+
+-- The replacement for findSlot(I.LOADER_TURTLE). Every caller that means "where
+-- is my chunk loader" must use this rather than the raw item name.
+function equipment.findLoaderSlot()
+    for s = 1, 16 do
+        if equipment.isLoaderItem(itemDetail(s)) then return s end
+    end
+    return nil
+end
+
+-- Resolved on every call, deliberately not memoised. require() already caches,
+-- so this is a table lookup -- and holding our own reference would pin whichever
+-- instance happened to load first. loader_state carries an in-memory cache of
+-- the on-disk record, so a stale reference means equipment answers from a
+-- different view of the world than mine_flow and ore_turtle, which is exactly
+-- the divergence this whole section exists to stop.
+local function loaderState()
+    local ok, m = pcall(require, "loader_state")
+    if ok then return m end
+    return nil
+end
+
+-- Slot of an advanced turtle that CANNOT be this miner's loader, because the
+-- disk record says its loader is standing in the world. Of the two contradicting
+-- facts the record is the more trustworthy: it is written before placement and
+-- cleared only after confirmed retrieval.
+--
+-- A miner that finds one of these has almost certainly just destroyed a fleet
+-- member, so callers should report it rather than swallow it. Returns nil when
+-- there is no contradiction -- including when loader_state is unavailable, since
+-- absence of the module is not evidence of a foreign turtle.
+function equipment.foreignTurtleSlot()
+    local ls = loaderState()
+    if not (ls and ls.hasPlaced()) then return nil end
+    for s = 1, 16 do
+        local it = turtle.getItemDetail(s)
+        if it and it.name == I.LOADER_TURTLE then return s end
+    end
+    return nil
+end
+
 local function emptySide()
     for _, side in ipairs({ "left", "right" }) do
         if kindOnSide(side) == nil and peripheral.getType(side) == nil then
@@ -99,7 +184,7 @@ function equipment.state()
         left        = kindOnSide("left"),
         right       = kindOnSide("right"),
         pickaxeOn   = equipment.sideOf("pickaxe") ~= nil,
-        invLoader   = findSlot(I.LOADER_TURTLE) ~= nil,
+        invLoader   = equipment.findLoaderSlot() ~= nil,
         invScanner  = findSlot(I.SCANNER)       ~= nil,
         invFuelEC   = turtle.getItemDetail(S.FUEL_EC) ~= nil,
         invOreEC    = turtle.getItemDetail(S.ORE_EC)  ~= nil,
@@ -122,6 +207,13 @@ function equipment.validate(mode)
 
     if mode == "travel" then
         if not equipment.sideOf("chunky") then return false, "chunky_not_equipped" end
+        -- Checked before possession, and it is the stronger signal. A miner about
+        -- to travel should be carrying its loader, so a disk record saying the
+        -- loader is already standing means whatever is in the inventory is some
+        -- other advanced turtle -- most likely a fleet member this miner dug up.
+        -- Departing on that would fence the miner to a chunk nothing is loading
+        -- (Invariant A), and could place a corpse as a loader.
+        if equipment.foreignTurtleSlot() then return false, "foreign_turtle_carried" end
         if not equipment.state().invLoader then return false, "loader_turtle_missing" end
     elseif mode == "mine" then
         if equipment.sideOf("chunky") then return false, "chunky_still_equipped" end
