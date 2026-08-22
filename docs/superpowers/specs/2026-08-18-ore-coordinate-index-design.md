@@ -120,12 +120,16 @@ At 4 bytes per indexed block:
 | A narrow watchlist (3–4 materials) | ~400–900 | **~2–4 KB** |
 | Naive `{name=…,x=…,y=…,z=…}` for comparison | ~4,800 | **~287 KB** |
 
-**This is what makes the watchlist load-bearing rather than a refinement.** At
-~19 KB/sector, indexing every ore type fits only **27–34 sectors** in a
-512–640 KB budget before eviction starts thrashing — and a single mine order
-routinely covers 12. The earlier 60–80 sector figure was a consequence of the low
-density estimate and should not be relied on. A narrow watchlist fits several
-hundred sectors in the same budget.
+**This is what makes the watchlist load-bearing rather than a refinement.** The
+argument is a ratio and survives wherever Tier 2 ends up living: indexing every
+ore type costs **5–9× a narrow watchlist**, so whatever cap it is given, the
+watchlist buys back most of an order of magnitude in sectors retained. Against
+the 512–640 KB this document originally assumed, every-ore fits only **27–34
+sectors** while a single mine order routinely covers 12 — eviction thrashes
+before one job completes.
+
+The earlier 60–80 sector figure was a consequence of the low density estimate and
+should not be relied on. Neither should the 512–640 KB: see immediately below.
 
 #### Where this budget comes from — corrected 2026-08-22
 
