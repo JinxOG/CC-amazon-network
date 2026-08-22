@@ -162,25 +162,32 @@ Invariant J. The server-side fix costs one field and introduces no new waiting.
 
 Fix the listener, not the shouter.
 
-## Operator trap in the recovery
+## Operator trap in the recovery — WITHDRAWN 2026-08-22
 
-Cancelling job_0726 frees `node_118` but does **not** make it usable. Its
-`loader_state` still records a placed loader, so it refuses the next job outright
-([`ore_turtle.lua:1681`](../../../ore_turtle.lua)) with `loader_outstanding at 1160,200,-2743`
-and `recoverable = false` — which then trips `dispatchBlockedUntil` for
-`DISPATCH_BLOCK_SEC` (600s), repeatedly.
+**This section was wrong and is retained only so the correction is on the record.**
 
-The loader record must be cleared first. Per `ore_turtle.lua:1685`, dropping a loader
-turtle into slot 2 self-clears it at the dock with **no reboot required**, or
-`loader_state.dat` can be deleted. Order matters: clear the record, then cancel the job.
+It originally warned that cancelling job_0726 would leave `node_118` refusing work
+with `loader_outstanding`, on the inference that the loader standing at
+1160,200,−2743 was node_118's. An in-world check showed **node_118 is carrying its
+loader**, so no such record survives — and even if one did,
+`clearStaleLoaderRecord()` treats possession as proof and clears it before the
+refusal check is reached (`ore_turtle.lua:1680`). There is no trap. Cancelling the
+job is sufficient to return node_118 to service.
+
+The inference was drawn from position alone and should not have been stated as
+fact. See the companion report on turtles digging one another
+(`2026-08-22-W1-to-W3-vertical-bypass-digs-through-turtles.md`) for what the
+orphaned loader actually belongs to.
 
 ## Not part of this report
 
-- **`node_160` abandoned at 1160, 200, −2743.** Still beaconing, inside job_0726's zone,
-  at the altitude `placeLoader` records from the miner's own `p.y` — node_118's travel
-  slot. Why the retrieval failed is unrecoverable: the 100-line `serverLog` ring rolled
-  past node_118's return roughly 45 minutes before the visible window begins. Loader
-  retrieval and its diagnosability are W1's, and W1 is treating them as its own work.
+- **`node_160` abandoned at 1160, 200, −2743.** Still beaconing. W1 originally
+  attributed this to node_118 on position alone; that was wrong. node_118 is carrying
+  its loader, and the zone `1040,-2832,1200,-2736` is **shared** by jobs 0723–0726, so
+  position never identified an owner in the first place. The likely owner is
+  **node_119**, which was destroyed mid-job — see
+  `2026-08-22-W1-to-W3-vertical-bypass-digs-through-turtles.md`. A loader whose miner
+  ceases to exist is orphaned permanently; nothing in the system reclaims it.
 - **`saveJobs failed: /startup.lua:433: Out of space`**, repeating. The server computer's
   disk is full and job state is not being persisted at all. Independent of this deadlock
   (which is entirely in-memory) but it means a restart loses the job table, and
