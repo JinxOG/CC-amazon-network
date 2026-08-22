@@ -20,6 +20,7 @@ local files = {
     "tests.test_control_loop",
     "tests.test_dock_refuel",
     "tests.test_field_refuel",
+    "tests.test_server_recovery",
 }
 
 local passed, failed = 0, 0

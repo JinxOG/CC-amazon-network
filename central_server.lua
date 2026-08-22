@@ -192,6 +192,20 @@ end
 function registry.update(id, status, fuel, position, jobId, version)
     local t = state.registry[id]
     if not t then logWarn("Heartbeat from unknown turtle: " .. id) return end
+
+    -- What the turtle actually said, recorded before the guard below rewrites it.
+    -- jobQueue.checkGhosts' idle-stuck arm reads THIS, never t.status.
+    --
+    -- The guard is a dispatch protection and must not double as the server's only
+    -- memory of what the miner reported. Its own comment justifies the ASSIGNED
+    -- window -- an IDLE sent before JOB_ASSIGN lands -- but it also covers
+    -- IN_PROGRESS with no time bound, so a miner whose JOB_COMPLETE was dropped
+    -- reports IDLE forever and the server overwrites the evidence every time.
+    -- The recovery condition was being destroyed before the recovery code could
+    -- read it: observed 2026-08-22, node_118 held job_0726 open for four hours
+    -- at its own dock, fully fuelled, while dispatch reported idle=0 every minute.
+    if status then t.reportedStatus = status end
+
     -- Guard: if the server has an ASSIGNED/IN_PROGRESS job for this turtle, don't
     -- let a stale IDLE heartbeat (sent before JOB_ASSIGN is received) overwrite
     -- the server-side assignment and re-open the turtle for a second dispatch.
@@ -701,9 +715,13 @@ function jobQueue.checkGhosts()
             -- Case 2: miner reports IDLE while server still has this MINE job active.
             -- Means JOB_COMPLETE or JOB_FAILED was lost during a server crash.
             -- Miners never report IDLE while actively mining, so IDLE = job truly done.
+            -- reportedStatus, not t.status: the stale-IDLE guard in
+            -- registry.update strips the IDLE out of t.status while this job is
+            -- active, which is exactly the condition this arm waits for. Reading
+            -- t.status here meant the arm could never fire at all.
             local isIdleStuck = not isGhost
                 and t and t.online
-                and t.status == proto.STATUS.IDLE
+                and t.reportedStatus == proto.STATUS.IDLE
                 and t.jobId == jobId
                 and job.type == proto.JOB.MINE
             if isIdleStuck then
@@ -3322,6 +3340,31 @@ function server.run()
             end
         end
     end
+end
+
+-- ─── Test seam ───────────────────────────────────────────────────────────────
+--
+-- This file holds the registry, the dispatcher and every job-recovery path, and
+-- has had NO test coverage at all -- because requiring it enters the run loop
+-- below and never returns, so a suite could only ever mirror its logic in a
+-- comment and hope. That is how the stale-IDLE guard silently disabled the
+-- idle-stuck reconciler the day after it was written and went unnoticed for two
+-- months while a healthy miner sat unusable at its dock.
+--
+-- Setting _G.__CC_SERVER_TEST before the require hands back the internals
+-- instead of starting the server. Production never sets it, so the run loop is
+-- entered exactly as before and the trailing return is unreachable there --
+-- this changes nothing about how the server behaves.
+--
+-- state and registry are locals; jobQueue is already a global (line 655).
+if _G.__CC_SERVER_TEST then
+    server._test = {
+        state    = state,
+        registry = registry,
+        jobQueue = jobQueue,
+        CFG      = CFG,
+    }
+    return server
 end
 
 -- Auto-reboot on crash: server.run() crashing silently leaves the bridge stale
