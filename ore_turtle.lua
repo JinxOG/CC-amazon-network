@@ -685,6 +685,26 @@ end
 
 -- If a protected item was dug up and landed in a mining slot, move it home.
 -- (Declared local at the top of the file: checkFuel is defined before this.)
+-- Say so, loudly, when we are carrying an advanced turtle that cannot be ours.
+--
+-- A miner that acquires one has almost certainly just destroyed a fleet member,
+-- and the wreckage is recoverable if somebody knows to look: node_119 booted
+-- with its ID, filesystem and role intact once it was placed back down. Nothing
+-- in the system told anyone it was in a slot -- W1 diagnosed it as a missing
+-- turtle for most of a session. Rate-limited to one report per slot per find so
+-- a dump loop cannot flood the log.
+local _foreignTurtleReported = {}
+local function reportForeignTurtle(slot, item)
+    if _foreignTurtleReported[slot] then return end
+    _foreignTurtleReported[slot] = true
+    local detail = string.format(
+        "foreign_turtle_carried in slot %d (%s) — our loader is on record as "
+        .. "standing; this is most likely a destroyed fleet turtle", slot,
+        tostring(item and (item.displayName or item.name) or "?"))
+    print("[MINER] " .. detail)
+    base.sendProgress(detail)
+end
+
 rescueProtectedItems = function()
     -- Scans slots 1..14, not just the mining slots.
     --
@@ -709,6 +729,23 @@ rescueProtectedItems = function()
             -- both ECs share the same item name, the fuel EC home wins.
             for _, home in ipairs({ S_SCANNER, S_LOADER, S_FUEL_EC, S_ORE_EC }) do
                 if protectedSlotNames[home] == item.name then
+                    -- A turtle we cannot account for is NOT our loader.
+                    --
+                    -- foreignTurtleSlot() fires only when our own loader is on
+                    -- record as standing in the world, which makes any advanced
+                    -- turtle in the inventory something we picked up -- almost
+                    -- certainly a fleet member we just dug up. Promoting it into
+                    -- slot 2 is how node_119 rode home in node_139's loader slot
+                    -- and then passed every possession check in the system.
+                    --
+                    -- Safe against the retrieval window: mine_flow clears the
+                    -- record (line 588) BEFORE normalizeLoaderSlot (595), so a
+                    -- legitimately retrieved loader always arrives here with
+                    -- hasPlaced() already false and rescues normally.
+                    if home == S_LOADER and equipment.foreignTurtleSlot() then
+                        reportForeignTurtle(s, item)
+                        break
+                    end
                     if turtle.getItemCount(home) == 0 then
                         turtle.select(s)
                         turtle.transferTo(home)
@@ -739,16 +776,27 @@ end
 -- called through withDigTool by dumpOres below.
 local function dumpToEC()
     sweepCoalToSlot14()
-    turtle.select(S_ORE_EC)
-    if turtle.detectDown() then
-        turtle.digDown()
-        rescueProtectedItems()  -- recover anything displaced into mining slots
-        turtle.select(S_ORE_EC)  -- re-select: rescueProtectedItems changes selected slot
-    end
-    turtle.placeDown()
-    for s = 1, 16 do
-        local item = turtle.getItemDetail(s)
-        if turtle.getItemCount(s) > 0 then
+
+    -- Banking moved to mine_flow.bankPayload so it can be tested.
+    --
+    -- What was here: turtle.placeDown() with its result ignored, then a drop
+    -- loop that ran regardless. turtle.dropDown() with no container underneath
+    -- throws the items into the world, so any failure to place the chest
+    -- scattered the whole payload -- observed in-world 2026-08-22 as piles of
+    -- ore across the mining zone. Two ways it failed routinely: the deepest
+    -- scan level bottoms out in bedrock where digDown() refuses, and a
+    -- displaced ore chest is rescued into slot 15 (both ender chests share one
+    -- registry name), leaving slot 16 empty at dump time.
+    --
+    -- ore_turtle self-executes and cannot be loaded headlessly, so nothing in
+    -- the suite could ever reach this code. bankPayload lives in a requirable
+    -- module and is covered by tests that model a drop into thin air as
+    -- distinct from a drop into the chest -- a distinction stub_cc's own
+    -- drop() does not make, which is why this survived so long.
+    local banked, why = mine_flow.bankPayload({
+        chestSlot = S_ORE_EC,
+        afterDig  = rescueProtectedItems,
+        shouldDump = function(s, item)
             local isHardware = item and protectedItemNames[item.name] ~= nil
             local reserved   = PROTECTED[s] == true
 
@@ -768,12 +816,19 @@ local function dumpToEC()
             -- for, and rescueProtectedItems puts it back afterwards.
             local foreignInReserved = reserved and s ~= S_COAL and not isHardware
 
-            if (not reserved and not isHardware) or foreignInReserved then
-                turtle.select(s)
-                turtle.dropDown()
-            end
-        end
+            return (not reserved and not isHardware) or foreignInReserved
+        end,
+    })
+
+    if not banked then
+        -- Keep the payload. A full inventory home is a bad trip; a sector's ore
+        -- on the floor is gone. The old code chose the floor, silently.
+        print("[MINER] Ore chest could not be deployed (" .. tostring(why)
+            .. ") — payload kept aboard, nothing dropped")
+        base.sendProgress("bank_failed: " .. tostring(why)
+            .. " — payload retained, nothing dropped")
     end
+
     -- Clear slot 16 if something (from a full EC) landed there during the dump
     local inSlot = turtle.getItemDetail(S_ORE_EC)
     if inSlot and inSlot.name ~= protectedSlotNames[S_ORE_EC] then
@@ -782,8 +837,10 @@ local function dumpToEC()
             if turtle.getItemCount(free) == 0 then turtle.transferTo(free); break end
         end
     end
+    -- No digDown() here any more: bankPayload takes the chest back on whichever
+    -- face it used. A blind digDown() at this point would dig whatever happens
+    -- to be below instead -- terrain, ore, or another turtle.
     turtle.select(S_ORE_EC)
-    turtle.digDown()
 
     -- Put displaced hardware back in its home slot, on EVERY dump.
     --
@@ -1396,7 +1453,32 @@ local function clearStaleLoaderRecord()
     -- Searches the whole inventory rather than slot 2 alone: a loader displaced
     -- into a mining slot is still a loader we are carrying, and the operator's
     -- intent when they drop one in is unambiguous either way.
-    local carried = equipment.findSlot(equipment.ITEMS.LOADER_TURTLE)
+    -- Possession is only proof if we can tell WHAT we possess.
+    --
+    -- The reasoning below is still right -- the same physical object cannot be
+    -- carried and standing at once -- but its premise broke: every advanced
+    -- turtle in the fleet is computercraft:turtle_advanced, so "a loader turtle
+    -- in our inventory" was really "an advanced turtle in our inventory", and a
+    -- mined-up miner satisfied it. Clearing on that evidence abandons a loader
+    -- that really is out there.
+    --
+    -- With a label configured, findLoaderSlot answers the real question and the
+    -- original convenience stands. Without one, refuse and say so: the operator
+    -- remedy is then the documented loader_state.dat delete, which is explicit
+    -- about what it is asserting. Fails toward keeping a record we might not
+    -- need, never toward forgetting a loader that is standing in the world.
+    local carried = equipment.findLoaderSlot()
+    if carried and equipment.LOADER_LABEL == nil then
+        reportForeignTurtle(carried, turtle.getItemDetail(carried))
+        print("[MINER] Carrying an advanced turtle but loaders are unlabelled — "
+            .. "cannot prove it is ours, keeping the record at "
+            .. string.format("%d,%d,%d", s.x, s.y, s.z))
+        base.sendProgress(string.format(
+            "loader_record_kept at %d,%d,%d (carried turtle in slot %d is not "
+            .. "provably a loader; set equipment.LOADER_LABEL or delete "
+            .. "loader_state.dat)", s.x, s.y, s.z, carried))
+        return false
+    end
     if carried then
         print(string.format(
             "[MINER] Loader recorded at %d,%d,%d, but one is carried in slot %d — "

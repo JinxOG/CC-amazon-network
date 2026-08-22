@@ -653,10 +653,27 @@ function(assert_eq)
     local body = src:sub(defAt, endAt - 1)
 
     -- The test must be possession, not silence: assert the actual lookup.
-    assert_eq(body:find("equipment%.findSlot%(equipment%.ITEMS%.LOADER_TURTLE%)") ~= nil, true,
-        "staleness must be decided by carrying a loader, not by beacon silence")
+    --
+    -- findLoaderSlot, NOT findSlot(ITEMS.LOADER_TURTLE). This assertion used to
+    -- demand the raw item lookup, which pinned the defect in place: every
+    -- advanced turtle in the fleet shares that item id, so "carrying a loader"
+    -- was really "carrying an advanced turtle" and a mined-up miner cleared a
+    -- record for a loader still standing in the world. W3 2026-08-22, 1.9.35.
+    assert_eq(body:find("equipment%.findLoaderSlot%(%)") ~= nil, true,
+        "staleness must be decided by carrying a LOADER -- findSlot on the raw "
+        .. "item id cannot tell a loader from a dug-up fleet turtle")
+    assert_eq(body:find("equipment%.findSlot%(equipment%.ITEMS%.LOADER_TURTLE%)"), nil,
+        "the ambiguous raw lookup must not come back")
     assert_eq(body:find("loader_state%.clear%(%)") ~= nil, true,
         "a proven-stale record must actually be cleared")
+
+    -- Possession is only proof when we can tell what we possess. With no label
+    -- configured the two cases are indistinguishable, and the safe answer is to
+    -- keep a record we might not need rather than forget a standing loader.
+    assert_eq(body:find("equipment%.LOADER_LABEL == nil") ~= nil, true,
+        "an unlabelled fleet cannot prove possession and must refuse to clear")
+    assert_eq(body:find("loader_record_kept") ~= nil, true,
+        "the refusal must be reported, not silent")
     -- It must stay visible: the one case this gets wrong is a replacement
     -- supplied while the original is still standing, and the coordinates are
     -- what let the orphan check catch that.
@@ -1061,6 +1078,37 @@ function(assert_eq)
     local soloCall = src:find("\n        tidyAtDock%(%)")
     assert_eq(bootCall ~= nil, true, "boot recovery must tidy on arrival")
     assert_eq(soloCall ~= nil, true, "soloReturn must tidy on arrival")
+end
+
+
+-- A foreign turtle is never promoted into the loader slot (SOURCE-ONLY, weaker).
+--
+-- rescueProtectedItems matches slot 2's expected item name, and every advanced
+-- turtle in the fleet IS that name. Slot 2 is empty for the whole window in
+-- which a miner is out there to be dug, so a mined-up fleet member landed in it
+-- and was thereafter treated as this turtle's own chunk loader. That is how
+-- node_119 rode home in node_139's loader slot on 2026-08-22 and passed every
+-- possession check in the system.
+suite["a foreign turtle is never promoted into the loader slot (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local defAt = src:find("rescueProtectedItems = function%(%)")
+    assert_eq(defAt ~= nil, true, "rescueProtectedItems moved or vanished")
+    local endAt = src:find(nil ~= nil and "" or "\nend\n", defAt, true)
+    assert_eq(endAt ~= nil, true, "rescueProtectedItems has no column-0 terminator")
+    local body = src:sub(defAt, endAt)
+
+    assert_eq(body:find("equipment%.foreignTurtleSlot%(%)") ~= nil, true,
+        "the loader slot must be gated on the turtle being accountable")
+    assert_eq(body:find("S_LOADER") ~= nil, true,
+        "and the gate must apply to the loader home specifically")
+    -- Silence is how this cost a session of diagnosis: a destroyed fleet member
+    -- is recoverable if anyone knows to look in a slot for it.
+    assert_eq(body:find("reportForeignTurtle") ~= nil, true,
+        "finding an unaccountable turtle must be reported, not swallowed")
 end
 
 return suite

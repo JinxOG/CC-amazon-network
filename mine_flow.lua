@@ -317,7 +317,12 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     local ok, reason = equipment.validate("travel")
     if not ok then return false, reason end
 
-    local slot = equipment.findSlot(equipment.ITEMS.LOADER_TURTLE)
+    -- Ask which turtle this IS, not merely what item it is. Every advanced
+    -- turtle in the fleet shares one item id, so a lookup by that id alone
+    -- would hand us a mined-up miner to place as a chunk loader -- and the
+    -- placing miner would then fence itself to a chunk nothing is loading.
+    -- W3 2026-08-22, proto 1.9.35.
+    local slot = equipment.findLoaderSlot()
     if not slot then return false, "loader_turtle_missing" end
 
     -- turtle.place() puts the loader one block AHEAD, which can be in a
@@ -445,7 +450,7 @@ end
 -- safe in inventory by the time this runs.
 local function normalizeLoaderSlot()
     local home = equipment.SLOTS.LOADER
-    local loaderSlot = equipment.findSlot(equipment.ITEMS.LOADER_TURTLE)
+    local loaderSlot = equipment.findLoaderSlot()
     if not loaderSlot then return false, "loader_not_found_for_normalise" end
     if loaderSlot == home then return true end -- already home; no-op
 
@@ -565,7 +570,7 @@ function mine_flow.retrieveLoader()
     -- -- the block is gone, but the item is destroyed rather than
     -- collected -- so this is a real, reachable failure mode, not just
     -- theoretical race-guarding.
-    if not equipment.findSlot(equipment.ITEMS.LOADER_TURTLE) then
+    if not equipment.findLoaderSlot() then
         -- The chunk is DEFINITELY no longer held (the block really is
         -- gone), and chunky is already equipped on every path that reaches
         -- here, so it is correct to release the fence immediately -- there
@@ -627,6 +632,93 @@ function mine_flow.adoptRecordedLoader()
     _expectedLoaderPos = { x = recorded.x, y = recorded.y, z = recorded.z }
     _nearMissBeaconPos = nil
     return true
+end
+
+-- ── Payload banking ─────────────────────────────────────────────────────────
+--
+-- Deploy the ore ender chest on a usable face, drop the payload into it, take
+-- the chest back.
+--
+-- This lives here rather than in ore_turtle for one reason: ore_turtle
+-- self-executes and cannot be loaded headlessly, so nothing in the suite could
+-- ever reach its dump. The version this replaces called turtle.placeDown() and
+-- never looked at the result, then dropped every payload slot regardless --
+-- and turtle.dropDown() with no container underneath throws the items into the
+-- world. Observed in-world 2026-08-22: piles of ore on the ground throughout
+-- the mining zone.
+--
+-- The stub's drop() deletes the item and returns true whether or not anything
+-- is there to catch it, so the harness could not tell a chest from thin air.
+-- That is why this needs to be reachable by a test that models the difference.
+--
+-- Faces are resolved through closures rather than captured up front so a test
+-- can replace turtle.dropDown after this module loads and still be seen.
+local BANK_FACES = {
+    { name = "down",
+      detect = function() return turtle.detectDown() end,
+      dig    = function() return turtle.digDown()    end,
+      place  = function() return turtle.placeDown()  end,
+      drop   = function() return turtle.dropDown()   end },
+    { name = "forward",
+      detect = function() return turtle.detect()     end,
+      dig    = function() return turtle.dig()        end,
+      place  = function() return turtle.place()      end,
+      drop   = function() return turtle.drop()       end },
+    { name = "up",
+      detect = function() return turtle.detectUp()   end,
+      dig    = function() return turtle.digUp()      end,
+      place  = function() return turtle.placeUp()    end,
+      drop   = function() return turtle.dropUp()     end },
+}
+
+-- opts.chestSlot  - slot holding the ender chest
+-- opts.shouldDump - function(slot, itemDetail) -> boolean
+-- opts.afterDig   - optional, called after each successful clearing dig so the
+--                   caller can put displaced hardware back before we place
+--
+-- Returns true, faceName on success; false, reason when the chest never went
+-- down. On failure NOTHING is dropped -- see the guard below.
+function mine_flow.bankPayload(opts)
+    opts = opts or {}
+    local chestSlot  = opts.chestSlot
+    local shouldDump = opts.shouldDump
+    if not chestSlot  then return false, "no_chest_slot"  end
+    if not shouldDump then return false, "no_dump_filter" end
+
+    local face
+    for _, f in ipairs(BANK_FACES) do
+        turtle.select(chestSlot)
+        if f.detect() then
+            -- Clear it if we can. Bedrock and other unbreakable blocks simply
+            -- refuse, which is the whole reason "down" cannot be the only face:
+            -- the deepest scan level bottoms out in the bedrock layer, where
+            -- digDown() fails every time.
+            f.dig()
+            if opts.afterDig then opts.afterDig() end
+            turtle.select(chestSlot)
+        end
+        if not f.detect() and f.place() then face = f break end
+    end
+
+    -- No face took the chest -- an empty chest slot, or boxed in by blocks that
+    -- will not break. Keep the payload aboard.
+    --
+    -- A miner flying home with a full inventory is a bad trip. A sector's worth
+    -- of ore scattered on the floor is gone. Never fall through to the drop
+    -- loop to "make room": the drop loop is only safe once a container is
+    -- confirmed under the drop.
+    if not face then return false, "chest_not_placed" end
+
+    for s = 1, 16 do
+        if turtle.getItemCount(s) > 0 and shouldDump(s, turtle.getItemDetail(s)) then
+            turtle.select(s)
+            face.drop()
+        end
+    end
+
+    turtle.select(chestSlot)
+    face.dig()
+    return true, face.name
 end
 
 return mine_flow

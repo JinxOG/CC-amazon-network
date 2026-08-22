@@ -150,7 +150,198 @@ local function travelInv()
     }
 end
 
+-- Payload banking helpers ---------------------------------------------------
+--
+-- stub_cc's drop() deletes the item and returns true whether or not anything
+-- is there to catch it, so on the stub alone a dump into thin air looks
+-- exactly like a dump into the chest. That blind spot is precisely why an
+-- unchecked turtle.placeDown() could ship and then scatter ore across the
+-- mining zone in the real world. These replacements model the difference.
+local ORE_CHEST = "enderstorage:ender_chest"
+
+local function wkey(x, y, z) return x .. "," .. y .. "," .. z end
+
+-- Returns two lists: what reached the chest, and what hit the ground.
+local function bankingDrops(c)
+    local banked, ground = {}, {}
+    local function land(target)
+        local item = c.inv[c.selected]
+        if not item then return false end
+        table.insert(c.world[target] == ORE_CHEST and banked or ground, item)
+        c.inv[c.selected] = nil
+        return true
+    end
+    turtle.dropDown = function() return land(wkey(c.pos.x, c.pos.y - 1, c.pos.z)) end
+    turtle.dropUp   = function() return land(wkey(c.pos.x, c.pos.y + 1, c.pos.z)) end
+    -- facing 0 => ahead is -Z, matching stub_cc's own ahead().
+    turtle.drop     = function() return land(wkey(c.pos.x, c.pos.y, c.pos.z - 1)) end
+    return banked, ground
+end
+
+-- The stub has no unbreakable blocks. Bedrock is the case that matters: the
+-- deepest scan level bottoms out in it, digDown() refuses, and the floor stays.
+local function unbreakable(faces)
+    local refuse = function() return false, "Unbreakable block detected" end
+    for _, f in ipairs(faces) do
+        if     f == "down" then turtle.digDown = refuse
+        elseif f == "up"   then turtle.digUp   = refuse
+        else                    turtle.dig     = refuse end
+    end
+end
+
+
 return {
+
+    -- placeLoader must ask "is this a loader", not "is this an advanced turtle".
+    -- Every turtle in the fleet shares one item id, so the raw lookup would hand
+    -- a mined-up miner to turtle.place() and call it a chunk loader -- the miner
+    -- then fences itself to a chunk that nothing is loading. Only checkable once
+    -- a label exists to discriminate on, which is what LOADER_LABEL is for.
+    ["placeLoader refuses a fleet turtle that is not a labelled loader"] =
+    function(assert_eq)
+        local flow, eq, _, ls, c = loadFlow(E_TRAVEL(), travelInv())
+        eq.LOADER_LABEL = "LOADER"
+        -- An advanced turtle carrying someone else's label: a dug-up fleet
+        -- member, not our loader.
+        c.inv[2] = { name = eq.ITEMS.LOADER_TURTLE, count = 1,
+                     displayName = "Advanced Ender Mining Turtle" }
+        local ok, why = flow.placeLoader(1, nil)
+        eq.LOADER_LABEL = nil
+
+        assert_eq(ok, false, "an unlabelled fleet turtle must not be placed")
+        -- The REASON is the discriminator, not the state of the world: every
+        -- later failure path digs the loader back up, so "nothing was placed"
+        -- reads true whether we refused up front or placed a corpse and then
+        -- recovered it. Only the reason says we never considered it a loader.
+        assert_eq(why, "loader_turtle_missing",
+            "it must refuse for want of a LOADER -- any other reason means it "
+            .. "accepted the fleet turtle and failed later for some other cause")
+        assert_eq(ls.hasPlaced(), false,
+            "and no placement may be recorded for something never placed")
+
+        -- SOURCE-ONLY, and weaker on purpose. The behavioural assertions above
+        -- pass under both lookups, because placeLoader's later failure paths
+        -- dig the loader back up and clear the record -- so the end state is
+        -- identical whether we refused up front or placed a corpse and undid
+        -- it. Undoing it is not the same as never doing it: the corpse was
+        -- briefly a block in the world and the real loader is still standing.
+        -- The only durable evidence is which question the code asks.
+        local f = assert(io.open("mine_flow.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        assert_eq(src:find("equipment%.findLoaderSlot%(%)") ~= nil, true,
+            "placeLoader must ask findLoaderSlot, not the raw item id")
+        assert_eq(src:find("equipment%.findSlot%(equipment%.ITEMS%.LOADER_TURTLE%)"), nil,
+            "the ambiguous raw lookup must not come back")
+    end,
+
+    -- Payload banking --------------------------------------------------------
+    -- The defect: dumpToEC called turtle.placeDown() and never looked at the
+    -- result, then dropped every payload slot regardless. dropDown() with no
+    -- container underneath throws the items into the world. Observed in-world
+    -- 2026-08-22 as piles of ore across the whole mining zone.
+    ["bankPayload banks the payload when the floor is clear"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore",    count = 40 }
+        c.inv[6] = { name = "minecraft:cobblestone", count = 12 }
+
+        local ok, face = flow.bankPayload({
+            chestSlot  = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+        })
+
+        assert_eq(ok, true, "a clear floor must bank")
+        assert_eq(face, "down", "down is the preferred face")
+        assert_eq(#ground, 0, "nothing may reach the ground")
+        assert_eq(#banked, 2, "both payload slots go into the chest")
+        assert_eq(c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)], nil,
+            "the chest must be picked back up, not left standing")
+    end,
+
+    -- Bedrock. The deepest scan level bottoms out in it, so "down" is
+    -- unavailable EVERY time a miner dumps at the bottom of a sector -- which
+    -- is what made the ground piles so consistent.
+    ["bankPayload falls to another face when the floor will not break"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)] = "minecraft:bedrock"
+        unbreakable({ "down" })
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+
+        local ok, face = flow.bankPayload({
+            chestSlot  = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+        })
+
+        assert_eq(ok, true, "an unbreakable floor must not stop the bank")
+        assert_eq(face ~= "down", true, "down is impossible here")
+        assert_eq(#ground, 0, "nothing may reach the ground")
+        assert_eq(#banked, 1, "the payload still reaches the chest")
+    end,
+
+    -- The property that matters most. Losing a trip is recoverable; scattering
+    -- a sector's ore is not.
+    ["bankPayload drops NOTHING when the chest cannot be placed"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)] = "minecraft:bedrock"
+        c.world[wkey(c.pos.x, c.pos.y + 1, c.pos.z)] = "minecraft:bedrock"
+        c.world[wkey(c.pos.x, c.pos.y, c.pos.z - 1)] = "minecraft:bedrock"
+        unbreakable({ "down", "up", "forward" })
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+
+        local ok, why = flow.bankPayload({
+            chestSlot  = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+        })
+
+        assert_eq(ok, false, "it must report the failure, not pretend")
+        assert_eq(why, "chest_not_placed", "and say why")
+        assert_eq(#ground, 0, "NOT ONE ITEM may be thrown on the ground")
+        assert_eq(#banked, 0, "and none can have been banked either")
+        assert_eq(c.inv[5] ~= nil and c.inv[5].count, 40,
+            "the payload stays aboard, intact")
+    end,
+
+    -- The displaced-chest case: rescueProtectedItems walks its homes in the
+    -- order scanner -> loader -> fuel EC -> ore EC, and both ender chests share
+    -- one registry name, so an ore chest displaced into a mining slot is
+    -- rescued into 15 whenever 15 is empty. Slot 16 is then empty at dump time.
+    ["bankPayload drops NOTHING when the chest slot is empty"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.inv[16] = nil                     -- ore chest is not where we think
+        c.inv[5]  = { name = "minecraft:iron_ore", count = 40 }
+
+        local ok, why = flow.bankPayload({
+            chestSlot  = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+        })
+
+        assert_eq(ok, false, "an empty chest slot is a failure, not a dump")
+        assert_eq(why, "chest_not_placed", "and must say so")
+        assert_eq(#ground, 0, "NOT ONE ITEM may be thrown on the ground")
+        assert_eq(c.inv[5] ~= nil and c.inv[5].count, 40, "payload retained")
+    end,
+
+    ["bankPayload refuses without a filter rather than dumping everything"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+
+        local ok, why = flow.bankPayload({ chestSlot = 16 })
+
+        assert_eq(ok, false, "a missing filter must refuse")
+        assert_eq(why, "no_dump_filter", "and name the reason")
+        assert_eq(#ground, 0, "nothing dropped")
+        assert_eq(#banked, 0, "nothing banked -- including the hardware slots")
+    end,
 
     -- ─── placeLoader: happy path ────────────────────────────────────────
 
@@ -755,7 +946,11 @@ return {
         local origDig = turtle.dig
         turtle.dig = function()
             local ok = origDig()
-            eq.findSlot = function() return nil end -- nothing "found" from here on
+            -- findLoaderSlot, not findSlot: the post-dig check asks "did MY
+            -- loader come back", and answering it by item id alone would let a
+            -- dug-up fleet turtle already aboard stand in for the loader we
+            -- just lost. Changed with the 1.9.36 identity pass.
+            eq.findLoaderSlot = function() return nil end -- nothing "found" from here on
             return ok
         end
 
