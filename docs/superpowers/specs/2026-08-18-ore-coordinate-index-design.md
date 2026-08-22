@@ -120,27 +120,124 @@ At 4 bytes per indexed block:
 | A narrow watchlist (3–4 materials) | ~400–900 | **~2–4 KB** |
 | Naive `{name=…,x=…,y=…,z=…}` for comparison | ~4,800 | **~287 KB** |
 
-CC:Tweaked's default `computer_space_limit` is 1 MB, shared with the server's own
-programs, `zones.dat` and its backup — so the index gets a configured fraction,
-call it 512–640 KB.
-
 **This is what makes the watchlist load-bearing rather than a refinement.** At
-~19 KB/sector, indexing every ore type fits only **27–34 sectors** before
-eviction starts thrashing — and a single mine order routinely covers 12. The
-earlier 60–80 sector figure was a consequence of the low density estimate and
-should not be relied on. A narrow watchlist fits several hundred sectors in the
-same budget.
+~19 KB/sector, indexing every ore type fits only **27–34 sectors** in a
+512–640 KB budget before eviction starts thrashing — and a single mine order
+routinely covers 12. The earlier 60–80 sector figure was a consequence of the low
+density estimate and should not be relied on. A narrow watchlist fits several
+hundred sectors in the same budget.
+
+#### Where this budget comes from — corrected 2026-08-22
+
+An earlier revision said: *"CC:Tweaked's default `computer_space_limit` is 1 MB,
+shared with the server's own programs, `zones.dat` and its backup — so the index
+gets a configured fraction, call it 512–640 KB."*
+
+**That sentence was written without measuring the machine, and it was wrong.**
+The dispatch computer is **full**. `saveJobs` had been failing with
+`Out of space` for at least the visible log window, and the fraction available to
+this index was **zero** before a byte of it existed. Program text alone is
+~194 KB, and §13.1 of the integration spec now records that the machine may hold
+two 156,679-byte copies of `central_server.lua`.
+
+The integration spec resolved this on 2026-08-22 (§4.2 ruling, §7.1 decision,
+§13.1 budget table). **The two-tier split and the packing format both survive;
+only the location was wrong.** See "Where the tiers live" below.
+
+Sizing a subsystem against *free space* rather than a hard measured cap is now
+forbidden outright by §13.1 rule 2. This document is the reason that rule exists,
+and it must not reintroduce the habit.
 
 ### Tier 1 — census
 
-Cheap by comparison and always stored: ~50 distinct block types per sector, as
-name→count, is roughly **2 KB/sector** serialised. Eighty sectors of census is
-~160 KB — affordable alongside a watchlisted Tier 2, and it is the tier that
-answers the planner's questions.
+**Measured 2026-08-22, and the earlier estimate was low by more than half.** The
+previous figure — *"~50 distinct block types per sector, roughly 2 KB/sector"* —
+was an estimate. Counting the live `oreFound` table for one real zone gives **84
+distinct ore types alone**, before a single stone or deepslate entry. A full
+census adds the common non-ore blocks, so:
+
+| | Entries/sector | Per sector | 100 sectors | One-time |
+|---|---|---|---|---|
+| Plain `name→count` | 114 | **3,924 B** | **383 KB** | — |
+| **Interned `id→count`** | 114 | **1,082 B** | **106 KB** | 3.7 KB |
+
+Modded block names average **27.6 characters** and run to 47, so in a plain
+`name→count` table the *keys* are most of the payload, repeated identically in
+every sector file.
+
+**Intern them.** One store-wide dictionary maps name → small integer id; each
+sector stores `id→count`. That is a **3.6× reduction** — 383 KB down to 106 KB
+across 100 sectors, dictionary included — and it costs one shared table.
+
+```lua
+-- oreidx/names.dat   (written once, appended as new blocks are seen)
+{ [1] = "minecraft:deepslate_iron_ore", [2] = "electrodynamics:oreniter", ... }
+
+-- oreidx/<zone>/<sx>_<sz>.census
+{ v = 1, ts = 1755400000000, n = { [1] = 902, [2] = 1227, ... } }
+```
+
+The dictionary is append-only and never renumbers: an id, once issued, means that
+block forever. A census referencing an id the dictionary has lost is unreadable,
+so the dictionary is the one file in this design that must be written before the
+sector files that depend on it.
+
+#### Declared budget (§13.1 rule 1)
+
+| | Value |
+|---|---|
+| Steady state | **1.1 KB/sector** + 3.7 KB dictionary |
+| Worst case | **2 KB/sector** (unseen modded blocks, wider names) |
+| Hard cap | **128 KB**, refused rather than exceeded |
+| At cap | ~110 sectors; evict LRU, re-census on next visit |
+
+Tier 1 is *cheaper* than Tier 2, not *free*. At 383 KB per 100 sectors the plain
+encoding would have hit the same wall this document was written about. It gets a
+declared cap and LRU eviction like everything else.
 
 **Conclusion: the two tiers have opposite cost profiles.** Tier 1 is small,
 universal, and always kept. Tier 2 is large, selective, and evicted. Budget them
 separately; do not let one starve the other.
+
+### Where the tiers live — settled 2026-08-22
+
+Decided in §7.1 of the integration spec, in response to the disk finding above.
+
+**Tier 1 lives in-world and ships first.** It is the tier W2's planner blocks on,
+it is now measured rather than estimated, and it does not depend on **V8**.
+
+**Tier 2 lives on the Node bridge.** Permitted by the §4.2 ruling that "never
+load-bearing" forbids a *correctness* dependency, not an availability one. Tier 2
+qualifies because §7.3 already makes entries *hints, never truth*.
+
+**Rejected: a dedicated indexer computer.** It answers a 1 MB problem with another
+1 MB disk — one doubling, not a solution (§13.1 rule 3).
+
+**Deferred: CC disk drives**, pending **V8**. If they work in this pack they are
+the in-world alternative and this decision is worth reopening.
+
+#### Fallback when the depth store is absent — required by §4.2
+
+The optional-depth-store pattern obliges this spec to name exactly what happens
+when the store is gone. For Tier 2:
+
+> **The miner surveys on arrival and mines what it finds.** No coordinate hints,
+> no targeted passes — precisely the behaviour shipped today. A sector whose
+> Tier 2 entry is unavailable is indistinguishable from one never indexed.
+
+Nothing in the mining flow may *require* a Tier 2 hit. A miss and an absent store
+take the same code path, which is the existing full-scan path, so the bridge
+being down is not a distinct case to handle — it is the ordinary one.
+
+**Tier 1 has no such fallback and needs none**: it is in-world, and if it is
+unavailable the planner has no census, which is exactly today's position.
+
+#### Contract owed to W5
+
+The bridge is W5's (§13). Tier 2 living there is a cross-stream dependency that
+needs a written contract before either side builds: upload shape, query shape,
+the cap and eviction policy, and W5's guarantee that a query failure is reported
+as a miss rather than an error. **Not yet written.** Tier 1 does not depend on it.
 
 ## Architecture
 
@@ -392,9 +489,19 @@ Those sit on top of this index and belong to W2 and W4.
 ## Build order
 
 Tier 1 before Tier 2. The census is cheaper, is what W2's planner actually
-blocks on, and its storage profile is understood; Tier 2's is gated on the modem
-ceiling probe above. Delivering Tier 1 first also means a survey pass starts
-accumulating useful world data before any of the packing work lands.
+blocks on, and its storage profile is now measured rather than assumed; Tier 2's
+is gated on the modem ceiling probe above.
+
+**Reinforced 2026-08-22.** Tier 1 is in-world and depends on nothing unresolved.
+Tier 2 depends on the W5 bridge contract, which is not written, and would be
+revisited entirely if **V8** finds CC disk drives available. Delivering Tier 1
+first accumulates real world data while both of those settle — and if they never
+settle, Tier 1 alone still answers the planner's questions.
+
+**Ships with Invariant K.** The census writer surfaces a health signal reachable
+from `/state`: consecutive write failures, and the timestamp of the last
+successful write. A `pcall` around the write is required and is not sufficient.
+This index is on a disk that has already filled once without telling anyone.
 
 ## Standing constraints this design must satisfy
 
