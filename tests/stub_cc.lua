@@ -30,6 +30,9 @@ function M.install(opts)
         equipped = opts.equipped or { left = nil, right = nil },
         pos      = opts.pos or { x = 0, y = 64, z = 0, facing = 0 },
         world    = opts.world or {},        -- "x,y,z" -> block name
+        -- Items dropped with no inventory in the target block: gone in-world,
+        -- recorded here so a test can assert nothing was scattered.
+        dropped  = {},
         events   = opts.events or {},       -- queue of {name, ...}
         selected = 1,
         fuel     = opts.fuel or 100000,
@@ -236,8 +239,22 @@ function M.install(opts)
             if src.count <= 0 then c.inv[c.selected] = nil end
             return true
         end,
-        dropDown = function() c.inv[c.selected] = nil; return true end,
-        drop     = function() c.inv[c.selected] = nil; return true end,
+        -- Real CC's drop family is not "delete the slot and succeed". It used to
+        -- be exactly that here, which collapsed three distinct outcomes into one
+        -- and is how an unchecked placeDown() scattered ore across a zone for
+        -- weeks while this suite stayed green: the ore chest was never placed,
+        -- the drop "succeeded" anyway, and nothing in the model could tell a
+        -- chest from the floor.
+        --
+        --   * empty selected slot          -> false, nothing happens
+        --   * an inventory in the target   -> items go INTO it
+        --   * no inventory in the target   -> items hit the ground and are LOST
+        --
+        -- Ground drops land in c.dropped so a test can assert that nothing was
+        -- scattered, which is usually the real thing under test.
+        dropDown = function(n) return M._drop(c, c.world[below()], n) end,
+        dropUp   = function(n) return M._drop(c, c.world[above()], n) end,
+        drop     = function(n) return M._drop(c, c.world[ahead()], n) end,
 
         -- suck* pull from c.container into the selected slot. Real CC fills the
         -- selected slot first and returns false when the container is empty,
@@ -376,6 +393,31 @@ end
 -- slot. Returns false when there is no such block, it holds no contents, or it
 -- is empty -- which is the signal refuelFromChest uses to decide the chest had
 -- no coal.
+-- Known remaining gaps, so the next person does not rediscover them the way the
+-- displayName and drop gaps were found -- both after they had already let a real
+-- in-world failure through a green suite:
+--   * containers are unbounded, so a drop into a FULL chest still succeeds here
+--     and returns false in-world
+--   * fuel is not consumed by turn/dig, only by movement
+-- Add fidelity when a test needs it; do not assume the absence of a gap.
+function M._drop(c, blockName, n)
+    local i = c.inv[c.selected]
+    if not i then return false, "No items to drop" end
+    local moved = math.min(n or i.count, i.count)
+    if moved <= 0 then return false, "No items to drop" end
+
+    local contents = blockName and c.containers and c.containers[blockName]
+    if contents then
+        contents[#contents + 1] = { name = i.name, count = moved }
+    else
+        c.dropped[#c.dropped + 1] = { name = i.name, count = moved }
+    end
+
+    i.count = i.count - moved
+    if i.count <= 0 then c.inv[c.selected] = nil end
+    return true
+end
+
 function M._suck(c, blockName, n)
     if not blockName or not c.containers then return false end
     local contents = c.containers[blockName]

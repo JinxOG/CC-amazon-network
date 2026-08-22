@@ -347,10 +347,16 @@ return {
 
         base.fuel.refuelFromChest()
         local slot5, slot6 = turtle.getItemDetail(5), turtle.getItemDetail(6)
+        local scattered = #c.dropped
         restore()
         base.setMakeRoomFn(nil)
 
         assert_eq(banked, 3, "the hook must be given the chance to bank the cargo")
+        -- The direct statement of what this whole hook is for. Only assertable
+        -- since the stub started distinguishing a drop into a container from one
+        -- onto the floor; before that c.dropped did not exist and this test had
+        -- to infer the same fact from which slots survived.
+        assert_eq(scattered, 0, "no ore may be scattered on the ground")
         assert_eq(slot5 ~= nil and slot5.name == "minecraft:iron_ore", true,
             "ore in slot 5 must survive — the hook already made room")
         assert_eq(slot6 ~= nil and slot6.name == "minecraft:iron_ore", true,

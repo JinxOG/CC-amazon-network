@@ -139,6 +139,12 @@ equipment.LOADER_LABEL = nil
 -- It cannot reject a real loader, since a real loader has no digging tool, so
 -- the worst a pack rename can do is silently stop excluding anything. Set to nil
 -- to disable if this pack composes names differently.
+--
+-- IF YOU FIND THIS EXCLUDING NOTHING, SUSPECT LOCALE BEFORE SUSPECTING A BUG.
+-- displayName is a localised string, so on a non-English server the substring is
+-- simply absent and this check goes quietly inert -- which is the designed
+-- fallback, not a failure. Deliberately not translated: a table of translations
+-- would buy back a heuristic that LOADER_PREFIX already supersedes.
 equipment.TOOL_NAME_MARK = "Mining"
 
 -- Treats an empty string as unconfigured: #"" is 0, so a bare "" prefix would
