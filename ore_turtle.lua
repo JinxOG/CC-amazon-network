@@ -1270,6 +1270,24 @@ local function retrievePlacedLoader(stand)
         if not ok then return false, "approach_failed: " .. tostring(err) end
         base.move.face(facing)
 
+        -- Make room AGAIN, now that we have actually arrived.
+        --
+        -- The dump at the top of this function happens before the approach, and
+        -- the approach refills the inventory: base.move.to digs through any
+        -- static obstruction and CC collects what it breaks. Climbing ~200
+        -- blocks from mining depth to a loader at y=200 is easily enough stone
+        -- to consume every slot that dump just freed.
+        --
+        -- Observed in-world: node_139 lost a loader to loader_lost_after_dig on
+        -- 1.9.30, which already carried the pre-approach dump. turtle.dig() with
+        -- no room returns TRUE and destroys the drop, so the loader turtle was
+        -- gone -- not standing, not recoverable.
+        --
+        -- Room has to be guaranteed at the instant of the dig, not before the
+        -- journey to it. This is the check that actually protects the loader;
+        -- the earlier one just avoids travelling with a full load.
+        dumpIfInventoryTight("loader dig")
+
         local got, reason = mine_flow.retrieveLoader()
         -- retrieveLoader ends in equipment.retrievalSwapOut on both its success
         -- and most of its failure paths, which moves the modem to the other

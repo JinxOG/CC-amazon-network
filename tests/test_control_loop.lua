@@ -694,6 +694,25 @@ function(assert_eq)
     assert_eq(dumpAt ~= nil, true,
         "retrievePlacedLoader must make room before digging the loader up")
 
+    -- And AGAIN after arriving. The pre-approach dump is not enough: move.to
+    -- digs through static obstructions and CC collects what it breaks, so
+    -- climbing from mining depth to a loader at y=200 refills every slot the
+    -- first dump freed. node_139 lost a loader to loader_lost_after_dig on
+    -- 1.9.30, which already had the pre-approach dump. turtle.dig() with no room
+    -- returns TRUE and destroys the drop.
+    local digDumpAt = body:find('dumpIfInventoryTight%("loader dig"%)')
+    assert_eq(digDumpAt ~= nil, true,
+        "room must be guaranteed at the instant of the dig, not only before the journey")
+    local retrieveAt = body:find("local got, reason = mine_flow%.retrieveLoader%(%)")
+    assert_eq(retrieveAt ~= nil, true, "the retrieval call moved or vanished")
+    assert_eq(digDumpAt < retrieveAt, true,
+        "the arrival dump must precede the retrieval dig")
+    -- Precondition: it must come AFTER the approach, or it is just the first
+    -- dump again and the refill still happens between it and the dig.
+    local approachAt = body:find("local ok, err = base%.move%.to%(sx, sy, sz%)")
+    assert_eq(approachAt ~= nil and approachAt < digDumpAt, true,
+        "the arrival dump must come after the approach that refills the inventory")
+
     -- A true position before the approach is computed. The stand square and the
     -- recorded loader position were captured when the loader went down;
     -- everything since is dead reckoning across a sector of mining, and it
