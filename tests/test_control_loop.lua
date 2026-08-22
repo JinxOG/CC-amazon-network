@@ -963,4 +963,43 @@ function(assert_eq)
         "the rescue must NOT scan the ender chest slots")
 end
 
+-- A turtle without a GPS fix must not move (SOURCE-ONLY, weaker).
+--
+-- turtle_base's initPosition falls back to "Tracking from (0,0,0)" when
+-- gps.locate() returns nothing, and lets the turtle navigate anyway. Flying home
+-- then means flying the delta from the ORIGIN to the arrivals hole, from
+-- wherever the turtle actually is. On 2026-08-21 that put two miners 1,200 and
+-- 1,900 blocks from the depot with their loaders abandoned -- a frame error, not
+-- drift, which cannot accumulate a block at a time.
+suite["a turtle with no GPS fix waits and refuses to move (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    -- Boot must WAIT for the constellation, not assume a position. The cause is
+    -- timing -- everything reboots at once and turtles can outrun the hosts.
+    assert_eq(src:find("\nfor attempt = 1, GPS_WAIT_ATTEMPTS do") ~= nil, true,
+        "boot must retry the GPS fix rather than proceeding without one")
+    assert_eq(src:find("\nlocal GPS_RETRY_SECONDS = %d+") ~= nil, true,
+        "the retry interval must be defined")
+
+    -- Loader recovery flies. It must be gated on having a fix, or a fixless
+    -- turtle sets off across the world to a position it cannot compute.
+    local gateAt = src:find("\nif not _haveGpsFix then")
+    assert_eq(gateAt ~= nil, true, "boot must gate on whether a fix was obtained")
+    local recoverAt = src:find("pcall%(recoverPlacedLoader%)")
+    assert_eq(recoverAt ~= nil and recoverAt > gateAt, true,
+        "loader recovery must sit inside the has-a-fix branch, not before it")
+
+    -- And the job path must refuse too: the hosts can drop while the miner sits
+    -- idle at its dock, so the boot result cannot be trusted indefinitely.
+    local jobAt = src:find("local function mineJob%(job%)")
+    local departAt = src:find("local ok, err = base%.depart%(true%)", jobAt)
+    local guardAt = src:find("no_gps_fix: cannot confirm position", jobAt)
+    assert_eq(guardAt ~= nil, true, "the job path must re-check for a GPS fix")
+    assert_eq(guardAt < departAt, true,
+        "the GPS check must run BEFORE departure, not after it")
+end
+
 return suite

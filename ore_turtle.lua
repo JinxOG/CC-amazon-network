@@ -1646,6 +1646,20 @@ local function mineJob(job)
     -- reason the two checks above do: a refusal after departing produces a
     -- FAILED job, an auto-respawned replacement, and a miner parked at the
     -- dispatch hole burning fuel on every cycle.
+    -- A confirmed position, before anything moves. Without a GPS fix the turtle
+    -- navigates from (0,0,0) and flies the wrong delta across the world -- see
+    -- the boot-time wait for what that cost in the field. Re-checked here rather
+    -- than trusting the boot result, because the hosts can go down again while
+    -- the miner sits idle at its dock.
+    if not base.gpsSync() then
+        local detail = "no_gps_fix: cannot confirm position, refusing to depart"
+        print("[MINER] Refusing job — " .. detail)
+        base.sendProgress(detail)
+        base.sendFailed(detail, true)   -- recoverable: retry when the hosts return
+        _jobId = nil
+        return
+    end
+
     local slotOk, slotReason = preflightSlots()
     if not slotOk then
         print("[MINER] Refusing job — " .. slotReason)
@@ -1934,10 +1948,55 @@ local function mineJob(job)
 end
 
 initProtectedSlots()
--- Recover an abandoned loader before any job can be accepted.
-local rok, rerr = pcall(recoverPlacedLoader)
-if not rok then
-    print("[MINER] Loader recovery crashed: " .. tostring(rerr))
+
+-- Wait for the GPS constellation before doing ANYTHING that moves.
+--
+-- turtle_base's initPosition falls back to "Tracking from (0,0,0)" when
+-- gps.locate() returns nothing, and then lets the turtle navigate anyway. Every
+-- movement after that is computed in a false frame: flying home means flying the
+-- delta from the ORIGIN to the arrivals hole, from wherever the turtle actually
+-- is.
+--
+-- That is not theoretical. After a server shutdown on 2026-08-21, two of four
+-- miners ended up 1,200 and 1,900 blocks from the depot, at FLOOR_Y, reporting
+-- DOCKED, with their loaders abandoned untouched at the recorded positions. The
+-- axis-by-axis distances match an origin-frame flight almost exactly. A
+-- 1,900-block error cannot accumulate a block at a time -- it is a frame error,
+-- not drift.
+--
+-- The cause is timing, so the fix is to wait rather than to invent a position:
+-- on a server restart everything boots at once and a turtle can query GPS before
+-- the host computers are up and triangulating. Retrying for a couple of minutes
+-- costs a stalled job; flying blind costs a lost turtle, an abandoned loader and
+-- a permanently force-loaded chunk.
+local GPS_WAIT_ATTEMPTS = 6
+local GPS_RETRY_SECONDS = 20
+local _haveGpsFix = false
+for attempt = 1, GPS_WAIT_ATTEMPTS do
+    if base.gpsSync() then
+        _haveGpsFix = true
+        break
+    end
+    print(string.format(
+        "[MINER] No GPS fix (attempt %d/%d) — GPS hosts may still be booting. Retrying in %ds.",
+        attempt, GPS_WAIT_ATTEMPTS, GPS_RETRY_SECONDS))
+    if attempt < GPS_WAIT_ATTEMPTS then sleep(GPS_RETRY_SECONDS) end
+end
+
+if not _haveGpsFix then
+    -- Stay put. A miner that cannot place itself must not fly, must not try to
+    -- retrieve a loader, and must not accept a job -- the pre-departure preflight
+    -- refuses too. It still boots and registers, so it is visible and reachable
+    -- rather than silently absent.
+    print("[MINER] NO GPS FIX after " .. (GPS_WAIT_ATTEMPTS * GPS_RETRY_SECONDS)
+        .. "s — refusing to move. Check the GPS host computers.")
+    base.sendProgress("no_gps_fix: refusing to move until the GPS hosts are up")
+else
+    -- Recover an abandoned loader before any job can be accepted.
+    local rok, rerr = pcall(recoverPlacedLoader)
+    if not rok then
+        print("[MINER] Loader recovery crashed: " .. tostring(rerr))
+    end
 end
 -- Same for the geo scanner. Runs after the loader because the loader is the
 -- expensive one -- a whole turtle plus a permanently force-loaded chunk -- and
