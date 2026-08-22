@@ -102,39 +102,88 @@ equipment.findSlot = findSlot
 --
 -- Two independent signals, because neither is sufficient alone:
 --
---   LABEL -- an unlabelled chunky loader comes back from place -> break as
---   "Advanced Chunky Turtle" (verified in-world 2026-08-13, see
---   chunkloader-footprint.md), so displayName does survive the operations that
---   matter. A labelled fleet turtle shows its label instead. Set LOADER_LABEL
---   once the fleet's loaders actually carry a distinguishing name.
+--   LABEL -- probed in-world 2026-08-22 (W1). displayName is UPGRADE-DERIVED, not
+--   a label: CC composes it from what is bolted to the turtle, so it reports
+--   equipment, not role. An unlabelled loader and an unlabelled SUPPORT turtle
+--   both read "Advanced Chunky Ender Turtle", as does a miner in travel phase --
+--   so the default name discriminates nothing, and setting it as the expected
+--   value would make isLoaderItem accept the exact wreckage it exists to reject.
+--   os.setComputerLabel DOES override it, but the label doubles as
+--   proto.selfId(), so every loader needs a DIFFERENT one and they can only
+--   share a prefix. Hence LOADER_PREFIX rather than an equality check.
 --
 --   STATE -- a loader that loader_state says is standing in the world cannot at
 --   the same instant be in this turtle's inventory. That is a logical certainty
 --   rather than an item-identity guess, needs no unverified API, and closes the
 --   observed case on its own.
 --
--- LOADER_LABEL is nil by default and that is deliberate: asserting a label the
--- loaders do not yet carry would reject every real loader and ground the whole
--- mining fleet. Unconfigured, this behaves exactly as the old name-only check.
+-- Nil by default and that is deliberate: asserting a prefix the loaders do not
+-- yet carry would reject every real loader and ground the whole mining fleet.
+-- Unconfigured, this behaves as the old name-only check apart from the one free
+-- exclusion below. Label EVERY loader before setting this -- a partial rollout
+-- makes the unlabelled ones invisible.
+equipment.LOADER_PREFIX = nil
+
+-- Deprecated alias, honoured while ore_turtle migrates. All instances share one
+-- working tree with no branch isolation (integration spec 14.1), so renaming a
+-- field another workstream reads would break it on the next pull. Remove once
+-- nothing references it.
 equipment.LOADER_LABEL = nil
 
--- Detailed item queries cost more than plain ones, so only pay for them when a
--- label is actually configured and there is something to read.
-local function itemDetail(s)
-    return turtle.getItemDetail(s, equipment.LOADER_LABEL ~= nil)
+-- The upgrade-derived name for a turtle carrying a digging tool. Because the
+-- name reports EQUIPMENT, a turtle that reads as a mining turtle is provably not
+-- a loader: loaders carry chunky and nothing else. This is a one-way inference
+-- and it is the only signal that covered the observed case -- node_119 was in
+-- mine phase when node_139 dug it, so it read "Advanced Ender Mining Turtle".
+--
+-- It cannot reject a real loader, since a real loader has no digging tool, so
+-- the worst a pack rename can do is silently stop excluding anything. Set to nil
+-- to disable if this pack composes names differently.
+equipment.TOOL_NAME_MARK = "Mining"
+
+-- Treats an empty string as unconfigured: #"" is 0, so a bare "" prefix would
+-- match every string and quietly accept everything.
+local function loaderPrefix()
+    local p = equipment.LOADER_PREFIX or equipment.LOADER_LABEL
+    if type(p) ~= "string" or p == "" then return nil end
+    return p
 end
+
+-- Whether loader labelling is configured. Callers deciding if possession can be
+-- trusted as proof should ask this rather than reading the field, so the config
+-- shape stays owned here.
+function equipment.loaderLabelled() return loaderPrefix() ~= nil end
 
 function equipment.isLoaderItem(detail)
     if not detail or detail.name ~= I.LOADER_TURTLE then return false end
-    if equipment.LOADER_LABEL == nil then return true end
-    return detail.displayName == equipment.LOADER_LABEL
+    local d      = detail.displayName
+    local prefix = loaderPrefix()
+
+    if prefix then
+        -- Prefix, not equality: the label doubles as proto.selfId(), so the
+        -- loaders must be LOADER-160, LOADER-161 ... never all "LOADER", which
+        -- would collapse three turtles into one registry entry.
+        return type(d) == "string" and d:sub(1, #prefix) == prefix
+    end
+
+    -- Unconfigured: name only, minus anything visibly holding a digging tool.
+    local mark = equipment.TOOL_NAME_MARK
+    if mark and type(d) == "string" and d:find(mark, 1, true) then return false end
+    return true
 end
 
 -- The replacement for findSlot(I.LOADER_TURTLE). Every caller that means "where
 -- is my chunk loader" must use this rather than the raw item name.
+--
+-- Plain query first, detailed only for the handful of slots that are advanced
+-- turtles: the detailed form costs more, and asking for it on all sixteen slots
+-- to read one displayName would be paid on every validate().
 function equipment.findLoaderSlot()
     for s = 1, 16 do
-        if equipment.isLoaderItem(itemDetail(s)) then return s end
+        local plain = turtle.getItemDetail(s)
+        if plain and plain.name == I.LOADER_TURTLE then
+            if equipment.isLoaderItem(turtle.getItemDetail(s, true)) then return s end
+        end
     end
     return nil
 end

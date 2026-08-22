@@ -1,5 +1,17 @@
 -- loaderid.lua — can a chunk loader be told apart from a mined-up fleet turtle?
 --
+-- ANSWERED 2026-08-22. Kept for re-checking after a pack update; the guidance
+-- printed below is superseded by the result:
+--
+--   displayName is UPGRADE-DERIVED, not a label. A placed LOADER and a SUPPORT
+--   turtle both read "Advanced Chunky Ender Turtle", as does a miner in travel
+--   phase. So the default name discriminates NOTHING and must never be used as
+--   equipment.LOADER_PREFIX.
+--
+--   os.setComputerLabel does override it, but the label doubles as
+--   proto.selfId(), so loaders need unique labels sharing a prefix --
+--   LOADER-160, LOADER-161 -- and equipment.LOADER_PREFIX matches that prefix.
+--
 -- equipment.ITEMS.LOADER_TURTLE is computercraft:turtle_advanced, which every
 -- miner, loader and delivery turtle in this fleet also is. equipment.isLoaderItem
 -- can match on displayName instead, but only if displayName actually differs

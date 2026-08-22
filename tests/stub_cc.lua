@@ -107,7 +107,22 @@ function M.install(opts)
         select        = function(s) c.selected = s; return true end,
         getSelectedSlot = function() return c.selected end,
         getItemCount  = function(s) local i = c.inv[s or c.selected]; return i and i.count or 0 end,
-        getItemDetail = function(s) return c.inv[s or c.selected] end,
+        -- Real CC:Tweaked returns name/count/damage from the plain form and only
+        -- adds displayName, tags and nbt when `detailed` is true. Modelling that
+        -- matters: equipment.findLoaderSlot deliberately uses the cheap query to
+        -- filter by item name and the detailed one only for the few slots that
+        -- are advanced turtles. A stub that handed out displayName either way
+        -- would let a build that never asks for details pass here and then fail
+        -- in-world, where the field simply is not there.
+        getItemDetail = function(s, detailed)
+            local i = c.inv[s or c.selected]
+            if not i or detailed then return i end
+            local plain = {}
+            for k, v in pairs(i) do
+                if k ~= "displayName" and k ~= "tags" and k ~= "nbt" then plain[k] = v end
+            end
+            return plain
+        end,
         getItemSpace  = function(s) local i = c.inv[s or c.selected]; return 64 - (i and i.count or 0) end,
         getFuelLevel  = function() return c.fuel end,
         getFuelLimit  = function() return 100000 end,

@@ -41,6 +41,12 @@ end
 
 local LOADER = "computercraft:turtle_advanced"
 
+-- The upgrade-derived displayName a turtle carrying chunky + ender modem reports.
+-- Probed in-world 2026-08-22: a placed LOADER and a SUPPORT turtle both read
+-- exactly this, which is the entire reason the prefix has to come from a real
+-- os.setComputerLabel rather than from this string.
+local CHUNKY_NAME = "Advanced Chunky Ender Turtle"
+
 -- Swap in a loader_state whose hasPlaced() answers as the test needs. equipment
 -- pcall-requires the module lazily, so seeding package.loaded is enough. Returns
 -- a restore function; every test that calls this MUST call it, or the fake leaks
@@ -53,29 +59,77 @@ end
 
 return {
     -- Every advanced turtle in the fleet is one item id, so before labelling is
-    -- configured the name check is all there is and must behave exactly as it
+    -- configured the name check is nearly all there is and must behave as it
     -- always did. This is the no-regression floor for the whole mechanism.
-    ["an unconfigured LOADER_LABEL accepts any advanced turtle, as before"] =
+    ["an unconfigured prefix accepts any advanced turtle, as before"] =
     function(assert_eq)
         local eq = fresh(E_TRAVEL(), fullInv())
-        assert_eq(eq.LOADER_LABEL, nil, "the label must ship unconfigured")
-        assert_eq(eq.isLoaderItem({ name = LOADER, displayName = "node_119" }), true,
-            "unconfigured, a labelled fleet turtle still counts — old behaviour")
+        assert_eq(eq.LOADER_PREFIX, nil, "the prefix must ship unconfigured")
+        assert_eq(eq.isLoaderItem({ name = LOADER, displayName = CHUNKY_NAME }), true,
+            "unconfigured, a chunky turtle still counts — old behaviour")
         assert_eq(eq.isLoaderItem({ name = "minecraft:cobblestone" }), false,
             "a non-turtle is never a loader")
     end,
 
-    -- The point of the whole change: with a label configured, a mined-up miner
-    -- stops passing as a chunk loader.
-    ["a configured label rejects a fleet turtle and accepts a real loader"] =
+    -- THE probe finding (W1, 2026-08-22). displayName is composed from equipment,
+    -- not identity, so a support turtle -- modem + chunky permanently, which is
+    -- its entire job -- reads byte-identical to a loader. Setting that string as
+    -- the expected value would make isLoaderItem accept half the fleet as chunk
+    -- loaders. This test exists to stop anyone ever trying it.
+    ["the default chunky name must never be usable as the prefix"] =
     function(assert_eq)
         local eq = fresh(E_TRAVEL(), fullInv())
-        eq.LOADER_LABEL = "Advanced Chunky Turtle"
-        local corpse = eq.isLoaderItem({ name = LOADER, displayName = "node_119" })
-        local real   = eq.isLoaderItem({ name = LOADER, displayName = "Advanced Chunky Turtle" })
-        eq.LOADER_LABEL = nil
-        assert_eq(corpse, false, "a dug-up miner must not pass as a loader")
-        assert_eq(real, true, "a real loader must still be recognised")
+        eq.LOADER_PREFIX = CHUNKY_NAME              -- the tempting mistake
+        local support = eq.isLoaderItem({ name = LOADER, displayName = CHUNKY_NAME })
+        eq.LOADER_PREFIX = nil
+        assert_eq(support, true,
+            "documents the trap: a support turtle passes, which is why a real "
+            .. "os.setComputerLabel prefix is required instead of this string")
+    end,
+
+    -- Prefix, not equality: the label doubles as proto.selfId(), so each loader
+    -- needs its own. Labelling all three "LOADER" would collapse them into one
+    -- registry entry.
+    ["a configured prefix accepts differently-labelled loaders and rejects the rest"] =
+    function(assert_eq)
+        local eq = fresh(E_TRAVEL(), fullInv())
+        eq.LOADER_PREFIX = "LOADER-"
+        local l160    = eq.isLoaderItem({ name = LOADER, displayName = "LOADER-160" })
+        local l161    = eq.isLoaderItem({ name = LOADER, displayName = "LOADER-161" })
+        local support = eq.isLoaderItem({ name = LOADER, displayName = CHUNKY_NAME })
+        local miner   = eq.isLoaderItem({ name = LOADER, displayName = "node_119" })
+        eq.LOADER_PREFIX = nil
+        assert_eq(l160, true, "LOADER-160 must be recognised")
+        assert_eq(l161, true, "LOADER-161 must be recognised too — hence a prefix")
+        assert_eq(support, false, "an unlabelled support turtle must not pass")
+        assert_eq(miner, false, "a labelled fleet turtle must not pass")
+    end,
+
+    -- #"" is 0, so a bare "" prefix would match every string and silently accept
+    -- everything -- the failure would look exactly like working code.
+    ["an empty prefix is treated as unconfigured, not as matching everything"] =
+    function(assert_eq)
+        local eq = fresh(E_TRAVEL(), fullInv())
+        eq.LOADER_PREFIX = ""
+        local labelled = eq.loaderLabelled()
+        eq.LOADER_PREFIX = nil
+        assert_eq(labelled, false, "an empty prefix must not count as configured")
+    end,
+
+    -- The one exclusion available with no operator action at all. Because the
+    -- name reports equipment, a turtle reading as a mining turtle is provably not
+    -- a loader -- loaders carry chunky and nothing else. This is what would have
+    -- caught the observed case: node_119 was in mine phase when it was dug.
+    ["a turtle visibly holding a digging tool is never a loader"] =
+    function(assert_eq)
+        local eq = fresh(E_TRAVEL(), fullInv())
+        assert_eq(eq.LOADER_PREFIX, nil, "precondition: unconfigured")
+        assert_eq(eq.isLoaderItem({ name = LOADER, displayName = "Advanced Ender Mining Turtle" }),
+            false, "the dug-up miner from the observed incident must be excluded")
+        assert_eq(eq.isLoaderItem({ name = LOADER, displayName = "Advanced Mining Turtle" }),
+            false, "and the same turtle with no modem")
+        assert_eq(eq.isLoaderItem({ name = LOADER, displayName = CHUNKY_NAME }), true,
+            "a chunky turtle carries no digging tool and must still pass")
     end,
 
     -- findLoaderSlot is what placeLoader and validate consult. It must skip the
@@ -84,11 +138,11 @@ return {
     function(assert_eq)
         local inv = fullInv()
         inv[2] = { name = LOADER, count = 1, displayName = "node_119" }   -- corpse in the loader slot
-        inv[6] = { name = LOADER, count = 1, displayName = "Advanced Chunky Turtle" }
+        inv[6] = { name = LOADER, count = 1, displayName = "LOADER-160" }
         local eq = fresh(E_TRAVEL(), inv)
-        eq.LOADER_LABEL = "Advanced Chunky Turtle"
+        eq.LOADER_PREFIX = "LOADER-"
         local slot = eq.findLoaderSlot()
-        eq.LOADER_LABEL = nil
+        eq.LOADER_PREFIX = nil
         assert_eq(slot, 6, "must skip the corpse in slot 2 and find the real loader in slot 6")
     end,
 
