@@ -1021,4 +1021,46 @@ function(assert_eq)
         "the GPS check must run BEFORE departure, not after it")
 end
 
+-- Docking tidies the inventory (SOURCE-ONLY, weaker).
+--
+-- soloReturn dumps before leaving the sector, so in principle a miner arrives
+-- empty. It does not: the flight home runs through base.move.to, which digs any
+-- static obstruction and CC collects what it breaks -- the same mechanism that
+-- refilled the inventory between the pre-approach dump and the loader dig.
+suite["docking tidies the inventory (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local defAt = src:find("local function tidyAtDock%(%)")
+    assert_eq(defAt ~= nil, true, "tidyAtDock moved or vanished")
+    -- Bound the window at the function's OWN terminator -- a column-0 "end".
+    -- Every nested end inside the body is indented, so this cannot overrun into
+    -- the next declaration and match its code by accident.
+    local endAt = src:find("\nend\n", defAt, true)
+    assert_eq(endAt ~= nil, true, "tidyAtDock has no column-0 terminator")
+    local body = src:sub(defAt, endAt)
+
+    -- Reorientation must be unconditional: it needs no chest and cannot fail
+    -- destructively, so hardware gets its home slot back even when the ore
+    -- cannot be banked.
+    local rescueAt = body:find("\n    rescueProtectedItems%(%)")
+    assert_eq(rescueAt ~= nil, true, "docking must reorient displaced hardware")
+    local carryAt = body:find("local carrying = false")
+    assert_eq(carryAt ~= nil and rescueAt < carryAt, true,
+        "reorientation must happen before the conditional banking, not inside it")
+
+    -- Banking must never dig: at a dock the block below is often the station
+    -- chest that dockRefuel draws from.
+    assert_eq(body:find("turtle%.detectDown%(%)") ~= nil, true,
+        "the dock tidy must refuse to dig to place the ore chest")
+
+    -- Wired into BOTH dock arrivals, and only after a confirmed dock.
+    local bootCall = src:find("\n    tidyAtDock%(%)")
+    local soloCall = src:find("\n        tidyAtDock%(%)")
+    assert_eq(bootCall ~= nil, true, "boot recovery must tidy on arrival")
+    assert_eq(soloCall ~= nil, true, "soloReturn must tidy on arrival")
+end
+
 return suite

@@ -813,6 +813,43 @@ local function dumpOres()
     withDigTool("ore dump", dumpToEC)
 end
 
+-- Tidy up on arrival at the dock.
+--
+-- soloReturn already dumps before leaving the sector, so in principle a miner
+-- arrives empty. In practice it does not: the flight home runs through
+-- base.move.to, which digs any static obstruction in its path, and CC collects
+-- what it breaks. So a turtle reaches its bay carrying travel debris -- the same
+-- mechanism that refilled the inventory between the pre-approach dump and the
+-- loader dig.
+--
+-- Ordered deliberately. rescueProtectedItems needs no chest and cannot fail
+-- destructively, so it runs unconditionally: hardware ends up in its home slot
+-- even when the ore cannot be banked. Banking is attempted second, and only
+-- when there is somewhere safe to put the chest.
+local function tidyAtDock()
+    -- Always reorient, chest or no chest.
+    rescueProtectedItems()
+
+    local carrying = false
+    for s = MINE_FIRST, MINE_LAST do
+        if turtle.getItemCount(s) > 0 then carrying = true; break end
+    end
+    if not carrying then return end
+
+    -- Never dig here. dumpToEC digs the block below to place the ore chest, and
+    -- at a dock that block is very often the station chest dockRefuel draws
+    -- from. Keeping a stack of cobblestone is strictly better than destroying
+    -- the operator's chest.
+    if turtle.detectDown() then
+        print("[MINER] Dock tidy: no free space below for the ore chest — "
+            .. "travel debris kept aboard")
+        return
+    end
+
+    print("[MINER] Dock tidy: banking travel debris")
+    dumpOres()
+end
+
 -- Mining slots that must be free before a refuel is allowed to start.
 --
 -- turtle_base's refuelFromChest triggers its debris clear at fewer than 4 free
@@ -1507,6 +1544,7 @@ local function recoverPlacedLoader()
         base.sendProgress("dock_not_reached: " .. tostring(dockErr))
         return
     end
+    tidyAtDock()
     base.setStatus(proto.STATUS.IDLE)
     reportPhase(proto.PHASE.DOCKED)
 end
@@ -1605,6 +1643,7 @@ local function mineJob(job)
             base.sendProgress("dock_not_reached: " .. tostring(dockErr))
             return
         end
+        tidyAtDock()
         reportPhase(proto.PHASE.DOCKED)
     end
 
