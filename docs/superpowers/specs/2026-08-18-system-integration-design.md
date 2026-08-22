@@ -110,6 +110,21 @@ default.
 New message types may be added. Existing ones are never repurposed or silently
 reshaped.
 
+**P7 — The system must be able to report its own degradation.**
+A component that is failing while reporting itself healthy is worse than one that
+is plainly down, because it consumes debugging time that is spent looking
+somewhere else. Three separate defects in this project share exactly this shape
+and no other: failed jobs dropped out of `/state` taking their reason with them,
+`tryMove` waited two minutes on a blocked turtle in silence, and `saveJobs`
+failed on a full disk inside a `pcall` for hours. Each was survivable alone. What
+made all three expensive was that **the system was degraded and had no way to say
+so.**
+
+Invariants J and K descend from this principle, and Stage 0 of the roadmap exists
+to serve it. A `pcall` around a risky operation is error *handling*; it is not
+error *reporting*, and a `logWarn` into a ring buffer that overwrites itself is
+not a signal.
+
 ---
 
 ## 4. Layer model
@@ -157,6 +172,36 @@ and quotas. It is the gateway for **submission**, never for **execution**.
 **Operational requirement:** the bridge must start automatically with its host
 machine, via a Windows service (NSSM) or Task Scheduler "at startup". Manual
 restart after a host reboot is a defect, not a workflow.
+
+#### What "never load-bearing" means — ruling, 2026-08-22
+
+W1 asked whether this phrase forbids an *availability* dependency or only a
+*correctness* dependency, correctly noting the spec supported either reading and
+that the two produce different systems.
+
+**Ruling: it forbids a correctness dependency, and forbids any dependency that
+reduces the system below its current standalone capability.** It does not forbid
+the bridge holding data whose absence merely costs performance.
+
+Concretely, with the bridge down the system must still:
+
+- finish every job already in flight, and start new ones;
+- never strand, brick, or lose a worker;
+- never lose committed state or produce a wrong result;
+- operate at no worse than **today's** capability.
+
+It need not remain *as fast* or *as smart*. A bridge-side dataset whose loss
+degrades Turtle OS to something it already does today is **permitted**.
+
+**Test to apply:** *if the bridge never came back, would the fleet keep working,
+or merely work less well?* "Less well" is allowed; "not working" is not.
+
+This is the **optional depth store** pattern, and it recurs deliberately —
+the resource index's Tier 2, deep log retention, and any future database are all
+the same shape: the in-world system is complete on its own, and an outside store
+adds history and reach it cannot hold. Anything using this pattern must name, in
+its own spec, the exact behaviour the system falls back to when the store is
+absent.
 
 ---
 
@@ -319,7 +364,36 @@ world is spruce"* layer and the answer to *"how much is actually there."*
 only**, stored as per-sector files under an LRU byte budget.
 
 Rejected: **coordinates for every block type.** A sector scan covers ~109,000
-blocks; this is roughly 100× over the CC disk budget.
+blocks; this is roughly 100× over the disk budget in §13.1.
+
+#### Where the tiers live — decision, 2026-08-22
+
+The ore-index design assumed Tier 2 would get 512–640 KB on the dispatch
+computer. W1 measured that machine and found it **full**, failing to persist job
+state. The two-tier split and the packing format both survive; only the location
+was wrong.
+
+**Tier 1 (census) ships first and lives in-world.** It is ~50 entries per sector,
+an order of magnitude cheaper, and it answers the questions the planner needs
+first — *where is spruce* and *how much is there*. This unblocks Stage 2 without
+betting on an unresolved budget.
+
+**Tier 2 (coordinates) is deferred to the Node bridge**, permitted by the
+"never load-bearing" ruling in §4.2. §7.3 already makes index entries *hints,
+never truth*: a miss is detected free by `turtle.dig()` returning false, and every
+visit re-uploads an authoritative scan. So with the bridge absent, Tier 2 degrades
+to **"no hints — survey on arrival,"** which is exactly today's behaviour. That
+satisfies the ruling's test: less well, not not-working.
+
+Rejected: **a dedicated indexer computer.** It follows the §4.1 planner precedent,
+but it answers a 1 MB problem with another 1 MB disk (§13.1 rule 3). It buys one
+doubling, not a solution.
+
+Deferred: **CC disk drives**, pending **V8**. If they work here, they are the
+in-world alternative to the bridge and this decision is worth revisiting.
+
+**Whatever holds Tier 2, it enforces a hard measured cap** and evicts LRU rather
+than sizing itself against free space (§13.1 rule 2).
 
 ### 7.2 The scanner already sees everything
 
@@ -665,6 +739,20 @@ one session and was only resolved when a log line finally printed both positions
 This invariant is cheap to satisfy and converts the whole class of "a turtle is
 just sitting there" from an investigation into a glance.
 
+**K — Persistence failure must be visible.** Any subsystem that writes to disk
+surfaces a health signal reachable from `/state`. A `pcall` around the write is
+**required and not sufficient** — it converts a crash into a silent degradation,
+which is worse unless something reports it.
+
+Raised by W1 after finding `saveJobs failed: /startup.lua:433: Out of space`
+repeating in the server log. Job state had not persisted for at least the visible
+log window, and nothing anywhere said so. The failure was caught, logged into a
+ring buffer that overwrites itself, and otherwise ignored.
+
+A compliant signal answers "is this subsystem persisting successfully right now?"
+without a human reading logs. A counter of consecutive write failures and the
+timestamp of the last successful write is enough.
+
 ### 12.1 Build sites use a static loader blanket
 
 A build site does not move, and its footprint is known before the first block is
@@ -706,7 +794,43 @@ workstream that does not own it** — raise a request with the owner instead.
 `protocol.lua` is the one shared file. Every workstream will need to add message
 types to it, so changes there are announced, additive (P6), and version-bumped.
 
-### 13.1 Push protocol
+### 13.1 Disk budget — bytes have owners too
+
+**Added 2026-08-22, raised by W1.** §13 assigned an owner to every file and an
+owner to no *bytes*. Every subsystem that persists data was free to assume its own
+number, and the ore-index design assumed 512–640 KB on a dispatch computer that
+turned out to be full.
+
+**Every CC computer has a hard ceiling** — `computer_space_limit`, 1 MB by default
+(**unverified on this server; see V8**). Program text counts against it before a
+single byte of data is written.
+
+| Computer | Fixed cost | Data | Owner |
+|---|---|---|---|
+| Dispatch | `central_server.lua` **156,679 B**, `protocol.lua` 16,336 B, `waypoints.lua` 12,761 B, `updater.lua` 5,303 B | `zones.dat` + backup, `jobs.dat` | W3 |
+| Planner | `planner.lua`, `protocol.lua`, `waypoints.lua`, `updater.lua` | Project state, BOMs | W2 |
+| Warehouse | `warehouse.lua`, `protocol.lua`, `updater.lua` | — | W6 |
+| Worker | `turtle_base.lua` **87,037 B**, role program, `protocol.lua`, `equipment.lua`, `geofence.lua`, `loader_state.lua` | `loader_state.dat`, log buffer | W3 |
+
+**Rules:**
+
+1. **Any subsystem that persists data declares its steady-state and worst-case
+   bytes** before it ships. "It should fit" is not a declaration.
+2. **A subsystem sizes itself against a hard, measured cap it refuses to exceed
+   — never against free space.** Anything that expands to fill free space will
+   eventually consume someone else's budget. The resource index's LRU eviction
+   budget (§7.1) is the model.
+3. **The 1 MB ceiling is per computer**, so moving a dataset to a new CC computer
+   buys one more 1 MB disk, not unlimited room. New computers are not a storage
+   strategy.
+
+**Known defect — the dispatch computer stores the same program twice.**
+`install.lua:39` writes `central_server.lua` → `central_server.lua`, while
+`updater.lua:50` writes `central_server.lua` → `startup.lua`. A machine that was
+installed and later updated therefore carries **two 156,679-byte copies**, about
+313 KB — ~31% of a default disk. **W3 owns the fix.**
+
+### 13.2 Push protocol
 
 1. Make code changes.
 2. Bump `proto.VERSION` in `protocol.lua`.
@@ -716,7 +840,7 @@ types to it, so changes there are announced, additive (P6), and version-bumped.
 **Never trigger `/self-update` or `UPDATE_ALL` without asking first** — it
 restarts all turtles and interrupts active miners.
 
-### 13.2 Verification discipline
+### 13.3 Verification discipline
 
 There is **no Lua runtime for the live fleet on the development machine.**
 Nothing may be claimed verified without the headless harness or an in-world test.
@@ -1102,6 +1226,7 @@ built on an assumption about their answer.**
 | **V5 / Probe D** | Android failure modes: chunk unload, death, inventory, clean reboot and re-register | Whether unattended overnight builds are realistic |
 | **V6** | Single modem message ceiling — an unfiltered ~8 KB assign payload is the largest thing on the wire | Whether chunked transfer is needed |
 | **V7** | Can a turtle equip **shears** as an upgrade in this pack? CC:Tweaked ships upgrades for the diamond tools; shears may need a datapack. | Only whether leaf **blocks** are obtainable as a material. Sustainable forestry does **not** depend on this (§6.5) |
+| **V8** | What is `computer_space_limit` on this server, what is actually consuming the dispatch computer's disk, and are **CC disk drives** available and permitted in this modpack? | Where Tier 2 of the resource index lives (§7.1), and the planner's own budget (§13.1) |
 
 ---
 
