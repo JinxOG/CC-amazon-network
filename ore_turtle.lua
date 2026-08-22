@@ -697,10 +697,16 @@ local _foreignTurtleReported = {}
 local function reportForeignTurtle(slot, item)
     if _foreignTurtleReported[slot] then return end
     _foreignTurtleReported[slot] = true
+    -- Ask for the DETAILED form: displayName is absent from the plain query in
+    -- real CC (and now in the stub too, W3 2026-08-22). It is the single most
+    -- useful field here, because the name is upgrade-derived -- "Advanced Ender
+    -- Mining Turtle" versus "Advanced Chunky Ender Turtle" tells an operator
+    -- which phase the victim was in when it died, and so roughly where to look.
+    local d = turtle.getItemDetail(slot, true) or item
     local detail = string.format(
         "foreign_turtle_carried in slot %d (%s) — our loader is on record as "
         .. "standing; this is most likely a destroyed fleet turtle", slot,
-        tostring(item and (item.displayName or item.name) or "?"))
+        tostring(d and (d.displayName or d.name) or "?"))
     print("[MINER] " .. detail)
     base.sendProgress(detail)
 end
