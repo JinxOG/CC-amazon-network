@@ -70,19 +70,32 @@ function — have the same shape and the same gap.
 `computercraft:turtle_advanced` whether the turtle is powered or placed as a
 block). It is simply not consulted on these four calls.
 
-## Why the arrivals hole makes this systematic
+## Where it happened — corrected 2026-08-22
 
-This is not a rare geometric accident. The arrivals hole is a **single-block
-vertical chokepoint** (Invariant I), and returning miners queue in it. That queue
-is a column of turtles stacked vertically.
+An earlier revision of this report argued the arrivals hole was the likely site,
+on the strength of `node_139`'s log showing an arrivals-hole descent shortly
+before the inventory was observed. **That was wrong.** Those lines show where
+node_139 finished, not where it dug. The evidence points to the **mining zone**:
 
-A turtle in that column that cannot move forward will, by design, try to bypass by
-digging **up or down** — which is precisely the axis the queue occupies. **The
-chokepoint's geometry and the bypass's escape strategy are the same axis.** Every
-concurrent return is an opportunity.
+- **Fuel.** Recovered and replaced, `node_119` reads **81,885** — about 18,100
+  burned. `node_139`'s dock refuel for a *completed* job was **+38,171**. node_119
+  spent roughly half a round trip's fuel, consistent with stopping mid-job.
+- **The orphaned loader.** `soloReturn` retrieves the loader *before* flying home
+  (`ore_turtle.lua:1581`). `node_160` still standing means node_119 never began a
+  proper return.
+- **The one counter-argument is void.** W1 reasoned that a turtle dug during
+  mining would have been dumped to the ore chest at sector end, so surviving to
+  the dock implied a late dig. It survives for an unrelated reason — see the
+  companion report on the loader item-id collision. Its presence at the dock
+  says nothing about where it was picked up.
 
-`node_139`'s log shows it descending through the arrivals hole immediately before
-docking with node_119 aboard.
+**The arrivals hole remains worth hardening** — it is a single-block vertical
+chokepoint (Invariant I) where returning miners queue as a column, and digging up
+or down is precisely the bypass's escape axis. But that is now a standing concern,
+not a finding, and it should not drive the fix.
+
+The fix below is unchanged either way: the unguarded digs are unguarded wherever
+the turtle happens to be.
 
 ## Second unguarded site
 
@@ -164,17 +177,37 @@ Bypass: dug UP over blocker
 Bypass: dug DOWN under blocker
 ```
 
-If either appears in `node_139`'s terminal scrollback before the arrivals-hole
-descent, the `tryVertical` path is confirmed. If neither does, the surrounded-dig
-path at 1051 becomes the likely one and its warning line should be present instead.
+If either appears in `node_139`'s terminal scrollback, the `tryVertical` path is
+confirmed. If neither does, the surrounded-dig path at 1051 becomes the likely one
+and its warning line should be present instead.
 
 **What is proven:** node_119 was destroyed by another turtle and recovered as an
-item. **What is inferred:** which of the two unguarded paths did it. Both need
-fixing regardless of the answer.
+item. **What is inferred:** which of the two unguarded paths did it, and where.
+Both paths need fixing regardless of the answer, and neither fix depends on
+settling it.
 
-## Recovery
+## Why sector isolation alone will not close this
 
-`node_119` is not lost. Placing the item back down restores the computer with its
-ID, filesystem and role intact; it will boot, re-register, and `recoverPlacedLoader`
-should send it after `node_160`. Worth placing it in a clear spot rather than back
-in the dock row, and watching that first recovery.
+The operator's proposal — exclusive, geofenced sector leases — is the right
+instinct and addresses the likely site directly. Two notes on why it is not
+sufficient on its own, and why the dig guard is still required:
+
+- **Assignment is already exclusive.** `nextSector` pops from `zone.pending`
+  (`central_server.lua:1363`), so two miners never hold the same sector. What is
+  missing is enforcement: `SECTOR_STEP` is 32 blocks while the geofence is chunk-
+  based at radius 1 — **48 blocks**. Adjacent miners' fences overlap by 16 blocks
+  on every shared edge. The lease is real; the wall is the wrong size.
+- **Transit is not leased.** Miners still share the flight out, the flight home
+  and the depot. A lease that ends at the sector boundary does not cover the
+  journey to it.
+
+The dig guard is the floor that holds under both. Sector isolation reduces the
+opportunities; the guard is what makes an opportunity non-fatal.
+
+## Recovery — done
+
+`node_119` was recovered by placing the item back down. It booted with ID,
+filesystem and role intact, re-registered (`Registered node_119 [MINER]
+fuel=81887/100000 dock=bay1A`), and is IDLE at its dock. **A destroyed turtle is
+recoverable if someone finds the item.** Nothing in the system would have told
+anyone to look.
