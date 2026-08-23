@@ -673,6 +673,52 @@ jobQueue = {}
 -- cancel jobs without accessing the 'server' local (which is defined much later).
 local cancelJobInline
 
+-- ─── Sector leases ───────────────────────────────────────────────────────────
+--
+-- Return a holder's in-flight sector to the pool and drop its claim.
+--
+-- Assignment was ALWAYS exclusive: nextSector POPS from zone.pending, so a held
+-- sector simply is not in the pool and cannot be issued twice. The gap was never
+-- double-issue, it was RELEASE -- a holder that died took its sector out of the
+-- world with it.
+--
+-- jobQueue.reassign looks like it handles this by dropping the runtime zone
+-- (state.miningZones[jobId] = nil) for a clean rebuild. That works for a solo
+-- zone. It does NOT work for a shared one: with sharedZoneKey several jobs hold
+-- ONE table by reference, so nilling one job's key removes a reference and
+-- leaves the table -- and the popped sector -- exactly as it was. The zone can
+-- then never reach done == total, because a sector nobody holds is also in
+-- nobody's queue.
+--
+-- Honours the blacklist for the same reason the failure path does: a sector that
+-- has already failed three times should not be handed straight back out.
+local function releaseLease(jobId, minerId, reason)
+    local zone = state.miningZones[jobId]
+    if not (zone and minerId) then return false end
+    local la = zone.lastAssignments and zone.lastAssignments[minerId]
+    if not la then return false end
+
+    zone.lastAssignments[minerId] = nil
+
+    local sKey = la.x .. "," .. la.z
+    local pz   = zone.persistentKey and state.persistentZones[zone.persistentKey]
+    local fails = (pz and pz.sectorFailCount and pz.sectorFailCount[sKey]) or 0
+    if fails >= 3 then
+        logWarn(string.format("Lease on (%d,%d) released by %s (%s) — blacklisted, not requeued",
+            la.x, la.z, minerId, reason or "?"))
+        return true
+    end
+
+    zone.pending = zone.pending or {}
+    for _, s in ipairs(zone.pending) do
+        if s.x == la.x and s.z == la.z then return true end   -- already back
+    end
+    table.insert(zone.pending, 1, { x = la.x, z = la.z, isSurvey = la.isSurvey or false })
+    logInfo(string.format("Lease on (%d,%d) released by %s (%s) — returned to pending",
+        la.x, la.z, minerId, reason or "?"))
+    return true
+end
+
 -- Detect jobs that are IN_PROGRESS/ASSIGNED but whose turtle has moved on to a
 -- different job (or is idle).  These are orphaned by crash-recovery cycles where
 -- the server dispatched a fresh job before the old one was properly closed.
@@ -706,6 +752,9 @@ function jobQueue.checkGhosts()
                     logWarn(string.format(
                         "Ghost job %s: assigned to %s but turtle is on %s — auto-cancelling",
                         jobId, job.assignedTo, t.jobId or "nothing"))
+                    -- The turtle has moved on to other work, so whatever sector
+                    -- this job had out is not being mined by anyone.
+                    releaseLease(jobId, job.assignedTo, "holder_ghosted")
                     cancelJobInline(jobId)
                 end
             else
@@ -748,6 +797,11 @@ function jobQueue.checkGhosts()
                     logWarn(string.format(
                         "Absent-turtle job %s: %s not online for >5min — requeueing",
                         jobId, job.assignedTo))
+                    -- BEFORE reassign, which drops this job's reference to the
+                    -- zone: on a shared zone the table survives and the dead
+                    -- holder's sector would stay popped forever, so the release
+                    -- has to happen while we can still see the claim.
+                    releaseLease(jobId, job.assignedTo, "holder_absent")
                     jobQueue.reassign(jobId, job.assignedTo, "turtle_absent")
                 end
             else

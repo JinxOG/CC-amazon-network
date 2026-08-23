@@ -117,6 +117,87 @@ return {
             .. "heartbeats -- this is the four-hour deadlock")
     end,
 
+    -- ─── Sector leases ──────────────────────────────────────────────────────
+    --
+    -- A holder that dies must give its sector back. Assignment was always
+    -- exclusive -- nextSector POPS from pending, so a held sector cannot be
+    -- issued twice -- but nothing ever put one BACK, so a dead miner took its
+    -- sector out of the world with it and the zone could never finish.
+    --
+    -- The shared-zone case is the one that matters and the one reassign misses:
+    -- with sharedZoneKey several jobs hold ONE table by reference, so nilling
+    -- state.miningZones[jobId] removes a reference and leaves the table, and the
+    -- popped sector, exactly as they were.
+    ["a dead holder's sector returns to the pool, even on a shared zone"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+
+        -- Two jobs sharing one zone table by reference, as ensureMineZone builds
+        -- them for a multi-miner order.
+        local shared = {
+            persistentKey   = "zone_test",
+            pending         = { { x = 1152, z = -2800 } },
+            lastAssignments = { node_118 = { x = 1120, z = -2800, isSurvey = false } },
+            done = 0, total = 2,
+        }
+        T.state.miningZones["job_0726"] = shared
+        T.state.miningZones["job_0727"] = shared      -- the surviving miner's job
+
+        -- The holder goes dark and stays dark past the 5-minute absent window.
+        T.state.registry["node_118"].online = false
+        jobQueue.checkGhosts()
+        advance(400)
+        jobQueue.checkGhosts()
+
+        local stillShared = T.state.miningZones["job_0727"]
+        local returned, claim = false, nil
+        for _, s in ipairs(stillShared.pending) do
+            if s.x == 1120 and s.z == -2800 then returned = true end
+        end
+        claim = stillShared.lastAssignments["node_118"]
+        restore()
+
+        assert_eq(returned, true,
+            "the dead holder's sector must be back in the shared pool — reassign "
+            .. "only drops one reference and would leave it popped forever")
+        assert_eq(claim, nil, "and its claim on that sector must be gone")
+    end,
+
+    -- Release must not hand back a sector that has already failed three times,
+    -- for the same reason the failure path refuses to: it would be reissued
+    -- immediately and fail again.
+    ["a blacklisted sector is released but not requeued"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+
+        T.state.persistentZones["zone_test"] = {
+            sectorFailCount = { ["1120,-2800"] = 3 },
+        }
+        -- Held directly. reassign nils state.miningZones[jobId], so reading the
+        -- zone back through the state table afterwards yields nil whether the
+        -- blacklist was honoured or not -- an assertion that cannot fail.
+        local zone = {
+            persistentKey   = "zone_test",
+            pending         = {},
+            lastAssignments = { node_118 = { x = 1120, z = -2800 } },
+            done = 0, total = 1,
+        }
+        T.state.miningZones["job_0726"] = zone
+
+        T.state.registry["node_118"].online = false
+        jobQueue.checkGhosts()
+        advance(400)
+        jobQueue.checkGhosts()
+
+        local pendingCount = #zone.pending
+        local claim        = zone.lastAssignments["node_118"]
+        restore()
+
+        assert_eq(claim, nil, "the claim must still be dropped — release happened")
+
+        assert_eq(pendingCount, 0,
+            "a thrice-failed sector must not be handed straight back out")
+    end,
+
     -- The guard's stated rationale is the ASSIGNED window: an IDLE sent before
     -- JOB_ASSIGN arrives must not re-open the turtle. Recovery must not undo
     -- that, or one dropped packet becomes a double dispatch.
