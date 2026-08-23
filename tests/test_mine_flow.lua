@@ -192,6 +192,156 @@ end
 
 return {
 
+    -- Orphan loaders (design section 4.2) -------------------------------------
+    -- A loader left standing by a miner that died holding this sector. Nobody
+    -- else can reach it once the lease is ours, so if we do not say it is
+    -- there, nothing will. node_160 stood in a field for hours precisely
+    -- because no code path had a reason to mention it.
+    ["a foreign beacon inside the lease is recorded as an orphan"] =
+    function(assert_eq)
+        local flow, _, gf, ls, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        -- Precondition: our own loader must be in flight, or noteBeacon
+        -- early-returns and nothing below could possibly be exercised.
+        ls.record(0, 200, -1, { cx = 0, cz = -1 }, 1)
+        flow.adoptRecordedLoader()
+        assert_eq(flow.armLease({ x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 }), true,
+            "precondition: lease armed")
+        assert_eq(flow.orphanLoaderInLease(), nil, "precondition: no orphan yet")
+
+        -- A beacon from somewhere else entirely, but inside our lease.
+        flow.noteBeacon({ type = "LOADER_BEACON",
+                          payload = { position = { x = 12, y = 200, z = 12 } } })
+
+        local o = flow.orphanLoaderInLease()
+        assert_eq(o ~= nil, true, "an orphan inside the lease must be recorded")
+        assert_eq(o.x, 12, "with its real x")
+        assert_eq(o.z, 12, "and its real z")
+        -- y=200 is ABOVE the 160 ceiling: containment must be x/z only, or
+        -- every orphan is rejected for sitting at its placer's travel altitude.
+        assert_eq(o.y, 200, "and its altitude, above our ceiling")
+    end,
+
+    ["a foreign beacon outside the lease is not our orphan"] =
+    function(assert_eq)
+        local flow, _, gf, ls, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        ls.record(0, 200, -1, { cx = 0, cz = -1 }, 1)
+        flow.adoptRecordedLoader()
+        assert_eq(flow.armLease({ x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 }), true,
+            "precondition: lease armed")
+
+        -- The next sector over: another miner's live loader, not an orphan.
+        flow.noteBeacon({ type = "LOADER_BEACON",
+                          payload = { position = { x = 48, y = 200, z = 0 } } })
+
+        assert_eq(flow.orphanLoaderInLease(), nil,
+            "a loader outside our lease is somebody else's business")
+    end,
+
+    ["arming a different lease forgets the previous sector's orphan"] =
+    function(assert_eq)
+        local flow, _, gf, ls, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        ls.record(0, 200, -1, { cx = 0, cz = -1 }, 1)
+        flow.adoptRecordedLoader()
+        flow.armLease({ x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 })
+        flow.noteBeacon({ type = "LOADER_BEACON",
+                          payload = { position = { x = 12, y = 200, z = 12 } } })
+        assert_eq(flow.orphanLoaderInLease() ~= nil, true,
+            "precondition: an orphan was recorded for this sector")
+
+        flow.armLease({ x1=16, z1=-16, x2=47, z2=15, ceilingY=160 })
+
+        assert_eq(flow.orphanLoaderInLease(), nil,
+            "a stale orphan must not leak into the next sector")
+    end,
+
+    -- Sector lease -----------------------------------------------------------
+    -- The trap these exist for: the loader is placed from TRAVEL altitude (175
+    -- or 200) and the ceiling is 160. fenceBlocksStep passes the current y for
+    -- horizontal moves and the projected y for vertical ones, so a lease armed
+    -- up there fails EVERY direction at once and strands the miner on the
+    -- placement square with its loader already down.
+    ["armLease refuses above the ceiling rather than stranding the miner"] =
+    function(assert_eq)
+        local flow, _, gf, _, c = loadFlow(E_TRAVEL(), travelInv())
+        c.pos.y = 200                       -- travel altitude, where placeLoader runs
+        -- Precondition, asserted rather than assumed: nothing is armed yet.
+        assert_eq(gf.hasLease(), false, "precondition: no lease armed")
+
+        local ok, why = flow.armLease({ x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 })
+
+        assert_eq(ok, false, "arming above the ceiling must be refused")
+        assert_eq(why, "above_ceiling", "and must say why")
+        assert_eq(gf.hasLease(), false, "and MUST NOT have armed anything")
+        -- The whole point: the turtle can still move.
+        assert_eq(gf.contains(0, 0, 199), true, "a refused lease cannot fence us in")
+    end,
+
+    ["armLease arms once the miner is below the ceiling"] =
+    function(assert_eq)
+        local flow, _, gf, _, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16                        -- first scan level
+        assert_eq(gf.hasLease(), false, "precondition: no lease armed")
+
+        local ok, why = flow.armLease({ x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 })
+
+        assert_eq(ok, true, "below the ceiling it must arm")
+        assert_eq(why, "armed", "and report that it armed")
+        assert_eq(gf.hasLease(), true, "the lease is live")
+        assert_eq(gf.contains(0, 0, 16), true, "inside its own sector")
+        assert_eq(gf.contains(40, 0, 16), false, "outside is refused")
+        assert_eq(gf.contains(0, 0, 200), false, "and above the ceiling is refused")
+    end,
+
+    ["armLease is idempotent so it can be called every depth level"] =
+    function(assert_eq)
+        local flow, _, gf, _, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        local lease = { x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 }
+        local ok1 = flow.armLease(lease)
+        assert_eq(ok1, true, "precondition: first arm succeeded")
+
+        local ok2, why2 = flow.armLease(lease)
+
+        assert_eq(ok2, true, "re-arming the same lease must succeed")
+        assert_eq(why2, "already_armed", "and be recognised as a no-op")
+        assert_eq(gf.hasLease(), true, "still armed")
+    end,
+
+    -- The second trap. The retrieval approach climbs to the stand square at
+    -- travel altitude, and that climb is in ore_turtle BEFORE
+    -- mine_flow.retrieveLoader drops the fence -- so a live ceiling fails the
+    -- ascent at y=161 and the miner cannot reach its own loader.
+    ["releaseLeaseForAscent frees the climb but keeps the chunk anchor"] =
+    function(assert_eq)
+        local flow, _, gf, _, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        gf.setAnchorChunk(0, 0, 1)
+        assert_eq(flow.armLease({ x1=-16, z1=-16, x2=15, z2=15, ceilingY=160 }), true,
+            "precondition: lease armed")
+        assert_eq(gf.contains(0, 0, 200), false,
+            "precondition: the ceiling really does block the climb")
+
+        local released = flow.releaseLeaseForAscent()
+
+        assert_eq(released, true, "it must report having released")
+        assert_eq(gf.hasLease(), false, "the lease is gone")
+        assert_eq(gf.contains(0, 0, 200), true, "the climb to the stand is now allowed")
+        -- Defence in depth: the chunk anchor is what keeps us inside loaded
+        -- chunks, and retrieveLoader drops that at the proper moment.
+        assert_eq(gf.isActive(), true, "the chunk anchor MUST still be armed")
+        assert_eq(gf.contains(999, 999, 64), false, "so we are still fenced somewhere")
+    end,
+
+    ["releaseLeaseForAscent is safe when no lease was ever armed"] =
+    function(assert_eq)
+        local flow, _, gf = loadFlow(E_MINE(), travelInv())
+        assert_eq(gf.hasLease(), false, "precondition: nothing armed")
+        assert_eq(flow.releaseLeaseForAscent(), false, "nothing to release")
+    end,
+
     -- placeLoader must ask "is this a loader", not "is this an advanced turtle".
     -- Every turtle in the fleet shares one item id, so the raw lookup would hand
     -- a mined-up miner to turtle.place() and call it a chunk loader -- the miner

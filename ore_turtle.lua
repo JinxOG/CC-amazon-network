@@ -1361,6 +1361,19 @@ local function retrievePlacedLoader(stand)
         -- first avoids the loader entirely. Only done when we are actually in
         -- its column, so the normal end-of-sector retrieval still ascends
         -- before travelling.
+        -- Drop the LEASE before climbing, keeping the chunk anchor.
+        --
+        -- The loader stands at travel altitude and the lease ceiling is 160, so
+        -- an armed lease fails this ascent at y=161: approach_failed, and the
+        -- miner cannot reach its own loader. mine_flow.retrieveLoader does clear
+        -- the fence, but only AFTER the dig -- which is on the far side of this
+        -- climb, so it cannot help here.
+        --
+        -- The chunk anchor deliberately survives: it is what keeps us inside
+        -- loaded chunks for the climb, and retrieveLoader drops it at the right
+        -- moment. Releasing both here would ascend unfenced.
+        mine_flow.releaseLeaseForAscent()
+
         local here = base.getPos()
         if here.x == rec.x and here.z == rec.z and here.y ~= sy then
             base.move.to(sx, here.y, sz)
@@ -1883,6 +1896,10 @@ local function mineJob(job)
         local sx         = msg.payload.sectorX
         local sz         = msg.payload.sectorZ
         local surveyMode = msg.payload.surveyMode == true
+        -- Additive (P6): nil from a server that predates leases, and every use
+        -- below tolerates that by doing nothing.
+        local lease      = msg.payload.lease
+        local orphanSaid = false   -- report an orphan once per sector, not per level
         local modeTag    = surveyMode and "[SURVEY] " or ""
 
         base.setStatus(proto.STATUS.TRAVELLING, jobId)
@@ -1984,6 +2001,41 @@ local function mineJob(job)
             end
             checkFuel(jobId)
             base.move.to(sx, sy, sz)
+            -- Arm the lease HERE, not in placeLoader.
+            --
+            -- The loader goes down from travel altitude (175 or 200) and the
+            -- ceiling is 160, so arming at placement would fail every direction
+            -- at once and strand the miner on the placement square with its
+            -- loader already deployed. By this point we have descended to a
+            -- scan level, which is far below the ceiling.
+            --
+            -- Called every level rather than once: armLease is idempotent, and
+            -- a single call site that always runs beats one that has to be
+            -- reasoned about. It refuses on its own if we are somehow high.
+            if lease then
+                local armed, why = mine_flow.armLease(lease)
+                if not armed and why ~= "already_armed" then
+                    base.sendProgress("lease_not_armed: " .. tostring(why))
+                end
+            end
+
+            -- An orphan loader standing in our leased sector (§4.2). Reported,
+            -- never collected: recovery is a different job from mining, and a
+            -- miner already carrying its own loader cannot tell two of them
+            -- apart while loaders are unlabelled. The dig guard means movement
+            -- refuses to dig it anyway, so "work around it" needs no code --
+            -- only somebody being told it is there, which is the part that has
+            -- been missing every time this has happened.
+            if not orphanSaid then
+                local orphan = mine_flow.orphanLoaderInLease()
+                if orphan then
+                    orphanSaid = true
+                    local at = string.format("orphan_loader at %d,%d,%d",
+                        orphan.x, orphan.y, orphan.z)
+                    print("[MINER] " .. at .. " — working around it")
+                    base.sendProgress(at)
+                end
+            end
             base.setStatus(proto.STATUS.WORKING, jobId)
             base.sendProgress(string.format("%sScanning %d,%d depth %d/%d (Y=%d)",
                 modeTag, sx, sz, i, #SCAN_LEVELS, sy))

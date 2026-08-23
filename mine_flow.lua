@@ -175,6 +175,12 @@ local _nearMissBeaconPos = nil  -- our loader's OWN reported position, when it
 -- module exists to prevent.
 local _expectedLoaderPos = nil
 
+-- A foreign loader beacon standing inside our armed lease: an orphan left
+-- by a miner that died holding this sector. Scoped to the lease, cleared
+-- whenever a different one is armed, so it can never leak into the next
+-- sector the way a stale beacon timestamp could.
+local _orphanInLease = nil
+
 local function samePosition(a, b)
     return a ~= nil and b ~= nil and a.x == b.x and a.y == b.y and a.z == b.z
 end
@@ -222,6 +228,20 @@ function mine_flow.noteBeacon(msg)
         local dz = math.abs(pos.z - _expectedLoaderPos.z)
         if dx <= NEAR_MISS_RADIUS and dy <= NEAR_MISS_RADIUS and dz <= NEAR_MISS_RADIUS then
             _nearMissBeaconPos = { x = pos.x, y = pos.y, z = pos.z }
+        elseif not _orphanInLease and geofence.hasLease()
+               and geofence.contains(pos.x, pos.z) then
+            -- A loader that is not ours, standing inside our exclusive lease:
+            -- an orphan left by a miner that died holding this sector. Nobody
+            -- else can reach it now, since the lease is ours.
+            --
+            -- x/z only, deliberately -- y is omitted so the ceiling is not
+            -- tested. An orphan sits at ITS placer's travel altitude, well
+            -- above our ceiling, and passing y would reject every one of them.
+            --
+            -- Recorded, never acted on: §4.2 says work around it and report it.
+            -- The dig guard already makes "never retrieve" the default, since a
+            -- standing loader is a turtle block movement refuses to dig.
+            _orphanInLease = { x = pos.x, y = pos.y, z = pos.z }
         end
     else
         -- Our loader may well be the sender, but with no GPS fix in the
@@ -631,6 +651,65 @@ function mine_flow.adoptRecordedLoader()
     if not recorded then return false, "no_loader_recorded" end
     _expectedLoaderPos = { x = recorded.x, y = recorded.y, z = recorded.z }
     _nearMissBeaconPos = nil
+    return true
+end
+
+-- ── Sector lease ────────────────────────────────────────────────────────────
+--
+-- Arms the exclusive-sector fence from a server-issued lease.
+--
+-- NOT armed in placeLoader, despite that being the obvious place and what the
+-- handoff suggested. The loader is placed from the miner's TRAVEL altitude --
+-- SURVEY_TRAVEL_Y 175 or SKY_Y 200 -- and the lease ceiling is 160. Arming
+-- there would immobilise the turtle on the spot: turtle_base's fenceBlocksStep
+-- passes the CURRENT y for horizontal moves and the PROJECTED y for vertical
+-- ones, so at 200 under a 160 ceiling every direction fails at once. The miner
+-- would be stranded on the placement square with its loader already down.
+--
+-- So the lease is armed after the descent to the first scan level instead, and
+-- this refuses rather than trusting the caller to only ask at the right moment.
+-- Idempotent: re-arming an identical lease is a no-op, so callers can call it
+-- once per depth level without thinking about it.
+function mine_flow.armLease(lease)
+    if not lease then return false, "no_lease" end
+    local p = _hooks.pos()
+    if lease.ceilingY and p and p.y and p.y > lease.ceilingY then
+        return false, "above_ceiling"
+    end
+    local cur = geofence.lease()
+    if cur and cur.x1 == lease.x1 and cur.z1 == lease.z1
+           and cur.x2 == lease.x2 and cur.z2 == lease.z2
+           and cur.ceilingY == lease.ceilingY then
+        return true, "already_armed"
+    end
+    _orphanInLease = nil   -- new sector, new orphan question
+    geofence.setLease(lease.x1, lease.z1, lease.x2, lease.z2, lease.ceilingY)
+    log(string.format("Lease armed %d,%d..%d,%d ceiling %s",
+        lease.x1, lease.z1, lease.x2, lease.z2, tostring(lease.ceilingY)))
+    return true, "armed"
+end
+
+-- The orphan loader standing in our lease, or nil. Report it; never go for
+-- it (see noteBeacon).
+function mine_flow.orphanLoaderInLease()
+    if not _orphanInLease then return nil end
+    return { x = _orphanInLease.x, y = _orphanInLease.y, z = _orphanInLease.z }
+end
+
+-- Release the lease before climbing out of it.
+--
+-- The retrieval approach ascends to the stand square at TRAVEL altitude, and
+-- that ascent lives in ore_turtle's retrievePlacedLoader -- BEFORE
+-- mine_flow.retrieveLoader runs, which is where the fence is normally dropped.
+-- With a 160 ceiling still armed the climb fails at y=161, the approach reports
+-- approach_failed, and the miner cannot reach its own loader.
+--
+-- The chunk anchor deliberately stays armed: it is what keeps the miner inside
+-- loaded chunks, and retrieveLoader drops that at the proper moment.
+function mine_flow.releaseLeaseForAscent()
+    if not geofence.hasLease() then return false end
+    geofence.clearLease()
+    log("Lease released for the retrieval ascent; chunk anchor still armed")
     return true
 end
 

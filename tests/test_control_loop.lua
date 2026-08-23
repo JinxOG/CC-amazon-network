@@ -1111,4 +1111,64 @@ function(assert_eq)
         "finding an unaccountable turtle must be reported, not swallowed")
 end
 
+
+-- Lease arming and release ordering (SOURCE-ONLY, weaker).
+--
+-- Both orderings below strand a miner if they are wrong, and neither is
+-- reachable headlessly: ore_turtle self-executes. They are pinned here because
+-- the failure is not a wrong result, it is a turtle that cannot move.
+--
+-- The loader is placed from TRAVEL altitude (SURVEY_TRAVEL_Y 175 or SKY_Y 200)
+-- and the lease ceiling is 160. turtle_base's fenceBlocksStep passes the
+-- CURRENT y for horizontal moves and the PROJECTED y for vertical ones, so a
+-- lease armed up there fails every direction at once.
+suite["the lease is armed after the descent, never at placement (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local descend = src:find("base%.move%.to%(sx, sy, sz%)")
+    local arm     = src:find("mine_flow%.armLease%(")
+    assert_eq(descend ~= nil, true, "the descent to a scan level moved or vanished")
+    assert_eq(arm ~= nil, true, "the lease must be armed somewhere")
+    assert_eq(arm > descend, true,
+        "armLease must come AFTER the descent -- arming at travel altitude "
+        .. "under a 160 ceiling immobilises the turtle on the placement square")
+
+    -- And placement must not arm it, which is the obvious-but-wrong place.
+    local mf = assert(io.open("mine_flow.lua", "r"))
+    local msrc = mf:read("*a")
+    mf:close()
+    local plStart = msrc:find("function mine_flow%.placeLoader")
+    local plEnd   = msrc:find("\nend\n", plStart, true)
+    assert_eq(plStart ~= nil and plEnd ~= nil, true, "could not bound placeLoader")
+    assert_eq(msrc:sub(plStart, plEnd):find("setLease"), nil,
+        "placeLoader must NOT arm the lease -- it runs at travel altitude")
+end
+
+-- The retrieval approach climbs from mining depth to the stand square at travel
+-- altitude. mine_flow.retrieveLoader does clear the fence, but only after the
+-- dig -- which is on the far side of this climb, so it cannot help.
+suite["the lease is released before the retrieval ascent (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local fnAt = src:find("local function retrievePlacedLoader")
+    assert_eq(fnAt ~= nil, true, "retrievePlacedLoader moved or vanished")
+    local endAt = src:find("\nend\n", fnAt, true)
+    assert_eq(endAt ~= nil, true, "could not bound retrievePlacedLoader")
+    local body = src:sub(fnAt, endAt)
+
+    local release  = body:find("mine_flow%.releaseLeaseForAscent%(%)")
+    local approach = body:find("local ok, err = base%.move%.to%(sx, sy, sz%)")
+    assert_eq(release ~= nil, true, "the lease must be released for the climb")
+    assert_eq(approach ~= nil, true, "the approach move moved or vanished")
+    assert_eq(release < approach, true,
+        "release must come BEFORE the approach -- a live 160 ceiling fails the "
+        .. "ascent at y=161 and the miner never reaches its own loader")
+end
+
 return suite
