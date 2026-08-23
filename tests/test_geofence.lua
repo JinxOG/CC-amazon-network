@@ -109,4 +109,107 @@ return {
                 string.format("low-edge and high-edge anchors disagree at %d,%d", p[1], p[2]))
         end
     end,
+
+    -- ─── Leases ─────────────────────────────────────────────────────────────
+
+    ["a lease confines to its block rectangle, inclusive of both edges"] =
+    function(assert_eq)
+        local g = fresh()
+        g.setLease(1104, -2800, 1135, -2769, 160)
+        assert_eq(g.isActive(), true)
+        assert_eq(g.hasLease(), true)
+        assert_eq(g.contains(1104, -2800, 60), true, "low corner is inside")
+        assert_eq(g.contains(1135, -2769, 60), true, "high corner is inside")
+        assert_eq(g.contains(1103, -2800, 60), false, "one block west is outside")
+        assert_eq(g.contains(1136, -2800, 60), false, "one block east is outside")
+        assert_eq(g.contains(1104, -2801, 60), false, "one block north is outside")
+        assert_eq(g.contains(1104, -2768, 60), false, "one block south is outside")
+    end,
+
+    -- Scans may overlap. Leases must tile. The scanner reads 33 wide while
+    -- SECTOR_STEP is 32, so sector 1120 and sector 1152 both legitimately SCAN
+    -- x=1136 -- but if they both LEASED it, two holders could stand on the same
+    -- column and the whole exclusivity claim is void.
+    ["adjacent leases tile exactly, sharing no column"] = function(assert_eq)
+        local proto = require("protocol")
+        local g = fresh()
+
+        local ax1, _, ax2, _ = proto.leaseBounds(1120, 0)
+        local bx1, _, bx2, _ = proto.leaseBounds(1152, 0)
+
+        assert_eq(ax2 + 1, bx1, "the leases must abut with no gap and no overlap")
+        assert_eq(ax2 - ax1 + 1, proto.SECTOR_STEP, "a lease must be exactly SECTOR_STEP wide")
+        -- These go on the wire. On Lua 5.3+ a bare /2 yields 16.0 and the bounds
+        -- serialise as "1136.0"; CC's 5.2 cannot tell the two apart, so nothing
+        -- else in this suite would ever notice.
+        -- Asserted on the STRING, not with ==: 16.0 == 16 is true numerically, so
+        -- a numeric check passes either way and proves nothing. What matters is
+        -- what textutils.serialise puts on the wire.
+        assert_eq(tostring(ax1):find("%.") == nil, true,
+            "lease bounds must serialise as whole blocks, got " .. tostring(ax1))
+        assert_eq(tostring(ax2):find("%.") == nil, true,
+            "lease bounds must serialise as whole blocks, got " .. tostring(ax2))
+
+        g.setLease(ax1, -16, ax2, 15, 160)
+        local aOwnsSeam = g.contains(1136, 0, 60)
+        g.setLease(bx1, -16, bx2, 15, 160)
+        local bOwnsSeam = g.contains(1136, 0, 60)
+
+        assert_eq(aOwnsSeam ~= bOwnsSeam, true,
+            "exactly one of two adjacent leases may own the seam column x=1136")
+    end,
+
+    -- The ceiling is the whole reason vertical moves had to become fenced.
+    ["the ceiling bounds y, and only from above"] = function(assert_eq)
+        local g = fresh()
+        g.setLease(0, 0, 31, 31, 160)
+        assert_eq(g.contains(0, 0, 160), true,  "the ceiling itself is occupiable")
+        assert_eq(g.contains(0, 0, 161), false, "one block above the ceiling is not")
+        assert_eq(g.contains(0, 0, -60), true,  "there is no floor — leases run to bedrock")
+        assert_eq(g.contains(0, 0), true,
+            "a horizontal move passes no y and must not be judged against the ceiling")
+    end,
+
+    -- The ceiling must sit below the LOWEST travel lane in the fleet, not below
+    -- the holder's own. Lanes are 175 and 200 plus that miner's travelYOffset,
+    -- so a miner at offset 10 deriving 185 would claim exclusive airspace that an
+    -- offset-0 miner transits at 175 -- reintroducing the collision leases exist
+    -- to prevent.
+    ["the lease ceiling clears the lowest travel lane in the fleet"] =
+    function(assert_eq)
+        local proto = require("protocol")
+        local LOWEST_LANE = 175            -- SURVEY_TRAVEL_Y at travelYOffset 0
+        assert_eq(proto.LEASE_CEILING_Y < LOWEST_LANE, true,
+            string.format("ceiling %d must be below the lowest lane %d",
+                proto.LEASE_CEILING_Y, LOWEST_LANE))
+    end,
+
+    -- Both fences apply when both are set. A lease is a strict subset of the
+    -- loader's chunk footprint, so this is a pure narrowing -- it can never place
+    -- the miner outside loaded chunks, which would trade Invariant A for
+    -- exclusivity.
+    ["a lease narrows the chunk anchor and never widens it"] = function(assert_eq)
+        local g = fresh()
+        g.setAnchorChunk(0, 0, 1)          -- blocks -16..31
+        g.setLease(0, 0, 15, 15, 160)      -- a strict subset
+        assert_eq(g.contains(0, 0, 60), true,   "inside both")
+        assert_eq(g.contains(20, 20, 60), false, "inside the anchor, outside the lease")
+        assert_eq(g.contains(-16, -16, 60), false, "anchor corner is outside the lease")
+
+        -- And a lease can never buy back ground the anchor forbids.
+        g.clearLease()
+        g.setLease(-100, -100, 100, 100, 160)
+        assert_eq(g.contains(50, 50, 60), false,
+            "a lease wider than the anchor must still be refused by the anchor")
+    end,
+
+    ["clear releases both fences, not just the anchor"] = function(assert_eq)
+        local g = fresh()
+        g.setAnchorChunk(0, 0, 1)
+        g.setLease(0, 0, 15, 15, 160)
+        g.clear()
+        assert_eq(g.isActive(), false, "a released hold must release everything")
+        assert_eq(g.hasLease(), false)
+        assert_eq(g.contains(99999, 99999, 9999), true, "and permit everything again")
+    end,
 }

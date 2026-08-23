@@ -167,6 +167,41 @@ return {
             "stone above must be dug — the guard is about turtles, not about digging")
     end,
 
+    -- A lease ceiling is expressed purely in y, and vertical moves were not
+    -- fenced AT ALL -- tryMove gated the fence check on dir being forward/back,
+    -- on the reasoning that only those change chunk. True for a chunk anchor,
+    -- and it meant a ceiling would have had precisely no effect.
+    ["the lease ceiling actually stops a miner rising through it"] =
+    function(assert_eq)
+        local base = fresh({
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            pos      = { x = 0, y = 160, z = 0, facing = 0 },
+        })
+        base.geofence.setLease(-16, -16, 15, 15, 160)
+
+        local up, reason = base.move.up()
+        local down       = base.move.down()
+        local p          = base.getPos()
+
+        assert_eq(up, false, "rising above the ceiling must be refused")
+        assert_eq(reason, "geofence_breach")
+        assert_eq(down, true, "descending inside the lease must still be allowed")
+        assert_eq(p.y, 159, "and the tracked position must reflect only the move that happened")
+    end,
+
+    -- The mirror of the dig-guard terrain test: a fence that refuses everything
+    -- would pass the test above while immobilising the fleet.
+    ["a lease still permits movement inside its own volume"] = function(assert_eq)
+        local base = fresh({
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            pos      = { x = 0, y = 100, z = 0, facing = 0 },
+        })
+        base.geofence.setLease(-16, -16, 15, 15, 160)
+
+        assert_eq(base.move.up(), true, "well below the ceiling, up must work")
+        assert_eq(base.move.forward(), true, "and so must horizontal movement")
+    end,
+
     -- The second unguarded site: findFreeSpace's "surrounded" fallback, which
     -- dug down, up and forward with no inspection at all in order to make room
     -- for the fuel ender chest.

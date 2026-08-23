@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.39"
+proto.VERSION = "1.9.40"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -293,13 +293,64 @@ function proto.payloadSectorRequest(jobId)
     return { jobId = jobId }
 end
 
+-- ─── Sector leases ───────────────────────────────────────────────────────────
+--
+-- SECTOR_STEP is 32, but the geo scanner reads radius 16 -- 33 blocks wide. So
+-- sector 1120 covers x 1104-1136 and sector 1152 covers x 1136-1168: they SHARE
+-- the column at x=1136. That was harmless while fences were 48 wide and
+-- overlapped anyway; it is not harmless once exclusivity is the point, because
+-- two leaseholders could both legitimately stand on that column.
+--
+--   Scans may overlap. Leases must tile.
+--
+-- So the lease is the half-open 32, [sx-16, sx+15], while the scan still reads
+-- 33 wide. These are different things and only one of them is a promise.
+--
+-- This lives in protocol.lua rather than geofence.lua because geofence does not
+-- ship to the server (see install.lua PROFILES) and BOTH sides need the same
+-- arithmetic. One definition is what stops the off-by-one coming back.
+proto.SECTOR_STEP = 32
+
+-- Highest y a leaseholder may occupy. Deliberately a fleet-wide constant and NOT
+-- derived from the holder's own travelYOffset.
+--
+-- The ceiling exists to keep a WORKING miner below every TRAVELLING miner's
+-- lane. Lanes are SURVEY_TRAVEL_Y (175) and SKY_Y (200), each shifted up by that
+-- miner's travelYOffset -- so the lowest lane in the fleet is 175, at offset 0.
+-- A miner deriving its ceiling from its own offset of 10 would claim exclusive
+-- airspace up to 185 and own the lane an offset-0 miner transits, which is
+-- exactly the collision the leases exist to prevent.
+--
+-- 160 sits below the lowest lane with room to spare, and far above any mining
+-- (scanY defaults to 56). The holder releases its fence before the return ascent
+-- -- retrieval clears it -- so the ceiling never blocks a miner's way home.
+proto.LEASE_CEILING_Y = 160
+
+-- Inclusive block bounds of the lease for a sector centred on (sx, sz).
+-- math.floor, not `/` alone: on Lua 5.3+ (the test harness) 32/2 is the FLOAT
+-- 16.0, so the bounds would go onto the wire as 1136.0 rather than 1136. CC's
+-- Lua 5.2 does not distinguish the two, so this would have looked correct in
+-- every test and only differed in the serialised payload. `//` is not available
+-- in 5.2, so it cannot be used here.
+function proto.leaseBounds(sx, sz)
+    local half = math.floor(proto.SECTOR_STEP / 2)
+    return sx - half, sz - half, sx + half - 1, sz + half - 1
+end
+
 function proto.payloadSectorAssign(jobId, sectorX, sectorZ, scanY, surveyMode)
+    local x1, z1, x2, z2 = proto.leaseBounds(sectorX, sectorZ)
     return {
         jobId      = jobId,
         sectorX    = sectorX,
         sectorZ    = sectorZ,
         scanY      = scanY or 56,
         surveyMode = surveyMode == true,
+        -- The lease the holder must fence itself to. Additive (P6): an older
+        -- miner ignores these fields and behaves exactly as before.
+        lease      = {
+            x1 = x1, z1 = z1, x2 = x2, z2 = z2,
+            ceilingY = proto.LEASE_CEILING_Y,
+        },
     }
 end
 

@@ -422,8 +422,18 @@ end
 -- never need to separately check isActive().
 local function fenceBlocksStep(dir)
     if not (_geofence and _geofence.isActive()) then return false end
+
+    -- Vertical moves leave x/z alone and only change y. They used not to be
+    -- fenced at all, on the reasoning that the chunk grid ignores y -- true for a
+    -- chunk anchor, and false the moment a lease has a ceiling. An unfenced
+    -- vertical move meant the ceiling would have had no effect whatsoever.
+    if dir == "up" or dir == "down" then
+        local ny = _self.pos.y + ((dir == "up") and 1 or -1)
+        return not _geofence.contains(_self.pos.x, _self.pos.z, ny)
+    end
+
     local nx, nz = projectStep(dir)
-    return not _geofence.contains(nx, nz)
+    return not _geofence.contains(nx, nz, _self.pos.y)
 end
 
 -- ─── Movement ────────────────────────────────────────────────────────────────
@@ -644,18 +654,33 @@ local function tryMove(moveFn, digFn, dir)
         sleep(2)
     end
 
-    -- Geofence: refuse any move that would leave the placed loader's footprint.
-    -- Enforced here, at the single choke point every move passes through, so a
-    -- new call site cannot bypass it. Only forward/back change x/z (and hence
-    -- chunk); up/down only change y, which the chunk grid ignores, so vertical
-    -- moves are never fenced. (bypassForward below has its own raw turtle.
-    -- forward() calls that bypass this function entirely -- see fenceBlocksStep.)
-    if (dir == "forward" or dir == "back") and fenceBlocksStep(dir) then
-        local nx, nz = projectStep(dir)
-        local a = _geofence.anchor()
-        logWarn(string.format(
-            "Geofence: refusing move to %d,%d (anchor chunk %d,%d r%d)",
-            nx, nz, a.cx, a.cz, a.chunkRadius))
+    -- Geofence: refuse any move that would leave the placed loader's footprint,
+    -- or rise above a lease ceiling. Enforced here, at the single choke point
+    -- every move passes through, so a new call site cannot bypass it.
+    --
+    -- EVERY direction, including up and down. That used to read "only
+    -- forward/back change chunk, so vertical moves are never fenced" -- correct
+    -- for a chunk anchor and wrong for a lease, whose ceiling is expressed
+    -- purely in y. (bypassForward below has its own raw turtle.forward() calls
+    -- that bypass this function entirely -- see fenceBlocksStep.)
+    if fenceBlocksStep(dir) then
+        -- anchor() is nil when only a lease is armed, so this must not
+        -- dereference it unconditionally -- doing so would turn a refused move
+        -- into a crash on the very path the lease exists to exercise.
+        local a  = _geofence.anchor()
+        local ls = _geofence.lease and _geofence.lease()
+        local where
+        if dir == "up" or dir == "down" then
+            where = string.format("y=%d", _self.pos.y + ((dir == "up") and 1 or -1))
+        else
+            local nx, nz = projectStep(dir)
+            where = string.format("%d,%d", nx, nz)
+        end
+        logWarn(string.format("Geofence: refusing move to %s (%s)", where,
+            a and string.format("anchor chunk %d,%d r%d", a.cx, a.cz, a.chunkRadius)
+              or (ls and string.format("lease %d,%d..%d,%d ceil %s",
+                    ls.x1, ls.z1, ls.x2, ls.z2, tostring(ls.ceilingY))
+                  or "fence")))
         return false, "geofence_breach"
     end
 
