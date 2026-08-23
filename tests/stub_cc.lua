@@ -155,6 +155,16 @@ function M.install(opts)
             if b then return true, { name = b, tags = {} } end
             return false
         end,
+        -- inspectUp was simply missing, which made turtle_base's INSPECT.up nil
+        -- and isTurtleBlock("up") return false unconditionally. Any guard on the
+        -- upward direction would have been untestable and passed silently while
+        -- doing nothing in-world -- the same shape as the displayName and drop
+        -- gaps. Third one found this session; see M._drop's note.
+        inspectUp = function()
+            local b = c.world[above()]
+            if b then return true, { name = b, tags = {} } end
+            return false
+        end,
 
         place = function()
             local i = c.inv[c.selected]

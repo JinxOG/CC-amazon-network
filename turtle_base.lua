@@ -438,6 +438,13 @@ local INSPECT = {
     back    = nil,
 }
 
+local DIG = {
+    forward = turtle.dig,
+    up      = turtle.digUp,
+    down    = turtle.digDown,
+    back    = nil,
+}
+
 local function isTurtleBlock(dir)
     local fn = INSPECT[dir]
     if not fn then return false end
@@ -445,6 +452,30 @@ local function isTurtleBlock(dir)
     return ok and type(data) == "table"
            and type(data.name) == "string"
            and data.name:find("turtle")
+end
+
+-- Never dig a turtle. Not in the bypass, not when surrounded, not anywhere.
+--
+-- tryMove already refuses to dig a blocker and waits instead -- but the bypass it
+-- falls through to dug blind, so the sequence was: notice a turtle, decline to
+-- dig it, try to route around it, and dig a DIFFERENT turtle on the way past.
+--
+-- Hardware loss is not recoverable the way terrain loss is. A mined turtle takes
+-- its computer ID, its files and its loader_state with it, and its placed loader
+-- is orphaned permanently with nothing left that knows to reclaim it. It is also
+-- silent: the registry simply stops hearing from the victim and prunes it as
+-- offline. Observed 2026-08-22 -- node_139 docked carrying node_119, a MINER, as
+-- an item, and it was diagnosed as a missing turtle for a whole session before
+-- someone looked in a slot.
+--
+-- Refusal is reported distinctly from failure so callers can tell "I must not"
+-- from "I could not". A turtle in the way is a reason to WAIT: any column of
+-- turtles is transient by definition, because everyone in it is trying to leave.
+local function digGuarded(dir)
+    local fn = DIG[dir]
+    if not fn then return false, "no_dig_for_dir" end
+    if isTurtleBlock(dir) then return false, "would_dig_turtle" end
+    return fn()
 end
 
 -- Attempt to route around a turtle blocking the forward path.
@@ -515,8 +546,20 @@ local function bypassForward()
         local returnDir = isUp and "down"         or "up"
         local detectLayer = isUp and turtle.detectUp or turtle.detectDown
 
-        -- 1. Dig and move to upper/lower level
-        if detectLayer() then digLayer() end
+        -- 1. Dig and move to upper/lower level.
+        -- Refusing here is the whole point: this is the step that was digging a
+        -- second turtle while routing around the first. Bail so the caller tries
+        -- the other direction and then waits.
+        if detectLayer() then
+            local dug, why = digGuarded(applyDir)
+            if not dug then
+                if why == "would_dig_turtle" then
+                    logWarn("Vertical bypass: a turtle is " .. applyDir
+                        .. " — refusing to dig it, will wait instead")
+                end
+                return false
+            end
+        end
         if not moveLayer() then return false end
         applyMove(applyDir)
 
@@ -539,16 +582,26 @@ local function bypassForward()
         end
 
         if advanced < 2 then
-            -- Couldn't clear obstacle at this level — go back
-            if isUp and turtle.detectDown() then turtle.digDown() end
-            if not isUp and turtle.detectUp() then turtle.digUp() end
-            returnMov(); applyMove(returnDir)
+            -- Couldn't clear obstacle at this level — go back.
+            -- If something has moved into the level we came from and it is a
+            -- turtle, we stay put rather than dig it. Being at the wrong Y is
+            -- survivable; move.to corrects it.
+            local returnDetectA = isUp and turtle.detectDown or turtle.detectUp
+            if returnDetectA() then digGuarded(returnDir) end
+            -- applyMove ONLY on a move that actually happened. This was
+            -- unconditional -- `returnMov(); applyMove(returnDir)` -- so a failed
+            -- return silently desynced the tracked position from the real one,
+            -- which is the worst kind of bug this file can have: every later
+            -- fence check and GPS-free move would be computed from a lie. The
+            -- guard above makes a failed return far more likely, so this had to
+            -- be corrected in the same change rather than left as latent.
+            if returnMov() then applyMove(returnDir) end
             return false
         end
 
         -- 3. Return to original Y level (dig if terrain moved in)
         local returnDetect = isUp and turtle.detectDown or turtle.detectUp
-        if returnDetect() then returnDig() end
+        if returnDetect() then digGuarded(returnDir) end
         if not returnMov() then
             -- Stuck at the new level — still report success (move.to will fix Y)
             logWarn("Vertical bypass: could not return to original Y — move.to will correct")
@@ -1047,15 +1100,18 @@ local function findFreeSpace()
         return nil
     end
 
-    -- Has pickaxe — dig a temporary hole
+    -- Has pickaxe — dig a temporary hole.
+    -- Guarded: a turtle that finds itself surrounded AT A DOCK is surrounded by
+    -- other docked turtles, by construction. This is the most crowded part of the
+    -- map and these were three raw digs with no inspection at all.
     logWarn("Surrounded — digging temporary refuel hole...")
-    if turtle.digDown() then
+    if digGuarded("down") then
         return turtle.placeDown, turtle.digDown, turtle.suckDown, nil
     end
-    if turtle.digUp() then
+    if digGuarded("up") then
         return turtle.placeUp, turtle.digUp, turtle.suckUp, nil
     end
-    if turtle.dig() then
+    if digGuarded("forward") then
         return turtle.place, turtle.dig, turtle.suck, nil
     end
 
