@@ -122,15 +122,15 @@ local LOADER_LANDING = { x = 0, y = 80, z = -1 }
 -- c.pos already carries facing (stub_cc defaults it to 0 and tracks it on
 -- every turn), so handing hooks.pos the same table satisfies mine_flow's
 -- "pos() must return facing too" requirement for free.
--- realFuel opts in to stub_cc's combustion model: refuel() then consumes the
--- item and raises the level, and REFUSES anything not in its fuel table. That
--- refusal is the whole subject of the fuel-buffer tests, so they cannot run
--- against the default no-op refuel.
-local function loadFlow(equipped, inv, world, pumpFactory, realFuel)
+-- startFuel sets the starting tank for tests that assert on fuel gained.
+-- realFuel is deliberately NOT passed: stub_cc defaults to faithful
+-- combustion as of 1.9.45, and passing `realFuel or false` here would opt
+-- every test in this file back OUT of it -- reopening the exact gap that
+-- change closed, in the one file that found the bug behind it.
+local function loadFlow(equipped, inv, world, pumpFactory, startFuel)
     freshModules()
     local c  = stub.install({ equipped = equipped, inv = inv, world = world or {},
-                               realFuel = realFuel or false,
-                               fuel = realFuel and 1000 or nil,
+                               fuel = startFuel,
                                pos = { x = 0, y = 80, z = 0, facing = 0 } })
     local eq = require("equipment")
     local gf = require("geofence")
@@ -220,7 +220,7 @@ return {
 
     ["tendFuelSlot evicts coal ore so the buffer can be refilled"] =
     function(assert_eq)
-        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, 1000)
         c.inv[14] = { name = "minecraft:coal_ore", count = 64 }
         c.inv[5]  = nil
         -- Precondition: this is exactly the wedged state -- buffer full, no room.
@@ -245,7 +245,7 @@ return {
 
     ["tendFuelSlot burns real coal in the buffer"] =
     function(assert_eq)
-        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, 1000)
         c.inv[14] = { name = "minecraft:coal", count = 10 }
         local before = turtle.getFuelLevel()
 
@@ -262,7 +262,7 @@ return {
     -- behaviour reported in-world.
     ["tendFuelSlot burns coal stranded in the payload slots"] =
     function(assert_eq)
-        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, 1000)
         c.inv[14] = nil
         c.inv[6]  = { name = "minecraft:coal", count = 5 }
         c.inv[7]  = { name = "minecraft:iron_ore", count = 20 }
@@ -278,7 +278,7 @@ return {
 
     ["tendFuelSlot leaves a non-combustible occupant alone when there is nowhere to put it"] =
     function(assert_eq)
-        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, 1000)
         c.inv[14] = { name = "minecraft:coal_ore", count = 64 }
         for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
         assert_eq(turtle.getItemCount(14), 64, "precondition: buffer full of ore")
