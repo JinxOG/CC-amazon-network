@@ -122,9 +122,15 @@ local LOADER_LANDING = { x = 0, y = 80, z = -1 }
 -- c.pos already carries facing (stub_cc defaults it to 0 and tracks it on
 -- every turn), so handing hooks.pos the same table satisfies mine_flow's
 -- "pos() must return facing too" requirement for free.
-local function loadFlow(equipped, inv, world, pumpFactory)
+-- realFuel opts in to stub_cc's combustion model: refuel() then consumes the
+-- item and raises the level, and REFUSES anything not in its fuel table. That
+-- refusal is the whole subject of the fuel-buffer tests, so they cannot run
+-- against the default no-op refuel.
+local function loadFlow(equipped, inv, world, pumpFactory, realFuel)
     freshModules()
     local c  = stub.install({ equipped = equipped, inv = inv, world = world or {},
+                               realFuel = realFuel or false,
+                               fuel = realFuel and 1000 or nil,
                                pos = { x = 0, y = 80, z = 0, facing = 0 } })
     local eq = require("equipment")
     local gf = require("geofence")
@@ -191,6 +197,99 @@ end
 
 
 return {
+
+    -- Fuel buffer -------------------------------------------------------------
+    -- node_119, in-world 2026-08-22: 1,845 fuel against 1,696 needed to get
+    -- home, looping on "[FUEL] LOW", carrying six stacks of coal it could not
+    -- burn. A substring match on "coal" had swept mined coal ORE into the fuel
+    -- buffer; refuel() cannot burn ore, so the slot stayed full, and
+    -- refuelFromEC sizes its suck as 64 - getItemCount(slot) -- permanently 0.
+    ["isFuelItem accepts real fuel and rejects coal ORE"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.isFuelItem("minecraft:coal"), true, "coal burns")
+        assert_eq(flow.isFuelItem("minecraft:charcoal"), true, "charcoal burns")
+        assert_eq(flow.isFuelItem("minecraft:coal_block"), true, "coal blocks burn")
+        -- The two the fleet actually digs, in quantity.
+        assert_eq(flow.isFuelItem("minecraft:coal_ore"), false,
+            "coal ORE does not burn -- this is the bug")
+        assert_eq(flow.isFuelItem("minecraft:deepslate_coal_ore"), false,
+            "nor does deepslate coal ore")
+        assert_eq(flow.isFuelItem(nil), false, "and nil is not fuel")
+    end,
+
+    ["tendFuelSlot evicts coal ore so the buffer can be refilled"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        c.inv[14] = { name = "minecraft:coal_ore", count = 64 }
+        c.inv[5]  = nil
+        -- Precondition: this is exactly the wedged state -- buffer full, no room.
+        assert_eq(turtle.getItemCount(14), 64, "precondition: buffer full of ore")
+        local before = turtle.getFuelLevel()
+
+        local burned, evicted = flow.tendFuelSlot({ slot = 14, first = 5, last = 13 })
+
+        assert_eq(burned, 0, "ore cannot be burned")
+        assert_eq(evicted, 1, "so it must be evicted")
+        assert_eq(turtle.getItemCount(14), 0,
+            "the buffer MUST end empty, or the next suck is sized at zero again")
+        assert_eq(turtle.getFuelLevel(), before, "and no fuel was invented")
+        -- The ore is payload; it must survive to reach the ore chest.
+        local found = false
+        for s = 5, 13 do
+            local i = c.inv[s]
+            if i and i.name == "minecraft:coal_ore" and i.count == 64 then found = true end
+        end
+        assert_eq(found, true, "the ore is cargo, not rubbish -- keep it")
+    end,
+
+    ["tendFuelSlot burns real coal in the buffer"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        c.inv[14] = { name = "minecraft:coal", count = 10 }
+        local before = turtle.getFuelLevel()
+
+        local burned, evicted = flow.tendFuelSlot({ slot = 14, first = 5, last = 13 })
+
+        assert_eq(burned, 800, "ten coal is 800 fuel")
+        assert_eq(evicted, 0, "nothing to evict")
+        assert_eq(turtle.getFuelLevel(), before + 800, "and the tank really rose")
+        assert_eq(turtle.getItemCount(14), 0, "the coal was consumed")
+    end,
+
+    -- Only slot 14 is exempt from dumpToEC, so coal anywhere else was being
+    -- shipped to the ore chest as cargo -- the "adds coal then dumps it"
+    -- behaviour reported in-world.
+    ["tendFuelSlot burns coal stranded in the payload slots"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        c.inv[14] = nil
+        c.inv[6]  = { name = "minecraft:coal", count = 5 }
+        c.inv[7]  = { name = "minecraft:iron_ore", count = 20 }
+        local before = turtle.getFuelLevel()
+
+        local burned = flow.tendFuelSlot({ slot = 14, first = 5, last = 13 })
+
+        assert_eq(burned, 400, "the stranded coal must be burned, not dumped")
+        assert_eq(turtle.getFuelLevel(), before + 400, "tank rose")
+        assert_eq(c.inv[6], nil, "and the coal is gone from the payload slots")
+        assert_eq(c.inv[7] ~= nil and c.inv[7].count, 20, "ore is untouched")
+    end,
+
+    ["tendFuelSlot leaves a non-combustible occupant alone when there is nowhere to put it"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv(), nil, nil, true)
+        c.inv[14] = { name = "minecraft:coal_ore", count = 64 }
+        for s = 5, 13 do c.inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        assert_eq(turtle.getItemCount(14), 64, "precondition: buffer full of ore")
+
+        local burned, evicted = flow.tendFuelSlot({ slot = 14, first = 5, last = 13 })
+
+        assert_eq(burned, 0, "still nothing to burn")
+        assert_eq(evicted, 0, "and nowhere to evict to")
+        assert_eq(turtle.getItemCount(14), 64,
+            "it stays put rather than being destroyed -- a dump will free space")
+    end,
 
     -- Orphan loaders (design section 4.2) -------------------------------------
     -- A loader left standing by a miner that died holding this sector. Nobody

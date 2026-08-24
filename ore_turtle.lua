@@ -434,9 +434,15 @@ end
 
 -- ── Fuel management ──────────────────────────────────────────────────────────
 
+-- Burn the slot-14 reserve, and unblock the slot if what is in it will not burn.
+--
+-- The old version selected slot 14 and called refuel() unconditionally. On a
+-- slot full of coal ORE that fails silently and leaves it full, which is the
+-- state that made the buffer unusable for the rest of the job. tendFuelSlot
+-- evicts a non-combustible occupant so the next refuelFromEC has room to suck
+-- into.
 local function tryRefuelSlot14()
-    turtle.select(S_COAL)
-    if turtle.getItemCount() > 0 then turtle.refuel() end
+    mine_flow.tendFuelSlot({ slot = S_COAL, first = MINE_FIRST, last = MINE_LAST })
 end
 
 -- Full refuel using the existing base.fuel.refuelFromChest() — already handles
@@ -765,17 +771,26 @@ rescueProtectedItems = function()
     end
 end
 
+-- Keep slot 14 holding fuel, and burn any fuel found in the payload slots.
+--
+-- Replaces a substring match on "coal", which also matched minecraft:coal_ore
+-- and minecraft:deepslate_coal_ore -- 1,691 and 65 of them in the live zone
+-- history. Neither burns. Swept into slot 14 they bricked the fuel buffer
+-- permanently, because refuelFromEC sizes its suck as 64 - getItemCount(14) and
+-- that is then always 0. node_119 was found at 1,845 fuel against 1,696 needed
+-- to get home, looping on LOW, carrying six stacks of coal it could not burn.
+--
+-- Burning here rather than hoarding is deliberate: only slot 14 is exempt from
+-- dumpToEC, so coal anywhere else was being shipped to the ore chest as cargo.
 local function sweepCoalToSlot14()
-    for s = MINE_FIRST, MINE_LAST do
-        local it = turtle.getItemDetail(s)
-        if it and it.name:find("coal") then
-            local space = turtle.getItemSpace(S_COAL)
-            if space > 0 then
-                turtle.select(s)
-                turtle.transferTo(S_COAL, math.min(it.count, space))
-            end
-        end
+    local burned, evicted = mine_flow.tendFuelSlot({
+        slot = S_COAL, first = MINE_FIRST, last = MINE_LAST,
+    })
+    if evicted > 0 then
+        base.sendProgress("fuel_slot_cleared: non-combustible item evicted from slot "
+            .. S_COAL .. " (mined coal ore, most likely)")
     end
+    return burned
 end
 
 -- Deploys the ore ender chest, so it must be able to dig it back up: always

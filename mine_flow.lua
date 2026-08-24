@@ -654,6 +654,101 @@ function mine_flow.adoptRecordedLoader()
     return true
 end
 
+-- ── Fuel buffer ─────────────────────────────────────────────────────────────
+--
+-- What actually burns. Matching on a substring does NOT work here: the miner
+-- digs minecraft:coal_ore and minecraft:deepslate_coal_ore in quantity (1,691
+-- and 65 in the live zone history), and both contain "coal" while neither is
+-- combustible.
+--
+-- Same three items turtle_base's refuel sweep treats as fuel. Kept as a literal
+-- list rather than reaching into that file, which does not export it.
+local FUEL_ITEMS = {
+    ["minecraft:coal"]       = true,
+    ["minecraft:charcoal"]   = true,
+    ["minecraft:coal_block"] = true,
+}
+
+function mine_flow.isFuelItem(name)
+    return name ~= nil and FUEL_ITEMS[name] == true
+end
+
+-- Keep the fuel buffer slot holding fuel, and only fuel.
+--
+-- The livelock this exists to stop, observed in-world 2026-08-22 on node_119:
+-- a substring match swept mined coal ORE into the buffer slot; refuel() cannot
+-- burn ore, so the slot stayed full forever; and refuelFromEC computes its suck
+-- size as `64 - getItemCount(bufferSlot)`, which is then permanently 0. The
+-- miner could never draw coal from the ender chest again. It sat at 1,845 fuel
+-- against 1,696 needed to get home, reporting LOW on a loop, with six stacks of
+-- coal aboard it could not burn.
+--
+-- Three things, in order:
+--   1. burn whatever fuel is already in the buffer;
+--   2. evict anything left, because it demonstrably is not fuel;
+--   3. sweep real fuel out of the payload slots and burn that too.
+--
+-- Step 3 also stops genuine coal being dumped into the ore chest: only the
+-- buffer slot is exempt from the dump, so coal sitting anywhere else is treated
+-- as cargo and shipped to storage.
+--
+-- opts.slot   - the fuel buffer slot
+-- opts.first, opts.last - the payload slot range to sweep
+-- Returns burned, evicted (both counts).
+function mine_flow.tendFuelSlot(opts)
+    opts = opts or {}
+    local slot  = opts.slot
+    local first = opts.first
+    local last  = opts.last
+    if not (slot and first and last) then return 0, 0 end
+
+    local burned, evicted = 0, 0
+
+    local function burnSelected()
+        local before = turtle.getFuelLevel()
+        turtle.refuel()
+        local gained = turtle.getFuelLevel() - before
+        if gained > 0 then burned = burned + gained end
+        return gained
+    end
+
+    -- 1. Burn what is in the buffer.
+    turtle.select(slot)
+    if turtle.getItemCount(slot) > 0 then burnSelected() end
+
+    -- 2. Anything still sitting there refused to burn, so it is not fuel and
+    --    must not keep occupying the buffer. Evict rather than drop: it is very
+    --    likely mined ore, which is payload and belongs in the ore chest.
+    if turtle.getItemCount(slot) > 0 then
+        local it = turtle.getItemDetail(slot)
+        if not mine_flow.isFuelItem(it and it.name) then
+            for s = first, last do
+                if turtle.getItemCount(s) == 0 then
+                    turtle.select(slot)
+                    turtle.transferTo(s)
+                    evicted = evicted + 1
+                    log(string.format("Evicted %s from the fuel slot -- not combustible",
+                        tostring(it and it.name)))
+                    break
+                end
+            end
+        end
+    end
+
+    -- 3. Pull real fuel out of the payload slots and burn it, so it is neither
+    --    stranded nor dumped to storage.
+    for s = first, last do
+        local it = turtle.getItemDetail(s)
+        if mine_flow.isFuelItem(it and it.name) then
+            turtle.select(s)
+            burnSelected()
+        end
+    end
+
+    turtle.select(slot)
+    return burned, evicted
+end
+
 -- ── Sector lease ────────────────────────────────────────────────────────────
 --
 -- Arms the exclusive-sector fence from a server-issued lease.
