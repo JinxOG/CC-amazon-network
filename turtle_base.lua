@@ -423,17 +423,29 @@ end
 local function fenceBlocksStep(dir)
     if not (_geofence and _geofence.isActive()) then return false end
 
-    -- Vertical moves leave x/z alone and only change y. They used not to be
-    -- fenced at all, on the reasoning that the chunk grid ignores y -- true for a
-    -- chunk anchor, and false the moment a lease has a ceiling. An unfenced
-    -- vertical move meant the ceiling would have had no effect whatsoever.
-    if dir == "up" or dir == "down" then
-        local ny = _self.pos.y + ((dir == "up") and 1 or -1)
-        return not _geofence.contains(_self.pos.x, _self.pos.z, ny)
+    -- A ceiling is a ONE-WAY barrier: it may refuse a move that would carry the
+    -- turtle up through it, and nothing else. Anything stricter strands.
+    --
+    -- The first version passed y on every direction, which W1 hit twice while
+    -- integrating. A miner at travel altitude (175/200) under a 160 ceiling had
+    -- forward, up AND down all refused at once -- every direction, with the
+    -- loader already placed and the record already written. Descending toward
+    -- the lease was refused for being above it, which is precisely backwards,
+    -- and horizontal moves were judged against a ceiling they cannot change.
+    --
+    -- So: `up` tests y, `down` and the horizontals do not. That also restores
+    -- the contract geofence.lua documents and its own tests assert -- "a
+    -- horizontal move passes no y and must not be judged against the ceiling"
+    -- -- which this caller was quietly contradicting.
+    if dir == "up" then
+        return not _geofence.contains(_self.pos.x, _self.pos.z, _self.pos.y + 1)
+    end
+    if dir == "down" then
+        return not _geofence.contains(_self.pos.x, _self.pos.z)
     end
 
     local nx, nz = projectStep(dir)
-    return not _geofence.contains(nx, nz, _self.pos.y)
+    return not _geofence.contains(nx, nz)
 end
 
 -- ─── Movement ────────────────────────────────────────────────────────────────

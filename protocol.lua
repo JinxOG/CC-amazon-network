@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.43"
+proto.VERSION = "1.9.44"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -311,20 +311,33 @@ end
 -- arithmetic. One definition is what stops the off-by-one coming back.
 proto.SECTOR_STEP = 32
 
--- Highest y a leaseholder may occupy. Deliberately a fleet-wide constant and NOT
--- derived from the holder's own travelYOffset.
+-- Highest y a leaseholder may occupy. RETIRED -- nil, so no ceiling is issued.
 --
--- The ceiling exists to keep a WORKING miner below every TRAVELLING miner's
--- lane. Lanes are SURVEY_TRAVEL_Y (175) and SKY_Y (200), each shifted up by that
--- miner's travelYOffset -- so the lowest lane in the fleet is 175, at offset 0.
--- A miner deriving its ceiling from its own offset of 10 would claim exclusive
--- airspace up to 185 and own the lane an offset-0 miner transits, which is
--- exactly the collision the leases exist to prevent.
+-- W3 specified 160 and W1 asked, on integrating it, whether it earned the two
+-- ordering constraints it costs. Re-examined, it does not, and the reasoning is
+-- recorded here so it is not reinvented:
 --
--- 160 sits below the lowest lane with room to spare, and far above any mining
--- (scanY defaults to 56). The holder releases its fence before the return ascent
--- -- retrieval clears it -- so the ceiling never blocks a miner's way home.
-proto.LEASE_CEILING_Y = 160
+--   * A fence is a SELF-restriction. It never stops another turtle entering our
+--     lease. Exclusivity comes entirely from nextSector never issuing the same
+--     sector twice, so a ceiling adds no exclusivity at all.
+--   * The x/z bounds already confine the holder to its own sector at EVERY
+--     altitude, and the lease must be released before travelling home regardless,
+--     because those bounds would block the journey.
+--   * The ceiling was introduced (design 3.2) as a RELAXATION -- to stop a
+--     bedrock-to-sky fence deadlocking four miners on the way home. Releasing the
+--     lease for transit already achieves that, so the relaxation is redundant.
+--   * What remains is a miner rising inside its OWN column while a neighbour
+--     transits overhead. Design 3.2 already names the dig guard as the backstop
+--     there, and the dig guard now exists.
+--
+-- So it prevented nothing the x/z bounds do not, and cost two orderings that
+-- strand a miner if either is wrong -- both of which W1 hit while integrating.
+--
+-- The MECHANISM is kept and still tested: geofence.setLease takes a ceilingY and
+-- fenceBlocksStep honours it as a one-way barrier. Re-enabling is one value here.
+-- It is safe to re-enable now in a way it was not before, because the semantics
+-- were also fixed: a ceiling can only ever refuse an upward move.
+proto.LEASE_CEILING_Y = nil
 
 -- Inclusive block bounds of the lease for a sector centred on (sx, sz).
 -- math.floor, not `/` alone: on Lua 5.3+ (the test harness) 32/2 is the FLOAT

@@ -170,18 +170,17 @@ return {
             "a horizontal move passes no y and must not be judged against the ceiling")
     end,
 
-    -- The ceiling must sit below the LOWEST travel lane in the fleet, not below
-    -- the holder's own. Lanes are 175 and 200 plus that miner's travelYOffset,
-    -- so a miner at offset 10 deriving 185 would claim exclusive airspace that an
-    -- offset-0 miner transits at 175 -- reintroducing the collision leases exist
-    -- to prevent.
-    ["the lease ceiling clears the lowest travel lane in the fleet"] =
-    function(assert_eq)
+    -- No ceiling is issued any more. A fence is a self-restriction, so a ceiling
+    -- never added exclusivity -- that comes from nextSector never issuing a
+    -- sector twice -- while the x/z bounds already confine the holder at every
+    -- altitude. It cost two ordering constraints that stranded a miner, and
+    -- prevented nothing.
+    ["no ceiling is issued on a sector assignment"] = function(assert_eq)
         local proto = require("protocol")
-        local LOWEST_LANE = 175            -- SURVEY_TRAVEL_Y at travelYOffset 0
-        assert_eq(proto.LEASE_CEILING_Y < LOWEST_LANE, true,
-            string.format("ceiling %d must be below the lowest lane %d",
-                proto.LEASE_CEILING_Y, LOWEST_LANE))
+        local p = proto.payloadSectorAssign("job_1", 1120, -2800)
+        assert_eq(proto.LEASE_CEILING_Y, nil, "the constant must be retired")
+        assert_eq(p.lease.ceilingY, nil, "and no ceiling may reach the miner")
+        assert_eq(p.lease.x1 ~= nil, true, "while the x/z bounds still ship")
     end,
 
     -- Both fences apply when both are set. A lease is a strict subset of the

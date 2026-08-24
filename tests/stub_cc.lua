@@ -16,7 +16,7 @@ local PERIPHERAL_TYPE_BY_NAME = {
 }
 
 -- Fuel values per item, matching CC:Tweaked. Only consulted when a stub is
--- installed with realFuel = true.
+-- installed with fuel realism on, which is the default.
 local FUEL_PER_ITEM = {
     ["minecraft:coal"]       = 80,
     ["minecraft:charcoal"]   = 80,
@@ -60,10 +60,26 @@ function M.install(opts)
         -- "no containers", so suck* returns false exactly as it always has and
         -- no existing test observes any change.
         containers = opts.containers,
-        -- Opt-in fuel realism. Default false keeps turtle.refuel() a no-op
-        -- returning true, which is what the existing suite relies on; the fuel
-        -- tests set it so refuel actually consumes coal and raises the level.
-        realFuel  = opts.realFuel or false,
+        -- Fuel realism, now the DEFAULT. Pass realFuel = false to opt out.
+        --
+        -- This used to default off, so refuel() returned true and burned nothing
+        -- unless a suite remembered to opt in. Any test touching fuel without
+        -- opting in passed vacuously: a turtle that burns nothing looked exactly
+        -- like one that burns coal, and a refuel that should have been REFUSED
+        -- looked like a success. W1 hit that writing the coal-ore fix -- the
+        -- refusal was the entire behaviour under test, and five new tests would
+        -- have gone green asserting nothing had they not threaded realFuel through.
+        --
+        -- Flipping it was held off on the theory that suites relying on refuel()
+        -- always succeeding would regress. Measured rather than assumed: the flip
+        -- breaks nothing, all suites pass, so the theory was wrong and the
+        -- faithful default is free.
+        --
+        -- Fourth fidelity gap of the same shape, after displayName on the plain
+        -- getItemDetail, drop() succeeding onto nothing, and a missing inspectUp.
+        -- The pattern: THE STUB WAS MOST GENEROUS EXACTLY WHERE CC'S REFUSALS
+        -- CARRY THE MEANING. Anything here that cannot fail deserves suspicion.
+        realFuel  = (opts.realFuel ~= false),
     }
     -- facing lives only on c.pos; c.facing would drift out of sync with it
     -- the moment either got written independently, so there's one owner.

@@ -189,6 +189,42 @@ return {
         assert_eq(p.y, 159, "and the tracked position must reflect only the move that happened")
     end,
 
+    -- The two traps W1 hit integrating the lease. No ceiling is issued any more,
+    -- but the MECHANISM is kept and re-enabling must never strand a miner again,
+    -- so both are pinned here rather than left to the constant staying nil.
+    --
+    -- A ceiling is a ONE-WAY barrier. It may refuse a move that carries the
+    -- turtle up through it, and nothing else. Judged on every direction, a miner
+    -- at travel altitude had forward, up and down ALL refused at once, with the
+    -- loader already placed and the record already written.
+    ["a turtle above a ceiling can still descend toward its lease"] =
+    function(assert_eq)
+        local base = fresh({
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            pos      = { x = 0, y = 200, z = 0, facing = 0 },   -- travel altitude
+        })
+        base.geofence.setLease(-16, -16, 15, 15, 160)
+
+        local down = base.move.down()
+        assert_eq(down, true,
+            "descending is how a miner gets back UNDER the ceiling — refusing it "
+            .. "strands the turtle on the placement square")
+        assert_eq(base.getPos().y, 199)
+    end,
+
+    ["a horizontal move is never judged against a ceiling it cannot change"] =
+    function(assert_eq)
+        local base = fresh({
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            pos      = { x = 0, y = 200, z = 0, facing = 0 },
+        })
+        base.geofence.setLease(-16, -16, 15, 15, 160)
+
+        assert_eq(base.move.forward(), true,
+            "forward changes x/z, not y — geofence.lua documents exactly this and "
+            .. "its own tests assert it; this caller used to contradict both")
+    end,
+
     -- The mirror of the dig-guard terrain test: a fence that refuses everything
     -- would pass the test above while immobilising the fleet.
     ["a lease still permits movement inside its own volume"] = function(assert_eq)
