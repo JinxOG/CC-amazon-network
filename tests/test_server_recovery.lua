@@ -24,8 +24,8 @@ local proto = require("protocol")
 
 -- A server with one MINER registered and one MINE job IN_PROGRESS assigned to
 -- it -- the state node_118 was in the moment its JOB_COMPLETE went missing.
-local function serverWithMinerOnJob()
-    stub.install({})
+local function serverWithMinerOnJob(stubOpts)
+    local c = stub.install(stubOpts or {})
     local savedEpoch = os.epoch
     local clock = 1000000            -- ms; advanced by the tests
     os.epoch = function() return clock end
@@ -68,7 +68,7 @@ local function serverWithMinerOnJob()
     end
     -- advance(sec) moves the clock so the sweep's debounce windows can elapse.
     local advance = function(sec) clock = clock + (sec * 1000) end
-    return server, T, advance, restore, function() return clock end
+    return server, T, advance, restore, c
 end
 
 -- One heartbeat exactly as a finished miner sends it: its own state, which is
@@ -115,6 +115,78 @@ return {
         assert_eq(status ~= "IN_PROGRESS", true,
             "the job must not still be IN_PROGRESS after two minutes of IDLE "
             .. "heartbeats -- this is the four-hour deadlock")
+    end,
+
+    -- ─── Persistence ────────────────────────────────────────────────────────
+    --
+    -- saveJobs kept a backup so "a crash between delete and move can't destroy
+    -- both copies simultaneously". On a full disk the sequence did precisely
+    -- what the backup was written to prevent: the .bak was DELETED, the fs.copy
+    -- meant to recreate it needed room for a second full copy and failed, and
+    -- nothing after it ran. Every save then left jobs.dat stale, no .bak at all,
+    -- and the data stranded in jobs.tmp.
+    --
+    -- The invariant is not "the save succeeds" -- on a full disk it cannot. It is
+    -- that a failed save NEVER leaves the server with neither copy, because
+    -- loadJobs falls back to .bak only when jobs.dat is missing.
+    -- The invariant, stated on the state the operator actually cares about: after
+    -- a save that cannot complete, there must still be a backup to fall back to.
+    -- loadJobs consults .bak ONLY when jobs.dat is missing, and the old sequence
+    -- deleted .bak first and then failed to recreate it -- so the safety net was
+    -- destroyed by the exact failure it was written to survive.
+    ["a failing save leaves the backup intact"] = function(assert_eq)
+        local server, T, advance, restore, c = serverWithMinerOnJob({ freeSpace = 200000 })
+
+        -- First save writes jobs.dat while there is no backup yet, so the backup
+        -- ends up holding a SMALL early snapshot. That asymmetry is what makes
+        -- the fs.copy reachable: refunding a small .bak does not free enough to
+        -- copy a much larger jobs.dat.
+        pcall(jobQueue.add, proto.JOB.MINE, { note = "first" }, 5)
+        for i = 1, 30 do
+            pcall(jobQueue.add, proto.JOB.MINE, { note = string.rep("x", 200) }, 5)
+        end
+        local hadBackup = fs.exists("jobs.dat.bak")
+        local liveSize  = #c.files["jobs.dat"]
+
+        -- Leave room for the temp write and nothing more, so the sequence gets
+        -- past writing jobs.tmp, deletes the backup, and then cannot copy.
+        -- The window is narrow and real: free must be at least the new temp
+        -- file, yet less than that plus what refunding the small backup returns.
+        -- Below it the temp write fails first and nothing is damaged; above it
+        -- the copy fits. 600 bytes clears one more job's worth of growth while
+        -- staying inside the gap between the small backup and the large live file.
+        local pad = fs.open("ballast", "w")
+        pad.write(string.rep("b", fs.getFreeSpace() - liveSize - 600))
+        pcall(pad.close)
+
+        pcall(jobQueue.add, proto.JOB.MINE, { note = "final" }, 5)
+
+        local stillHaveBackup = fs.exists("jobs.dat.bak")
+        local stillHaveLive   = fs.exists("jobs.dat")
+        restore()
+
+        assert_eq(hadBackup, true, "precondition: a backup must have been established")
+        assert_eq(stillHaveBackup or stillHaveLive, true,
+            "a failed save must leave something to restore from")
+        assert_eq(stillHaveBackup, true,
+            "and specifically the BACKUP must survive — it is deleted before its "
+            .. "replacement is secured, so a failure here destroys the safety net")
+    end,
+
+    -- A disk too full to write anything at all is not recoverable by reordering,
+    -- so the requirement there is that it stops being SILENT. The server ran for
+    -- hours with no durability and the only signal was one repeated log line,
+    -- found by accident while chasing a different bug.
+    ["a save that cannot complete marks persistence unhealthy"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob({ freeSpace = 120 })
+
+        pcall(jobQueue.add, proto.JOB.MINE, { note = string.rep("x", 400) }, 5)
+
+        local healthy = T.state.persistenceHealthy
+        restore()
+
+        assert_eq(healthy, false,
+            "a disk too full to save must be reported, not swallowed by the pcall")
     end,
 
     -- ─── Sector leases ──────────────────────────────────────────────────────

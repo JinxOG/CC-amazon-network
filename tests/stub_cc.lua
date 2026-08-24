@@ -383,6 +383,23 @@ function M.install(opts)
     -- writeLine below take a single argument to match that, and callers
     -- must use the same convention.
     local files = {}
+    -- A real disk budget, because "out of space" is a behaviour this system has
+    -- to survive rather than an environment it can assume away. saveJobs has been
+    -- erroring into its own pcall on every test run -- fs.move, fs.copy and
+    -- fs.getFreeSpace simply did not exist here -- so the whole persistence path
+    -- was silently untested. Fifth stub fidelity gap, and the first that was an
+    -- ABSENCE rather than an over-generous success.
+    --
+    -- Pass freeSpace to model a nearly-full disk. Writes and copies consume it,
+    -- deletes refund it, and a rename costs nothing -- which is the entire point
+    -- of the saveJobs fix.
+    local freeSpace = opts.freeSpace or 1000000
+    local function sizeOf(p) return files[p] and #files[p] or 0 end
+    local function charge(n)
+        if n > freeSpace then error("Out of space", 0) end
+        freeSpace = freeSpace - n
+    end
+
     fs = {
         open = function(path, mode)
             if mode == "r" then
@@ -397,13 +414,35 @@ function M.install(opts)
             return {
                 write     = function(s) buf[#buf + 1] = s end,
                 writeLine = function(s) buf[#buf + 1] = s .. "\n" end,
-                close     = function() files[path] = table.concat(buf) end,
+                close     = function()
+                    local data = table.concat(buf)
+                    charge(#data - sizeOf(path))
+                    files[path] = data
+                end,
             }
         end,
         exists = function(path) return files[path] ~= nil end,
-        delete = function(path) files[path] = nil end,
+        delete = function(path)
+            freeSpace = freeSpace + sizeOf(path)
+            files[path] = nil
+        end,
+        -- A second full copy has to fit. This is the call that fails on a nearly
+        -- full disk, after the backup it is replacing has already been deleted.
+        copy = function(from, to)
+            if not files[from] then error("No such file", 0) end
+            charge(#files[from])
+            files[to] = files[from]
+        end,
+        -- A rename needs no additional space, so it cannot fail this way.
+        move = function(from, to)
+            if not files[from] then error("No such file", 0) end
+            freeSpace = freeSpace + sizeOf(to)
+            files[to], files[from] = files[from], nil
+        end,
+        getFreeSpace = function() return freeSpace end,
     }
     c.files = files
+    c.freeSpace = function() return freeSpace end
 
     c.pos.facing = c.pos.facing or 0
     return c

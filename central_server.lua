@@ -442,14 +442,46 @@ local function saveJobs()
         f.close()
         -- Keep a backup of the previous good file so a crash between delete and
         -- move can't destroy both copies simultaneously.
+        --
+        -- MOVE, not copy. A copy needs room for a second full copy of the file,
+        -- and it runs AFTER the old backup has already been deleted -- so on a
+        -- nearly full disk the sequence did exactly what the backup exists to
+        -- prevent: .bak gone, its replacement unwritable, jobs.dat frozen at
+        -- whenever the disk filled, and the real data stranded in jobs.tmp.
+        -- Observed 2026-08-22, repeating once per save on the live server.
+        -- A rename needs no additional space, so it cannot fail that way.
+        --
+        -- The window where only .bak exists is already handled: loadJobs falls
+        -- back to it when JOB_SAVE_FILE is missing -- a fallback the old sequence
+        -- could never actually reach, because it destroyed .bak first.
+        -- fs.delete(JOB_SAVE_FILE) is gone with it; the move consumes the file.
         if fs.exists(JOB_SAVE_FILE) then
             if fs.exists(JOB_SAVE_FILE .. ".bak") then fs.delete(JOB_SAVE_FILE .. ".bak") end
-            fs.copy(JOB_SAVE_FILE, JOB_SAVE_FILE .. ".bak")
-            fs.delete(JOB_SAVE_FILE)
+            fs.move(JOB_SAVE_FILE, JOB_SAVE_FILE .. ".bak")
         end
         fs.move("jobs.tmp", JOB_SAVE_FILE)
     end)
-    if not ok then logWarn("saveJobs failed: " .. tostring(err)) end
+    if not ok then
+        -- Name the condition rather than surfacing a line number out of fs. An
+        -- operator reading "saveJobs failed: /startup.lua:433: Out of space" has
+        -- to go and read the source to learn what to do about it.
+        local free = nil
+        pcall(function() free = fs.getFreeSpace(".") end)
+        if free and free < 8192 then
+            logWarn(string.format(
+                "DISK FULL — job state is NOT being saved (%d bytes free). "
+                .. "Free space on the server computer; a reboot now restores stale jobs.", free))
+        else
+            logWarn("saveJobs failed: " .. tostring(err))
+        end
+        -- Surfaced in /state so this is visible without catching the log ring at
+        -- the right moment. It was found only while chasing an unrelated bug.
+        state.persistenceHealthy = false
+        state.persistenceError   = tostring(err)
+    else
+        state.persistenceHealthy = true
+        state.persistenceError   = nil
+    end
 end
 
 local function loadJobs()
@@ -3132,6 +3164,11 @@ function server.run()
         for i = logStart, #state.log do
             table.insert(logSlice, state.log[i])
         end
+        -- pcall'd: fs.getFreeSpace is cheap but this runs on every bridge push,
+        -- and a failure here must never cost the whole payload.
+        local diskFree = nil
+        pcall(function() diskFree = fs.getFreeSpace(".") end)
+
         local payload = '{"turtles":'      .. js(turtles,             "{}",  "turtles") ..
                         ',"jobs":'         .. jobs ..
                         ',"version":'      .. js(proto.VERSION,        '"?"', "version") ..
@@ -3139,6 +3176,12 @@ function server.run()
                         ',"storageTs":'    .. tostring(storageTs) ..
                         ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
                         ',"oreThresholds":' .. js(oreThresholds,       "{}",  "oreThresholds") ..
+                        -- Persistence health. A dead disk is otherwise invisible
+                        -- unless someone reads the log ring at the right moment:
+                        -- the server ran for hours with no durability at all and
+                        -- it was found only while chasing an unrelated deadlock.
+                        ',"persistenceHealthy":' .. tostring(state.persistenceHealthy ~= false) ..
+                        ',"diskFree":'     .. tostring(diskFree or -1) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
                         ',"turtleLogs":'   .. js(state.turtleLogs,     "{}",  "turtleLogs") .. '}'
         return payload
