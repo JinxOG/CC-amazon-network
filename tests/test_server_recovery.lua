@@ -36,6 +36,19 @@ local function serverWithMinerOnJob(stubOpts)
     local server = require("central_server")
     local T = server._test
 
+    -- server.run() would normally find this. Handlers that reply -- SECTOR_DONE
+    -- dispatches the next sector -- reach proto.send, which indexes the modem,
+    -- so without one the test fails inside the transport rather than on its
+    -- assertion. Transmissions are recorded so a test can assert on them.
+    T.sent = {}
+    T.state.modem = {
+        isOpen   = function() return true end,
+        open     = function() end,
+        transmit = function(ch, reply, body)
+            T.sent[#T.sent + 1] = { channel = ch, body = body }
+        end,
+    }
+
     T.state.registry["node_118"] = {
         id       = "node_118",
         role     = proto.ROLE.MINER,
@@ -239,6 +252,109 @@ return {
             "two batches of 25 are 50 mined, not 25")
         assert_eq(zone.oreFound["minecraft:coal_ore"], 50,
             "and the find is still 50, not 50 + the batches")
+    end,
+
+    -- ─── Phase ETA ──────────────────────────────────────────────────────────
+    --
+    -- The old estimate divided remaining work by a rate averaged over a period
+    -- that included the entire SURVEY phase, where nothing is mined -- and its
+    -- numerator used the doubled `found`. Wrong twice, both the same direction.
+    --
+    -- A sector's duration is assignment -> SECTOR_DONE. This drives the real
+    -- handlers so the assignedAt stamp and the fold are exercised together; a
+    -- test that called recordSectorTime directly would not prove the stamp is
+    -- ever written.
+    ["the phase ETA is measured from real sector durations"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = {
+            oreFound = {}, oreMined = {}, phase = "MINE",
+            total = 10, done = 0, doneKeys = {},
+            pending = {}, lastAssignments = {},
+        }
+        T.state.miningZones["job_0726"] = zone
+
+        -- Two sectors, 100 s each, one miner. Eight left at 100 s => 800.
+        for i = 1, 2 do
+            zone.lastAssignments["node_118"] =
+                { x = i, z = 0, isSurvey = false, assignedAt = 1000000 + (i - 1) * 100000 }
+            advance(100)
+            T.handlers[proto.MSG.SECTOR_DONE]({ from = "node_118", payload = {
+                jobId = "job_0726", sectorX = i, sectorZ = 0,
+            } })
+        end
+
+        local samples = zone.sectorTimes and zone.sectorTimes["MINE"]
+        zone.done = 2
+        local eta = T.phaseEta(zone, 1)
+        restore()
+
+        assert_eq(samples ~= nil and samples.n, 2,
+            "precondition: two durations must actually have been folded in")
+        assert_eq(eta, 800, "8 sectors left at a 100s mean, one miner")
+    end,
+
+    -- Four miners share a zone; throughput is fleet-wide sectors-per-second, so
+    -- a per-miner mean overstates by 4x.
+    ["the ETA divides remaining work across the active miners"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = {
+            phase = "MINE", total = 10, done = 2,
+            sectorTimes = { MINE = { n = 2, total = 200 } },
+        }
+        local one  = T.phaseEta(zone, 1)
+        local four = T.phaseEta(zone, 4)
+        restore()
+        assert_eq(one, 800)
+        assert_eq(four, 200, "four miners finish the same eight sectors in a quarter the time")
+    end,
+
+    -- A wrong number is worse than no number: that is the failure being fixed,
+    -- and a one-sample mean would be the same mistake in a smaller form.
+    ["no ETA is reported below two samples"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local none = T.phaseEta({ phase = "MINE", total = 10, done = 0 }, 1)
+        local one  = T.phaseEta({ phase = "MINE", total = 10, done = 1,
+                                  sectorTimes = { MINE = { n = 1, total = 100 } } }, 1)
+        restore()
+        assert_eq(none, nil, "no samples means no estimate")
+        assert_eq(one,  nil, "and one sample is still not an estimate")
+    end,
+
+    -- MINE timings say nothing about RESCAN. A phase change starts with no
+    -- samples, so the ETA is correctly nil until two land in the new phase.
+    ["a phase change does not inherit the previous phase's mean"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = {
+            phase = "MINE", total = 10, done = 2,
+            sectorTimes = { MINE = { n = 5, total = 500 } },
+        }
+        local during = T.phaseEta(zone, 1)
+        zone.phase = "RESCAN"
+        local after = T.phaseEta(zone, 1)
+        restore()
+        assert_eq(during, 800, "precondition: the MINE phase has a usable mean")
+        assert_eq(after, nil, "RESCAN must not borrow it")
+    end,
+
+    -- A sector assigned before this shipped, or after a restart that lost the
+    -- ledger, carries no assignedAt. Counting it as zero would drag the mean
+    -- toward an ETA that is confidently too short.
+    ["a sector with no assignedAt is skipped, not counted as zero"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = {
+            oreFound = {}, oreMined = {}, phase = "MINE",
+            total = 10, done = 0, doneKeys = {}, pending = {},
+            lastAssignments = { node_118 = { x = 1, z = 0 } },   -- no assignedAt
+        }
+        T.state.miningZones["job_0726"] = zone
+        advance(100)
+        T.handlers[proto.MSG.SECTOR_DONE]({ from = "node_118", payload = {
+            jobId = "job_0726", sectorX = 1, sectorZ = 0,
+        } })
+        local samples = zone.sectorTimes and zone.sectorTimes["MINE"]
+        restore()
+        assert_eq(samples, nil, "an unstamped sector contributes no sample at all")
     end,
 
     -- ─── Persistence ────────────────────────────────────────────────────────

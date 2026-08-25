@@ -776,6 +776,56 @@ local function recomputeZoneOre(zone)
     zone.oreFound, zone.oreMined = found, mined
 end
 
+-- ─── Phase ETA ───────────────────────────────────────────────────────────────
+--
+-- The old estimate was wrong twice, both in the same direction. Its numerator
+-- used the doubled `found`, so remaining work read about double; and its rate
+-- divided by elapsed since z.startTime, which spans the whole SURVEY phase where
+-- mined is 0 -- averaging the mining rate against a period containing no mining.
+--
+--   eta = (sectorsRemainingInPhase / activeMiners) * meanSectorSeconds(phase)
+--
+-- PER PHASE, because a SURVEY sector is a scan and a MINE sector is a scan plus
+-- digging every vein; one mean across both describes neither. Phase transitions
+-- therefore start with no samples, which is correct rather than a gap.
+--
+-- DIVIDED BY ACTIVE MINERS, because four miners share a zone and throughput is
+-- fleet-wide sectors-per-second; a per-miner mean overstates by 4x.
+--
+-- FLAT MEAN, not recency-weighted: each sector is a full depth column, so density
+-- varies spatially rather than drifting over time, and the flat mean is the
+-- unbiased estimator for how long the remaining sectors will take.
+--
+-- Duration runs from assignment to SECTOR_DONE and INCLUDES travel, deliberately
+-- -- it is real elapsed work and it scales with the same sector count being
+-- estimated.
+local function recordSectorTime(zone, phase, assignedAt)
+    -- A sector with no assignedAt was assigned before this shipped, or after a
+    -- restart that lost the ledger. Skip it: counting it as zero would drag the
+    -- mean toward an ETA that is confidently too short.
+    if not assignedAt or not phase then return end
+    local secs = (os.epoch("utc") - assignedAt) / 1000
+    if secs <= 0 then return end
+    zone.sectorTimes = zone.sectorTimes or {}
+    local t = zone.sectorTimes[phase] or { n = 0, total = 0 }
+    t.n, t.total = t.n + 1, t.total + secs
+    zone.sectorTimes[phase] = t
+end
+
+-- Seconds to finish the current phase, or nil when we cannot say.
+--
+-- nil below two samples. The dashboard already handles a nil ETA, and a wrong
+-- number is worse than no number -- that is the failure being fixed, and a
+-- one-sample mean would be the same mistake in a smaller form.
+local function phaseEta(zone, activeMiners)
+    local t = zone.sectorTimes and zone.sectorTimes[zone.phase]
+    if not t or t.n < 2 then return nil end
+    local remaining = (zone.total or 0) - (zone.done or 0)
+    if remaining <= 0 then return nil end
+    local miners = math.max(1, activeMiners or 1)
+    return math.floor((remaining / miners) * (t.total / t.n))
+end
+
 local function recordScanReport(zone, p)
     zone.sectorSeen  = zone.sectorSeen  or {}
     zone.sectorMined = zone.sectorMined or {}
@@ -1934,7 +1984,8 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
             proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
         zone.lastAssignments = zone.lastAssignments or {}
-        zone.lastAssignments[msg.from] = { x = sector.x, z = sector.z, isSurvey = isSurvey }
+        zone.lastAssignments[msg.from] = { x = sector.x, z = sector.z, isSurvey = isSurvey,
+                                          assignedAt = os.epoch("utc") }
         saveMiningZones()
     end
 end
@@ -1976,6 +2027,13 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
             return
         end
+    end
+
+    -- Fold this sector's duration into the current phase's mean BEFORE anything
+    -- below reassigns lastAssignments, which is where assignedAt lives.
+    do
+        local la = zone.lastAssignments and zone.lastAssignments[msg.from]
+        recordSectorTime(zone, zone.phase, la and la.assignedAt)
     end
 
     -- Count DISTINCT sectors, not SECTOR_DONE messages. A sector that fails and
@@ -2137,7 +2195,8 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
                 proto.payloadSectorAssign(p.jobId, first.x, first.z, nil, true))
             zone.lastAssignments = zone.lastAssignments or {}
-            zone.lastAssignments[msg.from] = { x = first.x, z = first.z, isSurvey = true }
+            zone.lastAssignments[msg.from] = { x = first.x, z = first.z, isSurvey = true,
+                                               assignedAt = os.epoch("utc") }
             saveMiningZones()
         end
         return
@@ -2146,7 +2205,8 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
         proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
     zone.lastAssignments = zone.lastAssignments or {}
-    zone.lastAssignments[msg.from] = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey }
+    zone.lastAssignments[msg.from] = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey,
+                                      assignedAt = os.epoch("utc") }
     saveMiningZones()
 end
 
@@ -3161,20 +3221,20 @@ function server.run()
             else
                 pct = orePct(z.oreFound, z.oreMined) or 0
             end
-            -- ETA: ore-based during MINE (matches the %-display); nil during SURVEY/RESCAN.
-            -- Falls back to sector-based if no ore collected yet (barren zone).
-            local eta = nil
-            if z.phase == "MINE" then
-                local found, mined = 0, 0
-                for _, v in pairs(z.oreFound  or {}) do found = found + v end
-                for _, v in pairs(z.oreMined  or {}) do mined = mined + v end
-                local elapsed = (os.epoch("utc") - z.startTime) / 1000
-                if mined > 0 and found > mined and elapsed > 0 then
-                    eta = math.floor((found - mined) / (mined / elapsed))
-                elseif z.done > 0 and z.total > z.done and elapsed > 0 then
-                    eta = math.floor(elapsed / z.done * (z.total - z.done))
+            -- ETA: time to finish the CURRENT PHASE, from measured sector times.
+            -- Scoped to the phase rather than the whole job because estimating
+            -- MINE from SURVEY samples needs a seeded ratio that is guesswork
+            -- until the phase turns over -- and a confident wrong number is what
+            -- the previous version already delivered.
+            local activeMiners = 0
+            for _, j2 in pairs(state.jobs) do
+                if j2.assignedTo and state.miningZones[j2.id] == z
+                   and (j2.status == JOB_STATUS.ASSIGNED
+                        or j2.status == JOB_STATUS.IN_PROGRESS) then
+                    activeMiners = activeMiners + 1
                 end
             end
+            local eta = phaseEta(z, activeMiners)
             local minerId  = state.jobs[jid] and state.jobs[jid].assignedTo or nil
             local minerSt  = minerId and state.registry[minerId] and state.registry[minerId].status or nil
             mineZones[jid] = {
@@ -3548,6 +3608,7 @@ if _G.__CC_SERVER_TEST then
         -- The message handlers, so a test can drive the real dispatch path
         -- rather than an internal that only the test calls.
         handlers = handlers,
+        phaseEta = phaseEta,
     }
     return server
 end
