@@ -117,6 +117,130 @@ return {
             .. "heartbeats -- this is the four-hour deadlock")
     end,
 
+    -- ─── Ore accounting ─────────────────────────────────────────────────────
+    --
+    -- surveyMode gates only the digging, so every depth level is scanned and
+    -- reported twice. oreFound accumulated both, came out at ~2x reality, and
+    -- every zone read as "mined about half of what it found" however well the
+    -- mining had gone. The operator saw 50% and reasonably concluded the miners
+    -- were losing half the ore.
+    ["a sector scanned in both passes is not counted twice"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = { oreFound = {}, oreMined = {}, phase = "MINE" }
+        T.state.miningZones["job_0726"] = zone
+
+        local function scan(sy, found, mined)
+            T.handlers[proto.MSG.SECTOR_SCAN]({ from = "node_118", payload = {
+                jobId = "job_0726", sectorX = 100, sectorZ = 200, scanY = sy,
+                foundOres = found, minedOres = mined,
+            } })
+        end
+
+        -- SURVEY sees 100 iron at one depth and mines nothing.
+        scan(56, { ["minecraft:iron_ore"] = 100 }, nil)
+        local afterSurvey = zone.oreFound["minecraft:iron_ore"]
+
+        -- MINE revisits the same depth, reports the same find, and takes it all.
+        scan(56, { ["minecraft:iron_ore"] = 100 }, { ["minecraft:iron_ore"] = 100 })
+        restore()
+
+        assert_eq(afterSurvey, 100, "precondition: the survey pass must be counted once")
+        assert_eq(zone.oreFound["minecraft:iron_ore"], 100,
+            "the second report of the same depth is a fresher view, not more ore")
+        assert_eq(zone.oreMined["minecraft:iron_ore"], 100, "and all of it was mined")
+    end,
+
+    -- The case W1 flagged as the discriminator, and they are right that a naive
+    -- fix gets it wrong: plain replacement gives 60, plain accumulation gives 160.
+    ["a retried sector counts what was there, not what is left"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = { oreFound = {}, oreMined = {}, phase = "MINE" }
+        T.state.miningZones["job_0726"] = zone
+        local function scan(found, mined)
+            T.handlers[proto.MSG.SECTOR_SCAN]({ from = "node_118", payload = {
+                jobId = "job_0726", sectorX = 1, sectorZ = 2, scanY = 40,
+                foundOres = found, minedOres = mined,
+            } })
+        end
+
+        scan({ ["minecraft:gold_ore"] = 100 }, { ["minecraft:gold_ore"] = 40 })
+        scan({ ["minecraft:gold_ore"] = 60 },  { ["minecraft:gold_ore"] = 60 })
+        restore()
+
+        assert_eq(zone.oreFound["minecraft:gold_ore"], 100,
+            "100 were there: 40 taken on the first attempt, 60 on the second")
+        assert_eq(zone.oreMined["minecraft:gold_ore"], 100, "and 100 were mined")
+    end,
+
+    -- The rescan case, which used to need a wholesale rewrite of oreFound and now
+    -- falls out of the same rule. A level held 100, the miner took 40 and left 60,
+    -- and the rescan pass sees those 60 still in the ground: 40 + 60 = 100 were
+    -- there. This is the only figure the old accounting got right, and only
+    -- because RESCAN was special-cased.
+    ["a rescan of a partly mined level still reports what was there"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = { oreFound = {}, oreMined = {}, phase = "MINE" }
+        T.state.miningZones["job_0726"] = zone
+        local function scan(found, mined)
+            T.handlers[proto.MSG.SECTOR_SCAN]({ from = "node_118", payload = {
+                jobId = "job_0726", sectorX = 9, sectorZ = 9, scanY = 12,
+                foundOres = found, minedOres = mined,
+            } })
+        end
+
+        scan({ ["minecraft:redstone_ore"] = 100 }, { ["minecraft:redstone_ore"] = 40 })
+        zone.phase = "RESCAN"
+        scan({ ["minecraft:redstone_ore"] = 60 }, nil)   -- 60 still in the ground
+        restore()
+
+        assert_eq(zone.oreFound["minecraft:redstone_ore"], 100,
+            "40 taken plus 60 left is 100 that were there")
+        assert_eq(zone.oreMined["minecraft:redstone_ore"], 40,
+            "and a rescan mines nothing, so mined is unchanged")
+    end,
+
+    -- The correction to the design's own keying. foundOres is reported once per
+    -- DEPTH LEVEL, so keying by sector alone would keep only the last level's
+    -- find -- turning a double count into a large undercount.
+    ["depth levels within one sector each count"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = { oreFound = {}, oreMined = {}, phase = "MINE" }
+        T.state.miningZones["job_0726"] = zone
+        for _, sy in ipairs({ 56, 40, 24 }) do
+            T.handlers[proto.MSG.SECTOR_SCAN]({ from = "node_118", payload = {
+                jobId = "job_0726", sectorX = 7, sectorZ = 7, scanY = sy,
+                foundOres = { ["minecraft:diamond_ore"] = 10 },
+            } })
+        end
+        restore()
+        assert_eq(zone.oreFound["minecraft:diamond_ore"], 30,
+            "three depth levels of one sector are three finds, not one")
+    end,
+
+    -- minedOres arrives in batches of 25 within a single depth level
+    -- (ore_turtle's SCAN_BATCH), so mined must accumulate where seen replaces.
+    ["batched mined reports for one depth accumulate"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local zone = { oreFound = {}, oreMined = {}, phase = "MINE" }
+        T.state.miningZones["job_0726"] = zone
+        T.handlers[proto.MSG.SECTOR_SCAN]({ from = "node_118", payload = {
+            jobId = "job_0726", sectorX = 3, sectorZ = 3, scanY = 30,
+            foundOres = { ["minecraft:coal_ore"] = 50 },
+        } })
+        for _ = 1, 2 do
+            T.handlers[proto.MSG.SECTOR_SCAN]({ from = "node_118", payload = {
+                jobId = "job_0726", sectorX = 3, sectorZ = 3, scanY = 30,
+                minedOres = { ["minecraft:coal_ore"] = 25 },
+            } })
+        end
+        restore()
+        assert_eq(zone.oreMined["minecraft:coal_ore"], 50,
+            "two batches of 25 are 50 mined, not 25")
+        assert_eq(zone.oreFound["minecraft:coal_ore"], 50,
+            "and the find is still 50, not 50 + the batches")
+    end,
+
     -- ─── Persistence ────────────────────────────────────────────────────────
     --
     -- saveJobs kept a backup so "a crash between delete and move can't destroy

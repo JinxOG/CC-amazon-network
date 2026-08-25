@@ -705,6 +705,103 @@ jobQueue = {}
 -- cancel jobs without accessing the 'server' local (which is defined much later).
 local cancelJobInline
 
+-- ─── Ore accounting ──────────────────────────────────────────────────────────
+--
+-- oreFound used to accumulate from EVERY scan report. surveyMode gates only the
+-- digging, so each depth level is scanned and reported twice -- once in SURVEY,
+-- once in MINE -- and `found` came out at roughly 2x reality. Every zone then
+-- read as "mined about half of what it found" however well the mining had gone:
+-- 44%, 31%, and a near-uniform 34-49% per ore type, for common and rare, shallow
+-- and deep alike. Physical loss scatters by depth and vein size; a flat ratio is
+-- arithmetic. The one trustworthy figure was 64%, from the only zone whose RESCAN
+-- completed -- because RESCAN already replaced oreFound with collected +
+-- still-in-the-ground, which is the formula generalised here.
+--
+-- Keyed by SECTOR AND DEPTH, not by sector. foundOres is reported once per depth
+-- level, so a per-sector key would keep only the last level's find and undercount
+-- badly; minedOres is flushed in batches of 25 within a level (ore_turtle's
+-- SCAN_BATCH), so mined has to accumulate where seen must replace.
+--
+--   seenMax[key] -- the LARGEST scan of that depth ever reported
+--   mined[key]   -- cumulative, because it arrives in batches
+--   found        = max(seenMax, mined), per ore name
+--
+-- MAX, not `mined + seen`. The design proposed the latter, but the miner reports
+-- foundOres BEFORE it mines that level (ore_turtle.lua:2071 sends scanFound, and
+-- only then does `if #ores > 0 and not surveyMode` dig), so `seen` is never "what
+-- is left" -- it is always the full contents at the moment of the scan. Adding
+-- mined to it double counts exactly what we set out to stop: a survey-then-mine
+-- level gives 100 + 100 = 200.
+--
+-- Because the first scan of a level always precedes any digging there, the
+-- largest report is the true contents. That is right in all three cases:
+--
+--   survey then mine   seenMax 100, mined 100 -> 100
+--   retry              finds 100 mines 40, re-scans 60 and mines 60:
+--                      seenMax 100, mined 100 -> 100
+--   rescan             level held 100, mined 40, rescan sees 60 still there:
+--                      seenMax 100, mined 40  -> 100  (40 taken + 60 left)
+--
+-- Plain replacement gives 60 in the retry case; plain accumulation gives 160.
+-- max() also self-corrects if mined ever exceeds any single scan.
+--
+-- RESCAN needs no special case any more: a rescan report is just another scan of
+-- a level whose max is already known, so it changes nothing it should not.
+local function scanKey(p)
+    return string.format("%d,%d,%d", p.sectorX or 0, p.sectorZ or 0, p.scanY or 0)
+end
+
+local function recomputeZoneOre(zone)
+    local found, mined = {}, {}
+    local seenAll  = zone.sectorSeen  or {}
+    local minedAll = zone.sectorMined or {}
+
+    local keys = {}
+    for k in pairs(seenAll)  do keys[k] = true end
+    for k in pairs(minedAll) do keys[k] = true end
+
+    for k in pairs(keys) do
+        local seen = seenAll[k]  or {}
+        local m    = minedAll[k] or {}
+        local names = {}
+        for name in pairs(seen) do names[name] = true end
+        for name in pairs(m)    do names[name] = true end
+        for name in pairs(names) do
+            local got = m[name] or 0
+            mined[name] = (mined[name] or 0) + got
+            found[name] = (found[name] or 0) + math.max(seen[name] or 0, got)
+        end
+    end
+
+    zone.oreFound, zone.oreMined = found, mined
+end
+
+local function recordScanReport(zone, p)
+    zone.sectorSeen  = zone.sectorSeen  or {}
+    zone.sectorMined = zone.sectorMined or {}
+    local k = scanKey(p)
+
+    -- Keep the LARGEST view of this depth. A later scan of a partly-mined level
+    -- legitimately sees less, and the first scan always precedes any digging, so
+    -- the maximum is the true contents.
+    if type(p.foundOres) == "table" and next(p.foundOres) ~= nil then
+        local seen = zone.sectorSeen[k] or {}
+        for name, n in pairs(p.foundOres) do
+            seen[name] = math.max(seen[name] or 0, n)
+        end
+        zone.sectorSeen[k] = seen
+    end
+
+    -- Accumulate: one depth level arrives as several batches.
+    if type(p.minedOres) == "table" and next(p.minedOres) ~= nil then
+        local m = zone.sectorMined[k] or {}
+        for name, n in pairs(p.minedOres) do m[name] = (m[name] or 0) + n end
+        zone.sectorMined[k] = m
+    end
+
+    recomputeZoneOre(zone)
+end
+
 -- ─── Sector leases ───────────────────────────────────────────────────────────
 --
 -- Return a holder's in-flight sector to the pool and drop its claim.
@@ -1849,18 +1946,7 @@ handlers[proto.MSG.SECTOR_SCAN] = function(msg)
     local p    = msg.payload
     local zone = state.miningZones[p.jobId]
     if zone then
-        if zone.phase ~= "RESCAN" then
-            if type(p.foundOres) == "table" then
-                for name, n in pairs(p.foundOres) do
-                    zone.oreFound[name] = (zone.oreFound[name] or 0) + n
-                end
-            end
-            if type(p.minedOres) == "table" then
-                for name, n in pairs(p.minedOres) do
-                    zone.oreMined[name] = (zone.oreMined[name] or 0) + n
-                end
-            end
-        end
+        recordScanReport(zone, p)
         logInfo(string.format("Sector (%d,%d) Y=%d scan by %s [%s]",
             p.sectorX, p.sectorZ, p.scanY or 0, msg.from, p.jobId))
     end
@@ -1972,18 +2058,17 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             nextSect     = table.remove(zone.rescanSectors, 1)
             isNextSurvey = true
         else
-            -- Rescan pass complete — update oreFound to reflect actual accessible ore:
-            -- oreFound = what was collected + what is still in the ground
-            local newOreFound = {}
-            for k, v in pairs(zone.oreMined)      do newOreFound[k] = v end
-            for k, v in pairs(zone.rescanFound or {}) do
-                newOreFound[k] = (newOreFound[k] or 0) + v
-            end
-            zone.oreFound = newOreFound
+            -- Rescan pass complete. The wholesale `zone.oreFound = mined +
+            -- rescanFound` rewrite that used to live here is gone: recordScanReport
+            -- now applies exactly that formula per depth level as reports arrive,
+            -- so recomputing is enough and rewriting would be clobbered by the
+            -- next scan anyway. rescanFound stays -- it drives rescanPending
+            -- below, which decides which sectors are worth re-mining.
+            recomputeZoneOre(zone)
             local pz = zone.persistentKey and state.persistentZones[zone.persistentKey]
             if pz then
                 pz.oreFound = {}
-                for k, v in pairs(newOreFound) do pz.oreFound[k] = v end
+                for k, v in pairs(zone.oreFound) do pz.oreFound[k] = v end
                 savePersistentZones()
             end
 
@@ -3460,6 +3545,9 @@ if _G.__CC_SERVER_TEST then
         registry = registry,
         jobQueue = jobQueue,
         CFG      = CFG,
+        -- The message handlers, so a test can drive the real dispatch path
+        -- rather than an internal that only the test calls.
+        handlers = handlers,
     }
     return server
 end
