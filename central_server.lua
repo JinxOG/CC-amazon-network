@@ -56,6 +56,7 @@ local state = {
     miningZones     = {},   -- [jobId] = { pending={sectors}, total=n, done=n, scanY=n }
     persistentZones = {},   -- [zoneKey] = { bounds, total, doneSectors, oreFound, oreMined, … }
     turtleLogs      = {},   -- [id] = ring buffer of {ts, msg} entries from TURTLE_LOG messages
+    recentFailures  = {},   -- bounded ring of terminal job outcomes — see recordFailure
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
@@ -705,6 +706,45 @@ jobQueue = {}
 -- cancel jobs without accessing the 'server' local (which is defined much later).
 local cancelJobInline
 
+-- ─── Terminal job outcomes ───────────────────────────────────────────────────
+--
+-- /state deliberately carries only PENDING/ASSIGNED/IN_PROGRESS jobs. That
+-- filter is correct and must stay: serialising every past job grows O(n) with
+-- mining cycles and eventually stalls the event loop long enough to drop
+-- consecutive heartbeats.
+--
+-- Its side effect was that a job which FAILED vanished from /state ENTIRELY,
+-- taking the reason with it. The only remaining trace was one line in a ring
+-- buffer that overwrites itself, so from outside the symptom was "no jobs
+-- running" with no cause attached. Three separate incidents were read as
+-- "dispatch is broken" when in fact one turtle was refusing work -- Invariant P7
+-- exactly: degraded, and unable to say so.
+--
+-- A FIXED-SIZE ring keeps the reason without reintroducing the growth the filter
+-- exists to prevent: O(1) per failure, and a payload contribution bounded by
+-- RECENT_FAILURES_MAX however long the server runs.
+local RECENT_FAILURES_MAX = 20
+
+local function recordFailure(job, outcome, reason)
+    if not job then return end
+    -- Also stamped on the job itself. The ring ages out; a job still referenced
+    -- anywhere else should not have to be correlated against it to say why it
+    -- ended.
+    job.failReason = reason or "unknown"
+    job.failedAt   = os.epoch("utc")
+
+    local r = state.recentFailures
+    r[#r + 1] = {
+        jobId      = job.id,
+        jobType    = job.type,
+        outcome    = outcome,
+        reason     = job.failReason,
+        assignedTo = job.assignedTo,
+        ts         = job.failedAt,
+    }
+    while #r > RECENT_FAILURES_MAX do table.remove(r, 1) end
+end
+
 -- ─── Ore accounting ──────────────────────────────────────────────────────────
 --
 -- oreFound used to accumulate from EVERY scan report. surveyMode gates only the
@@ -1085,6 +1125,7 @@ cancelJobInline = function(jobId)
     if j.assignedTo then
         sendTo(j.assignedTo, proto.MSG.RECALL, proto.payloadRecall("job_cancelled"))
     end
+    recordFailure(j, "CANCELLED", "cancelled inline")
     j.status     = JOB_STATUS.CANCELLED
     j.assignedTo = nil
     j.updatedAt  = os.epoch("utc")
@@ -1226,6 +1267,7 @@ function jobQueue.fail(jobId, reason, recoverable)
         logWarn(string.format("Job %s retry %d/%d: %s", jobId, job.retries, CFG.MAX_JOB_RETRIES, reason or "?"))
     else
         job.status = JOB_STATUS.FAILED
+        recordFailure(job, "FAILED", reason)
         logError("Job permanently failed: " .. jobId .. " (" .. (reason or "?") .. ")")
     end
     -- Only cancel the partner job on permanent failure. On retry (status=PENDING)
@@ -3325,6 +3367,7 @@ function server.run()
                         -- unless someone reads the log ring at the right moment:
                         -- the server ran for hours with no durability at all and
                         -- it was found only while chasing an unrelated deadlock.
+                        ',"recentFailures":' .. js(state.recentFailures, "[]", "recentFailures") ..
                         ',"persistenceHealthy":' .. tostring(state.persistenceHealthy ~= false) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..

@@ -130,6 +130,56 @@ return {
             .. "heartbeats -- this is the four-hour deadlock")
     end,
 
+    -- ─── Terminal job outcomes (Invariant P7) ───────────────────────────────
+    --
+    -- /state carries only PENDING/ASSIGNED/IN_PROGRESS jobs, and that filter is
+    -- right -- serialising every past job grows O(n) with mining cycles and
+    -- stalls the event loop. Its side effect was that a FAILED job vanished
+    -- entirely, taking the reason with it, leaving "no jobs running" as the only
+    -- visible symptom. Three incidents were read as "dispatch is broken" when one
+    -- turtle was refusing work.
+    ["a permanently failed job keeps its reason"] = function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        local job = T.state.jobs["job_0726"]
+        job.retries = 99                       -- past MAX_JOB_RETRIES: terminal
+        jobQueue.fail("job_0726", "loader_outstanding", false)
+
+        local ring   = T.state.recentFailures
+        local last   = ring[#ring]
+        local onJob  = job.failReason
+        restore()
+
+        assert_eq(job.status, "FAILED", "precondition: the job must be terminal")
+        assert_eq(onJob, "loader_outstanding", "the reason must survive on the job")
+        assert_eq(last ~= nil and last.reason, "loader_outstanding",
+            "and reach /state through the failure ring")
+        assert_eq(last.jobId, "job_0726")
+        assert_eq(last.outcome, "FAILED")
+    end,
+
+    -- The bound is what lets this coexist with the filter it works around. An
+    -- unbounded list would reintroduce exactly the O(n) growth that made
+    -- serialising all jobs stall the event loop in the first place.
+    ["the failure ring stays bounded however long the server runs"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        for i = 1, 60 do
+            T.state.jobs["j" .. i] = {
+                id = "j" .. i, type = proto.JOB.MINE, status = "IN_PROGRESS",
+                params = {}, priority = 5, history = {}, retries = 99,
+            }
+            jobQueue.fail("j" .. i, "reason_" .. i, false)
+        end
+        local n     = #T.state.recentFailures
+        local newest = T.state.recentFailures[n]
+        restore()
+
+        assert_eq(n <= 20, true,
+            string.format("the ring must stay bounded, got %d entries", n))
+        assert_eq(newest.reason, "reason_60",
+            "and it must keep the NEWEST failures, not the first twenty")
+    end,
+
     -- ─── Ore accounting ─────────────────────────────────────────────────────
     --
     -- surveyMode gates only the digging, so every depth level is scanned and
