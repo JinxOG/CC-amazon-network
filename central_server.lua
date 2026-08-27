@@ -4,6 +4,10 @@
 
 local proto = require("protocol")
 local W     = require("waypoints")
+-- Storage (W6). Consumed through its documented interface only -- this file
+-- knows about zones and nothing about KV mechanics, and never touches the
+-- peripheral directly.
+local cloudstore = require("cloudstore")
 
 -- ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -558,6 +562,28 @@ local function savePersistentZones()
 end
 
 local function loadPersistentZones()
+    -- Prefer KV. It is authoritative once migration has run, and it is the only
+    -- store that does not compete with program text for the 1 MB disk.
+    --
+    -- A missing peripheral is NOT an error: mods add capability, they never
+    -- replace it, so with no kv_storage attached this behaves exactly as it did.
+    if cloudstore.available() then
+        local keys = cloudstore.listKeys(cloudstore.NS.ZONE)
+        if #keys > 0 then
+            local loaded, n = {}, 0
+            for _, zoneKey in ipairs(keys) do
+                local zone = cloudstore.get(cloudstore.NS.ZONE, zoneKey)
+                if zone then loaded[zoneKey] = zone; n = n + 1 end
+            end
+            state.persistentZones = loaded
+            logInfo(string.format("Loaded %d persistent mine zone(s) from cloud", n))
+            return
+        end
+        -- No cloud zones yet: fall through to disk so the first boot after
+        -- deployment still sees existing data. Migration moves it later.
+        logInfo("No cloud zones found — reading disk (migration pending)")
+    end
+
     local raw = ""
     if fs.exists(ZONE_SAVE_FILE) then
         local f = fs.open(ZONE_SAVE_FILE, "r")
@@ -575,7 +601,7 @@ local function loadPersistentZones()
     state.persistentZones = data
     local n = 0
     for _ in pairs(data) do n = n + 1 end
-    if n > 0 then logInfo(string.format("Loaded %d persistent mine zone(s)", n)) end
+    if n > 0 then logInfo(string.format("Loaded %d persistent mine zone(s) from disk", n)) end
 end
 
 -- ─── Active Mining Zone Persistence ──────────────────────────────────────────
@@ -3652,6 +3678,10 @@ if _G.__CC_SERVER_TEST then
         -- rather than an internal that only the test calls.
         handlers = handlers,
         phaseEta = phaseEta,
+        -- Zone persistence, so the KV/disk paths are actually covered. The plan
+        -- assumed this file could not be required and treated the harness as a
+        -- collateral-damage check only; the seam above makes it testable.
+        loadPersistentZones = loadPersistentZones,
     }
     return server
 end
