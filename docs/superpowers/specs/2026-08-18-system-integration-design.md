@@ -1072,143 +1072,153 @@ Four things that cost nothing today and are painful retrofits later.
 
 ## 16. Roadmap
 
-**This roadmap sequences risk, not features.** An earlier version ordered the
-work by capability — index, then planner, then building. That ordering assumed a
-greenfield project. This one does not: **the system is live, with workers in the
-field, and it is currently hard to diagnose.** You cannot safely build on
-something you cannot see failing.
+**This roadmap sequences risk, not features.** The system is live, with workers
+in the field. Each stage has an **exit gate**; do not start the next until the
+gate is true.
 
-Each stage has an **exit gate**. Do not start the next stage until the gate is
-true. Stages list every workstream that acts in them; anything not listed is
-idle or continuing prior work.
+**Recentred 2026-08-27** against measured live state at proto 1.9.55, and to
+place the three mods added on 2026-08-25 — Turtlematic, UnlimitedPeripheralWorks,
+Cloud Solutions — into the sequence rather than beside it.
 
-### Stage 0 — Make the system diagnosable
+### Where things actually stand
 
-**Owner: W3 alone. Nothing else starts.**
+**Done, verified live:**
 
-| Task | Why it is first |
+- Cloud KV zone storage. `Loaded 5 persistent mine zone(s) from cloud`,
+  `diskFree` back to **500030** bytes from ~253 KB. The disk crisis is over.
+- `storageHealth`, `zoneStoreHealthy`, `persistenceHealthy`, `diskFree` all
+  reachable from `/state`. **Invariant K is satisfied end to end.**
+- Failed jobs keep their reason (`d2c576b`).
+- Turtle log shipping — `turtleLogs` carries all 16 nodes.
+- The cloudstore namespace index (`36be20a`), so enumeration does not scale with
+  total keys.
+
+**Androids are gone from the modpack.** The Android class is retired; the builder
+will be a turtle. See §6 and W4.
+
+### Stage 0 — Stabilise (in progress, W3)
+
+The storage half is done. Five items remain, two of them new.
+
+| Task | Why |
 |---|---|
-| Failed jobs keep their reason in `/state` | **High.** Three incidents read as "dispatch is broken" when one turtle was refusing work. Every later stage is debugged through this payload. |
-| Bound the retrieval comms gap; make a worker in it recallable | **High.** If the modem swap-out fails, the worker is permanently deaf with no remote recovery. |
-| Make `central_server.lua` requireable under the test harness | It runs its main loop at load. This blocked five of W1's tests in two days, and W3's own stage-1 work is untestable until it is fixed. |
-| Invariant J logging on the `tryMove` block wait | A queued worker and a dead worker are currently indistinguishable for 120 seconds. |
+| **Server crash loop** — `5 crashes recorded in crash.log`, last `server.run crashed: Terminated` | **Highest priority.** Cause unknown. `24ccdbe` made crashes attributable; now use it. Everything below is built on a server that is falling over. |
+| **Bridge push timeout** — `Bridge push timed out (>15s)` | The `/state` payload is **~100 KB**: `storage` 47 KB (47%), `mineZones` 25 KB, `turtleLogs` 18 KB. Pushed whole, every cycle. Same shape as the disk failure — an unbounded payload with no declared ceiling. |
+| **Bound the retrieval comms gap** | A worker whose modem swap-out fails is permanently deaf with no remote recovery, and nothing bounds the window. |
+| **Make `central_server.lua` requireable under the harness** | It runs its main loop at load. Blocked five of W1's tests in two days; blocks testing everything W3 does next. |
+| **Invariant J logging** on `turtle_base.lua:613` | The `tryMove` block wait sits 120 s in silence, so a queued worker and a dead one look identical. |
 
-**Exit gate:** you can tell *why* a job failed from `/state` alone, without
-reading turtle logs, and a blocked worker says so.
+**Exit gate:** the server has not crashed unexplained in 48 hours, and the bridge
+push completes inside its timeout.
 
-### Stage 1 — Foundations others build against
+### Stage 1 — Bound the payload, and land the hooks
 
-**Owners: W3 and W6, in parallel.** They share no files.
+**Owners: W3, W5, W6 in parallel.** These touch different files.
 
 | Owner | Task |
 |---|---|
-| W3 | The four §15 hooks: `owner`, `priority`, `capabilities[]`, placement set as sole build input |
+| W5 + W6 | **Move `storage` out of the push.** 450 RS items re-sent every cycle is 47% of the payload for data that changes slowly. Push on change, or paginate. |
+| W6 | **Turtle logs to KV with TTL**, not through `/state`. Native expiry is the weekly purge — a parameter, not a feature. Removes 18 KB from every push. |
+| W3 | **`mineZones` deltas** rather than the whole map each cycle. |
+| W3 | The four §15 hooks: `owner`, `priority`, `capabilities[]`, placement set |
 | W3 | Capability-matched assignment (§6.4) |
-| W3 | The shared inbox — retires the Invariant G grandfather clause |
-| W6 | The §11.7 stock-and-craft interface: `STOCK_QUERY`, `CRAFT_REQUEST`, `CRAFT_STATUS` with `missing[]` |
-| W6 | `FUEL_CHEST` / `PAYLOAD_CHEST` in `equipment.ITEMS` — with §6.1's slot-position caveat |
+| W3 | **The shared inbox.** Invariant G still mandates `base.receive`, which does not exist. Until it does, every stream is grandfathered on `proto.receive` and ACK loops make loss *visible, not absent*. |
+| W6 | §11.7 stock-and-craft interface — `STOCK_QUERY`, `CRAFT_REQUEST`, `CRAFT_STATUS` with `missing[]` |
 
-**Exit gate:** W2 and W4 can build against real fields rather than guesses, and
-`missing[]` returns something truthful.
+**Exit gate:** `/state` is under ~30 KB, W2 and W4 can build against real fields,
+and no new worker↔worker signal depends on a race.
 
-### Stage 2 — World knowledge, and the probe that gates two streams
+### Stage 2 — Probe the mods before designing against them
 
-**Owners: W1, W4, W5, in parallel.**
+**Owner: whoever has a spare turtle. One test turtle, away from the working fleet.**
 
-| Owner | Task |
-|---|---|
-| W1 | Ore coordinate index (`oreindex.lua`, `oreindex_store.lua`, packed codec, per-sector store) |
-| W1 | Census tier — remove the `isOre` filter at `ore_turtle.lua:730`, store name→count for every block type |
-| W1 | Extended `SECTOR_ASSIGN` / `SECTOR_SCAN` payloads per §11.3 |
-| W4 | **Run Probe C.** Short, and unblocks both W4's builder role and W5's parser |
-| W4 | Fix the two `android_base.lua` defects: refuel mechanism, and the inbox split before any builder role |
-| W5 | Bridge auto-start as a Windows service (§4.2) |
-| W5 | Placement set format (§11.6) |
+This stage exists because **the spec has already been burned once by specifying
+against unverified capability** — Invariant G mandated an API that did not exist,
+and W1 built against it before discovering the gap. Do not repeat that at mod
+scale.
 
-**Exit gate:** V6 (modem message ceiling) answered, V1 (Probe C) answered, and a
-surveyed sector returns coordinates a second miner can consume without rescanning.
+| # | Probe | What it decides |
+|---|---|---|
+| **P-1** | **What functions inside a Peripheralium Hub** — chunky, pickaxe, automata core, geo scanner, tested individually | The entire slot architecture, where a builder's core lives, whether XP can be stored, and whether `equipment.lua`'s swap dance can be deleted. **Highest leverage probe available.** |
+| **P-2** | **Probe C — does Turtlematic `use()` place block states correctly?** | The builder. There is now **no fallback**: Androids are gone, so a failure here means baseline `turtle.place()` with its slab/stair limits is all you get. |
+| **P-3** | **Is `sendXPToOwner()` ranged?** | If yes, XP recovery is two calls in the mining loop and nothing else. If no, it needs stored XP, which dies on every equipment swap. |
+| **P-4** | **Turtlematic operation costs** — fuel per `use()`, cooldowns, and what an upgrade swap costs in initial cooldown | Whether automata cores can go anywhere near the mining loop, which swaps twice per sector. |
 
-### Stage 3 — The planner
+**Exit gate:** every mod-dependent decision below is made on a measured result,
+not a hope.
 
-**Owner: W2 alone.** First point at which "push a task" means anything.
+### Stage 3 — Resource intelligence at scale
+
+**Owner: W1, with W6 for the store.**
 
 | Task |
 |---|
-| Project lifecycle state machine (§9) |
-| Placement set → BOM aggregation, with the world-drift buffer |
-| Deficit calculation against W6's stock |
-| Acquisition method assignment (§8), including live capability query |
-| Feasibility check — `HUMAN_SUPPLY` and no-capable-worker blockers |
-| The approval screen payload (§11.1 `PROJECT_PLAN`) |
-| `JOB_SUBMIT` emission to W3 |
+| Tier 1 census — drop the `isOre` filter at `ore_turtle.lua:730`, store name→count for every block type |
+| Tier 2 coordinates into KV, one key per sector, under the declared key budget |
+| Extended `SECTOR_ASSIGN` / `SECTOR_SCAN` payloads per §11.3 |
+| **Recipe Registry** (UnlimitedPeripheralWorks) so the planner can compute a true BOM *before* committing to an RS craft |
+
+**Exit gate:** a surveyed sector returns coordinates a second miner consumes
+without rescanning, and the planner can price a build without asking RS to start
+one.
+
+### Stage 4 — The planner
+
+**Owner: W2 alone.** Project lifecycle, BOM, deficit against W6's stock,
+acquisition methods, feasibility, the approval screen, `JOB_SUBMIT`.
 
 **Exit gate:** submitting a project produces a correct, complete plan with an
-honest blocker list — even if nothing executes it yet.
+honest blocker list — even with nothing executing it yet.
 
-### Stage 4 — Building, then the vertical slice
+### Stage 5 — Building, then the vertical slice
 
-**Owners: W4 and W5, then everyone.**
+**Owner: W4 and W5, then everyone.**
 
-| Owner | Task |
-|---|---|
-| W4 | Column protocol (§11.4), reassignable per P5 |
-| W4 | Builder implementation — class decided by Probe C |
-| W4 | Static loader blanket at build sites (§12.1) |
-| W5 | `.litematic` → placement set converter |
-| W6 | Build staging: materials into a chest at the site |
+Builder class decided by **P-2**. Column protocol (§11.4), reassignable per P5.
+Placement sets (§11.6). `.litematic` conversion. Build staging by W6. **Remote
+Observer** (UnlimitedPeripheralWorks) for verification without moving a builder.
 
-**Then, before anything else: drive one trivial project end to end.** A 3×3
-stone platform. Plan it, approve it, let the system mine or craft the deficit,
-stage it, build it, verify it.
+**Then drive one trivial project end to end — a 3×3 stone platform.** Plan it,
+approve it, source the deficit, stage it, build it, verify it.
 
 **This is the single highest-value task in the roadmap and it must not be
-deferred.** It is the first time all six contracts touch each other. It will find
-more integration defects than any amount of unit testing, because the failure
-mode being hunted is *contracts that were never exercised together* — and this
-project has direct evidence of that class of failure: the shared inbox was
-believed shipped for a week while no part of it existed in the code.
+deferred.** It is the first time all six contracts touch each other, and this
+project has direct evidence of that failure class: the shared inbox was believed
+shipped for a week while no part of it existed.
 
-**Exit gate — this is what "done" means.** A request submitted by a human is
-planned, approved, sourced, delivered, and built with no further intervention.
-The north star works. Everything after this stage widens a pipeline already
-proven to carry traffic.
+**Exit gate — this is what "done" means.** A human request is planned, approved,
+sourced, delivered and built with no further intervention.
 
-### Stage 5 — Scale
+### Stage 6 — Consolidation
 
-**Owners: W3, W1.**
-
-| Owner | Task |
-|---|---|
-| W3 | Worker consolidation — one general-purpose `WORKER` (P2); retire `SUPPORT` |
-| W3 | Invariant I: dispatch/arrivals chokepoint throughput, ordering, bounded wait |
-| W1 | Harvest workers, replant obligation (§6.6), renewable site semantics (§7.3) |
-| W1 | `FUEL_WARN` scaled to distance rather than a flat 3000 |
-
-These pair deliberately: **consolidation increases traffic through the same
-single dispatch hole.** Growing the fleet and fixing the bottleneck belong in one
-stage, or the second problem is discovered by traffic jam.
-
-**Exit gate:** no worker is idle because of what it is, and fleet growth does not
-degrade throughput at the depot.
-
-### Stage 6 — Parametric builds, then other people
-
-**Owner: W5.**
+**Owner: W3, W1.**
 
 | Task |
 |---|
-| Road generator — cross-section profile extruded along a path |
-| Dynmap drawing UI feeding the generator |
-| Auth, subaccounts, quotas, permissions (§4.2, §15 `owner` field) |
+| **Two-tier fleet** (§6.3): baseline workers keep the proven swap logic; a skew of hub-equipped super turtles declare more capabilities. Both register through `capabilities[]`; the dispatcher does not care which is which. |
+| **`equipment.lua` becomes a strategy seam** — `SwapEquipment` (today, unchanged) and `HubEquipment` (new), one interface above both |
+| Retire `SUPPORT`. **13 of 16 nodes are currently IDLE, 8 of them support** — P2's cost, measured |
+| Invariant I: dispatch/arrivals chokepoint throughput, ordering, bounded wait |
+| Harvest workers, replant obligation (§6.6), renewable sites (§7.3) |
 
-Auth is last deliberately: it is the only work in the roadmap with **no
-dependents**.
+Consolidation and the chokepoint pair deliberately: consolidation *increases*
+traffic through the same single hole.
+
+**Exit gate:** no worker is idle because of what it is, and fleet growth does not
+degrade depot throughput.
+
+### Stage 7 — Reach
+
+**Owner: W5.** Road generator and Dynmap drawing. **StatsD bridge** as Invariant
+K's grown-up form — metrics to an external receiver, with `fleet.idle` as the
+first gauge, because P2 currently has no measurement. Then auth, subaccounts and
+quotas, last because nothing depends on them.
 
 ### Staffing
 
-**Two to three concurrent workstreams is the honest ceiling**, not six. There is
-one working tree, no branch isolation, and the §13 owner column is the only thing
-preventing collisions (§14.1). Stages 0 and 3 are single-stream regardless.
+**Two to three concurrent workstreams is the ceiling**, not six. One working
+tree, no branch isolation, and the §13 owner column is the only thing preventing
+collisions (§14.1). Stages 0 and 4 are single-stream regardless.
 
 ---
 
