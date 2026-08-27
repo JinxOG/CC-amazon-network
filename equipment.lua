@@ -184,12 +184,36 @@ end
 -- Plain query first, detailed only for the handful of slots that are advanced
 -- turtles: the detailed form costs more, and asking for it on all sixteen slots
 -- to read one displayName would be paid on every validate().
+-- Names already reported, so a refusal that repeats every dispatch does not
+-- become its own noise problem.
+local _warnedUnlabelled = {}
+
 function equipment.findLoaderSlot()
+    local rejected = nil
     for s = 1, 16 do
         local plain = turtle.getItemDetail(s)
         if plain and plain.name == I.LOADER_TURTLE then
-            if equipment.isLoaderItem(turtle.getItemDetail(s, true)) then return s end
+            local detail = turtle.getItemDetail(s, true)
+            if equipment.isLoaderItem(detail) then return s end
+            rejected = rejected or (detail and detail.displayName) or "?"
         end
+    end
+
+    -- Once a prefix is configured, an UNLABELLED loader stops being a loader:
+    -- this returns nil, placeLoader refuses with loader_turtle_missing, and every
+    -- miner carrying one refuses its job. That is a fleet-wide outage produced by
+    -- a one-line config change, and it lands at the next dispatch rather than at
+    -- the edit -- so the cause has to be named at the first occurrence instead of
+    -- inferred from a refusal that says only "missing".
+    --
+    -- Costs nothing while the prefix is unset, which is the state the fleet is in
+    -- until the operator's labelling sweep completes.
+    if rejected and equipment.loaderLabelled() and not _warnedUnlabelled[rejected] then
+        _warnedUnlabelled[rejected] = true
+        print(string.format(
+            "[EQUIP] Carrying an advanced turtle named %q, which lacks the "
+            .. "configured LOADER_PREFIX %q — it will NOT be treated as a loader. "
+            .. "Either label it or clear the prefix.", rejected, tostring(loaderPrefix())))
     end
     return nil
 end

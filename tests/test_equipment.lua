@@ -132,6 +132,59 @@ return {
             "a chunky turtle carries no digging tool and must still pass")
     end,
 
+    -- Setting the prefix before every loader is labelled benches the fleet: an
+    -- unlabelled loader stops being a loader, placeLoader refuses with
+    -- loader_turtle_missing, and every miner carrying one refuses its job. The
+    -- outage arrives at the next dispatch, not at the edit, so the cause has to
+    -- be named rather than inferred from a refusal that says only "missing".
+    ["an unlabelled loader is named when a prefix is configured"] = function(assert_eq)
+        local inv = fullInv()
+        inv[2] = { name = LOADER, count = 1, displayName = CHUNKY_NAME }
+        local eq = fresh(E_TRAVEL(), inv)
+        eq.LOADER_PREFIX = "LOADER-"
+
+        local said = {}
+        local realPrint = print
+        print = function(s) said[#said + 1] = tostring(s) end
+        local slot = eq.findLoaderSlot()
+        print = realPrint
+        eq.LOADER_PREFIX = nil
+
+        assert_eq(slot, nil, "precondition: the unlabelled loader must be rejected")
+        local named = false
+        for _, line in ipairs(said) do
+            if line:find(CHUNKY_NAME, 1, true) and line:find("LOADER_PREFIX", 1, true) then
+                named = true
+            end
+        end
+        assert_eq(named, true,
+            "the refusal must name the offending turtle and the prefix, not fail silently")
+    end,
+
+    -- The warning is about a MISCONFIGURATION -- a prefix set before the fleet is
+    -- labelled -- not about the ordinary case of carrying something that simply
+    -- is not a loader. A mining turtle is rejected by TOOL_NAME_MARK whether or
+    -- not a prefix exists, and that is routine, not a problem to announce.
+    --
+    -- This fixture must be a turtle the unconfigured path REJECTS, or the loop
+    -- returns before the warning is reachable and the test proves nothing.
+    ["no warning is emitted while the prefix is unset"] = function(assert_eq)
+        local inv = fullInv()
+        inv[2] = { name = LOADER, count = 1, displayName = "Advanced Mining Turtle" }
+        local eq = fresh(E_TRAVEL(), inv)
+
+        local said = 0
+        local realPrint = print
+        print = function() said = said + 1 end
+        local slot = eq.findLoaderSlot()
+        print = realPrint
+
+        assert_eq(eq.LOADER_PREFIX, nil, "precondition: no prefix configured")
+        assert_eq(slot, nil, "precondition: a mining turtle is rejected regardless")
+        assert_eq(said, 0,
+            "carrying a non-loader is routine — only a set-but-unmet prefix is worth saying")
+    end,
+
     -- findLoaderSlot is what placeLoader and validate consult. It must skip the
     -- corpse and keep looking rather than returning the first turtle it sees.
     ["findLoaderSlot skips a fleet turtle and finds the real loader deeper"] =
