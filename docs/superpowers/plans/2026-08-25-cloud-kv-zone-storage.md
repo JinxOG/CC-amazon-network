@@ -33,7 +33,7 @@ Every task's requirements implicitly include this section.
 | `protocol.lua` version bump | W3, announced |
 | `install.lua`, `updater.lua` deployment entries | W3 |
 
-W6 does Task 1 alone. W3 does Tasks 2–6 and consumes Task 1 through its documented interface only.
+W6 does Tasks 1 and 1b alone. W3 does Tasks 2–6 and consumes `cloudstore` through its documented interface only.
 
 ## File Structure
 
@@ -340,6 +340,185 @@ git commit -m "feat: cloudstore module wrapping the kv_storage peripheral"
 
 ---
 
+### Task 1b: Namespace index, so enumeration does not scale with total keys
+
+**Files:**
+- Modify: `cloudstore.lua`
+- Modify: `tests/test_cloudstore.lua`
+
+**Interfaces:**
+- Consumes: Task 1's `cloudstore` module.
+- Produces: no signature change. `listKeys(ns)` keeps its contract; it stops
+  being O(all keys) internally.
+
+**Why this exists.** `kv.list()` returns **every key in the shared player-bound
+space** with no prefix filter, and Task 1's `listKeys` filters client-side. That
+is fine at the current 10240-key limit and becomes a problem at the 32768 this
+system is expected to be configured for: enumerating zones would transfer and
+iterate a 32000-element table on a computer with a tick budget, on a hot path.
+
+Each namespace therefore maintains its own index key, and `list()` becomes a
+repair tool rather than normal operation. Build the seam now — retrofitting it
+after Tier 2 lands means rewriting live callers.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/test_cloudstore.lua`, and extend `fakeKV()` to count `list` calls
+by replacing its `list` field with:
+
+```lua
+        list   = function()
+            store.__listCalls = (store.__listCalls or 0) + 1
+            local out = {}
+            for k in pairs(store) do if k ~= "__listCalls" then out[#out + 1] = k end end
+            return out
+        end,
+```
+
+Then add these two tests:
+
+```lua
+    ["listKeys uses the index and does not scan all keys"] = function(assert_eq)
+        local kv = fakeKV()
+        local cs = fresh(kv)
+        cs.put(cs.NS.ZONE, "a", { n = 1 })
+        cs.put(cs.NS.ZONE, "b", { n = 2 })
+        kv._store.__listCalls = 0
+        local keys = cs.listKeys(cs.NS.ZONE)
+        table.sort(keys)
+        assert_eq(#keys, 2)
+        assert_eq(keys[1], "a")
+        assert_eq(kv._store.__listCalls, 0)
+    end,
+
+    ["delete removes the key from the index"] = function(assert_eq)
+        local cs = fresh(fakeKV())
+        cs.put(cs.NS.ZONE, "a", { n = 1 })
+        cs.put(cs.NS.ZONE, "b", { n = 2 })
+        cs.delete(cs.NS.ZONE, "a")
+        local keys = cs.listKeys(cs.NS.ZONE)
+        assert_eq(#keys, 1)
+        assert_eq(keys[1], "b")
+    end,
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `lua tests/run.lua`
+Expected: `FAIL  listKeys uses the index and does not scan all keys` — the count
+will be 1, not 0.
+
+- [ ] **Step 3: Implement the index**
+
+In `cloudstore.lua`, add above `cloudstore.put`:
+
+```lua
+-- Each namespace keeps its own index of live keys. kv.list() returns the whole
+-- shared key space with no prefix filter, so scanning it per enumeration costs
+-- O(total keys across every subsystem) — untenable once the key limit is raised.
+local function indexKey(ns) return ns .. ":__index" end
+
+local function readIndex(p, ns)
+    local ok, raw = pcall(function() return p.get(indexKey(ns)) end)
+    if not ok or type(raw) ~= "string" or raw == "" then return nil end
+    local decoded = textutils.unserialise(raw)
+    if type(decoded) ~= "table" then return nil end
+    return decoded
+end
+
+local function writeIndex(p, ns, set)
+    pcall(function() p.put(indexKey(ns), textutils.serialise(set)) end)
+end
+
+-- Rebuild from a full scan. Only called when the index is missing or corrupt,
+-- which is a repair path, not a hot path.
+local function rebuildIndex(p, ns)
+    local set = {}
+    local ok, all = pcall(function() return p.list() end)
+    if ok and type(all) == "table" then
+        local prefix = ns .. ":"
+        for _, k in ipairs(all) do
+            if type(k) == "string" and k:sub(1, #prefix) == prefix then
+                local bare = k:sub(#prefix + 1)
+                if bare ~= "__index" then set[bare] = true end
+            end
+        end
+    end
+    writeIndex(p, ns, set)
+    return set
+end
+```
+
+Then, in `cloudstore.put`, immediately before `return true`, add:
+
+```lua
+    local set = readIndex(p, ns) or rebuildIndex(p, ns)
+    if not set[tostring(key)] then
+        set[tostring(key)] = true
+        writeIndex(p, ns, set)
+    end
+```
+
+In `cloudstore.delete`, replace the body after the `if not p` guard with:
+
+```lua
+    local ok = pcall(function() p.delete(fullKey(ns, key)) end)
+    if ok then
+        local set = readIndex(p, ns)
+        if set and set[tostring(key)] then
+            set[tostring(key)] = nil
+            writeIndex(p, ns, set)
+        end
+    end
+    return ok and true or false
+```
+
+And replace `cloudstore.listKeys` entirely with:
+
+```lua
+function cloudstore.listKeys(ns)
+    local p = kv()
+    if not p then return {} end
+    local set = readIndex(p, ns) or rebuildIndex(p, ns)
+    local out = {}
+    for k in pairs(set) do out[#out + 1] = k end
+    return out
+end
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `lua tests/run.lua`
+Expected: `248 passed, 0 failed` (246 from Task 1 + 2 new).
+
+- [ ] **Step 5: Mutation-test both new assertions**
+
+| Test | Break this | Expect |
+|---|---|---|
+| listKeys uses the index | make `listKeys` call `rebuildIndex` unconditionally | FAIL (count becomes 1) |
+| delete removes from index | drop the `writeIndex` call inside `delete` | FAIL |
+
+Restore after each. Do not proceed until both have been observed failing.
+
+- [ ] **Step 6: Update the key budget**
+
+Each namespace now spends one extra key on its own index. In
+`cloudstore.BUDGET`, this is within existing allocations and needs no change —
+but add this comment above the table so nobody is surprised:
+
+```lua
+-- Each namespace also consumes one key for its "<ns>:__index" entry.
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add cloudstore.lua tests/test_cloudstore.lua
+git commit -m "perf: index each cloudstore namespace so enumeration is not O(all keys)"
+```
+
+---
+
 ### Task 2: Load zones from KV, with the disk path as fallback
 
 **Files:**
@@ -408,7 +587,7 @@ end
 - [ ] **Step 3: Verify the harness still passes**
 
 Run: `lua tests/run.lua`
-Expected: `246 passed, 0 failed`. `central_server.lua` is not covered by the harness, so this confirms no collateral damage rather than proving the change.
+Expected: `248 passed, 0 failed`. `central_server.lua` is not covered by the harness, so this confirms no collateral damage rather than proving the change.
 
 - [ ] **Step 4: Commit**
 
@@ -507,7 +686,7 @@ A bare call is never wrong; a wrong key is. When unsure, leave it bare.
 - [ ] **Step 3: Verify the harness still passes**
 
 Run: `lua tests/run.lua`
-Expected: `246 passed, 0 failed`.
+Expected: `248 passed, 0 failed`.
 
 - [ ] **Step 4: Commit**
 
@@ -570,7 +749,7 @@ indentation.
 - [ ] **Step 3: Verify the harness still passes**
 
 Run: `lua tests/run.lua`
-Expected: `246 passed, 0 failed`.
+Expected: `248 passed, 0 failed`.
 
 - [ ] **Step 4: Commit**
 
@@ -611,7 +790,7 @@ Match the surrounding comma and quoting style exactly — the payload is assembl
 - [ ] **Step 2: Verify the harness still passes**
 
 Run: `lua tests/run.lua`
-Expected: `246 passed, 0 failed`.
+Expected: `248 passed, 0 failed`.
 
 - [ ] **Step 3: Commit**
 
