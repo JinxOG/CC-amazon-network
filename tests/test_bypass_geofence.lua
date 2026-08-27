@@ -238,6 +238,61 @@ return {
         assert_eq(base.move.forward(), true, "and so must horizontal movement")
     end,
 
+    -- Both dock returns claimed success unconditionally. The turtle KNEW it was
+    -- in the wrong place -- it logged "Post-dock GPS mismatch", attempted a
+    -- correction, and threw the result away. Observed 2026-08-25: node_119 sat at
+    -- 228,210,-2782, exactly ARRIVALS_HOLE's x/z at its sky travel altitude and
+    -- 143 blocks above its own dock, reporting DOCKED and IDLE. IDLE is
+    -- dispatchable, so the next mine job would have begun from there. Its fuel had
+    -- jumped +87,737 -- dockRefuel falling back to its own ender chest because the
+    -- dock station was 143 blocks below, leaving a chest where nobody would look.
+    --
+    -- SOURCE-ONLY, and weaker than a behavioural test: _self.dock is set only from
+    -- a REGISTER_ACK reply, so neither function can be driven headlessly without
+    -- standing up registration. This pins the two properties that matter -- verify
+    -- before claiming, and never refuel on the failure path -- and would not catch
+    -- a verify that is present but wrong.
+    ["neither dock return claims success without verifying (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("turtle_base.lua", "r")
+        local src = f:read("*a"); f:close()
+
+        for _, fn in ipairs({ "base%.returnToDock%(%)", "base%.returnToDockFromSky%(%)" }) do
+            local at = src:find("function " .. fn)
+            assert_eq(at ~= nil, true, fn .. " moved or vanished")
+            local endAt = src:find("\nend\n", at) or #src
+            local body  = src:sub(at, endAt)
+
+            local verifyAt  = body:find("verifyAtDock")
+            local refuelAt  = body:find("dockRefuel")
+            local claimAt   = body:find('logInfo%("Docked at bay')
+
+            assert_eq(verifyAt ~= nil, true, fn .. " must verify it reached the dock")
+            assert_eq(refuelAt ~= nil and verifyAt < refuelAt, true,
+                fn .. " must verify BEFORE refuelling — the refuel is what "
+                .. "deployed an ender chest 143 blocks above a dock")
+            assert_eq(claimAt ~= nil and verifyAt < claimAt, true,
+                fn .. " must verify before announcing it has docked")
+        end
+    end,
+
+    -- The failure path must leave the turtle out of registry.getIdle, or a turtle
+    -- that is demonstrably not at its dock is still handed the next job.
+    ["a failed dock return reports ERROR rather than staying dispatchable (SOURCE-ONLY)"] =
+    function(assert_eq)
+        local f = io.open("turtle_base.lua", "r")
+        local src = f:read("*a"); f:close()
+        local at = src:find("local function verifyAtDock")
+        assert_eq(at ~= nil, true, "verifyAtDock moved or vanished")
+
+        -- Every caller of the verify must set ERROR on the false branch.
+        local guards = 0
+        for _ in src:gmatch("if not atDock then%s*\n%s*base%.setStatus%(proto%.STATUS%.ERROR%)") do
+            guards = guards + 1
+        end
+        assert_eq(guards, 2, "both dock returns must fail into ERROR, not success")
+    end,
+
     -- The second unguarded site: findFreeSpace's "surrounded" fallback, which
     -- dug down, up and forward with no inspection at all in order to make room
     -- for the fuel ender chest.

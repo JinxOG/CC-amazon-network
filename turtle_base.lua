@@ -911,6 +911,41 @@ end
 -- Navigate from the world back to dock via arrivals hole.
 -- Call this when turtle is outside/underground after completing a job.
 -- Always goes underground first then up through the arrivals hole.
+-- Confirm we are actually standing on the dock before anything claims we are.
+-- Returns true, or false plus a reason.
+--
+-- The block this replaces corrected and then DISCARDED the result: the turtle
+-- knew it was in the wrong place, logged it, attempted a fix, and reported
+-- success regardless. Observed 2026-08-25 -- node_119 was found at
+-- 228,210,-2782, which is exactly ARRIVALS_HOLE's x/z at its sky travel
+-- altitude, 143 blocks above its own dock, reporting phase DOCKED and status
+-- IDLE. IDLE is dispatchable, so the next mine job would have started from
+-- there. Its fuel had jumped +87,737, which is dockRefuel falling back to
+-- deploying its own ender chest because the dock station was 143 blocks below --
+-- a chest left somewhere nobody would look.
+--
+-- Two properties this must keep:
+--   * re-sync AFTER the correction, not only before it. The correction moves the
+--     turtle, so the belief that justified it is stale by the time it returns.
+--   * never let the caller refuel on this path. That refuel is what abandoned
+--     the chest.
+local function verifyAtDock()
+    local FLOOR_Y = CFG.FLOOR_Y
+    gpsSync()
+    if _self.pos.x == _self.dock.x and _self.pos.z == _self.dock.z then return true end
+
+    logWarn(string.format("Post-dock GPS mismatch: at %d,%d want %d,%d — correcting",
+        _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
+    local ok2, err2 = move.to(_self.dock.x, FLOOR_Y, _self.dock.z)
+    gpsSync()
+    if ok2 and _self.pos.x == _self.dock.x and _self.pos.z == _self.dock.z then
+        return true
+    end
+    return false, string.format("dock not reached: at %d,%d,%d want %d,%d (%s)",
+        _self.pos.x, _self.pos.y, _self.pos.z,
+        _self.dock.x, _self.dock.z, tostring(err2))
+end
+
 function base.returnToDock()
     if not _self.dock then logWarn("No dock assigned, staying put.") return true end
 
@@ -981,11 +1016,13 @@ function base.returnToDock()
     end
 
     -- GPS verify final dock position; correct if off by 1 from route rounding.
-    gpsSync()
-    if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
-        logWarn(string.format("Post-dock GPS mismatch: at %d,%d want %d,%d — correcting",
-            _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
-        move.to(_self.dock.x, FLOOR_Y, _self.dock.z)
+    -- A turtle that is NOT at its dock must not report that it is: IDLE plus
+    -- DOCKED is dispatchable, and the next job would start from wherever it
+    -- actually is. ERROR keeps it out of registry.getIdle until someone looks.
+    local atDock, dockErr = verifyAtDock()
+    if not atDock then
+        base.setStatus(proto.STATUS.ERROR)
+        return false, dockErr
     end
 
     -- Face toward the taxiway so departure always starts from the same orientation.
@@ -1039,11 +1076,10 @@ function base.returnToDockFromSky()
         return false, "sky return route failed: " .. (err or "?")
     end
 
-    gpsSync()
-    if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z then
-        logWarn(string.format("Post-dock GPS mismatch: at %d,%d want %d,%d — correcting",
-            _self.pos.x, _self.pos.z, _self.dock.x, _self.dock.z))
-        move.to(_self.dock.x, FLOOR_Y, _self.dock.z)
+    local atDock, dockErr = verifyAtDock()
+    if not atDock then
+        base.setStatus(proto.STATUS.ERROR)
+        return false, dockErr
     end
 
     move.face(W.dockFacing(_self.dock))
