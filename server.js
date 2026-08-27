@@ -90,7 +90,31 @@ let state = {
     players:   [],   // online players from Dynmap: [{ name, x, y, z, health, world }]
     locations,       // named delivery locations { [name]: { name, x, y, z } }
     updatedAt: null,
+
+    // Seeded so /state has a stable shape before the first CC push lands.
+    // The two health booleans start null, not true: on a cold bridge we have
+    // not heard from the server yet, and "unknown" must not read as "healthy" —
+    // that is the exact confusion Invariant K exists to prevent.
+    oreThresholds:      {},
+    turtleLogs:         {},
+    recentFailures:     [],
+    storageHealth:      {},
+    zoneStoreHealthy:   null,
+    persistenceHealthy: null,
+    diskFree:           -1,
 };
+
+// Keys the CC server may never overwrite, whatever it sends.
+//   locations — bridge-owned and persisted to disk here; no server-side counterpart
+//   players   — sourced from Dynmap, not from CC
+//   updatedAt — stamped by this handler
+const BRIDGE_OWNED = new Set(['locations', 'players', 'updatedAt']);
+
+// Keys with their own handling in /update below (marker diffing, type checks).
+// Listed so the generic merge skips them rather than assigning twice.
+const EXPLICITLY_MERGED = new Set([
+    'turtles', 'jobs', 'version', 'storage', 'storageTs', 'mineZones', 'serverLog',
+]);
 
 let pendingCommands = [];   // commands queued by dashboard, picked up by CC on next poll
 let markerExists    = {};   // track which turtle markers already exist on Dynmap
@@ -309,6 +333,24 @@ app.post('/update', async (req, res) => {
     if (typeof storageTs === 'number' && storageTs > 0) state.storageTs = storageTs;
     if (mineZones)                   state.mineZones = mineZones;
     if (Array.isArray(req.body?.serverLog)) state.serverLog = req.body.serverLog;
+
+    // Everything else the server sends passes straight through.
+    //
+    // This used to be a whitelist, which meant a new server-side field reached an
+    // operator only if someone remembered to add a line here. Seven did not get
+    // one — including every Invariant K health signal — so the system could be
+    // degraded and unable to say so while each component upstream believed it had
+    // reported. Merging by default inverts the failure mode: a new field arrives
+    // unstyled rather than not at all, which is the right direction for a signal
+    // nobody goes looking for until something is already wrong.
+    //
+    // Bridge-owned keys stay protected: a stray `locations` in a payload would
+    // otherwise wipe the operator's saved delivery points, which live only here.
+    for (const [key, value] of Object.entries(req.body || {})) {
+        if (BRIDGE_OWNED.has(key) || EXPLICITLY_MERGED.has(key)) continue;
+        state[key] = value;
+    }
+
     state.updatedAt = now;
 
     res.json({ ok: true, commands: pendingCommands.splice(0) });
