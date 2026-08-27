@@ -108,6 +108,66 @@ return {
         assert_eq(z and z.total, 4)
     end,
 
+    -- ─── Per-zone writes ────────────────────────────────────────────────────
+    --
+    -- The point of the whole plan. The old function re-serialised EVERY zone on
+    -- every sector completion, which both stalled the event loop and meant a
+    -- 254 KB file needed 254 KB free to save.
+    ["a keyed save writes only that zone"] = function(assert_eq)
+        local kv = fakeKV({})
+        local server, T, restore = freshServer(kv, nil)
+        T.state.persistentZones = {
+            ["a"] = { total = 1 },
+            ["b"] = { total = 2 },
+        }
+        T.savePersistentZones("a")
+        local wroteA = kv._store["z:a"] ~= nil
+        local wroteB = kv._store["z:b"] ~= nil
+        restore()
+        assert_eq(wroteA, true, "the named zone must be written")
+        assert_eq(wroteB, false,
+            "and the others must NOT be — re-serialising all of them is the cost "
+            .. "this change exists to remove")
+    end,
+
+    -- A bare call is never wrong, just slower. Shutdown and bulk edits use it.
+    ["a bare save still writes every zone"] = function(assert_eq)
+        local kv = fakeKV({})
+        local server, T, restore = freshServer(kv, nil)
+        T.state.persistentZones = { ["a"] = { total = 1 }, ["b"] = { total = 2 } }
+        T.savePersistentZones()
+        local a, b = kv._store["z:a"] ~= nil, kv._store["z:b"] ~= nil
+        restore()
+        assert_eq(a and b, true, "an unkeyed save must still persist everything")
+    end,
+
+    -- A zone deleted from memory must be removed from the store, not left as a
+    -- stale copy that the next load would resurrect. DELETE_MINE_ZONE passes its
+    -- key after nilling the entry, which is exactly this path.
+    ["a keyed save for a removed zone deletes it from the store"] = function(assert_eq)
+        local kv = fakeKV({ ["z:gone"] = textutils.serialise({ total = 3 }) })
+        local server, T, restore = freshServer(kv, nil)
+        T.state.persistentZones = {}
+        T.savePersistentZones("gone")
+        local still = kv._store["z:gone"] ~= nil
+        restore()
+        assert_eq(still, false,
+            "a zone removed from memory must not survive in the store")
+    end,
+
+    -- Invariant K: a write path exposes a health signal reachable from /state.
+    ["a failing zone write is reported, not swallowed"] = function(assert_eq)
+        local kv = fakeKV({})
+        kv.put = function() error("kv exploded", 0) end
+        local server, T, restore = freshServer(kv, nil)
+        T.state.persistentZones = { ["a"] = { total = 1 } }
+        T.savePersistentZones("a")
+        local healthy = T.state.zoneStoreHealthy
+        restore()
+        assert_eq(healthy, false,
+            "a pcall is error handling, not error reporting — the failure must surface")
+    end,
+
     -- Nothing anywhere is a clean start, not a crash.
     ["no cloud and no disk is an empty start"] = function(assert_eq)
         local server, T, restore = freshServer(fakeKV({}), nil)

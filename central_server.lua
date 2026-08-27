@@ -545,7 +545,49 @@ local function computeZoneKey(bx1, bz1, bx2, bz2)
     return string.format("%d,%d,%d,%d", bx1, bz1, bx2, bz2)
 end
 
-local function savePersistentZones()
+-- changedKey: write only that zone. Omitted: write all of them.
+--
+-- Granularity is the point. The previous implementation re-serialised the ENTIRE
+-- zone table on every sector completion, which both stalled the event loop and
+-- required free disk equal to the whole file -- a 254 KB file needing 254 KB free
+-- to save. Per-zone keys make it a ~40 KB write.
+--
+-- A bare call is never wrong, a wrong key is: passing a key writes only that
+-- zone, so naming the wrong one silently fails to persist the zone that actually
+-- changed. Call sites where no single zone is implicated stay bare.
+local function savePersistentZones(changedKey)
+    if cloudstore.available() then
+        local wrote, failed = 0, 0
+        if changedKey then
+            local zone = state.persistentZones[changedKey]
+            if zone then
+                local ok, err = cloudstore.put(cloudstore.NS.ZONE, changedKey, zone)
+                if ok then wrote = 1
+                else failed = 1
+                    logWarn("zone save failed for " .. changedKey .. ": " .. tostring(err)) end
+            else
+                -- The zone is gone from memory: remove it rather than leaving a
+                -- stale copy that a later load would resurrect.
+                cloudstore.delete(cloudstore.NS.ZONE, changedKey)
+            end
+        else
+            for zoneKey, zone in pairs(state.persistentZones) do
+                local ok, err = cloudstore.put(cloudstore.NS.ZONE, zoneKey, zone)
+                if ok then wrote = wrote + 1
+                else failed = failed + 1
+                    logWarn("zone save failed for " .. zoneKey .. ": " .. tostring(err)) end
+            end
+        end
+        if failed == 0 then
+            state.zoneStoreHealthy = true
+            return
+        end
+        state.zoneStoreHealthy = false
+        logWarn(string.format(
+            "savePersistentZones: %d written, %d failed — falling back to disk", wrote, failed))
+    end
+
+    -- Disk fallback: unchanged behaviour for a server with no KV attached.
     local ok, err = pcall(function()
         local data = textutils.serialise(state.persistentZones)
         local f = fs.open("zones.tmp", "w")
@@ -553,12 +595,22 @@ local function savePersistentZones()
         f.write(data); f.close()
         if fs.exists(ZONE_SAVE_FILE) then
             if fs.exists(ZONE_SAVE_FILE .. ".bak") then fs.delete(ZONE_SAVE_FILE .. ".bak") end
-            fs.copy(ZONE_SAVE_FILE, ZONE_SAVE_FILE .. ".bak")
-            fs.delete(ZONE_SAVE_FILE)
+            -- MOVE, not copy. The plan specified fs.copy here, which is the same
+            -- defect already fixed in saveJobs (3aa1f03): a copy needs room for a
+            -- second full file and runs AFTER the old backup is deleted, so on a
+            -- nearly full disk it destroys the backup and fails to replace it.
+            -- A rename needs no additional space. The window where only .bak
+            -- exists is what loadPersistentZones' backup branch is for.
+            fs.move(ZONE_SAVE_FILE, ZONE_SAVE_FILE .. ".bak")
         end
         fs.move("zones.tmp", ZONE_SAVE_FILE)
     end)
-    if not ok then logWarn("savePersistentZones failed: " .. tostring(err)) end
+    if not ok then
+        state.zoneStoreHealthy = false
+        logWarn("savePersistentZones failed: " .. tostring(err))
+    elseif not cloudstore.available() then
+        state.zoneStoreHealthy = true
+    end
 end
 
 local function loadPersistentZones()
@@ -703,7 +755,7 @@ local function mergeToPersistentZone(jobId, sx, sz, foundOres)
     pz.oreMined = {}
     for k, v in pairs(zone.oreMined) do pz.oreMined[k] = v end
     pz.lastActivity = os.epoch("utc")
-    savePersistentZones()
+    savePersistentZones(zone.persistentKey)
 end
 
 local function orePct(oreFound, oreMined)
@@ -1267,7 +1319,7 @@ function jobQueue.fail(jobId, reason, recoverable)
                         "Sector (%d,%d) blacklisted after %d failures",
                         la.x, la.z, pz.sectorFailCount[sKey]))
                 end
-                savePersistentZones()
+                savePersistentZones(zone.persistentKey)
             end
             -- Return the in-flight sector to pending so it isn't permanently lost.
             -- Only skip if the sector is blacklisted (>=3 failures on this sector).
@@ -1533,7 +1585,7 @@ local function ensureMineZone(jobId, params)
             rb = { x1 = pz.bounds.x1 + SCAN_RADIUS, z1 = pz.bounds.z1 + SCAN_RADIUS,
                    x2 = pz.bounds.x2 - SCAN_RADIUS, z2 = pz.bounds.z2 - SCAN_RADIUS }
             pz.rawBounds = rb
-            savePersistentZones()
+            savePersistentZones(key)
         end
         state.miningZones[jobId] = {
             pending         = targeted,
@@ -1662,11 +1714,11 @@ local function ensureMineZone(jobId, params)
             oreMined     = {},
             lastActivity = os.epoch("utc"),
         }
-        savePersistentZones()
+        savePersistentZones(key)
     elseif not pz.rawBounds then
         -- Backward compat: patch older on-disk zones that predate rawBounds
         pz.rawBounds = rawBounds
-        savePersistentZones()
+        savePersistentZones(key)
     end
 
     saveMiningZones()
@@ -2164,7 +2216,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             local pz = zone.persistentKey and state.persistentZones[zone.persistentKey]
             if pz then
                 pz.surveyed = true
-                savePersistentZones()
+                savePersistentZones(zone.persistentKey)
             end
             logInfo(string.format("Zone %s survey complete (survey-only) — MINE_COMPLETE", p.jobId))
             sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
@@ -2195,7 +2247,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             if pz then
                 pz.oreFound = {}
                 for k, v in pairs(zone.oreFound) do pz.oreFound[k] = v end
-                savePersistentZones()
+                savePersistentZones(zone.persistentKey)
             end
 
             local remaining = zone.rescanPending or {}
@@ -2934,7 +2986,7 @@ function server.run()
             end
             if state.persistentZones[key] then
                 state.persistentZones[key] = nil
-                savePersistentZones()
+                savePersistentZones(key)
                 logInfo("Dashboard: deleted mine zone " .. key)
             else
                 logWarn("DELETE_MINE_ZONE: zone not found: " .. key)
@@ -3682,6 +3734,7 @@ if _G.__CC_SERVER_TEST then
         -- assumed this file could not be required and treated the harness as a
         -- collateral-damage check only; the seam above makes it testable.
         loadPersistentZones = loadPersistentZones,
+        savePersistentZones = savePersistentZones,
     }
     return server
 end
