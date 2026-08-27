@@ -47,6 +47,9 @@ local ROLE_FILES = {
         { src = "warehouse.lua", dst = "startup.lua" },
     },
     SERVER    = {
+        -- Must precede central_server: it requires cloudstore at load, and an
+        -- OTA that ships the server without it bricks the boot.
+        "cloudstore.lua",
         { src = "central_server.lua", dst = "startup.lua" },
         "stress_test.lua",
     },

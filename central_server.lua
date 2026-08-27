@@ -7,7 +7,32 @@ local W     = require("waypoints")
 -- Storage (W6). Consumed through its documented interface only -- this file
 -- knows about zones and nothing about KV mechanics, and never touches the
 -- peripheral directly.
-local cloudstore = require("cloudstore")
+--
+-- pcall'd, and the fallback is the point. A hard require makes deployment ORDER
+-- load-bearing: shipping central_server before cloudstore.lua stops the server
+-- booting at all, which is exactly what happened on 2026-08-27 --
+-- "module 'cloudstore' not found" at startup.lua:10, dispatch down completely,
+-- because the require shipped before the installer entry did.
+--
+-- The same principle that makes a missing kv_storage peripheral a non-error
+-- applies to a missing module: capability is ADDED, never required. A stub that
+-- reports unavailable means the server starts and uses the disk path, which is
+-- precisely the behaviour it had before any of this landed.
+local okCloudstore, cloudstore = pcall(require, "cloudstore")
+if not okCloudstore or type(cloudstore) ~= "table" then
+    cloudstore = {
+        NS         = { ZONE = "z", INDEX = "ix", LOG = "log", JOB = "j" },
+        BUDGET     = {},
+        available  = function() return false end,
+        put        = function() return false, "cloudstore not installed" end,
+        get        = function() return nil end,
+        delete     = function() end,
+        listKeys   = function() return {} end,
+        health     = function()
+            return { available = false, lastError = "cloudstore.lua not installed" }
+        end,
+    }
+end
 
 -- ─── Config ──────────────────────────────────────────────────────────────────
 

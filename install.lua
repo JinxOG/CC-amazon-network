@@ -29,6 +29,7 @@ local FILES = {
     loader_state    = "loader_state.lua",
     mine_flow       = "mine_flow.lua",
     loader_turtle   = "loader_turtle.lua",
+    cloudstore      = "cloudstore.lua",
 }
 
 local PROFILES = {
@@ -36,6 +37,10 @@ local PROFILES = {
         { src = FILES.protocol,       name = "protocol.lua"       },
         { src = FILES.updater,        name = "updater.lua"        },
         { src = FILES.waypoints,      name = "waypoints.lua"      },
+        -- central_server requires this at load. Without it the server does not
+        -- start at all -- observed 2026-08-27, "module 'cloudstore' not found"
+        -- on boot, because the require shipped before the deployment entry did.
+        { src = FILES.cloudstore,     name = "cloudstore.lua"     },
         { src = FILES.central_server, name = "central_server.lua" },
         { src = FILES.startup_server, name = "startup.lua"        },
     },

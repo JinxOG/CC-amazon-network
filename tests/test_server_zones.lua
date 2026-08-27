@@ -252,6 +252,53 @@ return {
             "and it must survive serialiseJSON, or the /state signal is silently empty")
     end,
 
+    -- The boot failure of 2026-08-27. central_server hard-required cloudstore
+    -- while the installer did not ship it, so the server did not start at all:
+    -- "module 'cloudstore' not found" at startup.lua:10, dispatch down entirely.
+    --
+    -- Deployment order must not be load-bearing. A missing MODULE degrades the
+    -- same way a missing peripheral does -- capability is added, never required
+    -- -- so the server boots and uses the disk path it always had.
+    ["a missing cloudstore module does not stop the server loading"] =
+    function(assert_eq)
+        local c = stub.install({})
+        local savedEpoch, savedPeripheral = os.epoch, peripheral
+        os.epoch = function() return 1000000 end
+        peripheral = { find = function() return nil end }
+
+        local f = fs.open("mine_zones.dat", "w")
+        f.write(textutils.serialise({ ["0,0,32,32"] = ZONE })); f.close()
+
+        -- Force the require to fail exactly as a missing file does.
+        package.loaded["cloudstore"] = nil
+        package.preload["cloudstore"] = function() error("module not found", 0) end
+
+        _G.__CC_SERVER_TEST = true
+        package.loaded["central_server"] = nil
+        package.loaded["waypoints"]      = nil
+        local ok, server = pcall(require, "central_server")
+
+        local loaded, zones = false, 0
+        if ok and server and server._test then
+            server._test.state.persistentZones = {}
+            server._test.loadPersistentZones()
+            for _ in pairs(server._test.state.persistentZones) do zones = zones + 1 end
+            loaded = true
+        end
+
+        package.preload["cloudstore"] = nil
+        package.loaded["cloudstore"]  = nil
+        package.loaded["central_server"] = nil
+        _G.__CC_SERVER_TEST = nil
+        os.epoch, peripheral = savedEpoch, savedPeripheral
+
+        assert_eq(ok, true,
+            "the server must load without cloudstore — a hard require bricked the "
+            .. "boot when the installer had not shipped it yet")
+        assert_eq(loaded, true, "and the seam must still be usable")
+        assert_eq(zones, 1, "and zones must still load from disk")
+    end,
+
     -- Nothing anywhere is a clean start, not a crash.
     ["no cloud and no disk is an empty start"] = function(assert_eq)
         local server, T, restore = freshServer(fakeKV({}), nil)
