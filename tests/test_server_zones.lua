@@ -183,7 +183,10 @@ return {
         }
         T.migrateZonesToCloud()
         local n = 0
-        for _ in pairs(kv._store) do n = n + 1 end
+        -- Skip the namespace index. Task 1b gave each namespace a "<ns>:__index"
+        -- key so listKeys stops scanning the whole shared key space; it is
+        -- bookkeeping, not a zone. Counted here it would read as a fourth zone.
+        for k in pairs(kv._store) do if k ~= "z:__index" then n = n + 1 end end
         restore()
         assert_eq(n, 3, "every zone must be seeded, not just the ones that later change")
     end,

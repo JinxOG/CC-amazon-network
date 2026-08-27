@@ -12,8 +12,9 @@ local function fakeKV()
         get    = function(k) return store[k] end,
         delete = function(k) store[k] = nil end,
         list   = function()
+            store.__listCalls = (store.__listCalls or 0) + 1
             local out = {}
-            for k in pairs(store) do out[#out + 1] = k end
+            for k in pairs(store) do if k ~= "__listCalls" then out[#out + 1] = k end end
             return out
         end,
         getConfiguration = function() return { valueLimit = 500000, keyLimit = 10240 } end,
@@ -100,5 +101,50 @@ return {
         kv._store["z:scalar"] = "42"
         assert_eq(cs.get(cs.NS.ZONE, "bad"), nil)
         assert_eq(cs.get(cs.NS.ZONE, "scalar"), nil)
+    end,
+
+    ["listKeys uses the index and does not scan all keys"] = function(assert_eq)
+        local kv = fakeKV()
+        local cs = fresh(kv)
+        cs.put(cs.NS.ZONE, "a", { n = 1 })
+        cs.put(cs.NS.ZONE, "b", { n = 2 })
+        kv._store.__listCalls = 0
+        local keys = cs.listKeys(cs.NS.ZONE)
+        table.sort(keys)
+        assert_eq(#keys, 2)
+        assert_eq(keys[1], "a")
+        assert_eq(kv._store.__listCalls, 0)
+    end,
+
+    ["delete removes the key from the index"] = function(assert_eq)
+        local cs = fresh(fakeKV())
+        cs.put(cs.NS.ZONE, "a", { n = 1 })
+        cs.put(cs.NS.ZONE, "b", { n = 2 })
+        cs.delete(cs.NS.ZONE, "a")
+        local keys = cs.listKeys(cs.NS.ZONE)
+        assert_eq(#keys, 1)
+        assert_eq(keys[1], "b")
+    end,
+
+    -- Invariant K: a pcall is error handling, not error reporting. If the index
+    -- write fails, listKeys silently under-reports and a zone load quietly comes
+    -- back short -- the exact class of loss this plan exists to stop. The plan's
+    -- writeIndex discarded that failure, so it had to become visible somewhere.
+    ["a failed index write is reported in health"] = function(assert_eq)
+        local kv = fakeKV()
+        local cs = fresh(kv)
+        -- Seed a valid index first, so this exercises the incremental index
+        -- update rather than the rebuild path.
+        cs.put(cs.NS.ZONE, "a", { n = 1 })
+        local realPut = kv.put
+        kv.put = function(k, v)
+            if k == "z:__index" then error("kv full", 0) end
+            realPut(k, v)
+        end
+        local ok = cs.put(cs.NS.ZONE, "b", { n = 2 })
+        assert_eq(ok, true)              -- the value itself was written
+        local h = cs.health()
+        assert_eq(h.failures, 1)         -- but the index write was not silent
+        assert_eq(type(h.lastError), "string")
     end,
 }

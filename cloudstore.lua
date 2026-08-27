@@ -20,6 +20,7 @@ cloudstore.NS = {
 -- Declared allocations against the measured 10240-key limit. A subsystem that
 -- would exceed its allocation must raise it here first, so the shared pool is
 -- never consumed by accident (spec §13.1, applied to keys instead of bytes).
+-- Each namespace also consumes one key for its "<ns>:__index" entry.
 cloudstore.BUDGET = {
     [cloudstore.NS.ZONE]  = 500,
     [cloudstore.NS.INDEX] = 6000,
@@ -53,6 +54,59 @@ local function fullKey(ns, key)
     return ns .. ":" .. tostring(key)
 end
 
+-- Shared by get() and readIndex(). A corrupt or foreign value must read as
+-- absent, never raise: an unreadable zone is survivable, a crashed server is
+-- not. Anything that does not decode to a table — a scalar, another
+-- subsystem's value — counts as absent rather than being handed back.
+local function decodeTable(raw)
+    if type(raw) ~= "string" or raw == "" then return nil end
+    local decoded = textutils.unserialise(raw)
+    if type(decoded) ~= "table" then return nil end
+    return decoded
+end
+
+-- Each namespace keeps its own index of live keys. kv.list() returns the whole
+-- shared key space with no prefix filter, so scanning it per enumeration costs
+-- O(total keys across every subsystem) — untenable once the key limit is raised.
+local function indexKey(ns) return ns .. ":__index" end
+
+local function readIndex(p, ns)
+    local ok, raw = pcall(function() return p.get(indexKey(ns)) end)
+    if not ok then return nil end
+    return decodeTable(raw)
+end
+
+local function writeIndex(p, ns, set)
+    local ok, err = pcall(function() p.put(indexKey(ns), textutils.serialise(set)) end)
+    if not ok then
+        -- Invariant K. A lost index write is worse than a lost value: listKeys
+        -- then under-reports, so the next load comes back short and looks like a
+        -- clean load of fewer zones. Count it like any other write failure so it
+        -- reaches health() and /state rather than dying inside the pcall.
+        _failures  = _failures + 1
+        _lastError = "index write failed for " .. tostring(ns) .. ": " .. tostring(err)
+    end
+    return ok
+end
+
+-- Rebuild from a full scan. Only called when the index is missing or corrupt,
+-- which is a repair path, not a hot path.
+local function rebuildIndex(p, ns)
+    local set = {}
+    local ok, all = pcall(function() return p.list() end)
+    if ok and type(all) == "table" then
+        local prefix = ns .. ":"
+        for _, k in ipairs(all) do
+            if type(k) == "string" and k:sub(1, #prefix) == prefix then
+                local bare = k:sub(#prefix + 1)
+                if bare ~= "__index" then set[bare] = true end
+            end
+        end
+    end
+    writeIndex(p, ns, set)
+    return set
+end
+
 function cloudstore.put(ns, key, tbl)
     local p = kv()
     if not p then
@@ -73,6 +127,11 @@ function cloudstore.put(ns, key, tbl)
     end
     _writes   = _writes + 1
     _lastOkAt = os.epoch and os.epoch("utc") or 0
+    local set = readIndex(p, ns) or rebuildIndex(p, ns)
+    if not set[tostring(key)] then
+        set[tostring(key)] = true
+        writeIndex(p, ns, set)
+    end
     return true
 end
 
@@ -80,32 +139,30 @@ function cloudstore.get(ns, key)
     local p = kv()
     if not p then return nil end
     local ok, raw = pcall(function() return p.get(fullKey(ns, key)) end)
-    if not ok or type(raw) ~= "string" or raw == "" then return nil end
-    -- A corrupt or foreign value must read as absent, never raise: an
-    -- unreadable zone is survivable, a crashed server is not.
-    local decoded = textutils.unserialise(raw)
-    if type(decoded) ~= "table" then return nil end
-    return decoded
+    if not ok then return nil end
+    return decodeTable(raw)
 end
 
 function cloudstore.delete(ns, key)
     local p = kv()
     if not p then return false end
     local ok = pcall(function() p.delete(fullKey(ns, key)) end)
+    if ok then
+        local set = readIndex(p, ns)
+        if set and set[tostring(key)] then
+            set[tostring(key)] = nil
+            writeIndex(p, ns, set)
+        end
+    end
     return ok and true or false
 end
 
 function cloudstore.listKeys(ns)
     local p = kv()
     if not p then return {} end
-    local ok, all = pcall(function() return p.list() end)
-    if not ok or type(all) ~= "table" then return {} end
-    local prefix, out = ns .. ":", {}
-    for _, k in ipairs(all) do
-        if type(k) == "string" and k:sub(1, #prefix) == prefix then
-            out[#out + 1] = k:sub(#prefix + 1)
-        end
-    end
+    local set = readIndex(p, ns) or rebuildIndex(p, ns)
+    local out = {}
+    for k in pairs(set) do out[#out + 1] = k end
     return out
 end
 
