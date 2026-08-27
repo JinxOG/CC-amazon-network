@@ -168,6 +168,90 @@ return {
             "a pcall is error handling, not error reporting — the failure must surface")
     end,
 
+    -- ─── Migration ──────────────────────────────────────────────────────────
+    --
+    -- This is what makes the per-zone write safe to deploy. Without it, the
+    -- FIRST zone saved after deployment leaves KV holding one key -- and
+    -- loadPersistentZones treats any non-empty KV as authoritative, so the next
+    -- restart loads that one zone and silently drops every zone that had not
+    -- happened to change.
+    ["migration seeds every disk zone into an empty cloud store"] = function(assert_eq)
+        local kv = fakeKV({})
+        local server, T, restore = freshServer(kv, nil)
+        T.state.persistentZones = {
+            ["a"] = { total = 1 }, ["b"] = { total = 2 }, ["c"] = { total = 3 },
+        }
+        T.migrateZonesToCloud()
+        local n = 0
+        for _ in pairs(kv._store) do n = n + 1 end
+        restore()
+        assert_eq(n, 3, "every zone must be seeded, not just the ones that later change")
+    end,
+
+    -- Idempotent: it runs on every boot and must do nothing once KV is populated,
+    -- or a later boot would overwrite live cloud state with whatever the disk
+    -- fallback happened to hold.
+    ["migration does nothing once the cloud store is populated"] = function(assert_eq)
+        local kv = fakeKV({ ["z:a"] = textutils.serialise({ total = 99 }) })
+        local server, T, restore = freshServer(kv, nil)
+        T.state.persistentZones = { ["a"] = { total = 1 }, ["b"] = { total = 2 } }
+        T.migrateZonesToCloud()
+        local a = textutils.unserialise(kv._store["z:a"])
+        local addedB = kv._store["z:b"] ~= nil
+        restore()
+        assert_eq(a.total, 99, "an existing cloud zone must not be overwritten on reboot")
+        assert_eq(addedB, false, "and migration must not run at all once KV is non-empty")
+    end,
+
+    -- A partial migration is the dangerous state: KV is now non-empty, so the
+    -- next boot reads it as authoritative while some zones exist only on disk.
+    -- It must be loud, and the disk files must stay.
+    ["a partial migration reports unhealthy rather than passing quietly"] =
+    function(assert_eq)
+        local kv = fakeKV({})
+        local calls = 0
+        kv.put = function(k, v)
+            calls = calls + 1
+            if calls == 2 then error("kv full", 0) end
+            kv._store[k] = v
+        end
+        local server, T, restore = freshServer(kv, nil)
+        T.state.zoneStoreHealthy = true
+        T.state.persistentZones = { ["a"] = { total = 1 }, ["b"] = { total = 2 } }
+        T.migrateZonesToCloud()
+        local healthy = T.state.zoneStoreHealthy
+        restore()
+        assert_eq(healthy, false,
+            "a half-migrated store must surface — the next boot trusts KV over disk")
+    end,
+
+    ["migration is a no-op with no kv peripheral"] = function(assert_eq)
+        local server, T, restore = freshServer(nil, nil)
+        T.state.persistentZones = { ["a"] = { total = 1 } }
+        local ok = pcall(T.migrateZonesToCloud)
+        restore()
+        assert_eq(ok, true, "no peripheral is not an error")
+    end,
+
+    -- Invariant K for the cloud path. /state carries cloudstore.health() through
+    -- the js() helper, which pcalls serialiseJSON and falls back to "{}" -- so a
+    -- bad shape degrades one field rather than blanking the dashboard. What it
+    -- cannot survive is health() returning something serialiseJSON rejects on
+    -- every call, which would make the signal permanently empty and silent.
+    --
+    -- buildBridgePayload is a local inside server.run and is not reachable from
+    -- the seam, so this covers the input rather than the assembly.
+    ["storage health serialises for /state"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local cs = require("cloudstore")
+        local h  = cs.health()
+        local ok, encoded = pcall(textutils.serialiseJSON, h)
+        restore()
+        assert_eq(type(h), "table", "health() must return a table")
+        assert_eq(ok and type(encoded) == "string", true,
+            "and it must survive serialiseJSON, or the /state signal is silently empty")
+    end,
+
     -- Nothing anywhere is a clean start, not a crash.
     ["no cloud and no disk is an empty start"] = function(assert_eq)
         local server, T, restore = freshServer(fakeKV({}), nil)

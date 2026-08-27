@@ -375,6 +375,11 @@ function M.install(opts)
     textutils = {
         serialise = function(t) return M._serialise(t) end,
         unserialise = function(s) return M._unserialise(s) end,
+        -- serialiseJSON was missing entirely, which meant every js() call in the
+        -- bridge payload raised in tests -- so /state, the thing every dashboard
+        -- and every debugging session reads, had no coverage at all and could not
+        -- have had any. Sixth stub fidelity gap; see M._drop's note.
+        serialiseJSON = function(v) return M._json(v) end,
     }
 
     -- In-memory fs, just enough for loader_state.lua's persistence to run
@@ -465,6 +470,55 @@ end
 --     and returns false in-world
 --   * fuel is not consumed by turn/dig, only by movement
 -- Add fidelity when a test needs it; do not assume the absence of a gap.
+-- Minimal JSON encoder matching CC:Tweaked's serialiseJSON closely enough for
+-- payload tests: objects, arrays, strings, numbers, booleans.
+--
+-- This was missing entirely, which meant every js() call in the bridge payload
+-- raised under the harness -- so /state, the thing every dashboard and every
+-- debugging session reads, had no coverage at all and could not have had any.
+-- Sixth stub fidelity gap; see M._drop's note for the pattern.
+local JSON_ESC = {
+    ['"']  = '\\"',
+    ['\\'] = '\\\\',
+    ['\n'] = '\\n',
+    ['\r'] = '\\r',
+    ['\t'] = '\\t',
+}
+
+function M._json(v)
+    local t = type(v)
+    if v == nil then return "null" end
+    if t == "boolean" or t == "number" then return tostring(v) end
+    if t == "string" then
+        local out = v:gsub('.', function(ch)
+            if JSON_ESC[ch] then return JSON_ESC[ch] end
+            if ch:byte() < 32 then return string.format('\\u%04x', ch:byte()) end
+            return nil                      -- leave the character as it was
+        end)
+        return '"' .. out .. '"'
+    end
+    if t ~= "table" then error("cannot serialise " .. t, 0) end
+
+    -- A table with only positive integer keys encodes as an array; anything else
+    -- is an object. An EMPTY table becomes {}, matching what the bridge expects
+    -- for maps like `turtles` when no turtle is registered.
+    local isArray, n = true, 0
+    for k in pairs(v) do
+        n = n + 1
+        if type(k) ~= "number" or k < 1 or k % 1 ~= 0 then isArray = false end
+    end
+    if isArray and n > 0 then
+        local parts = {}
+        for i = 1, n do parts[#parts + 1] = M._json(v[i]) end
+        return "[" .. table.concat(parts, ",") .. "]"
+    end
+    local parts = {}
+    for k, val in pairs(v) do
+        parts[#parts + 1] = M._json(tostring(k)) .. ":" .. M._json(val)
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
 function M._drop(c, blockName, n)
     local i = c.inv[c.selected]
     if not i then return false, "No items to drop" end

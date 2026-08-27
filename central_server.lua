@@ -656,6 +656,49 @@ local function loadPersistentZones()
     if n > 0 then logInfo(string.format("Loaded %d persistent mine zone(s) from disk", n)) end
 end
 
+-- Idempotent: copies disk-loaded zones into KV the first time a cloud-capable
+-- server boots, then does nothing on later boots because KV is no longer empty.
+--
+-- This is the piece that makes the per-zone write safe. Without it, the FIRST
+-- zone saved after deployment leaves KV holding exactly one key -- and
+-- loadPersistentZones treats any non-empty KV as authoritative, so the next
+-- restart would load that one zone and silently drop every zone that had not
+-- happened to change. Seeding all of them up front means KV is never partially
+-- authoritative.
+--
+-- The disk files are deliberately NOT deleted here. A human deletes them once
+-- the cloud copy has been eyeballed; an automated delete on the same boot as the
+-- first write would remove the only fallback at the moment it is most needed.
+local function migrateZonesToCloud()
+    if not cloudstore.available() then return end
+    if #cloudstore.listKeys(cloudstore.NS.ZONE) > 0 then return end
+
+    local total, wrote, failed = 0, 0, 0
+    for zoneKey, zone in pairs(state.persistentZones) do
+        total = total + 1
+        local ok, err = cloudstore.put(cloudstore.NS.ZONE, zoneKey, zone)
+        if ok then
+            wrote = wrote + 1
+        else
+            failed = failed + 1
+            logError("zone migration failed for " .. zoneKey .. ": " .. tostring(err))
+        end
+    end
+
+    if total == 0 then return end
+    if failed == 0 then
+        logInfo(string.format("Migrated %d zone(s) to cloud storage", wrote))
+    else
+        -- Partial migration is the dangerous state: KV is now non-empty, so the
+        -- next boot reads it as authoritative while some zones exist only on
+        -- disk. Reported loudly, and the disk files stay put.
+        state.zoneStoreHealthy = false
+        logError(string.format(
+            "Zone migration incomplete: %d of %d written, %d FAILED — disk files retained",
+            wrote, total, failed))
+    end
+end
+
 -- ─── Active Mining Zone Persistence ──────────────────────────────────────────
 -- Saves the runtime state.miningZones to disk so that a server restart can
 -- replay SECTOR_ASSIGN to reconnecting mid-job miners.
@@ -3446,6 +3489,8 @@ function server.run()
                         -- the server ran for hours with no durability at all and
                         -- it was found only while chasing an unrelated deadlock.
                         ',"recentFailures":' .. js(state.recentFailures, "[]", "recentFailures") ..
+                        ',"storageHealth":' .. js(cloudstore.health(), "{}", "storageHealth") ..
+                        ',"zoneStoreHealthy":' .. tostring(state.zoneStoreHealthy ~= false) ..
                         ',"persistenceHealthy":' .. tostring(state.persistenceHealthy ~= false) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
@@ -3482,6 +3527,9 @@ function server.run()
     W.loadDockAssignments()
     loadJobs()
     loadPersistentZones()
+    -- Idempotent, and must follow the load: it seeds KV from whatever the load
+    -- produced, so KV is never partially authoritative.
+    migrateZonesToCloud()
     loadMiningZones()
     loadOreThresholds()
     print("Console ready. Type 'help' for commands.")
@@ -3735,6 +3783,7 @@ if _G.__CC_SERVER_TEST then
         -- collateral-damage check only; the seam above makes it testable.
         loadPersistentZones = loadPersistentZones,
         savePersistentZones = savePersistentZones,
+        migrateZonesToCloud = migrateZonesToCloud,
     }
     return server
 end
