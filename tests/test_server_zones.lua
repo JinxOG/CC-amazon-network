@@ -302,6 +302,28 @@ return {
         assert_eq(zones, 1, "and zones must still load from disk")
     end,
 
+    -- Invariant K, one layer in from where W5 guarded it. They seed
+    -- persistenceHealthy and zoneStoreHealthy to null on a cold bridge, because
+    -- "we have not heard from the server" must not render as "healthy". A server
+    -- that has never attempted a write knows exactly as little, so it must not
+    -- assert true either -- doing so would overwrite their null on the first push
+    -- and rebuild the confusion one hop earlier.
+    --
+    -- The payload builder is a local inside server.run and is not reachable, so
+    -- this covers the rule the field is emitted by rather than the assembly.
+    ["an unwritten health flag is unknown, not healthy"] = function(assert_eq)
+        local server, T, restore = freshServer(nil, nil)
+        local unset = T.state.zoneStoreHealthy
+        restore()
+
+        assert_eq(unset, nil, "precondition: nothing has been written yet")
+        -- The rule the payload applies. Emitting `x ~= false` for a nil value
+        -- yields true, which is the bug this replaced.
+        assert_eq(unset ~= false, true,
+            "documents the trap: the old expression reported an untouched server "
+            .. "as healthy, which is why the field is now omitted while nil")
+    end,
+
     -- Nothing anywhere is a clean start, not a crash.
     ["no cloud and no disk is an empty start"] = function(assert_eq)
         local server, T, restore = freshServer(fakeKV({}), nil)

@@ -3506,6 +3506,20 @@ function server.run()
         -- Serialise each section independently.  If one field has a bad table
         -- (mixed integer+string keys from corrupted on-disk data or peripheral quirk)
         -- the push still succeeds with a safe fallback for that section.
+        -- A health flag that has never been written is UNKNOWN, not healthy.
+        -- Omitting the key leaves the bridge's seeded null in place; emitting
+        -- `tostring(x ~= false)` would send `true` from a server that has not
+        -- attempted a single write yet.
+        --
+        -- W5 seeds these null on a cold bridge precisely so "we have not heard"
+        -- cannot render as "fine" (Invariant K). Sending an unfounded true from
+        -- here would have defeated that guard one layer in -- the same mistake,
+        -- one hop earlier.
+        local function healthField(name, value)
+            if value == nil then return "" end
+            return ',"' .. name .. '":' .. tostring(value and true or false)
+        end
+
         local function js(val, fallback, label)
             local ok, r = pcall(textutils.serialiseJSON, val)
             if not ok then
@@ -3538,8 +3552,8 @@ function server.run()
                         -- it was found only while chasing an unrelated deadlock.
                         ',"recentFailures":' .. js(state.recentFailures, "[]", "recentFailures") ..
                         ',"storageHealth":' .. js(cloudstore.health(), "{}", "storageHealth") ..
-                        ',"zoneStoreHealthy":' .. tostring(state.zoneStoreHealthy ~= false) ..
-                        ',"persistenceHealthy":' .. tostring(state.persistenceHealthy ~= false) ..
+                        healthField("zoneStoreHealthy",   state.zoneStoreHealthy) ..
+                        healthField("persistenceHealthy", state.persistenceHealthy) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
                         ',"turtleLogs":'   .. js(state.turtleLogs,     "{}",  "turtleLogs") .. '}'
