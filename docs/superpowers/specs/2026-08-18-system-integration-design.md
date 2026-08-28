@@ -801,8 +801,10 @@ owner to no *bytes*. Every subsystem that persists data was free to assume its o
 number, and the ore-index design assumed 512–640 KB on a dispatch computer that
 turned out to be full.
 
-**Every CC computer has a hard ceiling** — `computer_space_limit`, 1 MB by default
-(**unverified on this server; see V8**). Program text counts against it before a
+**Every CC computer has a hard ceiling** — `computer_space_limit`, **exactly
+1,000,000 bytes, measured on this server 2026-08-28** by W1 (free 237,583 + user
+files 762,417, closing exactly). `/rom/*` is mod-supplied and read-only and does
+not count against it. Program text counts against it before a
 single byte of data is written.
 
 | Computer | Fixed cost | Data | Owner |
@@ -824,11 +826,36 @@ single byte of data is written.
    buys one more 1 MB disk, not unlimited room. New computers are not a storage
    strategy.
 
-**Known defect — the dispatch computer stores the same program twice.**
-`install.lua:39` writes `central_server.lua` → `central_server.lua`, while
-`updater.lua:50` writes `central_server.lua` → `startup.lua`. A machine that was
-installed and later updated therefore carries **two 156,679-byte copies**, about
-313 KB — ~31% of a default disk. **W3 owns the fix.**
+**Known defect — the dispatch computer carries two builds of the same program
+under different names.** `install.lua:39` writes `central_server.lua` →
+`central_server.lua`, while `updater.lua:50` writes it → `startup.lua`. An
+installed-then-updated machine therefore holds the **current** build as
+`startup.lua` and a **stale** one as `central_server.lua`.
+
+Corrected 2026-08-28: this previously read "two 156,679-byte copies." Measured,
+they were **156,679 and 150,190 — different builds, ~307 KB together**, still
+~31% of the disk. "Duplicate" implies the two are interchangeable; they are not,
+and anyone deciding which to delete must know that `updater.lua` deploys the
+server *as* `startup.lua`, and that a file does not require itself.
+
+Cleared on the live machine 2026-08-28; the mechanism still exists in
+`install.lua`/`updater.lua`. **W3 owns the fix.**
+
+**The failure manufactured its own cause.** The largest file on the full disk was
+`/jobs.dat.bak` at **190,932 bytes** — a partial write left behind when
+`saveJobs` deleted its backup and then failed to recreate it. Deleting that plus
+the stale build reclaimed **341,122 bytes**.
+
+That is the concrete case rule 2 exists for: **a subsystem that fails part-way
+through a write can leave debris larger than the data it was trying to store**, so
+a budget must account for the failure modes of its own writes, not only for
+steady-state size.
+
+The `fs.copy` mechanism behind it was replaced with `fs.move` in `saveJobs`
+(`central_server.lua:490`) and `savePersistentZones` (`:629`). **It survives at
+`saveActiveZones` (`central_server.lua:754`)** — and `active_zones.dat` was one
+of the two files truncated to near-zero in the original incident. W3 should
+finish the sweep.
 
 ### 13.2 Push protocol
 
@@ -1236,7 +1263,7 @@ built on an assumption about their answer.**
 | **V5 / Probe D** | Android failure modes: chunk unload, death, inventory, clean reboot and re-register | Whether unattended overnight builds are realistic |
 | **V6** | Single modem message ceiling — an unfiltered ~8 KB assign payload is the largest thing on the wire | Whether chunked transfer is needed |
 | **V7** | Can a turtle equip **shears** as an upgrade in this pack? CC:Tweaked ships upgrades for the diamond tools; shears may need a datapack. | Only whether leaf **blocks** are obtainable as a material. Sustainable forestry does **not** depend on this (§6.5) |
-| **V8** | What is `computer_space_limit` on this server, what is actually consuming the dispatch computer's disk, and are **CC disk drives** available and permitted in this modpack? | Where Tier 2 of the resource index lives (§7.1), and the planner's own budget (§13.1) |
+| **V8** | ~~`computer_space_limit`~~ and ~~what consumes the dispatch disk~~ — **both answered 2026-08-28** (1,000,000 bytes exactly; a stale build plus a 190 KB partial write, since cleared). **Still open, narrowed:** are **CC disk drives** available and permitted in this modpack? | Only whether disk drives are the in-world alternative to putting Tier 2 on the bridge (§7.1). The tier placement decision stands either way. |
 
 ---
 
