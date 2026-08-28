@@ -38,6 +38,18 @@
         #feed-badge.live    { color:#00ff88; border-color:#00ff8844; background:#00ff8808; }
         #feed-badge.stale   { color:#ffaa44; border-color:#ffaa4444; background:#ffaa4408; animation:stalePulse 1.4s ease-in-out infinite; }
         #feed-badge.offline { color:#ff4444; border-color:#ff444444; background:#ff444408; }
+        /* Disk headroom. The server needs its own file size free just to update
+           itself, so "plenty of bytes left" is the wrong mental model -- the
+           threshold that matters is whether the next deploy can write. A full
+           disk has now silently broken saveJobs, savePersistentZones and the
+           updater, each found only while chasing something else. */
+        #disk-badge {
+            margin-left:8px; padding:3px 8px; border:1px solid; border-radius:2px;
+            font-size:10px; letter-spacing:1px; white-space:nowrap;
+        }
+        #disk-badge.warn { color:#ffaa44; border-color:#ffaa4444; background:#ffaa4408; }
+        #disk-badge.crit { color:#ff4444; border-color:#ff444444; background:#ff444408;
+                           animation:stalePulse 1.4s ease-in-out infinite; }
         @keyframes stalePulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
         #header-stats { margin-left:auto; display:flex; gap:16px; font-size:11px; align-items:center; }
         .stat { color:#7a8a9a; letter-spacing:1px; }
@@ -602,6 +614,7 @@
     <span class="sep">|</span>
     <div id="last-update">connecting...</div>
     <div id="feed-badge" class="offline">● —</div>
+    <div id="disk-badge" hidden></div>
     <div id="header-stats">
         <div class="stat">ONLINE <b id="s-online">0</b></div>
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
@@ -1463,6 +1476,7 @@ async function poll(){
         if(stale){badge.className='stale';badge.textContent='⚠ STALE';}
         else{badge.className='live';badge.textContent='● LIVE';}
         if(d.version)document.getElementById('cc-version').textContent=`v${d.version}`;
+        renderDisk(d.diskFree);
         try{renderAll(d);}catch(re){console.error('[render error]',re);}
     }catch(e){
         document.getElementById('status-dot').className='offline';
@@ -2174,6 +2188,32 @@ function sortItems(items){
     else if(mode==='high')s.sort((a,b)=>b.amount-a.amount);
     else if(mode==='craft')s.sort((a,b)=>((b.craftable?1:0)-(a.craftable?1:0))||b.amount-a.amount);
     return s;
+}
+
+// The dispatch computer must have at least one whole copy of the server file
+// free to update itself -- the updater writes a full-size temp alongside the
+// existing one. So the meaningful threshold is "can the next deploy write",
+// not "are there bytes left". SERVER_BYTES tracks central_server.lua's size.
+const SERVER_BYTES=190000;
+function renderDisk(free){
+    const el=document.getElementById('disk-badge');
+    if(!el)return;
+    if(typeof free!=='number'||free<0){el.hidden=true;return;}
+    const kb=Math.round(free/1024);
+    if(free<SERVER_BYTES){
+        el.hidden=false;
+        el.className='crit';
+        el.textContent='⚠ DISK '+kb+'KB';
+        el.title='Below one server-file of headroom ('+Math.round(SERVER_BYTES/1024)+'KB). '
+            +'The next update will fail partway and the server may come up running old code.';
+    }else if(free<SERVER_BYTES*2){
+        el.hidden=false;
+        el.className='warn';
+        el.textContent='DISK '+kb+'KB';
+        el.title='Under two server-files of headroom. Free space before the next deploy.';
+    }else{
+        el.hidden=true;   // healthy: stay out of the way
+    }
 }
 
 function renderStorage(items,storageTs){

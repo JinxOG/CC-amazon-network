@@ -71,6 +71,15 @@ local CFG = {
     -- Web dashboard bridge
     BRIDGE_URL        = "http://127.0.0.1:3000/update",
     BRIDGE_INTERVAL   = 3,      -- seconds between state pushes
+    -- RS storage poll. Measured in-world 2026-08-28: rsBridge.listItems() returns
+    -- 450 items in 37ms, so a 5s poll is well under a 1% duty cycle. This was 30s
+    -- on the assumption the call was expensive; the measurement says otherwise.
+    -- If listItems ever gets slow (a much larger network), raise this rather than
+    -- letting the poll eat the event loop the fleet dispatcher runs on.
+    STORAGE_INTERVAL  = 5,
+    -- listCraftableItems is the slow one and its answer rarely changes: it only
+    -- moves when a recipe or machine chain is added in-world.
+    CRAFTABLE_INTERVAL = 60,
 }
 
 -- ─── State ───────────────────────────────────────────────────────────────────
@@ -3539,6 +3548,23 @@ function server.run()
 
     logInfo(string.format("Central server online v%s  ID: %s", proto.VERSION, proto.selfId()))
 
+    -- Report a failed update, for the same reason and one step earlier: this
+    -- server reboots unconditionally after running the updater, so a partial
+    -- update's error text is wiped by the reboot that follows it. That is how a
+    -- machine came up running an old server while reporting a new proto.VERSION
+    -- -- the version lives in a small file that downloaded fine, the server did
+    -- not. The marker is cleared by the next successful update.
+    pcall(function()
+        if not fs.exists("update_failed.txt") then return end
+        local f = fs.open("update_failed.txt", "r")
+        if not f then return end
+        local detail = f.readAll()
+        f.close()
+        logError("LAST UPDATE FAILED — this server may be running old code: "
+            .. tostring(detail):gsub("%s+$", ""))
+        logError("Free disk now: " .. tostring(fs.getFreeSpace(".")) .. "B. Re-run 'updater' after freeing space.")
+    end)
+
     -- Replay the last crash into the live log so it reaches /state and the
     -- dashboard. Without this the reason exists only in a file nobody opens,
     -- and the operator sees turtles re-registering with no explanation.
@@ -3580,8 +3606,8 @@ function server.run()
     local oreWatchdogTimer = os.startTimer(60)
     -- RS peripheral calls block the event loop for several seconds — keep them
     -- on their own timers so they never run inside the bridge push path.
-    local storageTimer     = os.startTimer(30)
-    local craftableTimer   = os.startTimer(60)
+    local storageTimer     = os.startTimer(CFG.STORAGE_INTERVAL)
+    local craftableTimer   = os.startTimer(CFG.CRAFTABLE_INTERVAL)
     pcall(refreshStorage)
     pcall(refreshCraftable)
 
@@ -3735,14 +3761,21 @@ function server.run()
                 logWarn("Bridge push timed out (>15s)")
 
             elseif p1 == storageTimer then
-                -- Runs on its own timer so the blocking peripheral scan never
-                -- happens inside startBridgePush() where it would stall the event loop.
+                -- Runs on its own timer so the peripheral scan never happens
+                -- inside startBridgePush() where it would stall the event loop.
+                --
+                -- lastStorageWC is stamped here too. The wall-clock fallback below
+                -- is an independent trigger, so without this both fire and the poll
+                -- runs twice per interval -- observed live as two refreshes two
+                -- seconds apart. The fallback is a safety net, not a second poll.
                 pcall(refreshStorage)
-                storageTimer = os.startTimer(30)
+                lastStorageWC = os.epoch("utc")
+                storageTimer = os.startTimer(CFG.STORAGE_INTERVAL)
 
             elseif p1 == craftableTimer then
                 pcall(refreshCraftable)
-                craftableTimer = os.startTimer(60)
+                lastCraftableWC = os.epoch("utc")
+                craftableTimer = os.startTimer(CFG.CRAFTABLE_INTERVAL)
 
             end
 
@@ -3808,12 +3841,12 @@ function server.run()
             -- yield is what fills the 256-slot event queue. Moving this poll
             -- off the dispatch computer entirely is the real fix (W6 owns RS);
             -- this makes it survivable in the meantime.
-            if isDue(wc, lastStorageWC, 30) then
+            if isDue(wc, lastStorageWC, CFG.STORAGE_INTERVAL) then
                 local ok_s, err_s = pcall(refreshStorage)
                 if not ok_s then logError("Storage refresh WC: " .. tostring(err_s)) end
                 lastStorageWC = wc
             end
-            if isDue(wc, lastCraftableWC, 60) then
+            if isDue(wc, lastCraftableWC, CFG.CRAFTABLE_INTERVAL) then
                 local ok_c, err_c = pcall(refreshCraftable)
                 if not ok_c then logError("Craftable refresh WC: " .. tostring(err_c)) end
                 lastCraftableWC = wc
