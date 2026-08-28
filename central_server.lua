@@ -2701,6 +2701,20 @@ local function checkStaleSupports()
     if cancelled then saveJobs() end
 end
 
+-- Is a wall-clock-scheduled periodic task due?
+--
+-- `now` and `lastRun` are os.epoch("utc") milliseconds; `intervalSec` is
+-- seconds, matching how every interval in CFG is expressed. The unit mismatch
+-- is the whole reason this is a named function rather than another inline
+-- comparison: there are seven of these in the run loop and a missing *1000
+-- silently turns a 30-second poll into a 30-millisecond one.
+--
+-- Kept at file scope so the test seam can reach it; the callers live inside
+-- server.run's closure and cannot be exported.
+local function isDue(now, lastRun, intervalSec)
+    return (now - lastRun) >= (intervalSec * 1000)
+end
+
 function server.run()
     state.modem = peripheral.find("modem")
     if not state.modem then
@@ -3580,6 +3594,13 @@ function server.run()
     local lastBridgePushWC   = 0  -- wall-clock ms of last push attempt (fallback if bridgeTimer drops)
     local lastDispatchWC     = 0  -- wall-clock ms of last dispatch tick (fallback if dispatchTimer drops)
     local lastHealthWC       = os.epoch("utc")  -- init to now so first WC health check fires after full interval
+    -- Same fallback, for the four periodic tasks that never got one. Init to now
+    -- so each first WC run happens after a full interval rather than instantly:
+    -- refreshStorage/refreshCraftable are already called once during startup.
+    local lastStorageWC      = os.epoch("utc")
+    local lastCraftableWC    = os.epoch("utc")
+    local lastStaleWC        = os.epoch("utc")
+    local lastOreWatchdogWC  = os.epoch("utc")
 
     local function startBridgePush()
         local now = os.epoch("utc")
@@ -3774,6 +3795,41 @@ function server.run()
                 if not ok_h then logError("Health WC: " .. tostring(err_h)) end
                 lastHealthWC = wc
             end
+
+            -- RS storage — this is the one that actually bit us. storageTimer
+            -- re-arms only inside its own handler, so a single dropped timer
+            -- event killed RS sync until the next reboot: the dashboard showed
+            -- a snapshot frozen minutes after every server start, measured live
+            -- at 3.8 hours stale while the server was otherwise healthy.
+            --
+            -- Worse, refreshStorage is a prime suspect for causing the very
+            -- overflow that drops it -- listItems() on 450 items is a
+            -- multi-second blocking call, and the flood arriving during that
+            -- yield is what fills the 256-slot event queue. Moving this poll
+            -- off the dispatch computer entirely is the real fix (W6 owns RS);
+            -- this makes it survivable in the meantime.
+            if isDue(wc, lastStorageWC, 30) then
+                local ok_s, err_s = pcall(refreshStorage)
+                if not ok_s then logError("Storage refresh WC: " .. tostring(err_s)) end
+                lastStorageWC = wc
+            end
+            if isDue(wc, lastCraftableWC, 60) then
+                local ok_c, err_c = pcall(refreshCraftable)
+                if not ok_c then logError("Craftable refresh WC: " .. tostring(err_c)) end
+                lastCraftableWC = wc
+            end
+            -- Same single-point-of-failure shape, same fix. Neither is as
+            -- visible as storage going stale, which is why both went unnoticed.
+            if isDue(wc, lastStaleWC, 30) then
+                local ok_ss, err_ss = pcall(checkStaleSupports)
+                if not ok_ss then logError("Stale support WC: " .. tostring(err_ss)) end
+                lastStaleWC = wc
+            end
+            if isDue(wc, lastOreWatchdogWC, 60) then
+                local ok_o, err_o = pcall(checkOreThresholds)
+                if not ok_o then logError("Ore watchdog WC: " .. tostring(err_o)) end
+                lastOreWatchdogWC = wc
+            end
         end
     end
 end
@@ -3809,6 +3865,10 @@ if _G.__CC_SERVER_TEST then
         loadPersistentZones = loadPersistentZones,
         savePersistentZones = savePersistentZones,
         migrateZonesToCloud = migrateZonesToCloud,
+        -- Wall-clock scheduling for periodic work. The callers live inside
+        -- server.run's closure and cannot be reached, but the due-check itself
+        -- carries the seconds/milliseconds boundary worth pinning down.
+        isDue = isDue,
     }
     return server
 end

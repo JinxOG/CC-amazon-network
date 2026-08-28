@@ -305,6 +305,21 @@
         #order-btn:hover { background:#0f2e1e; }
         #order-btn.dim { border-color:#1a1a2e; color:#666; background:#040407; text-shadow:none; }
         .storage-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
+        /* Stale RS data is worse than missing RS data: the list still shows 450
+           items with confident amounts, so it reads as live unless something
+           says otherwise. The old indicator was 9px grey text and three hours of
+           staleness went unnoticed. */
+        .storage-stale {
+            flex-shrink:0; margin-bottom:6px; padding:7px 10px;
+            border:1px solid #ff4444; border-left:3px solid #ff4444;
+            background:#ff44440d; color:#ff6666;
+            font-size:11px; line-height:1.5; letter-spacing:0.5px;
+            animation:stalePulse 1.8s ease-in-out infinite;
+        }
+        .storage-stale b { color:#ff9999; letter-spacing:1px; }
+        .storage-stale span { color:#c08080; }
+        /* Dim the amounts so a frozen number is never read as a live one. */
+        .storage-list.is-stale { opacity:0.55; }
         .sr { display:flex; align-items:center; gap:8px; padding:6px 6px; border-bottom:1px solid #00ff8806; transition:background .1s; }
         .sr:hover { background:#0a0a14; }
         .sr-name { flex:1; color:#aaa; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
@@ -667,6 +682,7 @@
                 </select>
                 <button id="order-btn" class="dim" onclick="openOrderModal()">ORDER (0)</button>
             </div>
+            <div id="storage-stale" class="storage-stale" hidden></div>
             <div id="storage-age" style="font-size:9px;letter-spacing:1px;color:#5a6a7a;margin-bottom:4px;text-align:right;flex-shrink:0"></div>
             <div id="storage-list" class="storage-list"><div class="empty">NO RS DATA</div></div>
         </div>
@@ -2165,19 +2181,44 @@ function renderStorage(items,storageTs){
     if(storageTs)_lastStorageTs=storageTs;
     // Storage age indicator
     const ageEl=document.getElementById('storage-age');
+    const banner=document.getElementById('storage-stale');
+    const listEl=document.getElementById('storage-list');
+    // Age past ~an hour used to render as "228m ago", which reads like a number
+    // rather than a problem. Hours and minutes make the scale obvious.
+    const fmtAge=s=>s<60?s+'s ago':s<3600?Math.round(s/60)+'m ago'
+        :Math.floor(s/3600)+'h '+Math.round((s%3600)/60)+'m ago';
+    let stale=false;
     if(ageEl){
         if(!storageTs){
             ageEl.textContent='RS: never synced';
             ageEl.style.color='#ff4444';
+            stale=true;
+            if(banner){
+                banner.hidden=false;
+                banner.innerHTML='<b>⚠ RS NEVER SYNCED</b><br>'
+                    +'<span>The server has not returned a storage snapshot since it started. '
+                    +'Nothing below is live.</span>';
+            }
         }else{
             const ageSec=Math.round((Date.now()-storageTs)/1000);
-            const stale=ageSec>90;
-            const ageStr=ageSec<60?ageSec+'s ago':Math.round(ageSec/60)+'m ago';
+            stale=ageSec>90;
+            const ageStr=fmtAge(ageSec);
             ageEl.textContent='RS: '+ageStr;
             ageEl.style.color=stale?'#ff4444':'#5a6a7a';
             ageEl.title=stale?'Storage data is stale — rsBridge may be offline':'Last RS sync: '+ageStr;
+            if(banner){
+                banner.hidden=!stale;
+                if(stale){
+                    banner.innerHTML='<b>⚠ RS DATA STALE — FROZEN '+ageStr.toUpperCase()+'</b><br>'
+                        +'<span>Amounts below are not live and orders may be planned against stock '
+                        +'that no longer exists. If this persists, the server\'s storage poll has '
+                        +'stopped and it needs a restart.</span>';
+                }
+            }
         }
     }
+    // Dim the list itself, so a frozen amount is never mistaken for a live one.
+    if(listEl)listEl.classList.toggle('is-stale',stale);
     const query=(document.getElementById('store-search').value||'').toLowerCase();
     const filtered=items.filter(it=>!query||(it.displayName||it.name).toLowerCase().includes(query)||it.name.toLowerCase().includes(query));
     const list=sortItems(filtered);

@@ -312,4 +312,41 @@ return {
         restore()
         assert_eq(n, 0, "no zones anywhere must load cleanly, not raise")
     end,
+
+    -- Wall-clock scheduling for periodic work.
+    --
+    -- Timers that re-arm only inside their own handler are a single point of
+    -- failure: CC drops events once the 256-slot queue overflows, and one lost
+    -- tick kills that task until reboot. That is how RS storage sync died
+    -- minutes after every server start -- measured live at 3.8 hours stale
+    -- while the server was otherwise pushing normally.
+    --
+    -- The run loop's callers are inside a closure and unreachable, so what is
+    -- pinned here is the seconds-vs-milliseconds boundary: `now`/`lastRun` are
+    -- epoch ms, `intervalSec` is seconds. Dropping the *1000 turns a 30-second
+    -- poll into a 30-millisecond one, which looks like working code.
+    ["isDue treats the interval as seconds against millisecond clocks"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local isDue = T.isDue
+        restore()
+
+        assert_eq(isDue(1000000, 1000000, 30), false, "no time passed: not due")
+        assert_eq(isDue(1029999, 1000000, 30), false,
+            "29.999s after the last run a 30s task is not due -- if this passes, "
+            .. "the interval is being read as milliseconds and the task runs ~1000x too often")
+        assert_eq(isDue(1030000, 1000000, 30), true,  "exactly 30s is due")
+        assert_eq(isDue(1030001, 1000000, 30), true,  "past 30s is due")
+    end,
+
+    -- The fallback exists precisely for the case where the timer never fires
+    -- again, so a task that has never run must become due on its own.
+    ["a task whose timer never fired still becomes due"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local isDue = T.isDue
+        restore()
+
+        -- lastRun still at its init value, clock well past the interval.
+        assert_eq(isDue(500000, 0, 30), true,
+            "a periodic task must not depend on its timer event ever arriving")
+    end,
 }
