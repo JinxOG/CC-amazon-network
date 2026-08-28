@@ -198,6 +198,79 @@ end
 
 return {
 
+    -- Scan filtering ---------------------------------------------------------
+    -- The scanner reads 33 blocks wide; a lease is 32, half-open so leases tile.
+    -- So the sx+16 and sz+16 planes are scanned but unreachable -- 6.0% of the
+    -- volume by geometry, measured at 6.7% in-world with a 94% median across 79
+    -- ore types. Counting them as found credited the neighbour's ore to us.
+    ["filterToLease drops ore outside the lease and keeps the rest"] =
+    function(assert_eq)
+        local flow, _, gf, _, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        -- Lease for a sector centred on 0: half-open, [-16, 15].
+        assert_eq(flow.armLease({ x1 = -16, z1 = -16, x2 = 15, z2 = 15 }), true,
+            "precondition: lease armed")
+
+        local kept, dropped = flow.filterToLease({
+            { name = "a", x =   0, y = 10, z =   0 },   -- centre
+            { name = "b", x = -16, y = 10, z =   0 },   -- low edge, INSIDE
+            { name = "c", x =  15, y = 10, z =  15 },   -- high edge, INSIDE
+            { name = "d", x =  16, y = 10, z =   0 },   -- the sx+16 plane, OUTSIDE
+            { name = "e", x =   0, y = 10, z =  16 },   -- the sz+16 plane, OUTSIDE
+        })
+
+        assert_eq(#kept, 3, "everything within the lease is kept")
+        assert_eq(dropped, 2, "and the two edge planes are dropped")
+        assert_eq(kept[1].name, "a", "order is preserved")
+        assert_eq(kept[2].name, "b", "the low edge is INSIDE a half-open lease")
+        assert_eq(kept[3].name, "c", "so is the high edge")
+    end,
+
+    -- With the ceiling retired this is inert, but it pins the intent: ore above
+    -- a ceiling is ore the turtle cannot reach, so the filter must exclude it.
+    ["filterToLease respects a ceiling if one is ever set"] =
+    function(assert_eq)
+        local flow, _, gf, _, c = loadFlow(E_MINE(), travelInv())
+        c.pos.y = 16
+        flow.armLease({ x1 = -16, z1 = -16, x2 = 15, z2 = 15, ceilingY = 160 })
+
+        local kept, dropped = flow.filterToLease({
+            { name = "deep",    x = 0, y = -60, z = 0 },   -- normal mining depth
+            { name = "shallow", x = 0, y =  40, z = 0 },   -- still well below 160
+            { name = "above",   x = 0, y = 200, z = 0 },   -- ABOVE the ceiling
+        })
+
+        assert_eq(#kept, 2, "everything below the ceiling is reachable")
+        assert_eq(dropped, 1, "ore above the ceiling cannot be reached, so drop it")
+    end,
+
+    -- An older server sends no lease. Filtering must then exclude nothing --
+    -- fail open, or the miner silently stops mining most of its sector.
+    ["filterToLease keeps everything when no lease is armed"] =
+    function(assert_eq)
+        local flow, _, gf = loadFlow(E_MINE(), travelInv())
+        assert_eq(gf.hasLease(), false, "precondition: no lease")
+
+        local kept, dropped = flow.filterToLease({
+            { name = "a", x =    0, y = 10, z =    0 },
+            { name = "b", x = 9999, y = 10, z = 9999 },
+        })
+
+        assert_eq(#kept, 2, "with no lease, nothing is out of bounds")
+        assert_eq(dropped, 0, "and nothing is dropped")
+    end,
+
+    ["filterToLease survives a nil or empty scan"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local k1, d1 = flow.filterToLease(nil)
+        assert_eq(#k1, 0, "nil scan yields no ore")
+        assert_eq(d1, 0, "and no drops")
+        local k2, d2 = flow.filterToLease({})
+        assert_eq(#k2, 0, "empty scan yields no ore")
+        assert_eq(d2, 0, "and no drops")
+    end,
+
     -- Fuel buffer -------------------------------------------------------------
     -- node_119, in-world 2026-08-22: 1,845 fuel against 1,696 needed to get
     -- home, looping on "[FUEL] LOW", carrying six stacks of coal it could not

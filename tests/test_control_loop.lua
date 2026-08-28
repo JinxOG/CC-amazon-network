@@ -1171,4 +1171,41 @@ function(assert_eq)
         .. "ascent at y=161 and the miner never reaches its own loader")
 end
 
+
+-- scanSector reports only reachable ore (SOURCE-ONLY, weaker).
+--
+-- The geo scanner reads radius 16 -- 33 blocks wide -- and a lease is 32,
+-- half-open so leases tile. The sx+16 and sz+16 planes are therefore scanned
+-- but outside the fence: 6.0% of the volume by geometry, measured at 6.7%
+-- in-world on zone 1264,-3184,1392,-3120 with a 94% median across 79 ore types.
+-- Reporting them as found credited the neighbouring sector's ore to this one and
+-- made every sector look like it left 6% behind.
+--
+-- Not reachable headlessly: scanSector places a peripheral and ore_turtle
+-- self-executes. The filter itself is covered behaviourally by
+-- test_mine_flow's filterToLease cases; this pins that scanSector actually uses
+-- it, which those cannot see.
+suite["scanSector returns the lease-filtered list, not the raw scan (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local defAt = src:find("local function scanSector%(%)")
+    assert_eq(defAt ~= nil, true, "scanSector moved or vanished")
+    local endAt = src:find("\nend\n", defAt, true)
+    assert_eq(endAt ~= nil, true, "could not bound scanSector")
+    local body = src:sub(defAt, endAt)
+
+    local filterAt = body:find("mine_flow%.filterToLease%(")
+    assert_eq(filterAt ~= nil, true, "scanSector must filter the scan to the lease")
+
+    -- The returned value must be the filtered list. Returning `ores` would hand
+    -- back the raw scan and silently undo the filter above it.
+    assert_eq(body:find("return reachable") ~= nil, true,
+        "scanSector must return the FILTERED list")
+    assert_eq(body:find("\n    return ores\n"), nil,
+        "returning the raw scan would undo the filter")
+end
+
 return suite

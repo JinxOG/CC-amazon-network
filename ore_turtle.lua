@@ -1145,8 +1145,19 @@ local function scanSector()
             })
         end
     end
-    print("[SCAN] Found " .. #ores .. " ore blocks")
-    return ores
+    -- Drop ore the fence will not let us reach. The scanner sees 33 blocks wide
+    -- and the lease is 32, so roughly 6% of every scan sits outside it -- ore
+    -- that belongs to the neighbouring sector and is mined when that lease is
+    -- issued. Counting it here credited it to the wrong sector and made every
+    -- sector look like it left 6% behind.
+    local reachable, dropped = mine_flow.filterToLease(ores)
+    if dropped > 0 then
+        print(string.format("[SCAN] Found %d ore blocks (%d outside the lease, "
+            .. "left for the neighbouring sector)", #reachable, dropped))
+    else
+        print("[SCAN] Found " .. #reachable .. " ore blocks")
+    end
+    return reachable
 end
 
 -- ── Mining ───────────────────────────────────────────────────────────────────

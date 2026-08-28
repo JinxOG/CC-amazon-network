@@ -749,6 +749,45 @@ function mine_flow.tendFuelSlot(opts)
     return burned, evicted
 end
 
+-- ── Scan filtering ──────────────────────────────────────────────────────────
+--
+-- Keep only ore this sector can actually reach.
+--
+-- The geo scanner reads radius 16 -- 33 blocks wide -- while a lease is 32,
+-- half-open so leases tile (scans may overlap; leases must not). So the sx+16
+-- and sz+16 planes are scanned but lie outside the fence: 1 - (32/33)^2 = 6.0%
+-- of the scanned volume.
+--
+-- Reporting those as `found` made every sector look like it left ~6% behind.
+-- Measured in-world 2026-08-28 on zone 1264,-3184,1392,-3120: a 6.7% shortfall
+-- with a 94% median across 79 ore types -- against 6.0% predicted by the
+-- geometry alone. The ore is not lost; the NEIGHBOURING lease covers that plane
+-- and mines it. It was simply being credited to the wrong sector.
+--
+-- Filtering also stops the mining loop attempting moves the geofence will
+-- refuse, which cost real time and inflated the per-sector duration the ETA is
+-- built from.
+--
+-- geofence.contains is the right question to ask -- "can this turtle go there"
+-- -- and it answers correctly when no lease is armed, where nothing is excluded.
+--
+-- y IS passed. With the ceiling retired (LEASE_CEILING_Y = nil) it changes
+-- nothing, since ore sits far below any plausible ceiling. But if a ceiling
+-- ever returns, ore above it is ore this turtle cannot reach, and excluding
+-- it is precisely what this function is for.
+function mine_flow.filterToLease(ores)
+    if type(ores) ~= "table" then return {}, 0 end
+    local kept, dropped = {}, 0
+    for _, o in ipairs(ores) do
+        if geofence.contains(o.x, o.z, o.y) then
+            kept[#kept + 1] = o
+        else
+            dropped = dropped + 1
+        end
+    end
+    return kept, dropped
+end
+
 -- ── Sector lease ────────────────────────────────────────────────────────────
 --
 -- Arms the exclusive-sector fence from a server-issued lease.
