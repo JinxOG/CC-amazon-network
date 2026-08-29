@@ -40,15 +40,24 @@ That is the pre-rotation RCON password, hardcoded, in a **public** repository.
 Pulling `master` onto the server today would re-introduce it *and* delete the
 auth gate. The broken pull is the only thing currently preventing that.
 
-## 2. The merge is yours to own
+## 2. ~~The merge is yours to own~~ — CORRECTED 2026-08-28, no conflict existed
 
-`fc0af64` — your fix stopping the bridge discarding fields it was not told to
-expect — is on `master` and touches the same file. The operator's auth work is
-in their working tree. **Both must survive.** Neither side should resolve this
-by taking their own version wholesale.
+**This section was wrong when written. Corrected by the server operator, who
+checked rather than assumed.**
 
-The operator has been asked to commit, fetch, merge and push. Coordinate with
-them on the conflict rather than racing it.
+I claimed `fc0af64` was on `master` *opposite* the operator's uncommitted work,
+and that both had to be reconciled. In fact **`fc0af64` was already an ancestor
+of the host's local HEAD** — your payload fix was sitting *underneath* the
+uncommitted auth work, not against it. The two incoming commits (`a9be09a`,
+`c639a84`) touch `central_server.lua`, `protocol.lua`, a spec doc and a test.
+**Neither touches `server.js`.**
+
+The pull was refusing purely because of the uncommitted tracked file. There was
+nothing to clobber and nothing to reconcile. The merge completed with **zero
+conflicts**, and the operator verified your `persistenceHealthy` seeding intact
+afterwards rather than assuming it survived.
+
+**No action for you here.** The rest of this document stands.
 
 ## 3. Delete the literal regardless
 
@@ -71,6 +80,13 @@ supervised, and neither returns after a reboot. `logs/wrapper.out` and
 (NSSM) or Task Scheduler." The bridge runs on a **Linux** host. The requirement
 is right; the mechanism named is not. A correction is pending the spec owner's
 next pass — build systemd units, not a Windows service.
+
+## 4a. `package.json` has never been committed
+
+Found by the operator, not on the original list. Neither `package.json` nor
+`package-lock.json` is tracked, so **a fresh clone cannot `npm install`.** The
+bridge is a two-dependency project whose dependencies exist only in one
+directory on one machine. Commit both.
 
 ## 5. One defect worth fixing while you are in that file
 

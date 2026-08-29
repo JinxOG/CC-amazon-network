@@ -1130,7 +1130,7 @@ The storage half is done. Five items remain, two of them new.
 | Task | Why |
 |---|---|
 | **Server crash loop** — `5 crashes recorded in crash.log`, last `server.run crashed: Terminated` | **Highest priority.** Cause unknown. `24ccdbe` made crashes attributable; now use it. Everything below is built on a server that is falling over. |
-| **Bridge push timeout** — `Bridge push timed out (>15s)` | The `/state` payload is **~100 KB**: `storage` 47 KB (47%), `mineZones` 25 KB, `turtleLogs` 18 KB. Pushed whole, every cycle. Same shape as the disk failure — an unbounded payload with no declared ceiling. |
+| ~~**Bridge push timeout**~~ — **resolved, and my diagnosis was wrong** | I attributed `Bridge push timed out (>15s)` to payload size. The server operator investigated and it was **event-buffer overflow on a central server that had been up for days** — the condition the Lua force-clear already documents. It cleared on the Minecraft restart. **No action; do not chase it.** The payload measurement below stands as a fact, but it was not the cause and is not urgent. |
 | **Bound the retrieval comms gap** | A worker whose modem swap-out fails is permanently deaf with no remote recovery, and nothing bounds the window. |
 | **Make `central_server.lua` requireable under the harness** | It runs its main loop at load. Blocked five of W1's tests in two days; blocks testing everything W3 does next. |
 | **Invariant J logging** on `turtle_base.lua:613` | The `tryMove` block wait sits 120 s in silence, so a queued worker and a dead one look identical. |
@@ -1141,6 +1141,13 @@ push completes inside its timeout.
 ### Stage 1 — Bound the payload, and land the hooks
 
 **Owners: W3, W5, W6 in parallel.** These touch different files.
+
+**Priority corrected 2026-08-28.** The payload work was scheduled here because I
+believed a ~100 KB `/state` was causing the bridge timeouts. It was not — the
+timeouts were event-buffer overflow and cleared on restart. A 100 KB payload
+pushed every cycle is still worth bounding before the fleet grows, but it is
+**hygiene, not an emergency**. If a stream must choose, the hooks and the inbox
+come first.
 
 | Owner | Task |
 |---|---|
