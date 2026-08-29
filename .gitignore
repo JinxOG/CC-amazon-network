@@ -1,0 +1,10 @@
+# Secrets — the RCON password was a literal in server.js in this public repo.
+# It is now read from the environment; the environment file must never be committed.
+.env
+
+# Runtime artefacts
+node_modules/
+logs/
+locations.json
+*.tmp
+update_failed.txt

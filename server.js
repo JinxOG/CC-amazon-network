@@ -10,7 +10,18 @@ const { exec }  = require('child_process');
 process.on('unhandledRejection', (err) => {
     console.error('[ERROR] Unhandled rejection:', err && err.message || err);
 });
+// Errors that mean this process can never do its job must exit, not be logged
+// and ignored. A swallowed EADDRINUSE leaves a process that failed to bind but
+// keeps running -- a silent zombie holding no port and serving nothing. Two
+// orphans (PIDs 3077167, 2423081) came from exactly that, and it recurs on every
+// accidental double-start. P7: degraded with no way to say so.
+const FATAL_ERRNO = new Set(['EADDRINUSE', 'EACCES', 'EADDRNOTAVAIL']);
 process.on('uncaughtException', (err) => {
+    if (err && FATAL_ERRNO.has(err.code)) {
+        console.error(`[FATAL] ${err.code}: ${err.message}`);
+        console.error('[FATAL] cannot serve — exiting rather than lingering as a zombie.');
+        process.exit(1);
+    }
     console.error('[ERROR] Uncaught exception:', err && err.message || err);
 });
 
@@ -44,12 +55,26 @@ app.get('/lua/:file', (req, res) => {
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
+// The RCON password is read from the environment and has no default. It used to
+// be a literal in this file, in a public repository. Rotation makes the old value
+// worthless; only removing it stops the next one being committed the same way.
+// Set RCON_PASSWORD in the environment (the host loads it from .env).
+//
+// Unset is not fatal: RCON only drives Dynmap markers, so the bridge runs without
+// it. But it says so once, loudly, rather than retrying a bad login forever --
+// a marker that silently stops updating looks identical to a turtle not moving.
+const RCON_PASSWORD = process.env.RCON_PASSWORD || null;
+if (!RCON_PASSWORD) {
+    console.warn('[WARN] RCON_PASSWORD is not set — Dynmap marker updates are disabled.');
+    console.warn('[WARN] Everything else (dashboard, /state, /command) works normally.');
+}
+
 const CFG = {
-    port:        3000,
+    port:        Number(process.env.PORT) || 3000,
     rcon: {
-        host:     '127.0.0.1',
-        port:     25575,
-        password: 'zoomer',
+        host:     process.env.RCON_HOST || '127.0.0.1',
+        port:     Number(process.env.RCON_PORT) || 25575,
+        password: RCON_PASSWORD,
     },
     dynmap: {
         world:  'MODPACK',
@@ -126,6 +151,9 @@ let markerExists    = {};   // track which turtle markers already exist on Dynma
 let rconClient = null;
 
 async function getRcon() {
+    // Short-circuit when no password is configured, so we don't attempt (and log)
+    // a failed login on every marker update.
+    if (!CFG.rcon.password) throw new Error('RCON disabled: RCON_PASSWORD not set');
     if (rconClient) {
         try {
             await rconClient.send('');   // ping to verify connection is alive

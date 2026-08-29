@@ -1,0 +1,46 @@
+[Unit]
+# The Node bridge. §4.2 requires it to start with its host — "manual restart
+# after a reboot is a defect, not a workflow." It has been running under
+# `setsid nohup`, which survives a logout but not a reboot and is supervised by
+# nothing.
+Description=CC Amazon Network bridge (dashboard + /state + /command)
+Documentation=https://github.com/JinxOG/CC-amazon-network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust User/WorkingDirectory to match the host. The repo clone lives in
+# ~/cc-dashboard on 192.168.86.35.
+User=%i
+WorkingDirectory=/home/%i/cc-dashboard
+ExecStart=/usr/bin/node server.js
+
+# Secrets come from the environment, never from the repository. server.js reads
+# RCON_PASSWORD and refuses to enable RCON without it.
+EnvironmentFile=/home/%i/cc-dashboard/.env
+
+# Supervision: this is the whole point of the unit.
+Restart=always
+RestartSec=5
+# If it fails 5 times in 60s it is not a blip — stop and stay stopped so the
+# failure is visible in `systemctl status` instead of hidden in a restart loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Log to the journal rather than an unrotated logs/*.out file. journald rotates
+# and caps on its own, which is the other half of the operator's finding.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cc-dashboard
+
+# Modest hardening. The bridge serves HTTP and talks to RCON on loopback; it has
+# no reason to write outside its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/cc-dashboard
+
+[Install]
+WantedBy=multi-user.target
