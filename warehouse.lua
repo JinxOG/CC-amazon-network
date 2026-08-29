@@ -55,6 +55,35 @@ local function sendToServer(msgType, toId, payload)
     proto.send(modem, proto.CH_SERVER, msg)
 end
 
+-- Every rsBridge call goes through here.
+--
+-- The peripheral can throw, and did for two months: AdvancedPeripherals 0.7.44r
+-- raised NoClassDefFoundError from ItemFilter.parse on every importItem, from
+-- 26 June until 0.7.46r landed on 28 Aug. Unprotected, that error left
+-- clearEnderChest, left main, and ended the program -- the bottom of this file
+-- caught the crash and then simply exited, so the warehouse stayed dead until a
+-- human noticed. Deliveries do not stall gracefully when the thing that serves
+-- them is gone.
+--
+-- The mod bug is fixed. The exposure it revealed is ours, and it is not specific
+-- to importItem: an RS network that unloads, a bridge that is broken by a player,
+-- or the next mod regression all arrive the same way.
+--
+-- Returns the call's result, or nil plus a message. Never raises.
+local function rsCall(method, ...)
+    if not rsBridge then return nil, "no rsBridge" end
+    local fn = rsBridge[method]
+    if type(fn) ~= "function" then
+        return nil, "rsBridge has no method '" .. tostring(method) .. "'"
+    end
+    local ok, res = pcall(fn, ...)
+    if not ok then
+        log(string.format("RS %s failed: %s", method, tostring(res)))
+        return nil, tostring(res)
+    end
+    return res
+end
+
 local function chestsNeeded(items)
     local totalStacks = 0
     for _, count in pairs(items) do
@@ -79,7 +108,7 @@ local function clearEnderChest()
             return total
         end
         for _, item in pairs(slots) do
-            local moved = rsBridge.importItem({ name = item.name, count = item.count }, CFG.entangledChest)
+            local moved = rsCall("importItem", { name = item.name, count = item.count }, CFG.entangledChest)
             total = total + ((type(moved) == "number") and moved or (moved and moved.count or 0))
         end
         if attempt < 4 then sleep(1) end
@@ -94,19 +123,19 @@ local function clearEnderChest()
 end
 
 local function loadChests(n)
-    local result = rsBridge.exportItem({ name = CFG.regularChestItem, count = n }, CFG.entangledChest)
+    local result = rsCall("exportItem", { name = CFG.regularChestItem, count = n }, CFG.entangledChest)
     local moved  = (type(result) == "number") and result or (result and result.count or 0)
     log("Loaded " .. moved .. "/" .. n .. " chests into entangled chest")
     return moved
 end
 
 local function exportItem(name, count)
-    local result = rsBridge.exportItem({ name = name, count = count }, CFG.entangledChest)
+    local result = rsCall("exportItem", { name = name, count = count }, CFG.entangledChest)
     return (type(result) == "number") and result or (result and result.count or 0)
 end
 
 local function checkStock(name, needed)
-    local info = rsBridge.getItem({ name = name })
+    local info = rsCall("getItem", { name = name })
     local have = info and info.amount or 0
     if have < needed then
         log(string.format("WARNING: need %d x %s but RS only has %d", needed, name, have))
@@ -479,8 +508,25 @@ end
 
 -- ─── Main loop ───────────────────────────────────────────────────────────────
 
+local CRASH_LOG_FILE = "wh_crash.log"
+
 local function main()
     log(string.format("Warehouse online v%s (RS bridge / state-machine mode)", proto.VERSION))
+    -- Replay the last crash, same as central_server does. Without it the reason
+    -- lives in a file nobody opens and the operator sees only that deliveries
+    -- stopped.
+    pcall(function()
+        if not fs.exists(CRASH_LOG_FILE) then return end
+        local f = fs.open(CRASH_LOG_FILE, "r")
+        if not f then return end
+        local lines = {}
+        for line in f.readLine do table.insert(lines, line) end
+        f.close()
+        if #lines > 0 then
+            log("Restarted after a crash — last: " .. lines[#lines])
+            if #lines > 1 then log(#lines .. " crashes recorded in " .. CRASH_LOG_FILE) end
+        end
+    end)
     log("Entangled chest : " .. CFG.entangledChest)
     log("RS bridge       : " .. (peripheral.getName(rsBridge) or "found"))
     log("Startup EC sweep...")
@@ -511,5 +557,48 @@ local function main()
     end
 end
 
-local ok, err = pcall(main)
-if not ok then print("CRASH: " .. tostring(err)) end
+-- ─── Test seam ───────────────────────────────────────────────────────────────
+--
+-- Requiring this file otherwise enters main() and never returns, which is why it
+-- has had no coverage at all. Setting _G.__CC_WAREHOUSE_TEST before the require
+-- hands back the internals instead of starting. Production never sets it, so the
+-- run loop below is entered exactly as before.
+if _G.__CC_WAREHOUSE_TEST then
+    return {
+        rsCall          = rsCall,
+        clearEnderChest = clearEnderChest,
+        loadChests      = loadChests,
+        exportItem      = exportItem,
+        checkStock      = checkStock,
+        chestsNeeded    = chestsNeeded,
+        CFG             = CFG,
+        CRASH_LOG_FILE  = CRASH_LOG_FILE,
+    }
+end
+
+-- Restart on crash, matching central_server.
+--
+-- This used to print "CRASH:" and exit. The warehouse then stayed dead until a
+-- human noticed deliveries had stopped -- which is how a two-month-old mod bug
+-- in importItem went unattributed. §4 gives the Storage layer the failure mode
+-- "deliveries stall; nothing is lost"; a process that is simply gone does not
+-- stall, it disappears, and the difference is invisible from the outside.
+--
+-- Rebooting rather than re-calling main() is deliberate: it re-wraps every
+-- peripheral handle, which is the thing most likely to be stale after a fault.
+while true do
+    local ok, err = pcall(main)
+    if ok then break end
+    print("[FATAL] warehouse crashed: " .. tostring(err))
+    pcall(function()
+        local f = fs.open(CRASH_LOG_FILE, "a")
+        if f then
+            f.writeLine(string.format("[%d] main crashed: %s",
+                os.epoch and os.epoch("utc") or 0, tostring(err)))
+            f.close()
+        end
+    end)
+    print("Rebooting in 5 seconds...")
+    sleep(5)
+    os.reboot()
+end
