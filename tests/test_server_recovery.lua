@@ -479,6 +479,32 @@ return {
             "a disk too full to save must be reported, not swallowed by the pcall")
     end,
 
+    -- The third and last instance of the backup-destroying save. saveJobs and
+    -- savePersistentZones were fixed; saveMiningZones still deleted its backup
+    -- and then tried to fs.copy a replacement, which needs room for a second
+    -- full file. active_zones.dat was one of the two files truncated to
+    -- near-zero in the original disk incident, so this was the exact mechanism
+    -- that produced it, still live.
+    --
+    -- Source-level: saveMiningZones is a local with no seam, and the whole point
+    -- is which fs call is used. Weaker than a behavioural test and labelled so.
+    ["no disk save destroys its backup before securing one (SOURCE-ONLY)"] =
+    function(assert_eq)
+        local f = io.open("central_server.lua", "r")
+        local src = f:read("*a"); f:close()
+
+        local calls = 0
+        for line in src:gmatch("[^\n]+") do
+            -- Ignore comments; several explain why fs.copy is NOT used.
+            if not line:match("^%s*%-%-") and line:find("fs%.copy%(") then
+                calls = calls + 1
+            end
+        end
+        assert_eq(calls, 0,
+            "fs.copy needs room for a second full file and every use here runs "
+            .. "AFTER the only backup has been deleted — use fs.move")
+    end,
+
     -- ─── Sector leases ──────────────────────────────────────────────────────
     --
     -- A holder that dies must give its sector back. Assignment was always

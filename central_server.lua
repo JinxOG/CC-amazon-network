@@ -760,12 +760,25 @@ local function saveMiningZones()
         f.write(data); f.close()
         if fs.exists(ACTIVE_ZONES_FILE) then
             if fs.exists(ACTIVE_ZONES_FILE .. ".bak") then fs.delete(ACTIVE_ZONES_FILE .. ".bak") end
-            fs.copy(ACTIVE_ZONES_FILE, ACTIVE_ZONES_FILE .. ".bak")
-            fs.delete(ACTIVE_ZONES_FILE)
+            -- MOVE, not copy. Third and last instance of the defect fixed in
+            -- saveJobs (3aa1f03) and savePersistentZones: a copy needs room for a
+            -- second full file and runs AFTER the only backup has been deleted,
+            -- so a nearly full disk destroys the backup and then fails to replace
+            -- it. active_zones.dat was one of the two files truncated to
+            -- near-zero in the original disk incident -- this is the exact
+            -- mechanism that produced it, still live. A rename needs no space.
+            fs.move(ACTIVE_ZONES_FILE, ACTIVE_ZONES_FILE .. ".bak")
         end
         fs.move("active_zones.tmp", ACTIVE_ZONES_FILE)
     end)
-    if not ok then logWarn("saveMiningZones failed: " .. tostring(err)) end
+    if not ok then
+        -- Invariant K: this writes to disk, so its failure has to be reachable
+        -- from /state. persistenceHealthy covers disk persistence generally, not
+        -- jobs specifically -- a full disk takes every writer down together, and
+        -- three separate booleans for one physical cause would be noise.
+        state.persistenceHealthy = false
+        logWarn("saveMiningZones failed: " .. tostring(err))
+    end
 end
 
 local function loadMiningZones()
