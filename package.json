@@ -1,0 +1,17 @@
+{
+  "name": "cc-amazon-network-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node bridge for the CC Amazon Network: dashboard, /state, /command, Dynmap proxy",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "rcon-client": "^4.2.5"
+  }
+}

@@ -3,6 +3,7 @@
 - **Date:** 2026-08-28
 - **Status:** Design proposed; not approved; no implementation
 - **Protocol version at time of writing:** 1.9.58
+- **Revised:** 2026-08-29 — two causal claims corrected (§2, §10)
 - **Author:** W6 (Storage) / W5 (Bridge & Dashboard)
 - **Conforms to:** `2026-08-18-system-integration-design.md` — this document extends
   its §4 layer model and §11 contracts. Where the two disagree, that one wins and
@@ -29,15 +30,20 @@ Every number here was observed in-world on 2026-08-27/28.
 |---|---|
 | `central_server.lua` = **185 KB**, disk = 1 MB | Updating it needs its own size free *alongside* the existing copy. It hit `Out of space` mid-deploy: 166,813 free, 185,351 needed. |
 | The deploy half-applied and **rebooted anyway** | The machine ran an old server while reporting a new `proto.VERSION`. Two rounds of diagnosis went into code that was not running. |
-| `/state` payload ≈ **125 KB**, serialised every 3 s | On the dispatcher's event loop. `Bridge push timed out (>15s)` observed repeatedly. |
+| `/state` payload ≈ **125 KB**, serialised every 3 s | On the dispatcher's event loop. Bulk work on the machine that runs the fleet. |
 | Timer events are **demonstrably dropped** | The RS poll died minutes after every boot. It now survives only because a wall-clock fallback carries it; the timer itself appears to still be dropping. |
 | CC event queue = 256 slots | Shared by every subsystem on that computer. More work on one machine means more dropped events for all of it. |
 
-One correction, recorded because it shaped earlier thinking and was wrong:
+Two corrections, recorded because they shaped earlier thinking and were wrong.
+
 `rsBridge.listItems()` was assumed to be a multi-second blocking call and blamed
 for the queue overflow. **Measured: 450 items in 37 ms.** It is not the cause.
-Whatever is timing out bridge pushes has not been identified, and this document
-does not assume the split fixes it — it makes it observable in isolation.
+
+`Bridge push timed out (>15s)` was attributed to the 125 KB payload. The spec
+owner checked: it was **event-buffer overflow on a server up for days**, the
+condition the Lua force-clear already documents, and it cleared on restart. The
+measurement stood; the causation did not. Both errors ran the same way — a number
+was real, and the story told about it was not. Hence S5.
 
 **What changed to make splitting practical:** `cloudstore` / `kv_storage`. Before
 it, dividing responsibilities meant coordinating over the wireless modem — which
@@ -252,10 +258,20 @@ survivable everywhere, exactly as it already is for zones.
 
 ## 10. Extraction order
 
-**1 — Gateway.** Smallest, targets a live failure (>15 s push timeouts), needs no
-turtle changes, and is fully reversible. It also isolates the timeout: if pushes
-still time out from a computer doing nothing else, the cause is the bridge or the
-network, not the event loop — which we currently cannot tell apart.
+**1 — Gateway.** Smallest, needs no turtle changes, and is fully reversible.
+
+**Corrected 2026-08-29.** An earlier draft justified this by the `Bridge push
+timed out (>15s)` warnings and attributed them to the 125 KB payload. The spec
+owner checked: they were **event-buffer overflow on a server up for days** — the
+condition the Lua force-clear already documents — and they cleared on restart.
+The measurement stood; the causation did not.
+
+That weakens the urgency, not the case. Overflow is exactly the pressure this
+extraction relieves, and the *same* overflow is what kills the RS poll timer. But
+the gateway is now justified as hygiene — removing HTTP and bulk serialisation
+from the machine that runs the fleet — rather than as a fix for a specific live
+failure. It stays first because it is the smallest and safest, not because
+anything is on fire.
 
 **2 — Storage snapshot publisher (W6).** Warehouse already holds an `rsBridge` and
 already polls. Publishing `st:items` removes 44 KB from the dispatch payload and
@@ -299,7 +315,7 @@ Each is a small in-world probe, not a build.
 | **M1** | How long does `cloudstore.put` take for a 44 KB value? For 125 KB? | Whether snapshot cadence can match the current 3 s push |
 | **M2** | How long does `cloudstore.get` take at those sizes? | Whether the gateway can poll KV at 3 s |
 | **M3** | Does a second computer's KV access contend with the first? | Whether readers and the writer can run at the same cadence |
-| **M4** | Does the >15 s bridge push timeout persist on a computer doing nothing else? | Whether the timeout is event-loop pressure or the bridge itself |
+| **M4** | How long does the dispatcher's event queue stay under its 256-slot cap once HTTP and payload assembly leave it? | Whether the extraction actually relieves the overflow that drops timers |
 | **M5** | Is a `kv_storage` peripheral available for each new computer in-world? | Everything — confirmed available in principle, not yet placed |
 
 M1–M3 decide whether KV is fast enough to be the transport at all. If it is not,
