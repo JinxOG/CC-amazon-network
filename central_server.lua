@@ -2108,6 +2108,16 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     jobQueue.progress(p.jobId, p.status, p.detail)
 end
 
+-- Entries retained per node. The whole buffer stays here for live diagnosis;
+-- only TURTLE_LOG_PUSH_WINDOW of it is shipped to the bridge. See the comment
+-- in buildBridgePayload for why the shipped size is load-bearing.
+local TURTLE_LOG_BUFFER = 60
+
+-- Entries per node actually shipped in the bridge payload. Ten is what a
+-- dashboard pane shows; the other fifty were paying full serialisation cost on
+-- every push to display nothing.
+local TURTLE_LOG_PUSH_WINDOW = 10
+
 handlers[proto.MSG.TURTLE_LOG] = function(msg)
     local lines = msg.payload.lines
     if type(lines) ~= "table" then return end
@@ -2118,7 +2128,7 @@ handlers[proto.MSG.TURTLE_LOG] = function(msg)
             table.insert(buf, entry)
         end
     end
-    while #buf > 60 do table.remove(buf, 1) end
+    while #buf > TURTLE_LOG_BUFFER do table.remove(buf, 1) end
 end
 
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
@@ -3547,6 +3557,31 @@ function server.run()
         for i = logStart, #state.log do
             table.insert(logSlice, state.log[i])
         end
+        -- Ship only a recent window of each turtle's log, not its whole buffer.
+        --
+        -- state.turtleLogs holds 60 entries per node and every one of them was
+        -- serialised into every push. Measured 2026-08-30: 96 KB of a 190 KB
+        -- payload, and byte-identical across a 110-second sample -- the same
+        -- history retransmitted every 3 s to deliver nothing.
+        --
+        -- That cost is not the bytes on the wire, it is the time. This function
+        -- is synchronous, so the server is deaf to the radio for its whole
+        -- duration, and CC's event queue drops what arrives while it runs. That
+        -- is what silently loses heartbeats, empties the registry, and leaves
+        -- turtles unregistered while both sides look healthy. The failure rate
+        -- rising with each release tracked the payload growing, not one bad
+        -- commit.
+        --
+        -- The full buffer is deliberately kept server-side: it costs nothing to
+        -- retain and it is what a live diagnosis reads.
+        local logsOut = {}
+        for id, buf in pairs(state.turtleLogs) do
+            local out   = {}
+            local start = math.max(1, #buf - (TURTLE_LOG_PUSH_WINDOW - 1))
+            for i = start, #buf do out[#out + 1] = buf[i] end
+            logsOut[id] = out
+        end
+
         -- pcall'd: fs.getFreeSpace is cheap but this runs on every bridge push,
         -- and a failure here must never cost the whole payload.
         local diskFree = nil
@@ -3569,7 +3604,7 @@ function server.run()
                         healthField("persistenceHealthy", state.persistenceHealthy) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
-                        ',"turtleLogs":'   .. js(state.turtleLogs,     "{}",  "turtleLogs") .. '}'
+                        ',"turtleLogs":'   .. js(logsOut,              "{}",  "turtleLogs") .. '}'
         return payload
     end
 
