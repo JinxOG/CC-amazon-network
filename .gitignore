@@ -7,4 +7,7 @@ node_modules/
 logs/
 locations.json
 *.tmp
+*.log
+*.out
+server.js.save
 update_failed.txt

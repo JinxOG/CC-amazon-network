@@ -4,7 +4,18 @@ const { Rcon }  = require('rcon-client');
 const path      = require('path');
 const http      = require('http');
 const fs        = require('fs');
+const crypto    = require('crypto');
 const { exec }  = require('child_process');
+
+// Minimal .env loader — avoids pulling in dotenv for three values.
+(function loadEnv() {
+    const envPath = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath)) return;
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+        const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+        if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
+    }
+})();
 
 // Prevent unhandled rejections from crashing the process
 process.on('unhandledRejection', (err) => {
@@ -27,6 +38,71 @@ process.on('uncaughtException', (err) => {
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+
+// ─── Access control ──────────────────────────────────────────────────────────
+// Trusted = loopback (in-game CC computers) and the local LAN (browsers on the
+// home network). Anything arriving through the ngrok tunnel carries
+// X-Forwarded-For — even though it reaches us from 127.0.0.1 — so it is treated
+// as remote and must present Basic Auth credentials.
+
+function isTrustedNetwork(req) {
+    if (req.headers['x-forwarded-for'] || req.headers['x-real-ip']) return false;
+
+    // Strip the IPv4-mapped IPv6 prefix (::ffff:192.168.1.5 -> 192.168.1.5)
+    const addr = (req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+
+    if (addr === '127.0.0.1' || addr === '::1') return true;
+
+    const m = addr.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!m) return false;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+
+    if (a === 127) return true;                        // 127.0.0.0/8
+    if (a === 10) return true;                         // 10.0.0.0/8
+    if (a === 192 && b === 168) return true;           // 192.168.0.0/16
+    if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
+
+    // 100.64.0.0/10 — the Tailscale tailnet. Devices here are already
+    // authenticated by Tailscale itself before a packet reaches us. Note this
+    // range is CGNAT: it is only safe to trust because nothing routes to this
+    // host from a carrier network, and it must be dropped if that ever changes.
+    if (a === 100 && b >= 64 && b <= 127) return true;
+
+    return false;
+}
+
+function safeEqual(a, b) {
+    const ba = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+app.use((req, res, next) => {
+    if (req.path === '/ping') return next();
+    if (isTrustedNetwork(req)) return next();
+
+    const user = process.env.DASH_USER;
+    const pass = process.env.DASH_PASS;
+    if (!user || !pass) {
+        console.error('[AUTH] DASH_USER/DASH_PASS unset — refusing remote request');
+        return res.status(503).json({ error: 'auth not configured' });
+    }
+
+    const header = req.headers.authorization || '';
+    if (header.startsWith('Basic ')) {
+        const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
+        const idx = decoded.indexOf(':');
+        if (idx !== -1 &&
+            safeEqual(decoded.slice(0, idx), user) &&
+            safeEqual(decoded.slice(idx + 1), pass)) {
+            return next();
+        }
+    }
+
+    console.warn(`[AUTH] Rejected ${req.method} ${req.path} from ${req.headers['x-forwarded-for'] || req.socket.remoteAddress}`);
+    res.setHeader('WWW-Authenticate', 'Basic realm="cc-dashboard", charset="UTF-8"');
+    res.status(401).json({ error: 'authentication required' });
+});
 
 // Serve index.html with no-cache so the browser always fetches the latest version
 app.get('/', (req, res) => {
