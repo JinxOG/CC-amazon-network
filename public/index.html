@@ -1463,15 +1463,48 @@ function switchTab(name){
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function poll(){
+    const lu=document.getElementById('last-update');
+    const badge=document.getElementById('feed-badge');
     try{
-        const r=await fetch('/state'),d=await r.json();
+        const r=await fetch('/state');
+        // A failed response still carries a JSON body — {"error":"authentication
+        // required"} — so r.json() succeeds and nothing throws. Without this
+        // check the dashboard read d.updatedAt as undefined, computed age=null,
+        // concluded that was not stale, and painted "● LIVE"; renderAll then
+        // threw on the missing fields and was swallowed, leaving the PREVIOUS
+        // render frozen on screen. Hours-old data under a green badge, with no
+        // way to tell. This became reachable the moment the auth gate landed,
+        // because /state had always returned 200 before it.
+        if(!r.ok){
+            document.getElementById('status-dot').className='offline';
+            badge.className='offline';
+            lu.style.color='#ff4444';
+            if(r.status===401||r.status===403){
+                badge.textContent='✕ AUTH';
+                lu.textContent='not signed in — reload the page';
+            }else{
+                badge.textContent='✕ HTTP '+r.status;
+                lu.textContent='bridge returned '+r.status;
+            }
+            return;   // keep whatever is on screen, but never call it live
+        }
+        const d=await r.json();
+        // A 200 with no updatedAt means the bridge is up but has never been
+        // pushed to — a cold bridge, or a central server that is not reporting.
+        // Distinct from stale, and distinct from healthy.
+        if(typeof d.updatedAt!=='number'){
+            document.getElementById('status-dot').className='offline';
+            badge.className='offline';
+            badge.textContent='⚠ NO DATA';
+            lu.style.color='#ff4444';
+            lu.textContent='bridge has received no server push';
+            return;
+        }
         lastState=d;
         document.getElementById('status-dot').className='';
-        const age=d.updatedAt?Math.round((Date.now()-d.updatedAt)/1000):null;
-        const stale=age!==null&&age>8;
-        const lu=document.getElementById('last-update');
-        const badge=document.getElementById('feed-badge');
-        lu.textContent=age!=null?`synced ${age}s ago`:'synced ?s ago';
+        const age=Math.round((Date.now()-d.updatedAt)/1000);
+        const stale=age>8;
+        lu.textContent=`synced ${age}s ago`;
         lu.style.color=stale?'#ffaa44':'';
         if(stale){badge.className='stale';badge.textContent='⚠ STALE';}
         else{badge.className='live';badge.textContent='● LIVE';}
