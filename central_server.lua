@@ -2777,6 +2777,12 @@ function server.run()
     local storageItems  = {}
     local craftableMap  = {}
     local storageJSON   = "[]"
+    -- Duration of the last rsBridge.listItems call, and the worst seen since
+    -- boot. Published as rsPollMs / rsPollWorstMs. The worst matters more than
+    -- the last: this fault is intermittent, and a single slow poll is enough to
+    -- drop the events that strand the fleet.
+    local lastRsPollMs  = -1
+    local rsPollWorstMs = -1
     local storageTs     = 0   -- os.epoch("utc") ms of last successful rsBridge.listItems()
 
     -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
@@ -2880,7 +2886,20 @@ function server.run()
             if not rsBridge then return end
             logInfo("RS Bridge re-acquired")
         end
+        -- listItems is a peripheral call and therefore synchronous: the server
+        -- processes no events while it runs, and CC drops what arrives. Timed
+        -- separately from the rest of this function because the suspicion is
+        -- specifically the mod call, not the table walk after it.
+        --
+        -- Measured once at 37 ms by the server operator. That was a single
+        -- sample on an idle system. The live log alternates "RS storage
+        -- refreshed" with "Bridge push timed out" one-for-one, which is what it
+        -- would look like if this call were eating the window the push
+        -- completion arrives in.
+        local rsStart = os.epoch("utc")
         local ok, raw = pcall(function() return rsBridge.listItems() end)
+        lastRsPollMs = os.epoch("utc") - rsStart
+        if lastRsPollMs > rsPollWorstMs then rsPollWorstMs = lastRsPollMs end
         if not ok then
             logWarn("RS listItems failed: " .. tostring(raw))
             rsBridge = nil   -- force re-acquire next cycle
@@ -3606,6 +3625,8 @@ function server.run()
                         -- Previous, not current, because the current build cannot
                         -- include its own elapsed time.
                         ',"pushBuildMs":'  .. tostring(lastBuildMs) ..
+                        ',"rsPollMs":'     .. tostring(lastRsPollMs) ..
+                        ',"rsPollWorstMs":' .. tostring(rsPollWorstMs) ..
                         ',"storage":'      .. storageJSON ..
                         ',"storageTs":'    .. tostring(storageTs) ..
                         ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
