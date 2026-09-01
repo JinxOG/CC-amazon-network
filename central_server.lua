@@ -3330,6 +3330,11 @@ function server.run()
     -- Serialises current server state to a JSON string.
     -- HTTP is handled by startBridgePush (async) and the http_success /
     -- http_failure event handlers in the main loop — no parallel.waitForAny.
+
+    -- Duration of the last assembly, published as pushBuildMs. -1 until the
+    -- first build completes.
+    local lastBuildMs = -1
+
     local function buildBridgePayload()
         local turtles = {}
         local nowMs = os.epoch("utc")
@@ -3437,6 +3442,7 @@ function server.run()
         end
         local jobs = buildJobsJSON(activeJobs)
         -- Build mineZones summary for the dashboard overlay (active + historical)
+        local buildStartMs = os.epoch("utc")
         local mineZones = {}
         -- Active zones — keyed by jobId
         -- Shallow-copy a table so serialiseJSON sees distinct objects even when
@@ -3590,6 +3596,16 @@ function server.run()
         local payload = '{"turtles":'      .. js(turtles,             "{}",  "turtles") ..
                         ',"jobs":'         .. jobs ..
                         ',"version":'      .. js(proto.VERSION,        '"?"', "version") ..
+                        -- How long the PREVIOUS assembly took, in ms. This
+                        -- function is synchronous, so that number is exactly how
+                        -- long the server was deaf to the radio -- the window in
+                        -- which CC drops heartbeats, http_success and its own
+                        -- timers. It is reported rather than reasoned about
+                        -- because two fixes have now been shipped against an
+                        -- assumed duration nobody has measured (spec §8, N2).
+                        -- Previous, not current, because the current build cannot
+                        -- include its own elapsed time.
+                        ',"pushBuildMs":'  .. tostring(lastBuildMs) ..
                         ',"storage":'      .. storageJSON ..
                         ',"storageTs":'    .. tostring(storageTs) ..
                         ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
@@ -3605,6 +3621,7 @@ function server.run()
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
                         ',"turtleLogs":'   .. js(logsOut,              "{}",  "turtleLogs") .. '}'
+        lastBuildMs = os.epoch("utc") - buildStartMs
         return payload
     end
 
