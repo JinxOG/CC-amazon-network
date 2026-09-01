@@ -3690,6 +3690,26 @@ function server.run()
     local lastStaleWC        = os.epoch("utc")
     local lastOreWatchdogWC  = os.epoch("utc")
 
+    -- How long to wait for a push's http_success before assuming the event was
+    -- dropped and allowing the next push.
+    --
+    -- THIS MUST STAY WELL BELOW THE FLEET'S PATIENCE. A turtle re-registers
+    -- after MAX_MISSED (3) missed heartbeats at HEARTBEAT_INTERVAL (5s) --
+    -- 15 seconds. This timer was also 15 seconds, so recovery could never win
+    -- the race: one dropped http_success made the server unresponsive for
+    -- exactly as long as it took the entire fleet to give up on it.
+    --
+    -- That is a feedback loop, not a slow push. Observed 2026-08-30 with the
+    -- fleet completely idle -- 15 turtles, zero jobs -- and every node
+    -- re-registering six times in a 100-line log window. Each re-registration
+    -- is more traffic into the queue that is already dropping events, which
+    -- drops more http_success, which re-registers more turtles.
+    --
+    -- At 5s the server recovers three times over before a turtle gives up, so a
+    -- dropped event costs staleness and nothing else. Raising this back toward
+    -- 15 re-arms the loop.
+    local BRIDGE_PUSH_TIMEOUT = 5
+
     local function startBridgePush()
         local now = os.epoch("utc")
         -- Wall-clock failsafe: if bridgePending has been stuck for >30s both the
@@ -3711,7 +3731,7 @@ function server.run()
         if started then
             bridgePending     = true
             bridgePendingSince = now
-            bridgeTimeoutId   = os.startTimer(15)
+            bridgeTimeoutId   = os.startTimer(BRIDGE_PUSH_TIMEOUT)
         else
             logWarn("Bridge: http.request could not start")
         end
@@ -3820,7 +3840,7 @@ function server.run()
             elseif p1 == bridgeTimeoutId then
                 bridgePending   = false
                 bridgeTimeoutId = nil
-                logWarn("Bridge push timed out (>15s)")
+                logWarn(string.format("Bridge push timed out (>%ds)", BRIDGE_PUSH_TIMEOUT))
 
             elseif p1 == storageTimer then
                 -- Runs on its own timer so the peripheral scan never happens
