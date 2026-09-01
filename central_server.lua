@@ -2823,6 +2823,9 @@ function server.run()
     -- and player activity without reading crash.log after the fact.
     local terminateCount  = 0
     local lastTerminateMs = -1
+    -- Item count at the last storage poll that was worth logging. -1 until the
+    -- first poll, so the first one always reports.
+    local lastLoggedStorageCount = -1
     local storageTs     = 0   -- os.epoch("utc") ms of last successful rsBridge.listItems()
 
     -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
@@ -2963,7 +2966,28 @@ function server.run()
         storageItems = result
         storageJSON  = textutils.serialiseJSON(result)
         storageTs    = os.epoch("utc")
-        logInfo("RS storage refreshed: " .. #storageItems .. " items")
+
+        -- Log only when the item count actually moves.
+        --
+        -- This ran every 5s unconditionally, which is 12 lines a minute into a
+        -- 100-line window. Measured 2026-09-01: 51 of the last 100 server log
+        -- lines were this one message, and the entire visible history was
+        -- 2.2 minutes long. A fault that builds over days is invisible through
+        -- a two-minute window, and this is the direct reason a week of
+        -- diagnosis kept starting from scratch — every attempt to read what had
+        -- happened found only storage polls.
+        --
+        -- P7 says the system must be able to report its own degradation. A log
+        -- that overwrites itself faster than anyone can look at it reports
+        -- nothing. Silence on an unchanged poll is not lost information: the
+        -- count is already published continuously as storageTs and the storage
+        -- payload, where a stalled poll shows up as a stale timestamp.
+        local n = #storageItems
+        if n ~= lastLoggedStorageCount then
+            logInfo(string.format("RS storage: %d items (was %s)",
+                n, lastLoggedStorageCount < 0 and "first poll" or tostring(lastLoggedStorageCount)))
+            lastLoggedStorageCount = n
+        end
     end
 
     local recentCmds = {}
