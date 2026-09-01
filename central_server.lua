@@ -2752,9 +2752,44 @@ function server.run()
     if not state.modem then
         error("No modem found. Attach a wireless or ender modem.")
     end
-    proto.openChannels(state.modem, {
+    local SERVER_CHANNELS = {
         proto.CH_SERVER, proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_WAREHOUSE,
-    })
+    }
+    proto.openChannels(state.modem, SERVER_CHANNELS)
+
+    -- Invariant B, applied to the server. It was written for turtles -- "a
+    -- worker must be able to recover a missing modem" -- and the server, which
+    -- every worker depends on, never got it. The modem was acquired once at
+    -- boot and its channels opened once, with no path back if either was lost.
+    --
+    -- A deaf server is invisible from every angle that matters. Observed
+    -- 2026-09-01: dashboard refreshing normally at 3.6 s, storage polling at
+    -- 57 ms, payload assembly at 11 ms, player online, chunks loaded -- and 100
+    -- consecutive log lines containing nothing but "RS storage refreshed".
+    -- Zero heartbeats, and not even the "heartbeat from unknown node" warning
+    -- that an unregistered turtle would produce, because nothing arrived at
+    -- all. The fleet had been talking to a server that could not hear it.
+    --
+    -- This is why only a reboot ever fixed it, and why every fix that shipped
+    -- with a restart appeared to work.
+    local function ensureModemLive()
+        local ok, open = pcall(function()
+            return state.modem and state.modem.isOpen(proto.CH_SERVER)
+        end)
+        if ok and open then return end
+        local m = peripheral.find("modem")
+        if not m then
+            logError("Modem missing — the server cannot hear the fleet")
+            return
+        end
+        state.modem = m
+        local ok2, err = pcall(proto.openChannels, m, SERVER_CHANNELS)
+        if ok2 then
+            logWarn("Modem recovered — channels reopened (was deaf)")
+        else
+            logError("Modem reopen failed: " .. tostring(err))
+        end
+    end
 
     local rsBridge = peripheral.find("rsBridge")
     if rsBridge then
@@ -3607,6 +3642,14 @@ function server.run()
             logsOut[id] = out
         end
 
+        -- Can we still hear the fleet? P7: a deaf server otherwise reports
+        -- itself perfectly healthy — dashboard fresh, storage polling, disk
+        -- fine — while receiving nothing at all.
+        local modemOpen = false
+        pcall(function()
+            modemOpen = (state.modem and state.modem.isOpen(proto.CH_SERVER)) or false
+        end)
+
         -- pcall'd: fs.getFreeSpace is cheap but this runs on every bridge push,
         -- and a failure here must never cost the whole payload.
         local diskFree = nil
@@ -3640,6 +3683,7 @@ function server.run()
                         healthField("zoneStoreHealthy",   state.zoneStoreHealthy) ..
                         healthField("persistenceHealthy", state.persistenceHealthy) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
+                        ',"modemOpen":'    .. tostring(modemOpen) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
                         ',"turtleLogs":'   .. js(logsOut,              "{}",  "turtleLogs") .. '}'
         lastBuildMs = os.epoch("utc") - buildStartMs
@@ -3850,6 +3894,10 @@ function server.run()
                 dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
 
             elseif p1 == healthTimer then
+                -- Before anything else: confirm we can still hear. Every other
+                -- health check reasons about turtles we may simply not be
+                -- receiving.
+                ensureModemLive()
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
                 local ok2, err2 = pcall(jobQueue.checkGhosts)
