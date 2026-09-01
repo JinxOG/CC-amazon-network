@@ -2826,6 +2826,10 @@ function server.run()
     -- Item count at the last storage poll that was worth logging. -1 until the
     -- first poll, so the first one always reports.
     local lastLoggedStorageCount = -1
+    -- Duration of the last health pass and the worst since boot. The health
+    -- pass runs on the same 240s period as the observed failure bursts.
+    local lastHealthMs  = -1
+    local healthWorstMs = -1
     local storageTs     = 0   -- os.epoch("utc") ms of last successful rsBridge.listItems()
 
     -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
@@ -3701,6 +3705,8 @@ function server.run()
                         ',"rsPollWorstMs":' .. tostring(rsPollWorstMs) ..
                         ',"terminateCount":' .. tostring(terminateCount) ..
                         ',"lastTerminateMs":' .. tostring(lastTerminateMs) ..
+                        ',"healthMs":'     .. tostring(lastHealthMs) ..
+                        ',"healthWorstMs":' .. tostring(healthWorstMs) ..
                         ',"storage":'      .. storageJSON ..
                         ',"storageTs":'    .. tostring(storageTs) ..
                         ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
@@ -3945,18 +3951,48 @@ function server.run()
                 dispatchTimer = os.startTimer(CFG.DISPATCH_INTERVAL)
 
             elseif p1 == healthTimer then
-                -- Before anything else: confirm we can still hear. Every other
-                -- health check reasons about turtles we may simply not be
-                -- receiving.
+                -- This block runs every HEARTBEAT_TIMEOUT (240 s), and 240 s is
+                -- exactly the period of the push-failure bursts observed
+                -- 2026-09-01: six consecutive timeouts, five seconds apart, at
+                -- 11:13, 11:17, 11:21, 11:25, 11:29 and 11:33. Roughly 30
+                -- seconds of failure, then 3.5 minutes of health, repeating.
+                --
+                -- Everything in here is synchronous, so whichever of these is
+                -- slow is the deaf window. Each is timed separately rather than
+                -- as a block, because "the health check is slow" would not say
+                -- which of four to fix — and three theories have already been
+                -- lost this week to measuring the aggregate and guessing at the
+                -- part.
+                local hStart = os.epoch("utc")
                 ensureModemLive()
+                local tModem = os.epoch("utc")
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
+                local tTimeouts = os.epoch("utc")
                 local ok2, err2 = pcall(jobQueue.checkGhosts)
                 if not ok2 then logError("Ghost check: " .. tostring(err2)) end
+                local tGhosts = os.epoch("utc")
                 local ok3, err3 = pcall(checkOrphanedMiners)
                 if not ok3 then logError("Orphan check: " .. tostring(err3)) end
+                local tOrphans = os.epoch("utc")
                 local ok4, err4 = pcall(registry.autoRefuelIdle)
                 if not ok4 then logError("Auto-refuel: " .. tostring(err4)) end
+                local tRefuel = os.epoch("utc")
+
+                lastHealthMs = tRefuel - hStart
+                if lastHealthMs > healthWorstMs then healthWorstMs = lastHealthMs end
+                -- Logged only when it is slow enough to matter. A health pass
+                -- that costs more than one bridge interval has starved a push.
+                if lastHealthMs >= (CFG.BRIDGE_INTERVAL * 1000) then
+                    logWarn(string.format(
+                        "Health pass %dms — modem %d, timeouts %d, ghosts %d, orphans %d, refuel %d",
+                        lastHealthMs,
+                        tModem    - hStart,
+                        tTimeouts - tModem,
+                        tGhosts   - tTimeouts,
+                        tOrphans  - tGhosts,
+                        tRefuel   - tOrphans))
+                end
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then
