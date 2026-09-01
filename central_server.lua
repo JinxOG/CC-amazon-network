@@ -2818,6 +2818,11 @@ function server.run()
     -- drop the events that strand the fleet.
     local lastRsPollMs  = -1
     local rsPollWorstMs = -1
+    -- Terminate signals received and ignored since boot. Published so the
+    -- source can be correlated against Minecraft restarts, /self-update runs
+    -- and player activity without reading crash.log after the fact.
+    local terminateCount  = 0
+    local lastTerminateMs = -1
     local storageTs     = 0   -- os.epoch("utc") ms of last successful rsBridge.listItems()
 
     -- Ore demand watchdog: auto-dispatch targeted mines when storage is low
@@ -3670,6 +3675,8 @@ function server.run()
                         ',"pushBuildMs":'  .. tostring(lastBuildMs) ..
                         ',"rsPollMs":'     .. tostring(lastRsPollMs) ..
                         ',"rsPollWorstMs":' .. tostring(rsPollWorstMs) ..
+                        ',"terminateCount":' .. tostring(terminateCount) ..
+                        ',"lastTerminateMs":' .. tostring(lastTerminateMs) ..
                         ',"storage":'      .. storageJSON ..
                         ',"storageTs":'    .. tostring(storageTs) ..
                         ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
@@ -3824,9 +3831,29 @@ function server.run()
     startBridgePush()
 
     while true do
-        local event, p1, p2, p3, p4 = os.pullEvent()
+        -- pullEventRaw, not pullEvent. pullEvent turns a terminate event into a
+        -- thrown "Terminated" error, which killed this server 12 times between
+        -- 28 Aug and 1 Sep -- every entry in crash.log, with no other cause
+        -- recorded. Each kill emptied the registry, and the fleet cannot rejoin
+        -- a server that has forgotten it without a turtle being rebooted by
+        -- hand. Every symptom chased that week -- stale dashboard, vanishing
+        -- turtles, unregistered workers -- was downstream of this.
+        --
+        -- A fleet controller should not be stoppable by a stray signal at
+        -- 02:29 in the morning. The cost is that Ctrl+T no longer stops it;
+        -- reboot the computer to do that.
+        local event, p1, p2, p3, p4 = os.pullEventRaw()
 
-        if event == "modem_message" then
+        if event == "terminate" then
+            -- Logged rather than silently swallowed: something is sending these
+            -- and we still do not know what. The count and timing are the
+            -- evidence for finding out.
+            terminateCount = terminateCount + 1
+            lastTerminateMs = os.epoch("utc")
+            logWarn(string.format(
+                "Terminate signal ignored (#%d) — server staying up", terminateCount))
+
+        elseif event == "modem_message" then
             local parsed = textutils.unserialise(p4)
             if parsed then
                 local valid, msg = proto.decode(parsed)
