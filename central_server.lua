@@ -2821,6 +2821,8 @@ function server.run()
     -- Terminate signals received and ignored since boot. Published so the
     -- source can be correlated against Minecraft restarts, /self-update runs
     -- and player activity without reading crash.log after the fact.
+    -- Window in which a second Ctrl+T confirms a deliberate stop.
+    local TERMINATE_CONFIRM_MS = 3000
     local terminateCount  = 0
     local lastTerminateMs = -1
     -- Item count at the last storage poll that was worth logging. -1 until the
@@ -3875,13 +3877,30 @@ function server.run()
         local event, p1, p2, p3, p4 = os.pullEventRaw()
 
         if event == "terminate" then
-            -- Logged rather than silently swallowed: something is sending these
-            -- and we still do not know what. The count and timing are the
-            -- evidence for finding out.
+            -- Double-press to stop. The first Ctrl+T is ignored and says so on
+            -- screen; a second within TERMINATE_CONFIRM_MS actually stops the
+            -- server.
+            --
+            -- The single-press guard shipped in 2219d40 on the theory that
+            -- something unknown was killing the server 12 times. The operator
+            -- then identified those as their own deliberate stops to deploy
+            -- updates, so the guard was solving a problem that did not exist
+            -- while removing a workflow that did. terminateCount has since read
+            -- zero, confirming it.
+            --
+            -- Kept as a double-press rather than reverted outright because it
+            -- costs one extra keypress and still refuses a single stray signal.
+            -- Deliberate stops go through; accidents do not.
+            local nowT = os.epoch("utc")
             terminateCount = terminateCount + 1
-            lastTerminateMs = os.epoch("utc")
+            if lastTerminateMs > 0 and (nowT - lastTerminateMs) <= TERMINATE_CONFIRM_MS then
+                logWarn("Terminate confirmed — stopping server")
+                error("Terminated", 0)
+            end
+            lastTerminateMs = nowT
             logWarn(string.format(
-                "Terminate signal ignored (#%d) — server staying up", terminateCount))
+                "Terminate ignored (#%d) — press Ctrl+T again within %ds to stop",
+                terminateCount, TERMINATE_CONFIRM_MS / 1000))
 
         elseif event == "modem_message" then
             local parsed = textutils.unserialise(p4)
