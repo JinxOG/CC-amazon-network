@@ -98,9 +98,17 @@ local PLACE_FACING = 2
 
 -- Loader liveness while mining. The loader beacons every 5s (loader_turtle.lua
 -- BEACON_INTERVAL), but the job coroutine only sees modem traffic while it is
--- actually blocked in proto.receive: anything arriving while it is inside a
--- turtle move is delivered to turtle_base's control loop instead and is gone
--- before we look. So "no beacon" only means anything after we have deliberately
+-- actually blocked in base.receive: anything arriving while it is inside a
+-- turtle move is delivered to turtle_base's control loop instead.
+--
+-- For a BEACON that still means gone, which is why the windows below are sized
+-- the way they are. Beacons are TRANSIENT_TYPES: the control loop does not queue
+-- them, deliberately, because noteBeacon verifies one by exact block position
+-- and a stale beacon is worse than none. Other message types ARE queued as of
+-- 1.9.72 and are waiting in the job inbox rather than lost -- do not read this
+-- paragraph as saying dropping is safe in general.
+--
+-- So "no beacon" only means anything after we have deliberately
 -- listened, which costs mining time -- hence a long interval, a listen window
 -- comfortably wider than one beacon period, and a grace window spanning more
 -- than two checks so a single missed window never abandons a good sector.
@@ -247,18 +255,31 @@ base.setServerDownEscape(autonomousReturnDue)
 -- ── Messaging ────────────────────────────────────────────────────────────────
 
 -- mine_flow's beacon gate calls this. Contract: block for roughly pollSeconds
--- when nothing is arriving (proto.receive does, via os.pullEvent), hand every
--- message straight to mine_flow.noteBeacon with msg.payload INTACT (noteBeacon
+-- when nothing is arriving (base.receive does, via os.pullEvent), hand every
+-- beacon straight to mine_flow.noteBeacon with msg.payload INTACT (noteBeacon
 -- verifies a beacon by exact block position out of msg.payload.position — a
 -- stripped payload silently disables that check), and never raise: mine_flow
 -- does not pcall this hook.
 --
--- Messages drained here are not stolen from anything. turtle_base runs its
--- control loop and the job coroutine under parallel.waitForAny, which delivers
--- every event to both, so RECALL / JOB_ASSIGN still reach the control loop.
+-- Asks for LOADER_BEACON specifically rather than draining whatever is next.
+--
+-- The old shape took ANY message and dropped it after noteBeacon -- the same
+-- discard that cost 11.8 hours in the registration storm, where a waiter wanting
+-- one type threw away another and the real reply landed with nobody waiting.
+--
+-- Naming the type matters more than it looks. base.receive drains the inbox
+-- BEFORE waiting on the wire, so an unfiltered call here would pop a queued
+-- SECTOR_ASSIGN and destroy it. Asking for beacons means inboxPop finds nothing
+-- (beacons are TRANSIENT_TYPES and never queued), so nothing is taken from the
+-- queue, and anything live that is not a beacon gets routed into the job inbox
+-- instead of dropped.
+--
+-- Beacons still arrive live, which is what mine_flow's gate needs: noteBeacon
+-- verifies one by exact block position, so a queued stale beacon would be worse
+-- than none.
 local function pump(pollSeconds)
     local ok, err = pcall(function()
-        local msg = proto.receive(base.getSelfId(), pollSeconds or 1)
+        local msg = base.receive(pollSeconds or 1, proto.MSG.LOADER_BEACON)
         if msg then mine_flow.noteBeacon(msg) end
     end)
     if not ok then print("[MINER] pump error: " .. tostring(err)) end
@@ -277,6 +298,19 @@ mine_flow.setHooks({
     pump        = pump,
 })
 
+-- No longer feeds mine_flow.noteBeacon, and that is safe for two independent
+-- reasons -- either alone would do:
+--
+--   1. Beacons are TRANSIENT_TYPES: never queued, so a filtered receive cannot
+--      return one here however long the wait.
+--   2. Nothing is standing to beacon. The only caller is waitSectorResponse,
+--      which runs AFTER SECTOR_DONE, and the loader is retrieved before that is
+--      sent ("Take the loader back BEFORE reporting the sector done"). Loader
+--      liveness is not a live question at this point in the cycle.
+--
+-- Written down because the removed line carried a comment claiming a beacon seen
+-- here was as good as one seen in pump. That was true when this drained every
+-- message; it is not the reason it can go.
 local function waitMsg(types, secs)
     local set = {}
     for _, t in ipairs(types) do set[t] = true end
@@ -294,13 +328,13 @@ local function waitMsg(types, secs)
         end
         local remain = deadline - os.epoch("utc") / 1000
         if remain <= 0 then break end
-        local msg = proto.receive(base.getSelfId(), math.max(0.5, remain))
-        if msg then
-            -- Keep feeding the loader-liveness tracker even while waiting for
-            -- something else; a beacon seen here is as good as one seen in pump.
-            mine_flow.noteBeacon(msg)
-            if set[msg.type] then return msg end
-        end
+        -- Pass the set down instead of filtering after the fact. The old shape
+        -- popped a message, checked its type, and dropped it if it did not
+        -- match -- so a SECTOR_ASSIGN arriving while this waited for something
+        -- else was destroyed exactly the way the registration ACK was.
+        -- base.receive routes non-matching messages into the inbox instead.
+        local msg = base.receive(math.max(0.5, remain), set)
+        if msg then return msg end
     end
     return nil
 end

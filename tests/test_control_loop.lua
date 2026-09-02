@@ -1208,4 +1208,79 @@ function(assert_eq)
         "returning the raw scan would undo the filter")
 end
 
+
+-- The miner's two receives route rather than discard (SOURCE-ONLY, weaker).
+--
+-- proto.receive returns the first message addressed to this turtle of ANY type.
+-- A waiter that wants one type and pops another destroys it. That is the exact
+-- mechanism behind the 11.8-hour registration storm: register() wanted a
+-- REGISTER_ACK, a HEARTBEAT_ACK arrived first and was discarded along with the
+-- attempt, and the real ACK then landed with nothing waiting for it.
+--
+-- ore_turtle self-executes and cannot be loaded headlessly, so these are pinned
+-- by inspection. The routing itself is turtle_base's and is tested there.
+suite["the miner uses no raw proto.receive (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    -- Strip comment lines first: the file legitimately DISCUSSES proto.receive,
+    -- and matching prose would make this pass or fail on wording.
+    local code = {}
+    for line in (src .. "\n"):gmatch("([^\n]*)\n") do
+        if not line:match("^%s*%-%-") then code[#code + 1] = line end
+    end
+    code = table.concat(code, "\n")
+
+    assert_eq(code:find("proto%.receive"), nil,
+        "every receive must go through base.receive so non-matching messages "
+        .. "are routed into the inbox instead of discarded")
+end
+
+suite["pump asks for beacons by type, not whatever is next (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local defAt = src:find("local function pump%(pollSeconds%)")
+    assert_eq(defAt ~= nil, true, "pump moved or vanished")
+    local endAt = src:find("\nend\n", defAt, true)
+    assert_eq(endAt ~= nil, true, "could not bound pump")
+    local body = src:sub(defAt, endAt)
+
+    -- Naming the type is what keeps this safe. base.receive drains the inbox
+    -- BEFORE waiting on the wire, so an unfiltered call would pop a queued
+    -- SECTOR_ASSIGN and drop it -- reintroducing the bug in a new place.
+    assert_eq(body:find("base%.receive%([^)]-proto%.MSG%.LOADER_BEACON") ~= nil, true,
+        "pump must ask for LOADER_BEACON specifically, or it will pop and "
+        .. "discard queued job messages")
+end
+
+suite["the sector wait passes its type set down (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local defAt = src:find("local function waitMsg%(types, secs%)")
+    assert_eq(defAt ~= nil, true, "waitMsg moved or vanished")
+    local endAt = src:find("\nend\n", defAt, true)
+    assert_eq(endAt ~= nil, true, "could not bound waitMsg")
+    local body = src:sub(defAt, endAt)
+
+    -- Two substrings rather than one pattern: the call contains a nested
+    -- paren -- base.receive(math.max(0.5, remain), set) -- so a [^)] span
+    -- cannot reach the second argument. The first version of this assertion
+    -- failed on correct code for exactly that reason.
+    assert_eq(body:find("base%.receive%(") ~= nil, true,
+        "waitMsg must receive through base.receive")
+    assert_eq(body:find(", set%)") ~= nil, true,
+        "waitMsg must pass the set down, not filter afterwards")
+    -- Filtering after the fact is the discard this migration removes.
+    assert_eq(body:find("if set%[msg%.type%] then"), nil,
+        "a post-hoc type check means the non-matching message was already popped")
+end
+
 return suite
