@@ -212,6 +212,22 @@ local CTRL_TYPES = {
     [proto.MSG.FORCE_REFUEL]  = true,
 }
 
+-- Types that are only meaningful LIVE and must never be queued.
+--
+-- Both are continuous streams where a stale copy is worse than none: a placed
+-- loader broadcasts its liveness beacon to every turtle every 5 seconds, and a
+-- delivery turtle streams its position to its partner. Queuing either fills the
+-- job inbox on turtles whose handlers do not drain it -- and a support turtle
+-- acting on a stale position would fly to where its partner used to be.
+--
+-- This is type-specific knowledge in a generic router, which is a cost. It is
+-- the same cost CTRL_TYPES already pays, and the alternative is an overflow
+-- warning every 5 seconds on every turtle in the fleet.
+local TRANSIENT_TYPES = {
+    [proto.MSG.LOADER_BEACON]   = true,
+    [proto.MSG.POSITION_UPDATE] = true,
+}
+
 local _ctrlInbox, _jobInbox = {}, {}
 
 -- Bounded so a worker that stops draining an inbox cannot grow it without limit.
@@ -220,17 +236,32 @@ local _ctrlInbox, _jobInbox = {}, {}
 -- 1 MB computer is its own outage.
 local INBOX_MAX = 64
 
+-- Rate-limited: an inbox that nobody drains overflows on every single arrival,
+-- and a warning per arrival would bury the log it is trying to appear in. Log
+-- space on these computers is scarce enough that shipping fewer lines per node
+-- was itself a fix (1.9.61/1.9.67).
+local _lastOverflowLog = 0
+
 local function inboxPush(q, msg)
     q[#q + 1] = msg
+    local dropped = 0
     while #q > INBOX_MAX do
         table.remove(q, 1)
-        logWarn("Inbox overflow — dropped the oldest message")
+        dropped = dropped + 1
+    end
+    if dropped > 0 then
+        local now = os.epoch("utc")
+        if now - _lastOverflowLog >= 60000 then
+            _lastOverflowLog = now
+            logWarn("Inbox overflow — oldest messages dropped; a handler is not draining")
+        end
     end
 end
 
 -- Route a decoded message to its inbox. The single place that decides which
 -- queue a message belongs in.
 local function routeMessage(msg)
+    if TRANSIENT_TYPES[msg.type] then return end
     inboxPush(CTRL_TYPES[msg.type] and _ctrlInbox or _jobInbox, msg)
 end
 base.routeMessage = routeMessage

@@ -94,7 +94,7 @@ return {
     -- just queued and spin without ever blocking.
     ["unmatched messages are held and re-queued in order"] = function(assert_eq)
         local base = fresh()
-        deliver(base, proto.MSG.POSITION_UPDATE, "node_2")
+        deliver(base, proto.MSG.MINE_CLEAR, "node_2")
         deliver(base, proto.MSG.HOLE_READY,      "node_2")
         deliver(base, proto.MSG.SUPPORT_STAGED,  "node_2")
 
@@ -104,7 +104,7 @@ return {
 
         assert_eq(got ~= nil and got.type, proto.MSG.SUPPORT_STAGED,
             "the requested type must be pulled out of the middle")
-        assert_eq(first ~= nil and first.type, proto.MSG.POSITION_UPDATE,
+        assert_eq(first ~= nil and first.type, proto.MSG.MINE_CLEAR,
             "and the others must come back in arrival order")
         assert_eq(second ~= nil and second.type, proto.MSG.HOLE_READY)
     end,
@@ -114,7 +114,7 @@ return {
     ["a set of wanted types matches any member and holds the rest"] =
     function(assert_eq)
         local base = fresh()
-        deliver(base, proto.MSG.POSITION_UPDATE, "node_2")
+        deliver(base, proto.MSG.MINE_CLEAR, "node_2")
         deliver(base, proto.MSG.HOLE_READY,      "node_2")
 
         local set = { [proto.MSG.HOLE_READY] = true }
@@ -133,13 +133,31 @@ return {
         assert_eq(base.receiveCtrl(0, proto.MSG.REGISTER_ACK), nil)
     end,
 
+    -- Continuous streams must never be queued. A placed loader broadcasts its
+    -- liveness beacon to every turtle every 5 seconds; queuing those fills the
+    -- job inbox on any turtle whose handler does not drain it, and then warns on
+    -- every arrival forever. A stale position update is worse still -- a support
+    -- turtle acting on one flies to where its partner used to be.
+    ["live-only streams are never queued"] = function(assert_eq)
+        local base = fresh()
+        for _ = 1, 50 do
+            deliver(base, proto.MSG.LOADER_BEACON, "node_9")
+            deliver(base, proto.MSG.POSITION_UPDATE, "node_2")
+        end
+        local ctrl, jobs = base.inboxSizes()
+        assert_eq(ctrl, 0)
+        assert_eq(jobs, 0,
+            "beacons and position updates are only meaningful live — queuing "
+            .. "them fills the inbox on every turtle in the fleet")
+    end,
+
     -- A worker that stops draining must not grow a queue without limit on a
     -- 1 MB computer. Dropping the oldest is deliberate: a superseded assignment
     -- is worth less than the message that just arrived.
     ["an inbox is bounded and drops the oldest first"] = function(assert_eq)
         local base = fresh()
         for i = 1, 200 do
-            base.routeMessage({ type = proto.MSG.POSITION_UPDATE, from = "node_2",
+            base.routeMessage({ type = proto.MSG.MINE_CLEAR, from = "node_2",
                                 to = "node_1", payload = { n = i } })
         end
         local _, jobs = base.inboxSizes()
