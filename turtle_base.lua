@@ -1594,6 +1594,12 @@ base.fuel = fuel
 -- delivery/support/warehouse boot behaviour is byte-for-byte unchanged.
 local BOOT_REGISTER_ATTEMPTS = 6
 
+-- Registration retry backoff: 5s, 10s, 20s, 40s, then capped at 60s. Flat 5s
+-- retries let a lost ACK become a fleet-wide storm — see the comment in
+-- register()'s retry branch.
+local REGISTER_BACKOFF_BASE = 5
+local REGISTER_BACKOFF_MAX  = 60
+
 -- Returns true once the server ACKs. Returns false only when maxAttempts is set
 -- and exhausted; with maxAttempts nil it never returns false.
 --
@@ -1647,9 +1653,29 @@ local function register(maxAttempts)
             return false
         end
 
-        -- Not connected yet — wait and retry automatically (no reboot needed)
-        logWarn("No response from server. Retrying in 5s... (is the server running?)")
-        sleep(5)
+        -- Not connected yet — wait and retry, backing off.
+        --
+        -- A flat 5s retry turned a lost ACK into a fleet-wide storm. Captured
+        -- 2026-09-02: all 15 turtles re-registering together every 32s, then
+        -- every 7s, with identical fuel values each round -- nobody working,
+        -- everyone shouting. The server logged every registration, so it was
+        -- receiving and answering them; the ACKs were being consumed by the
+        -- other coroutine before register() could see them (Invariant G, the
+        -- inbox that does not exist).
+        --
+        -- That is a runaway: retries add traffic, traffic drops more ACKs, more
+        -- turtles retry. It ended with the server unable to push at all and the
+        -- dashboard frozen for 11.8 hours.
+        --
+        -- Backing off does not fix the race -- only the inbox does -- but it
+        -- stops the race from feeding itself. Fewer attempts per second means
+        -- less traffic, which means a given attempt is more likely to survive,
+        -- so the fleet converges instead of diverging.
+        local wait = math.min(REGISTER_BACKOFF_BASE * (2 ^ (attempt - 1)),
+                              REGISTER_BACKOFF_MAX)
+        logWarn(string.format(
+            "No response from server. Retrying in %ds (attempt %d)...", wait, attempt))
+        sleep(wait)
     end
 end
 
