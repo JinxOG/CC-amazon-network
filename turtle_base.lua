@@ -173,6 +173,153 @@ local comms = {}
 -- never end up subscribed to a different set than the original.
 local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }
 
+-- ─── Shared inbox (Invariant G) ──────────────────────────────────────────────
+--
+-- Invariant G has mandated base.receive since it was written. It never existed:
+-- every waiter called proto.receive directly, and on 2026-09-02 that took the
+-- fleet down for 11.8 hours.
+--
+-- THE MECHANISM. proto.receive returns the FIRST message addressed to this
+-- turtle, whatever its type. register() waits for a REGISTER_ACK, so any other
+-- message arriving first -- a HEARTBEAT_ACK, of which fifteen turtles produce a
+-- steady stream -- comes back instead, fails the `reply.type == REGISTER_ACK`
+-- test, and is DISCARDED along with the attempt. The real ACK then arrives while
+-- nothing is waiting for it and is discarded in turn. register() retries, adds
+-- traffic, and makes the next collision more likely: retries beget retries.
+--
+-- The server was answering correctly throughout. It logged "Re-registered" for
+-- every attempt, which only happens on the success path -- the ACK was sent and
+-- then thrown away at the receiver. That is why Invariant G says ACK loops make
+-- loss VISIBLE, not absent: the hazard is receiver-side.
+--
+-- THE FIX. Nothing is ever discarded. Every waiter routes what it did not ask
+-- for into one of two inboxes instead of dropping it, so a message can arrive
+-- for a waiter that has not asked yet and still be there when it does.
+--
+--   _ctrlInbox  HEARTBEAT_ACK, REGISTER_ACK, RECALL, UPDATE_ALL, FORCE_REFUEL
+--   _jobInbox   everything else -- job assignment and worker coordination
+--
+-- Control types are separated because HEARTBEAT_ACK is the only proof the server
+-- is alive. If a job handler absorbed one, _missedHeartbeats would climb to
+-- MAX_MISSED, serverDown would trip, and tryMove() would freeze all movement --
+-- presenting as a fleet-wide freeze rather than a messaging fault, which looks
+-- nothing like the actual cause.
+local CTRL_TYPES = {
+    [proto.MSG.HEARTBEAT_ACK] = true,
+    [proto.MSG.REGISTER_ACK]  = true,
+    [proto.MSG.RECALL]        = true,
+    [proto.MSG.UPDATE_ALL]    = true,
+    [proto.MSG.FORCE_REFUEL]  = true,
+}
+
+local _ctrlInbox, _jobInbox = {}, {}
+
+-- Bounded so a worker that stops draining an inbox cannot grow it without limit.
+-- Dropping the OLDEST is deliberate: a stale RECALL or a superseded assignment is
+-- worth less than the message that just arrived, and an unbounded queue on a
+-- 1 MB computer is its own outage.
+local INBOX_MAX = 64
+
+local function inboxPush(q, msg)
+    q[#q + 1] = msg
+    while #q > INBOX_MAX do
+        table.remove(q, 1)
+        logWarn("Inbox overflow — dropped the oldest message")
+    end
+end
+
+-- Route a decoded message to its inbox. The single place that decides which
+-- queue a message belongs in.
+local function routeMessage(msg)
+    inboxPush(CTRL_TYPES[msg.type] and _ctrlInbox or _jobInbox, msg)
+end
+base.routeMessage = routeMessage
+
+-- Pop the first message matching wantType (or any, when wantType is nil).
+--
+-- HOLD, NEVER PUSH BACK INLINE. Non-matching messages go into a local `held`
+-- table and are re-queued only after the scan finishes. Pushing one back inline
+-- would have this loop re-pop what it had just queued, spinning the CPU without
+-- ever blocking -- learned the hard way in the design this replaces.
+-- wantType may be nil (anything), a type string, or a SET of types. The set form
+-- exists so a caller waiting on several types does not have to pop-and-requeue
+-- what it did not want, which is the inline push-back that spins the CPU.
+local function wantMatches(msg, wantType)
+    if wantType == nil then return true end
+    if type(wantType) == "table" then return wantType[msg.type] == true end
+    return msg.type == wantType
+end
+
+local function inboxPop(q, wantType)
+    local held, found = {}, nil
+    while #q > 0 do
+        local msg = table.remove(q, 1)
+        if found == nil and wantMatches(msg, wantType) then
+            found = msg
+        else
+            held[#held + 1] = msg
+        end
+    end
+    for i = 1, #held do q[#q + 1] = held[i] end
+    return found
+end
+
+-- Pull one event, decode it, and route anything that is not what the caller
+-- asked for. Returns the matching message, or nil on timeout.
+--
+-- Every waiter uses this, which is what makes the guarantee hold: whichever
+-- coroutine happens to see an event first, the message reaches the queue it
+-- belongs to rather than being dropped on the floor by a filter that did not
+-- want it.
+local function pumpFor(q, wantType, timeout)
+    local ready = inboxPop(q, wantType)
+    if ready then return ready end
+
+    -- A non-positive timeout means "poll, do not wait". Returning here rather
+    -- than arming a zero-length timer keeps a caller that only wants to drain
+    -- the queue from yielding at all -- and a yield inside a job handler is
+    -- exactly the kind of surprise this module exists to remove.
+    if timeout ~= nil and timeout <= 0 then return nil end
+
+    local timer = timeout and os.startTimer(timeout) or nil
+    while true do
+        local event, p1, p2, p3, p4 = os.pullEvent()
+        if event == "modem_message" then
+            local parsed = type(p4) == "table" and p4 or textutils.unserialise(p4)
+            if parsed then
+                local valid, msg = proto.decode(parsed)
+                if valid and (msg.to == _self.id or msg.to == "broadcast") then
+                    if wantMatches(msg, wantType)
+                       and ((CTRL_TYPES[msg.type] and q == _ctrlInbox)
+                            or (not CTRL_TYPES[msg.type] and q == _jobInbox)) then
+                        return msg
+                    end
+                    routeMessage(msg)
+                    local ready2 = inboxPop(q, wantType)
+                    if ready2 then return ready2 end
+                end
+            end
+        elseif event == "timer" and timer and p1 == timer then
+            return nil
+        end
+    end
+end
+
+-- The call Invariant G requires. Job handlers and worker coordination use this
+-- instead of proto.receive; control traffic is never returned here.
+function base.receive(timeout, wantType)
+    return pumpFor(_jobInbox, wantType, timeout)
+end
+
+-- Control-plane equivalent, for register() waiting on its own ACK.
+function base.receiveCtrl(timeout, wantType)
+    return pumpFor(_ctrlInbox, wantType, timeout)
+end
+
+-- Test seam: inbox depths, so a test can assert nothing was silently dropped.
+function base.inboxSizes() return #_ctrlInbox, #_jobInbox end
+
+
 -- Consecutive comms.toServer failures; reset by any successful send or by a
 -- successful modem recovery.
 local _sendFailures = 0
@@ -853,7 +1000,7 @@ function base.depart(noDescend)
             local deadline = os.epoch("utc") / 1000 + 60
             while os.epoch("utc") / 1000 < deadline do
                 if base.isRecalled() then break end
-                local msg = proto.receive(_self.id, 5)
+                local msg = base.receive(5)
                 if not msg then
                     -- timeout tick — keep waiting
                 elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
@@ -1627,8 +1774,18 @@ local function register(maxAttempts)
             midJob   = _self.busy,
         })
 
-        local reply = proto.receive(_self.id, CFG.REGISTER_TIMEOUT)
-        if reply and reply.type == proto.MSG.REGISTER_ACK and reply.payload.ok then
+        -- Waits for a REGISTER_ACK SPECIFICALLY, and routes anything else into
+        -- the inboxes rather than discarding it.
+        --
+        -- This line was the fleet outage. proto.receive returns the first message
+        -- addressed to this turtle of ANY type, so a HEARTBEAT_ACK arriving first
+        -- -- and fifteen turtles produce a steady stream of them -- came back
+        -- here, failed the type test below, and was thrown away along with the
+        -- attempt. The real ACK then landed with nothing waiting for it and went
+        -- the same way. Every retry added traffic and made the next collision
+        -- likelier, until the whole fleet did nothing but re-introduce itself.
+        local reply = base.receiveCtrl(CFG.REGISTER_TIMEOUT, proto.MSG.REGISTER_ACK)
+        if reply and reply.payload.ok then
             -- Server sends assigned dock in the ACK
             if reply.payload.dock then
                 _self.dock = reply.payload.dock
@@ -1774,8 +1931,11 @@ end
 
 function base.queryTurtle(targetId, timeout)
     comms.toServer(proto.MSG.TURTLE_QUERY, proto.payloadTurtleQuery(targetId))
-    local reply = proto.receive(_self.id, timeout or 5)
-    if reply and reply.type == proto.MSG.TURTLE_INFO then
+    -- Waits for TURTLE_INFO specifically. Previously took whatever arrived
+    -- first and discarded it if the type did not match -- the same loss the
+    -- registration storm was made of.
+    local reply = base.receive(timeout or 5, proto.MSG.TURTLE_INFO)
+    if reply then
         return reply.payload
     end
     return nil
@@ -1793,8 +1953,10 @@ function base.waitForAny(types, seconds)
             deadline = os.epoch("utc") / 1000 + seconds
             sleep(2)
         else
-            local msg = proto.receive(_self.id, math.max(1, deadline - os.epoch("utc") / 1000))
-            if msg and set[msg.type] then return msg end
+            -- The set is passed down rather than filtered here, so a message
+            -- outside it stays queued instead of being dropped.
+            local msg = base.receive(math.max(1, deadline - os.epoch("utc") / 1000), set)
+            if msg then return msg end
         end
     end
     return nil
@@ -2030,6 +2192,16 @@ function base.run(jobHandler)
                                 logWarn("updater.lua not found — rebooting anyway")
                                 os.reboot()
                             end
+
+                        else
+                            -- Anything the control loop does not itself act on
+                            -- belongs to a job handler or to worker coordination.
+                            -- ROUTED, not dropped: the handler may not be waiting
+                            -- at this instant, and a message that arrives before
+                            -- its reader does must still be there when it asks.
+                            -- Dropping it here is the same class of fault as the
+                            -- registration storm, one layer down.
+                            routeMessage(msg)
                         end
                     end
                 end
