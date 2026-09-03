@@ -57,18 +57,28 @@ end
 -- The loop ends when the queue runs dry (os.pullEvent raises), which the
 -- `parallel` stand-in below swallows exactly the way parallel.waitForAny ending
 -- a coroutine would.
-local function runControlLoop(events)
+local function runControlLoop(events, onPull)
     clearModules()
-    stub.install({ fuel = 100000 })
+    -- A modem must actually be equipped, or recoverModem leaves _self.modem nil,
+    -- comms.toServer's pcall(proto.send, nil, ...) fails silently, and any test
+    -- that asserts on what the turtle SENT passes or fails for the wrong reason.
+    stub.install({ fuel = 100000, equipped = { left = require("equipment").ITEMS.MODEM } })
 
     local clock   = 1000000
     local timerId = 0
     local queue   = events
+    local base                      -- set below; onPull needs it
 
     os.epoch      = function() return clock end
     os.startTimer = function() timerId = timerId + 1; return timerId end
     os.pullEvent  = function()
         clock = clock + HEARTBEAT_MS
+        -- Fired at the moment the loop blocks, which is the only moment another
+        -- coroutine could have routed something into an inbox on its behalf.
+        -- Skipped on the pull that ends the run, so the last message routed is
+        -- always one the loop still gets an iteration to action -- otherwise
+        -- every inbox-depth assertion below is off by one for harness reasons.
+        if onPull and #queue > 0 then onPull(base) end
         local ev = table.remove(queue, 1)
         if not ev then error("test: event queue exhausted", 0) end
         return table.unpack(ev)
@@ -78,7 +88,7 @@ local function runControlLoop(events)
 
     gps = { locate = function() return 0, 64, 0 end }
 
-    local base = require("turtle_base")
+    base = require("turtle_base")
     base.recoverModem()          -- bind the stub's equipped modem so sends work
     base.run(function() end)
     return base
@@ -134,6 +144,94 @@ function(assert_eq)
         local base = runControlLoop(repeated(serverBroadcastEvent, 6))
         assert_eq(base.isServerDown(), false,
             "server traffic must still prove the server is alive")
+    end)
+end
+
+-- ─── The control loop must drain its own inbox (1.9.75) ──────────────────────
+--
+-- The shared inbox (1.9.72) fixed register() discarding a mismatched message,
+-- and introduced this: HEARTBEAT_ACK is a control type, so it was ROUTED into
+-- _ctrlInbox -- which nothing ever popped. register()'s receiveCtrl was the only
+-- reader and it only ever takes a REGISTER_ACK.
+--
+-- Two consequences, both observed in-world at 1.9.74. The queue filled at one
+-- ACK per turtle per 5s, hit INBOX_MAX in about five minutes and then evicted
+-- its oldest entry on every push ("Inbox overflow — oldest messages dropped").
+-- And an ACK that took the queue never reached resetMissedHeartbeats, so
+-- _missedHeartbeats climbed to MAX_MISSED, serverDown tripped, and all 15
+-- turtles re-registered every 15 seconds -- MAX_MISSED (3) x HEARTBEAT (5) --
+-- with identical fuel values each round, nobody working.
+
+-- A HEARTBEAT_ACK routed in by ANOTHER coroutine, which is the case that broke:
+-- the control loop is inside pumpFor or a sleep, so the ACK never reaches the
+-- direct-pull path where the reset used to live. Delivered at the instant the
+-- loop blocks, so it is queued before the iteration that must action it.
+local function routeAckOnPull(base)
+    base.routeMessage(
+        proto.encode(proto.MSG.HEARTBEAT_ACK, "server", "broadcast", { ts = 1 }))
+end
+
+suite["a heartbeat ACK that arrived via the queue still proves the server is alive"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- Six iterations of loader-beacon traffic: not from the server, so the
+        -- direct-pull path cannot reset anything (the F1 test above pins that,
+        -- and asserts these same six beacons DO trip serverDown on their own --
+        -- which is this test's precondition: the counter really is climbing, so
+        -- staying up can only be the queued ACKs doing it).
+        local base = runControlLoop(repeated(beaconEvent, 6), routeAckOnPull)
+        assert_eq(base.isServerDown(), false,
+            "an ACK the control loop was handed rather than pulled must still "
+            .. "reset the missed-heartbeat counter — this is the 1.9.74 storm")
+    end)
+end
+
+suite["the control loop leaves nothing sitting in its own inbox"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- Same stream. The eviction half: what is drained every iteration can
+        -- never reach INBOX_MAX, so the REGISTER_ACK that used to be pushed out
+        -- of a full queue is never at risk. Asserting depth rather than
+        -- catching the overflow warning pins the cause, not the symptom.
+        local base = runControlLoop(repeated(beaconEvent, 6), routeAckOnPull)
+        local ctrl = select(1, base.inboxSizes())
+        assert_eq(ctrl, 0,
+            "the control inbox must be empty after every iteration; anything "
+            .. "left here accumulates until it evicts a registration ACK")
+    end)
+end
+
+suite["a JOB_ASSIGN that arrived via the queue is still accepted"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- JOB_ASSIGN was NOT a control type until 1.9.75, so one routed while
+        -- the control loop sat inside pumpFor landed in _jobInbox -- which no
+        -- job handler ever asks for, because JOB_ASSIGN is the control loop's
+        -- own message. The turtle silently declined work it had been given.
+        -- Raw strings, not decoded: comms.toServer pcalls the send, so anything
+        -- this spy throws is swallowed and shows up as a silent miss.
+        local sent, routed = {}, false
+        local function routeJobOnce(base)
+            if routed then return end
+            routed = true
+            base.getModem().transmit = function(_, _, payload)
+                sent[#sent + 1] = tostring(payload)
+            end
+            base.routeMessage(proto.encode(proto.MSG.JOB_ASSIGN, "server",
+                base.getSelfId(), { jobId = "job_7", jobType = "MINE", params = {} }))
+        end
+
+        runControlLoop(repeated(beaconEvent, 4), routeJobOnce)
+
+        local ack
+        for _, s in ipairs(sent) do
+            if s:find(proto.MSG.JOB_ACK, 1, true) and s:find("job_7", 1, true) then ack = s end
+        end
+        assert_eq(ack ~= nil, true,
+            "a queued JOB_ASSIGN must be accepted and acknowledged — "
+            .. "before 1.9.75 it sat in _jobInbox, which no handler reads")
+        assert_eq(ack and ack:find("accepted = true", 1, true) ~= nil, true,
+            "and accepted, not declined — the turtle was idle")
     end)
 end
 

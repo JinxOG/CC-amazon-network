@@ -9,6 +9,13 @@ local base  = require("turtle_base")
 local proto = require("protocol")
 
 
+-- The two types the pre-departure wait accepts. Named so base.receive can leave
+-- everything else queued instead of returning it here to be discarded.
+local WAIT_FOR_HOLE = {
+    [proto.MSG.HOLE_READY] = true,
+    [proto.MSG.JOB_ABORT]  = true,
+}
+
 base.setCanDig(false)
 base.init(proto.ROLE.SUPPORT)
 base.fuel.dockRefuel()
@@ -49,7 +56,14 @@ local function supportJob(job)
             deadline = os.epoch("utc") / 1000 + holeTimeout   -- freeze while server unreachable
             sleep(2)
         end
-        local msg = proto.receive(base.getSelfId(), 5)
+        -- base.receive, not proto.receive: proto.receive returned the first
+        -- message of ANY type and the type tests below discarded the rest --
+        -- the same loss that caused the registration storm, and here it means a
+        -- HOLE_READY that arrives a moment early is gone. Naming the two types
+        -- this wait accepts leaves everything else queued for its own reader.
+        -- Authorised by the spec owner's scoped Invariant H exception,
+        -- 2026-09-02: three call sites, no other change.
+        local msg = base.receive(5, WAIT_FOR_HOLE)
         if base.isRecalled() then
             print("[SUPPORT] Recalled while waiting — aborting")
             return base.sendFailed("recalled", false)
@@ -109,7 +123,15 @@ local function supportJob(job)
     local ascending = false
 
     while true do
-        local msg = proto.receive(base.getSelfId(), 15)
+        -- base.receive, not proto.receive. Left UNFILTERED, exactly as it was:
+        -- this loop legitimately takes whatever the partner sends. The win is
+        -- that control traffic is no longer eligible to be swallowed here --
+        -- base.receive only ever returns job-plane messages, so a HEARTBEAT_ACK
+        -- can no longer be absorbed by a following support turtle.
+        -- POSITION_UPDATE is transient and never queued, so it still arrives
+        -- live rather than stale. Authorised by the spec owner's scoped
+        -- Invariant H exception, 2026-09-02: three call sites, no other change.
+        local msg = base.receive(15)
 
         if base.isRecalled() then
             print("[SUPPORT] Recalled mid-follow — returning to dock")

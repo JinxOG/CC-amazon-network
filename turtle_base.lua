@@ -204,12 +204,21 @@ local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }
 -- MAX_MISSED, serverDown would trip, and tryMove() would freeze all movement --
 -- presenting as a fleet-wide freeze rather than a messaging fault, which looks
 -- nothing like the actual cause.
+--
+-- THE MEMBERSHIP RULE, and it is exact: CTRL_TYPES is the set of messages the
+-- CONTROL LOOP acts on. Nothing else may be in it, and nothing the control loop
+-- handles may be left out -- because the control loop is the only thing that
+-- drains this queue, and _jobInbox is drained only by whichever handler happens
+-- to be waiting. JOB_ASSIGN was the omission: routed while the control loop sat
+-- inside pumpFor, it landed in _jobInbox where no job handler ever asks for it,
+-- and a turtle silently declined work it had already been given.
 local CTRL_TYPES = {
     [proto.MSG.HEARTBEAT_ACK] = true,
     [proto.MSG.REGISTER_ACK]  = true,
     [proto.MSG.RECALL]        = true,
     [proto.MSG.UPDATE_ALL]    = true,
     [proto.MSG.FORCE_REFUEL]  = true,
+    [proto.MSG.JOB_ASSIGN]    = true,
 }
 
 -- Types that are only meaningful LIVE and must never be queued.
@@ -294,6 +303,23 @@ local function inboxPop(q, wantType)
     for i = 1, #held do q[#q + 1] = held[i] end
     return found
 end
+
+-- Take everything queued and leave the queue empty.
+--
+-- Hands the caller a detached table rather than letting it iterate the live one,
+-- because dispatching a control message can re-enter the inbox: a queued
+-- HEARTBEAT_ACK can trip re-registration, and register() waits on receiveCtrl.
+-- A dispatcher walking the live queue would then be racing itself over the same
+-- table.
+local function inboxDrain(q)
+    local out = {}
+    for i = 1, #q do out[i] = q[i]; q[i] = nil end
+    return out
+end
+
+-- The control plane's drain. Called once per control-loop iteration; see the
+-- comment at its call site for what happened when nothing called it.
+function base.drainCtrl() return inboxDrain(_ctrlInbox) end
 
 -- Pull one event, decode it, and route anything that is not what the caller
 -- asked for. Returns the matching message, or nil on timeout.
@@ -2090,9 +2116,158 @@ function base.run(jobHandler)
     local pendingJob        = nil   -- job table waiting to be started
     local jobCo             = nil   -- running job coroutine
 
+    -- Action one control-plane message.
+    --
+    -- The SAME function serves both arrival paths -- pulled straight off the
+    -- wire, and drained out of _ctrlInbox -- because the defect this replaces
+    -- was precisely that the two paths did different things. A message that took
+    -- the queue must behave exactly as one that did not.
+    local function dispatchControl(msg)
+        -- ONLY the server's own traffic is evidence the server is alive. Every
+        -- server->turtle message carries from = "server" (central_server.lua's
+        -- sendTo/sendBroadcast are the only two senders), so this gate is exact.
+        --
+        -- Resetting on *any* addressed message was a fleet-wide fault, not a
+        -- miner-only one: a placed chunk loader broadcasts LOADER_BEACON to
+        -- "broadcast" on CH_LOCAL every 5s (loader_turtle.lua), every turtle
+        -- opens CH_LOCAL, and the modems are ender modems with effectively
+        -- unlimited range. MAX_MISSED=3 at a 5s heartbeat needs 15s to trip, so
+        -- one loader standing anywhere in the world held _missedHeartbeats at 0
+        -- for EVERY turtle. That suppressed the missed-ACK re-registration path
+        -- in sendHeartbeat -- the only way a running turtle rejoins the server's
+        -- in-memory registry after a restart -- for delivery and support too, and
+        -- made base.isServerDown() permanently false exactly when a loader was
+        -- out.
+        --
+        -- Partner traffic (POSITION_UPDATE, SUPPORT_STAGED, ...) and warehouse
+        -- traffic (from = "warehouse") are not evidence about the server either,
+        -- so this gate is strictly more correct than resetting on all of them.
+        --
+        -- This line is ALSO half of the 1.9.74 storm fix: it used to sit on the
+        -- direct-pull path only, so an ACK that arrived while this coroutine was
+        -- inside pumpFor was filed and never acted on.
+        if msg.from == "server" then
+            resetMissedHeartbeats()
+        end
+
+        if msg.type == proto.MSG.JOB_ASSIGN and not _self.busy then
+            local job = msg.payload
+            comms.toServer(proto.MSG.JOB_ACK,
+                proto.payloadJobAck(job.jobId, true, nil))
+            _self.busy   = true
+            _self.jobId  = job.jobId
+            _self.status = proto.STATUS.TRAVELLING
+            pendingJob   = { id=job.jobId, type=job.jobType, params=job.params }
+
+        elseif msg.type == proto.MSG.JOB_ASSIGN and _self.busy then
+            comms.toServer(proto.MSG.JOB_ACK,
+                proto.payloadJobAck(msg.payload.jobId, false, "busy"))
+
+        elseif msg.type == proto.MSG.RECALL then
+            logWarn("RECALL: " .. (msg.payload.reason or "?"))
+            if _self.busy then
+                -- Signal the job runner to exit its current wait loop.
+                -- The job runner will clean up (pick up EC etc.) then
+                -- call returnToDock itself. Control loop must NOT also
+                -- navigate or the two coroutines fight over movement.
+                _self.recalled = true
+                pendingJob = nil
+                -- A miner's recallReturn() has to retrieve its placed
+                -- chunk loader before it can come home, and it reports
+                -- the failure itself once that is done. sendFailed here
+                -- would end the job while the loader is still standing.
+                if _self.role ~= proto.ROLE.MINER then
+                    base.sendFailed("recalled", true)
+                end
+            else
+                -- Idle turtle: navigate directly.
+                local insideBuilding = base.isInsideBuilding(_self.pos)
+                if insideBuilding then
+                    base.returnToDockInternal()
+                elseif _self.pos.y >= 100 then
+                    -- Turtle is at sky altitude (mine recall position) —
+                    -- fly home at Y=200 via arrivals hole, not underground.
+                    base.returnToDockFromSky()
+                else
+                    base.returnToDock()
+                end
+                _self.busy   = false
+                _self.status = proto.STATUS.IDLE
+                _self.jobId  = nil
+            end
+
+        elseif msg.type == proto.MSG.FORCE_REFUEL then
+            if not _self.busy and not _self.recalled
+                    and base.isInsideBuilding(_self.pos) then
+                logInfo("FORCE_REFUEL received — refuelling at dock")
+                if _customRefuelFn then
+                    _customRefuelFn()
+                else
+                    fuel.dockRefuel()
+                end
+                -- Push fresh fuel level so fleet panel updates immediately
+                comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
+                    _self.status, fuel.level(), base.getPos(), _self.jobId))
+            elseif not base.isInsideBuilding(_self.pos) then
+                logWarn("FORCE_REFUEL ignored — turtle not at dock")
+            end
+
+        elseif msg.type == proto.MSG.UPDATE_ALL then
+            logWarn("UPDATE_ALL received — running updater then rebooting...")
+            if _self.busy and _self.jobId then
+                base.sendFailed("update_all", false)
+            end
+            sleep(1)
+            if fs.exists("updater.lua") then
+                shell.run("updater")
+            else
+                logWarn("updater.lua not found — rebooting anyway")
+                os.reboot()
+            end
+
+        elseif CTRL_TYPES[msg.type] then
+            -- HEARTBEAT_ACK and REGISTER_ACK. Their entire meaning is the
+            -- reset above, so they are CONSUMED here, not routed.
+            --
+            -- Routing them was the 1.9.74 bug: a control type handed back to
+            -- routeMessage goes straight into the queue this dispatcher is
+            -- draining, so the queue could never empty. It filled at one ACK
+            -- per turtle per 5s, hit INBOX_MAX in about five minutes, and then
+            -- evicted its oldest entry on every push -- taking a REGISTER_ACK
+            -- with it. A late REGISTER_ACK reaching here is stale by
+            -- construction: register() runs inside this coroutine and holds the
+            -- inbox itself while it waits, so nothing is waiting for this one.
+        else
+            -- Anything the control loop does not itself act on
+            -- belongs to a job handler or to worker coordination.
+            -- ROUTED, not dropped: the handler may not be waiting
+            -- at this instant, and a message that arrives before
+            -- its reader does must still be there when it asks.
+            -- Dropping it here is the same class of fault as the
+            -- registration storm, one layer down.
+            routeMessage(msg)
+        end
+    end
+
     -- Control loop: handles heartbeat, RECALL, and JOB_ASSIGN
     local function controlLoop()
         while true do
+            -- Everything the control plane was handed while this coroutine was
+            -- busy elsewhere, actioned before anything else this iteration.
+            --
+            -- WHY THIS EXISTS. Until 1.9.75 nothing popped _ctrlInbox at all.
+            -- register()'s filtered receiveCtrl was its only reader, and it only
+            -- ever takes a REGISTER_ACK. Every routed HEARTBEAT_ACK therefore
+            -- accumulated -- one per turtle every 5 seconds -- and every routed
+            -- RECALL was a turtle that never came home.
+            --
+            -- It drains BEFORE the heartbeat check below, so a queued ACK clears
+            -- _missedHeartbeats before sendHeartbeat can increment it into
+            -- MAX_MISSED. In the other order the fleet still storms, just one
+            -- iteration later.
+            local queued = base.drainCtrl()
+            for i = 1, #queued do dispatchControl(queued[i]) end
+
             if fuel.isCritical() then
                 fuel.ensureFuel()
                 -- ensureFuel()'s sleep() calls consume timer events; restart wakeup timer
@@ -2119,121 +2294,7 @@ function base.run(jobHandler)
                 if parsed then
                     local valid, msg = proto.decode(parsed)
                     if valid and (msg.to == _self.id or msg.to == "broadcast") then
-
-                        -- ONLY the server's own traffic is evidence the server
-                        -- is alive. Every server->turtle message carries
-                        -- from = "server" (central_server.lua sendTo/
-                        -- sendBroadcast are the only two senders), so this gate
-                        -- is exact.
-                        --
-                        -- Resetting on *any* addressed message was a fleet-wide
-                        -- fault, not a miner-only one: a placed chunk loader
-                        -- broadcasts LOADER_BEACON to "broadcast" on CH_LOCAL
-                        -- every 5s (loader_turtle.lua), every turtle opens
-                        -- CH_LOCAL, and the modems are ender modems with
-                        -- effectively unlimited range. MAX_MISSED=3 at a 5s
-                        -- heartbeat needs 15s to trip, so one loader standing
-                        -- anywhere in the world held _missedHeartbeats at 0 for
-                        -- EVERY turtle. That suppressed the missed-ACK
-                        -- re-registration path in sendHeartbeat -- which is the
-                        -- only way a running turtle rejoins the server's
-                        -- in-memory registry after a restart -- for delivery and
-                        -- support too, and made base.isServerDown() permanently
-                        -- false exactly when a loader was out.
-                        --
-                        -- Partner traffic (POSITION_UPDATE, SUPPORT_STAGED, ...)
-                        -- and warehouse traffic (from = "warehouse") are not
-                        -- evidence about the server either, so this gate is
-                        -- strictly more correct than resetting on all of them.
-                        if msg.from == "server" then
-                            resetMissedHeartbeats()
-                        end
-
-                    if msg.type == proto.MSG.JOB_ASSIGN and not _self.busy then
-                            local job = msg.payload
-                            comms.toServer(proto.MSG.JOB_ACK,
-                                proto.payloadJobAck(job.jobId, true, nil))
-                            _self.busy   = true
-                            _self.jobId  = job.jobId
-                            _self.status = proto.STATUS.TRAVELLING
-                            pendingJob   = { id=job.jobId, type=job.jobType, params=job.params }
-
-                        elseif msg.type == proto.MSG.JOB_ASSIGN and _self.busy then
-                            comms.toServer(proto.MSG.JOB_ACK,
-                                proto.payloadJobAck(msg.payload.jobId, false, "busy"))
-
-                        elseif msg.type == proto.MSG.RECALL then
-                            logWarn("RECALL: " .. (msg.payload.reason or "?"))
-                            if _self.busy then
-                                -- Signal the job runner to exit its current wait loop.
-                                -- The job runner will clean up (pick up EC etc.) then
-                                -- call returnToDock itself. Control loop must NOT also
-                                -- navigate or the two coroutines fight over movement.
-                                _self.recalled = true
-                                pendingJob = nil
-                                -- A miner's recallReturn() has to retrieve its placed
-                                -- chunk loader before it can come home, and it reports
-                                -- the failure itself once that is done. sendFailed here
-                                -- would end the job while the loader is still standing.
-                                if _self.role ~= proto.ROLE.MINER then
-                                    base.sendFailed("recalled", true)
-                                end
-                            else
-                                -- Idle turtle: navigate directly.
-                                local insideBuilding = base.isInsideBuilding(_self.pos)
-                                if insideBuilding then
-                                    base.returnToDockInternal()
-                                elseif _self.pos.y >= 100 then
-                                    -- Turtle is at sky altitude (mine recall position) —
-                                    -- fly home at Y=200 via arrivals hole, not underground.
-                                    base.returnToDockFromSky()
-                                else
-                                    base.returnToDock()
-                                end
-                                _self.busy   = false
-                                _self.status = proto.STATUS.IDLE
-                                _self.jobId  = nil
-                            end
-
-                        elseif msg.type == proto.MSG.FORCE_REFUEL then
-                            if not _self.busy and not _self.recalled
-                                    and base.isInsideBuilding(_self.pos) then
-                                logInfo("FORCE_REFUEL received — refuelling at dock")
-                                if _customRefuelFn then
-                                    _customRefuelFn()
-                                else
-                                    fuel.dockRefuel()
-                                end
-                                -- Push fresh fuel level so fleet panel updates immediately
-                                comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
-                                    _self.status, fuel.level(), base.getPos(), _self.jobId))
-                            elseif not base.isInsideBuilding(_self.pos) then
-                                logWarn("FORCE_REFUEL ignored — turtle not at dock")
-                            end
-
-                        elseif msg.type == proto.MSG.UPDATE_ALL then
-                            logWarn("UPDATE_ALL received — running updater then rebooting...")
-                            if _self.busy and _self.jobId then
-                                base.sendFailed("update_all", false)
-                            end
-                            sleep(1)
-                            if fs.exists("updater.lua") then
-                                shell.run("updater")
-                            else
-                                logWarn("updater.lua not found — rebooting anyway")
-                                os.reboot()
-                            end
-
-                        else
-                            -- Anything the control loop does not itself act on
-                            -- belongs to a job handler or to worker coordination.
-                            -- ROUTED, not dropped: the handler may not be waiting
-                            -- at this instant, and a message that arrives before
-                            -- its reader does must still be there when it asks.
-                            -- Dropping it here is the same class of fault as the
-                            -- registration storm, one layer down.
-                            routeMessage(msg)
-                        end
+                        dispatchControl(msg)
                     end
                 end
 

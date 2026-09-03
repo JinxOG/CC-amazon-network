@@ -38,7 +38,17 @@ local function waitForAny(types, seconds)
             deadline = os.epoch("utc") / 1000 + seconds
             sleep(2)
         else
-            local msg = proto.receive(base.getSelfId(), math.max(1, deadline - os.epoch("utc") / 1000))
+            -- base.receive, not proto.receive: proto.receive returns the first
+            -- message of ANY type and the `set` test below then threw away
+            -- whatever did not match. That is the discard the 11.8-hour
+            -- registration storm was made of, still live here mid-job, where a
+            -- lost message is a stalled delivery rather than a retry.
+            --
+            -- The set is passed DOWN rather than filtered after the fact, so a
+            -- message this call did not want stays queued for whoever does.
+            -- Authorised by the spec owner's scoped Invariant H exception,
+            -- 2026-09-02: three call sites, no other change.
+            local msg = base.receive(math.max(1, deadline - os.epoch("utc") / 1000), set)
             if msg and set[msg.type] then return msg end
         end
     end
