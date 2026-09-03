@@ -3862,6 +3862,33 @@ function server.run()
     -- before any turtles re-register, flushing ghost entries from before reboot.
     startBridgePush()
 
+    -- Guaranteed wakeup.
+    --
+    -- The wall-clock fallbacks below exist because CC drops timer events under
+    -- buffer pressure, and a dropped timer is never rescheduled — the code only
+    -- re-arms a timer while handling its own event. But those fallbacks live
+    -- INSIDE this loop, after os.pullEventRaw, which blocks until an event
+    -- arrives. So if every periodic timer dies, no event ever arrives, the loop
+    -- blocks forever, and the safety net never runs because it is behind the
+    -- thing that is stuck.
+    --
+    -- The server is then alive and completely idle: modem open, no crash, no
+    -- terminate, health and build times reading normal from the last pass it
+    -- managed. Observed 2026-09-02 with zero turtles and zero players, the
+    -- dashboard frozen 11.8 hours, and 100 consecutive log lines of nothing but
+    -- push timeouts.
+    --
+    -- It is also, finally, why rebooting a single turtle revived the whole
+    -- fleet three separate times: that turtle's registration is a modem_message,
+    -- the first event in minutes, and receiving it lets this loop turn once —
+    -- which runs the fallbacks, which restart everything.
+    --
+    -- Re-armed unconditionally at the bottom of every iteration, so a pending
+    -- timer always exists no matter which event woke us or which timers have
+    -- died.
+    local WAKEUP_INTERVAL = 1
+    local wakeupTimer = os.startTimer(WAKEUP_INTERVAL)
+
     while true do
         -- pullEventRaw, not pullEvent. pullEvent turns a terminate event into a
         -- thrown "Terminated" error, which killed this server 12 times between
@@ -4138,6 +4165,14 @@ function server.run()
                 lastOreWatchdogWC = wc
             end
         end
+
+        -- Re-arm the wakeup unconditionally, whatever woke us. This is the only
+        -- timer in the server that cannot be lost: it is recreated after every
+        -- single event, so the loop can never end up with no pending timer and
+        -- block forever. Everything else above is a wall-clock check, and those
+        -- only run because this guarantees the loop keeps turning.
+        os.cancelTimer(wakeupTimer)
+        wakeupTimer = os.startTimer(WAKEUP_INTERVAL)
     end
 end
 
