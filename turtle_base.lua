@@ -850,12 +850,42 @@ local function bypassForward()
     return false
 end
 
+-- Invariant J: nothing may block silently for more than 10 seconds.
+--
+-- tryMove has two waits that could, and both are the shape the invariant exists
+-- to stop: from the outside a turtle holding position is indistinguishable from
+-- a crashed one, and the whole fleet's diagnosis cost this month has been made
+-- of that ambiguity. The server-down hold announces itself once when serverDown
+-- trips and then says nothing for as long as it lasts, which is unbounded; the
+-- turtle-blocked wait says nothing at all for its full two minutes.
+--
+-- Reports the first time a wait crosses the threshold and then at a slower
+-- cadence, because a line per retry is how a log stops being readable -- these
+-- computers have already needed two rounds of log-volume fixes (1.9.61/1.9.67).
+local WAIT_REPORT_AFTER  = 10
+local WAIT_REPORT_REPEAT = 30
+
+-- `what` is a function, not a string, so the detail is read at the moment it is
+-- reported rather than when the wait began -- position changes under a bypass.
+local function waitReporter(what)
+    local started = os.clock()
+    local nextAt  = started + WAIT_REPORT_AFTER
+    return function()
+        local now = os.clock()
+        if now < nextAt then return end
+        nextAt = now + WAIT_REPORT_REPEAT
+        logWarn(string.format("Still waiting %ds — %s",
+            math.floor(now - started), what()))
+    end
+end
+
 local function tryMove(moveFn, digFn, dir)
     -- Hold position while the server is unreachable so it does not lose track of
     -- us — except during a fixed-path sky return, or an autonomous return, where
     -- the whole point is to get home WITHOUT the server. Blocking there would
     -- strand the miner in the field for as long as the server stays down, and
     -- leave its placed loader force-loading a chunk indefinitely.
+    local downReport = nil
     while _self.serverDown
           and not _self.inSkyReturn
           and not _self.autonomousReturn do
@@ -867,6 +897,13 @@ local function tryMove(moveFn, digFn, dir)
             local pok, escape = pcall(_serverDownEscape)
             if pok and escape then break end
         end
+        -- Built lazily: a turtle that is not blocked never pays for this, and
+        -- the overwhelmingly common case is that this loop is not entered.
+        downReport = downReport or waitReporter(function()
+            return string.format("server unreachable, holding at %d,%d,%d before moving %s",
+                _self.pos.x, _self.pos.y, _self.pos.z, dir)
+        end)
+        downReport()
         sleep(2)
     end
 
@@ -907,6 +944,7 @@ local function tryMove(moveFn, digFn, dir)
     local turtleDeadline  = os.clock() + 120
     local turtleWaits     = 0
     local bypassAttempted = false
+    local blockReport     = nil
 
     while true do
         if moveFn() then applyMove(dir); return true end
@@ -914,9 +952,20 @@ local function tryMove(moveFn, digFn, dir)
         if isTurtleBlock(dir) then
             -- Another turtle is in the way — wait, then try to route around it
             if os.clock() > turtleDeadline then
+                -- Logged as well as returned. Callers do report this, but not
+                -- all of them reach the server, and two minutes of standing
+                -- still ending in silence is the case Invariant J is about.
+                logWarn(string.format(
+                    "Gave up after 120s blocked by a turtle moving %s at %d,%d,%d",
+                    dir, _self.pos.x, _self.pos.y, _self.pos.z))
                 return false, "blocked by turtle (" .. dir .. ")"
             end
             turtleWaits = turtleWaits + 1
+            blockReport = blockReport or waitReporter(function()
+                return string.format("a turtle is blocking %s at %d,%d,%d (%d attempts)",
+                    dir, _self.pos.x, _self.pos.y, _self.pos.z, turtleWaits)
+            end)
+            blockReport()
             -- After ~3 s of waiting, attempt a one-block lateral bypass (forward only)
             if dir == "forward" and turtleWaits >= 6 and not bypassAttempted then
                 bypassAttempted = true
