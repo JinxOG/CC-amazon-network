@@ -867,11 +867,20 @@ local WAIT_REPORT_REPEAT = 30
 
 -- `what` is a function, not a string, so the detail is read at the moment it is
 -- reported rather than when the wait began -- position changes under a bypass.
-local function waitReporter(what)
-    local started = os.clock()
+--
+-- BOTH the constructor and the reporter take `now` from the caller rather than
+-- reading os.clock themselves. That is not a micro-optimisation: the loops below
+-- already read the clock once per iteration for their own deadline, and reading
+-- it a second time changes the NUMBER of os.clock calls per retry. A test
+-- harness that advances a fake clock per call -- test_bypass_geofence does
+-- exactly that, ten seconds a call, to reach the 120 s deadline without spinning
+-- for two real minutes -- then burns its budget faster and the code under test
+-- gives up before reaching the branch it was written for. Caught as an
+-- intermittent failure in an unrelated suite.
+local function waitReporter(what, now)
+    local started = now
     local nextAt  = started + WAIT_REPORT_AFTER
-    return function()
-        local now = os.clock()
+    return function(now)
         if now < nextAt then return end
         nextAt = now + WAIT_REPORT_REPEAT
         logWarn(string.format("Still waiting %ds — %s",
@@ -899,11 +908,12 @@ local function tryMove(moveFn, digFn, dir)
         end
         -- Built lazily: a turtle that is not blocked never pays for this, and
         -- the overwhelmingly common case is that this loop is not entered.
+        local now = os.clock()
         downReport = downReport or waitReporter(function()
             return string.format("server unreachable, holding at %d,%d,%d before moving %s",
                 _self.pos.x, _self.pos.y, _self.pos.z, dir)
-        end)
-        downReport()
+        end, now)
+        downReport(now)
         sleep(2)
     end
 
@@ -950,8 +960,11 @@ local function tryMove(moveFn, digFn, dir)
         if moveFn() then applyMove(dir); return true end
 
         if isTurtleBlock(dir) then
-            -- Another turtle is in the way — wait, then try to route around it
-            if os.clock() > turtleDeadline then
+            -- Another turtle is in the way — wait, then try to route around it.
+            -- Read the clock ONCE and pass it down; see waitReporter for why a
+            -- second read is not free.
+            local now = os.clock()
+            if now > turtleDeadline then
                 -- Logged as well as returned. Callers do report this, but not
                 -- all of them reach the server, and two minutes of standing
                 -- still ending in silence is the case Invariant J is about.
@@ -964,8 +977,8 @@ local function tryMove(moveFn, digFn, dir)
             blockReport = blockReport or waitReporter(function()
                 return string.format("a turtle is blocking %s at %d,%d,%d (%d attempts)",
                     dir, _self.pos.x, _self.pos.y, _self.pos.z, turtleWaits)
-            end)
-            blockReport()
+            end, now)
+            blockReport(now)
             -- After ~3 s of waiting, attempt a one-block lateral bypass (forward only)
             if dir == "forward" and turtleWaits >= 6 and not bypassAttempted then
                 bypassAttempted = true

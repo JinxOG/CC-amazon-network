@@ -144,8 +144,13 @@ return {
         local body = src:sub(loopAt, endAt)
 
         -- The call, not the construction: building a reporter and never calling
-        -- it is silence with extra steps.
-        assert_eq(body:find("downReport()", 1, true) ~= nil, true,
+        -- it is silence with extra steps. Matched as "downReport(" rather than
+        -- "downReport()" because the reporter takes the caller's clock reading
+        -- -- and pinning the exact argument list is how a source assertion goes
+        -- red on a refactor that changed nothing about the behaviour it guards.
+        -- The construction line reads "downReport = downReport or ...", so it
+        -- cannot satisfy this.
+        assert_eq(body:find("downReport(", 1, true) ~= nil, true,
             "the unbounded server-down hold must report itself (Invariant J)")
         assert_eq(body:find("waitReporter(", 1, true) ~= nil, true,
             "and must use the shared, rate-limited reporter rather than its own")
