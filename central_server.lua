@@ -3831,14 +3831,37 @@ function server.run()
     -- 15 re-arms the loop.
     local BRIDGE_PUSH_TIMEOUT = 5
 
+    -- Last-resort recovery when both the completion event and the timeout timer
+    -- above are lost. See startBridgePush for why this value is the duration of
+    -- every doubly-dropped stall.
+    local BRIDGE_FORCE_CLEAR_MS = 10000
+
     local function startBridgePush()
         local now = os.epoch("utc")
-        -- Wall-clock failsafe: if bridgePending has been stuck for >30s both the
-        -- http_success and bridgeTimeoutId events must have been dropped (event
-        -- buffer overflow during a blocking peripheral call).  Force-clear so
-        -- the next push can start instead of staying stale forever.
-        if bridgePending and (now - bridgePendingSince) > 30000 then
-            logWarn("Bridge push stuck >30s — force-clearing (dropped events)")
+        -- Wall-clock failsafe: if bridgePending has been stuck this long, both
+        -- the http_success and the bridgeTimeoutId events were dropped, so
+        -- neither normal recovery path can run. Force-clear so the next push
+        -- can start instead of staying stale forever.
+        --
+        -- This is the only thing that recovers a doubly-dropped push, which
+        -- means its value IS the length of every such stall. Measured over 8
+        -- minutes on 2026-09-03: six stalls, peaking at 33.2, 31.6, 31.3, 29.4,
+        -- 29.6 and 25.9 seconds. Every one of them was this timer running its
+        -- full course, not a slow push.
+        --
+        -- 30s was enormously over-provisioned. The bridge answers POST /update
+        -- in about 1 ms (operator-measured, with a full fleet in the payload)
+        -- and buildBridgePayload takes 11-21 ms. 10s is still a thousandfold
+        -- margin over the real round trip, and it cuts the cost of each stall by
+        -- two thirds without touching their frequency.
+        --
+        -- Lower with care rather than enthusiasm: force-clearing while a push is
+        -- genuinely in flight starts a second concurrent request. The bridge
+        -- takes the last write so that is survivable, but it is waste, and
+        -- below a second or so it would be routine rather than exceptional.
+        if bridgePending and (now - bridgePendingSince) > BRIDGE_FORCE_CLEAR_MS then
+            logWarn(string.format("Bridge push stuck >%ds — force-clearing (dropped events)",
+                BRIDGE_FORCE_CLEAR_MS / 1000))
             bridgePending   = false
             bridgeTimeoutId = nil
         end
