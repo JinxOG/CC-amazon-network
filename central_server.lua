@@ -3829,7 +3829,25 @@ function server.run()
     -- At 5s the server recovers three times over before a turtle gives up, so a
     -- dropped event costs staleness and nothing else. Raising this back toward
     -- 15 re-arms the loop.
-    local BRIDGE_PUSH_TIMEOUT = 5
+    --
+    -- 4, NOT 5, AND IT MUST NOT GO BACK. At 5 it was equal to STORAGE_INTERVAL,
+    -- and that is why every stall ran the full force-clear window instead of
+    -- ending after five seconds.
+    --
+    -- This timer is started in the same iteration as the push. When that
+    -- iteration is also an RS poll -- which is the iteration that loses the
+    -- http_success in the first place, see startBridgePush -- lastStorageWC is
+    -- stamped at the same instant, so the next poll is scheduled for exactly
+    -- push + STORAGE_INTERVAL. With this value at 5 that is exactly when this
+    -- timer fires, so the timeout event was born inside the next poll's yield
+    -- window every single time. The two "dropped events" were never independent:
+    -- they were the same peripheral call eating the same push twice, five
+    -- seconds apart.
+    --
+    -- Any value that is not STORAGE_INTERVAL or a multiple of it breaks the
+    -- lock. 4 also keeps the 15s fleet-patience margin the paragraph above is
+    -- about.
+    local BRIDGE_PUSH_TIMEOUT = 4
 
     -- Last-resort recovery when both the completion event and the timeout timer
     -- above are lost. See startBridgePush for why this value is the duration of
@@ -3860,8 +3878,16 @@ function server.run()
         -- takes the last write so that is survivable, but it is waste, and
         -- below a second or so it would be routine rather than exceptional.
         if bridgePending and (now - bridgePendingSince) > BRIDGE_FORCE_CLEAR_MS then
-            logWarn(string.format("Bridge push stuck >%ds — force-clearing (dropped events)",
-                BRIDGE_FORCE_CLEAR_MS / 1000))
+            -- Report the RS poll alongside it. The claim is that the poll's
+            -- yield is what destroyed both events, and the operator should be
+            -- able to check that from the log rather than take it on trust: if
+            -- force-clears keep happening while the last poll is milliseconds
+            -- away from the push, the diagnosis is wrong and this line says so.
+            logWarn(string.format(
+                "Bridge push stuck >%ds — force-clearing (dropped events); "
+                .. "last RS poll %dms, %dms before this push",
+                BRIDGE_FORCE_CLEAR_MS / 1000, lastRsPollMs,
+                bridgePendingSince - lastStorageWC))
             bridgePending   = false
             bridgeTimeoutId = nil
         end
@@ -4065,8 +4091,11 @@ function server.run()
                 healthTimer = os.startTimer(CFG.HEARTBEAT_TIMEOUT)
 
             elseif p1 == bridgeTimer then
-                local ok_bp, err_bp = pcall(startBridgePush)
-                if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
+                -- Deliberately does NOT push. The push is issued once per
+                -- iteration at the very bottom of the loop, after everything
+                -- that can yield; see there for why. This timer survives as the
+                -- thing that guarantees an iteration happens at all on a quiet
+                -- server, which is what the bottom-of-loop check needs.
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
             elseif p1 == staleTimer then
@@ -4124,14 +4153,9 @@ function server.run()
         -- Each dedicated timer remains as a supplemental trigger for normal operation.
         do
             local wc = os.epoch("utc")
-            -- Bridge push — call unconditionally: startBridgePush contains the 30s
-            -- force-clear for stuck bridgePending; guarding with "not bridgePending"
-            -- here would prevent that recovery path from ever running.
-            if (wc - lastBridgePushWC) >= (CFG.BRIDGE_INTERVAL * 1000) then
-                local ok_bp, err_bp = pcall(startBridgePush)
-                if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
-                lastBridgePushWC = wc
-            end
+            -- The bridge push USED TO BE HERE, and being here is what broke it.
+            -- It now runs at the bottom of the loop, below everything that can
+            -- yield. See that call site.
             -- Dispatch tick — essential: if dispatchTimer drops, miners sit idle indefinitely
             if (wc - lastDispatchWC) >= (CFG.DISPATCH_INTERVAL * 1000) then
                 local ok_d, err_d = pcall(function()
@@ -4186,6 +4210,49 @@ function server.run()
                 local ok_o, err_o = pcall(checkOreThresholds)
                 if not ok_o then logError("Ore watchdog WC: " .. tostring(err_o)) end
                 lastOreWatchdogWC = wc
+            end
+        end
+
+        -- THE BRIDGE PUSH GOES LAST. This position is the fix, not a tidy-up.
+        --
+        -- The bridge answers POST /update in about 1 ms, so the http_success
+        -- lands almost immediately after http.request returns. Anything between
+        -- the request and the next os.pullEventRaw that YIELDS therefore eats
+        -- it: a peripheral call parks the coroutine on a filtered wait, and CC
+        -- hands it every event that arrives meanwhile and discards the ones that
+        -- do not match. Nothing overflows -- which is why counting the 256-slot
+        -- queue against 5 messages/sec never explained anything.
+        --
+        -- The push used to sit in the wall-clock block ~40 lines above
+        -- refreshStorage, so on every iteration where both were due -- every
+        -- 15 s, being the lowest common multiple of BRIDGE_INTERVAL 3 and
+        -- STORAGE_INTERVAL 5 -- the request went out and rsBridge.listItems()
+        -- started yielding a few statements later, with the response in flight.
+        -- The window does not have to be wide to catch it, only adjacent, and it
+        -- was adjacent by construction. See BRIDGE_PUSH_TIMEOUT for why the 5 s
+        -- timeout then died to the *next* poll, which is what turned a 5 s
+        -- recovery into a full force-clear window every time.
+        --
+        -- Down here there is no yielding call left between the request and the
+        -- block on pullEventRaw. Two os.*Timer calls do not yield.
+        --
+        -- This is also now the ONLY place a push starts. The bridgeTimer branch
+        -- used to push without stamping lastBridgePushWC, so the timer and the
+        -- wall-clock check ran as two independent triggers -- exactly the
+        -- double-run that the storageTimer handler carries a comment about
+        -- having already fixed for the RS poll.
+        do
+            -- Recomputed, not reusing the wall-clock block's `wc`: that was read
+            -- before the RS poll, so it is stale by the length of the yield this
+            -- whole rearrangement exists to get clear of.
+            local pushWc = os.epoch("utc")
+            if (pushWc - lastBridgePushWC) >= (CFG.BRIDGE_INTERVAL * 1000) then
+                -- Called unconditionally rather than under "not bridgePending":
+                -- startBridgePush holds the force-clear that recovers a stuck
+                -- push, and guarding here would stop that path ever running.
+                local ok_bp, err_bp = pcall(startBridgePush)
+                if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
+                lastBridgePushWC = pushWc
             end
         end
 

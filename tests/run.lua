@@ -25,6 +25,7 @@ local files = {
     "tests.test_field_refuel",
     "tests.test_server_recovery",
     "tests.test_server_zones",
+    "tests.test_bridge_push_order",
 }
 
 local passed, failed = 0, 0
