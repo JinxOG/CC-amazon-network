@@ -2332,9 +2332,8 @@ function base.run(jobHandler)
 
             if fuel.isCritical() then
                 fuel.ensureFuel()
-                -- ensureFuel()'s sleep() calls consume timer events; restart wakeup timer
-                -- so the loop doesn't block indefinitely after recovering from ERROR state.
-                wakeupTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
+                -- The re-arm that used to live here is now unconditional at the
+                -- bottom of the loop, which covers this case and every other one.
             end
 
             -- Wall-clock heartbeat check (survives timer events being swallowed by sleep())
@@ -2362,8 +2361,34 @@ function base.run(jobHandler)
 
             elseif event == "timer" and p1 == wakeupTimer then
                 -- Wakeup timer fired — wall-clock check above handles actual heartbeat.
-                wakeupTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
             end
+
+            -- GUARANTEED WAKEUP. Re-armed unconditionally, whatever woke us.
+            --
+            -- Every check above -- heartbeat, log flush, the ctrl drain -- sits
+            -- BEFORE os.pullEvent, which blocks until an event arrives. So they
+            -- are not a safety net: they are behind the thing that gets stuck.
+            -- Losing a single wakeup timer event left this loop with no pending
+            -- timer, and an idle docked turtle generates nothing else -- it stops
+            -- heartbeating, so no HEARTBEAT_ACK comes back, and a loader placed
+            -- by turtle.place() is powered off and beacons nothing. The turtle
+            -- then sits alive and completely deaf, screen reading "Ready.",
+            -- until someone reboots it by hand.
+            --
+            -- Observed 2026-09-04: all 15 turtles silent for over two hours,
+            -- server healthy throughout, player standing in the depot. Every
+            -- turtle was running and none of them could ever speak again.
+            --
+            -- This is the identical fault the spec owner fixed in the SERVER's
+            -- loop in 6f7d1c6, whose comment ends "it is also, finally, why
+            -- rebooting a single turtle revived the whole fleet three separate
+            -- times." The turtle side had the same shape and never got the fix.
+            --
+            -- Timer events are lost routinely: any call that yields on a filter
+            -- destroys what arrives during it. That is not an edge case here, it
+            -- is the normal cost of a turtle doing anything at all.
+            os.cancelTimer(wakeupTimer)
+            wakeupTimer = os.startTimer(CFG.HEARTBEAT_INTERVAL)
         end
     end
 

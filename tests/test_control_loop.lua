@@ -91,7 +91,10 @@ local function runControlLoop(events, onPull)
     base = require("turtle_base")
     base.recoverModem()          -- bind the stub's equipped modem so sends work
     base.run(function() end)
-    return base
+    -- Second return: how many os.startTimer calls the run made. Counted in the
+    -- harness rather than exposed from turtle_base, so production gains no seam
+    -- that exists only for a test.
+    return base, timerId
 end
 
 -- Both helpers below produce a message addressed to "broadcast" on CH_LOCAL.
@@ -198,6 +201,41 @@ function(assert_eq)
         assert_eq(ctrl, 0,
             "the control inbox must be empty after every iteration; anything "
             .. "left here accumulates until it evicts a registration ACK")
+    end)
+end
+
+-- The wakeup timer must be re-armed whatever woke the loop (1.9.80).
+--
+-- It used to be re-armed ONLY inside its own `p1 == wakeupTimer` branch. Lose
+-- one such event -- and any call that yields on a filter destroys events that
+-- arrive during it, which is routine -- and the loop had no pending timer. Every
+-- wall-clock check sits BEFORE os.pullEvent, so none of them is a safety net:
+-- they are behind the thing that is stuck.
+--
+-- An idle docked turtle then generates nothing else. It stops heartbeating, so
+-- no HEARTBEAT_ACK comes back, and a loader placed by turtle.place() is powered
+-- off and beacons nothing. Observed 2026-09-04: all 15 turtles alive, silent for
+-- over two hours, screens reading "Ready.", server healthy, player in the depot.
+suite["the wakeup timer is re-armed whatever woke the loop"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        -- modem_message events only, never a timer, so the timer branch that
+        -- used to hold the only other re-arm is never reached.
+        --
+        -- SERVER broadcasts, not loader beacons. With beacons the turtle trips
+        -- serverDown partway through and calls register(), and register's own
+        -- wait arms a timer of its own -- so the count rose above 1 whether the
+        -- loop re-armed or not, and the test passed against the unfixed code.
+        -- Caught only because the mutation run is mandatory. `from = "server"`
+        -- resets the missed-heartbeat counter every iteration, so registration
+        -- never runs and every timer counted here belongs to the loop.
+        local _, armed = runControlLoop(repeated(serverBroadcastEvent, 5))
+        -- Pre-fix this is EXACTLY 1: the arm at base.run entry and nothing else.
+        assert_eq(armed > 1, true,
+            "the loop must re-arm its wakeup on every iteration; with only the "
+            .. "timer-branch re-arm this is 1 and a single lost timer event "
+            .. "leaves the turtle permanently blocked in os.pullEvent — got "
+            .. tostring(armed))
     end)
 end
 

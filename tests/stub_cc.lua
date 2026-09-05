@@ -372,6 +372,31 @@ function M.install(opts)
         end
     end
 
+    -- os.startTimer / os.cancelTimer.
+    --
+    -- SEVENTH fidelity gap found in this stub, and the most expensive so far:
+    -- neither existed, so every test that reached one died inside the missing
+    -- function rather than on its assertion. It hid the 2026-09-04 fleet freeze
+    -- twice over -- once by making the loop untestable, and then again by making
+    -- the FIX look broken, because adding the unconditional re-arm made four
+    -- unrelated suites fail for a reason that had nothing to do with the change.
+    --
+    -- cancelTimer does NOT remove an event already queued, matching real CC:
+    -- cancelling is a promise about the future, not a retraction of the past.
+    -- Code that assumes otherwise is wrong in-world and must be wrong here too.
+    c.timerId = c.timerId or 0
+    c.timersStarted  = 0
+    c.timersCanceled = 0
+    os.startTimer = function()
+        c.timerId = c.timerId + 1
+        c.timersStarted = c.timersStarted + 1
+        return c.timerId
+    end
+    os.cancelTimer = function(id)
+        c.timersCanceled = c.timersCanceled + 1
+        return nil
+    end
+
     textutils = {
         serialise = function(t) return M._serialise(t) end,
         unserialise = function(s) return M._unserialise(s) end,
