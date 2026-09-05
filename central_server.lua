@@ -157,15 +157,9 @@ local registry = {}
 function registry.register(id, role, fuel, fuelMax, position, midJob)
     local isNew = state.registry[id] == nil
 
-    -- Registering means the turtle has just booted, so whatever made it unfit
-    -- for dispatch (an outstanding loader, a missing chest) has either been
-    -- fixed or will re-assert itself on the next attempt. Either way the stale
-    -- hold must not outlive the reboot.
+    -- Held for the dispatch-hold carry-forward after the entry is REPLACED
+    -- below. See the note at that assignment.
     local prev = state.registry[id]
-    if prev then
-        prev.dispatchBlockedUntil = nil
-        prev.dispatchBlockReason  = nil
-    end
 
     -- Assign or recover a dock
     local dockRole = (role == proto.ROLE.SUPPORT) and "SUPPORT" or "DELIVERY"
@@ -197,6 +191,37 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
         online   = true,
         offlineSince = nil,   -- cleared on (re-)register so active turtles aren't pruned
     }
+
+    -- Carry the dispatch hold across a re-registration, unless the server had
+    -- actually LOST the turtle.
+    --
+    -- The table above is a REPLACEMENT, so anything not copied here is dropped.
+    -- The hold was therefore cleared by every registration, on the premise that
+    -- "registering means the turtle has just booted". That premise is false and
+    -- it cost real work.
+    --
+    -- Observed 2026-09-04 over 15 minutes: every turtle re-registered roughly
+    -- every 24 seconds without rebooting, because heartbeat ACKs are being lost
+    -- somewhere and MAX_MISSED keeps tripping. node_119 held an outstanding
+    -- chunk loader, refused every job instantly, was benched for 600s -- and
+    -- cleared its own bench ~24 seconds later by re-registering. getIdle sorts
+    -- by fuel descending and a turtle that never works stays full, so it was
+    -- offered work FIRST every time. It destroyed two of the operator's four
+    -- mine jobs, four seconds apart each; both refusals were non-recoverable, so
+    -- the jobs were not requeued.
+    --
+    -- Offline-first is the closest available evidence of a real reboot, which is
+    -- the case this clearing exists for: boot-time loader recovery may genuinely
+    -- have fixed the condition. A turtle the server still sees has not been
+    -- anywhere, and saying hello again proves nothing about what benched it.
+    --
+    -- The cost is that a turtle fixed by hand without ever going offline waits
+    -- out the full 600s. That is the fallback the timeout was always for.
+    if prev and prev.online ~= false then
+        state.registry[id].dispatchBlockedUntil = prev.dispatchBlockedUntil
+        state.registry[id].dispatchBlockReason  = prev.dispatchBlockReason
+    end
+
     logInfo(string.format("%s %s [%s] fuel=%d/%d dock=%s",
         isNew and "Registered" or "Re-registered", id, role, fuel, fuelMax,
         dock and ("bay"..dock.bay..dock.row) or "none"))

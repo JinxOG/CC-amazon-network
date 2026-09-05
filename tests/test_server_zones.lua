@@ -429,6 +429,44 @@ return {
             .. "threw and everything after it was skipped")
     end,
 
+    -- A bare re-registration must NOT clear a dispatch hold.
+    --
+    -- Observed 2026-09-04: every turtle re-registered roughly every 24 seconds
+    -- without rebooting (heartbeat ACKs are being lost somewhere). node_119 was
+    -- benched for 600s for holding an outstanding chunk loader, cleared its own
+    -- bench on the next re-registration, and -- being full of fuel, which sorts
+    -- it first for dispatch -- was offered work ahead of every healthy miner. It
+    -- destroyed two of the operator's four mine jobs, four seconds apart each.
+    ["a re-registration from a turtle the server still sees does not clear its bench"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local id = "node_777"
+
+        T.registry.register(id, proto.ROLE.MINER, 100000, 100000, { x = 0, y = 64, z = 0 }, false)
+        local t = T.state.registry[id]
+        t.dispatchBlockedUntil = 9999999999999
+        t.dispatchBlockReason  = "loader_outstanding at 1,2,3"
+
+        assert_eq(t.online, true, "precondition: the turtle is online after registering")
+
+        -- The storm case: it never went anywhere, it just said hello again.
+        T.registry.register(id, proto.ROLE.MINER, 100000, 100000, { x = 0, y = 64, z = 0 }, false)
+        local heldAfterStorm = T.state.registry[id].dispatchBlockedUntil
+
+        -- The real-reboot case: the server had lost it first.
+        T.state.registry[id].online = false
+        T.registry.register(id, proto.ROLE.MINER, 100000, 100000, { x = 0, y = 64, z = 0 }, false)
+        local heldAfterReboot = T.state.registry[id].dispatchBlockedUntil
+        restore()
+
+        assert_eq(heldAfterStorm ~= nil, true,
+            "a re-registration from a turtle that never went offline must not "
+            .. "clear the hold — that is what let one broken miner eat the queue")
+        assert_eq(heldAfterReboot, nil,
+            "but a turtle the server had actually lost must come back "
+            .. "dispatchable, or a hand-fixed reboot waits out the full 600s")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)
