@@ -360,6 +360,75 @@ return {
         assert_eq(isDue(1030001, 1000000, 30), true,  "past 30s is due")
     end,
 
+    -- Auto-respawn: a zone with sectors left must not stop being worked because
+    -- the job covering it failed.
+    --
+    -- This crashed in-world on 2026-09-04, caught during an 8-minute watch:
+    -- "Handler [JOB_FAILED]: attempt to index global 'server' (a nil value)".
+    -- jobQueue.fail calls server.submitJob roughly a thousand lines above where
+    -- `local server` was declared, so the name compiled to a global lookup and
+    -- the call threw. The handler is pcall'd, so it was caught and logged --
+    -- and everything after that line was skipped: the finished zone was never
+    -- cleared from state.miningZones and saveJobs() never ran.
+    --
+    -- Drives the real handler rather than jobQueue.fail directly, so the pcall
+    -- that hid this in production is in the path the test exercises too.
+    ["a failed mine job respawns a replacement for its unfinished zone"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+
+        T.state.jobs["job_0100"] = {
+            id       = "job_0100",
+            type     = proto.JOB.MINE,
+            status   = "IN_PROGRESS",
+            assignedTo = "node_1",
+            priority = 5,
+            params   = { x1 = 0, z1 = 0, x2 = 32, z2 = 32 },
+            -- jobQueue._hist appends to this on every transition; a job built
+            -- without it fails inside the history write, before reaching
+            -- anything this test is about.
+            history  = {},
+        }
+        T.state.miningZones["job_0100"] = {
+            persistentKey = "0,0,32,32",
+            pending = { { 0, 0 }, { 32, 0 } },   -- two sectors still to mine
+        }
+        local before = 0
+        for _ in pairs(T.state.jobs) do before = before + 1 end
+
+        -- Non-recoverable, so the job lands in FAILED rather than back in
+        -- PENDING -- the auto-respawn only runs on a permanent failure.
+        T.handlers[proto.MSG.JOB_FAILED]({
+            from = "node_1", type = proto.MSG.JOB_FAILED,
+            payload = { jobId = "job_0100", reason = "test", recoverable = false },
+        })
+
+        local after, replacement = 0, nil
+        for id, j in pairs(T.state.jobs) do
+            after = after + 1
+            if id ~= "job_0100" and j.type == proto.JOB.MINE
+               and j.params and j.params.sharedZoneKey == "0,0,32,32" then
+                replacement = j
+            end
+        end
+        local zoneCleared = T.state.miningZones["job_0100"] == nil
+        local failedStatus = T.state.jobs["job_0100"].status
+        restore()
+
+        assert_eq(failedStatus, "FAILED",
+            "precondition: the job must actually have failed permanently")
+        assert_eq(before, 1, "precondition: exactly one job before the failure")
+        assert_eq(replacement ~= nil, true,
+            "a zone with sectors remaining must get a replacement job, or it "
+            .. "silently stops being mined")
+        assert_eq(after, 2, "exactly one replacement, not several")
+        -- The tail of jobQueue.fail. Before the fix the throw skipped both of
+        -- these, which is the damage the caught-and-logged error concealed.
+        assert_eq(zoneCleared, true,
+            "the finished zone must be cleared -- if this fails, the respawn "
+            .. "threw and everything after it was skipped")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)

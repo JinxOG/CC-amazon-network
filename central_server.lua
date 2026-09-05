@@ -130,6 +130,22 @@ local function sendBroadcast(msgType, payload)
     proto.send(state.modem, proto.CH_BROADCAST, msg)
 end
 
+-- Forward declaration. The public API table is populated far below, but code up
+-- here calls into it at RUNTIME -- by which point it is fully built.
+--
+-- Without this, `server` at those call sites compiled to a lookup of the GLOBAL
+-- `server`, which is nil, and the call threw. It was live: the auto-respawn in
+-- jobQueue.complete crashed the JOB_FAILED handler in-world on 2026-09-04
+-- ("attempt to index global 'server'"). The handler is pcall'd, so the throw was
+-- caught and logged -- and everything after that line was skipped, including
+-- clearing the finished zone and saving jobs to disk.
+--
+-- The hazard was already known: the JOB_REQUEST handler further down carries the
+-- comment "Registered here so server.submitJob is in scope", i.e. it was moved
+-- to dodge exactly this. Declaring the name once is the fix that does not
+-- depend on remembering.
+local server
+
 -- ─── Registry ────────────────────────────────────────────────────────────────
 
 local registry = {}
@@ -2520,7 +2536,10 @@ end
 
 -- ─── Public API ──────────────────────────────────────────────────────────────
 
-local server = {}
+-- Assigned, not declared: `local server` is forward-declared at the top so call
+-- sites above this point resolve to it rather than to a nil global. Re-adding
+-- `local` here creates a second variable and silently restores the crash.
+server = {}
 
 -- Registered here so server.submitJob is in scope
 handlers[proto.MSG.JOB_REQUEST] = function(msg)
