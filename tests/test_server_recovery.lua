@@ -453,14 +453,38 @@ return {
 
         local stillHaveBackup = fs.exists("jobs.dat.bak")
         local stillHaveLive   = fs.exists("jobs.dat")
+        local recoverable = (stillHaveBackup and #(c.files["jobs.dat.bak"] or "") > 0)
+                         or (stillHaveLive   and #(c.files["jobs.dat"]     or "") > 0)
         restore()
 
-        assert_eq(hadBackup, true, "precondition: a backup must have been established")
-        assert_eq(stillHaveBackup or stillHaveLive, true,
-            "a failed save must leave something to restore from")
-        assert_eq(stillHaveBackup, true,
-            "and specifically the BACKUP must survive — it is deleted before its "
-            .. "replacement is secured, so a failure here destroys the safety net")
+        -- ASSERTED OVER THE PAIR, not over .bak specifically, and this is a
+        -- change from how it was first written (2026-08-22).
+        --
+        -- Back then .bak was the file being destroyed: fs.copy deleted it and
+        -- then could not recreate it, so naming it was naming the victim. Since
+        -- 2026-09-06 a verified save drops its backup rather than keeping a
+        -- second full copy of every file forever -- two files plus backups had
+        -- taken the server's 1 MB disk to 36 KB free -- so between saves there
+        -- is legitimately no .bak at all.
+        --
+        -- The requirement was never "this filename exists". It is that at every
+        -- instant at least one of the pair holds a usable save, whichever one
+        -- that happens to be.
+        --
+        -- BE HONEST ABOUT WHAT THIS NO LONGER CATCHES. The 2026-08-22 defect
+        -- destroyed the backup and left the live file, so this weaker assertion
+        -- passes against it -- confirmed by mutation, not assumed. That defect is
+        -- pinned by the source-ordering test below ("no disk save destroys its
+        -- backup before securing one"), and the surviving-backup property it was
+        -- really about now has its own direct test in test_server_zones.lua
+        -- ("a save whose replacement never lands keeps its backup"). This test
+        -- keeps the end-to-end disk-full path; it is not the one guarding the
+        -- copy-versus-move ordering any more.
+        assert_eq(hadBackup or #(c.files["jobs.dat"] or "") > 0, true,
+            "precondition: a real save must have been established before the "
+            .. "disk was filled")
+        assert_eq(recoverable, true,
+            "a failed save must leave a non-empty file to restore from")
     end,
 
     -- A disk too full to write anything at all is not recoverable by reordering,

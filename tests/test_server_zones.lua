@@ -467,6 +467,84 @@ return {
             .. "dispatchable, or a hand-fixed reboot waits out the full 600s")
     end,
 
+    -- Disk exhaustion, observed live 2026-09-06: the server's 1 MB disk down to
+    -- 36,081 bytes free after a mining job. jobs.dat.bak was 326,661 bytes -- a
+    -- third of the disk -- while jobs.dat was 35. Two causes, both here.
+    ["job history is bounded so a long job cannot fill the disk"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        T.state.jobs["job_0200"] = {
+            id = "job_0200", type = proto.JOB.MINE, status = "IN_PROGRESS",
+            priority = 5, params = {}, history = {},
+        }
+        -- A miner working a 20-sector zone sends this many STATUS_UPDATEs and
+        -- more; every one appended an entry that was never trimmed.
+        for i = 1, 300 do
+            T.jobQueue._hist("job_0200", "progress", "sector " .. i)
+        end
+        local h = T.state.jobs["job_0200"].history
+        local n, newest, oldest = #h, h[#h].detail, h[1].detail
+        restore()
+
+        assert_eq(n <= 40, true,
+            "history must be capped, or jobs.dat grows for as long as the job "
+            .. "runs — got " .. n .. " entries")
+        assert_eq(newest, "sector 300",
+            "the most recent entry must survive: it is what explains where the "
+            .. "job is now")
+        assert_eq(oldest ~= "sector 1", true,
+            "and the OLDEST must be the one dropped, not the newest")
+    end,
+
+    ["a completed save drops its backup instead of keeping a second full copy"] =
+    function(assert_eq)
+        local server, T, restore, c = freshServer(fakeKV({}), nil)
+        T.state.jobs["job_0201"] = {
+            id = "job_0201", type = proto.JOB.MINE, status = "IN_PROGRESS",
+            priority = 5, params = { x1 = 0, z1 = 0, x2 = 32, z2 = 32 },
+            history = {},
+        }
+        -- Twice: the first write creates jobs.dat, the second moves it aside to
+        -- jobs.dat.bak and writes a new one. Only after the second does a backup
+        -- exist to be dropped, so one save would pass without testing anything.
+        T.saveJobs()
+        local afterFirst = c.files["jobs.dat"] ~= nil
+        T.saveJobs()
+        local live = c.files["jobs.dat"]
+        local bak  = c.files["jobs.dat.bak"]
+        restore()
+
+        assert_eq(afterFirst, true, "precondition: the first save must land")
+        assert_eq(live ~= nil, true, "the live file must exist after the save")
+        assert_eq(bak, nil,
+            "the backup protects the write, not the file — keeping it costs a "
+            .. "second full copy for as long as the file exists, which is how "
+            .. "one file took 37% of the disk")
+    end,
+
+    -- The other half of the same change: the backup must SURVIVE when the
+    -- replacement did not land, which is the only case it exists for.
+    ["a save whose replacement never lands keeps its backup"] =
+    function(assert_eq)
+        local server, T, restore, c = freshServer(fakeKV({}), nil)
+        c.files["jobs.dat"]     = "live"
+        c.files["jobs.dat.bak"] = "previous"
+        T.dropBackupAfterVerify("jobs.dat")
+        local keptWhenPresent = c.files["jobs.dat.bak"]
+
+        c.files["jobs.dat"] = nil          -- the move did not land
+        c.files["jobs.dat.bak"] = "previous"
+        T.dropBackupAfterVerify("jobs.dat")
+        local keptWhenMissing = c.files["jobs.dat.bak"]
+        restore()
+
+        assert_eq(keptWhenPresent, nil,
+            "precondition: a verified file does drop its backup")
+        assert_eq(keptWhenMissing, "previous",
+            "but a missing replacement must keep it — that crash window is the "
+            .. "entire reason the backup exists")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)

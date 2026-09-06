@@ -499,6 +499,46 @@ local function saveOreThresholds()
     f.write(textutils.serialise(oreThresholds)); f.close()
 end
 
+-- Free the backup once the replacement is verifiably in place.
+--
+-- The backup protects the WRITE, not the file. Its whole job is to survive a
+-- crash between moving the old file aside and moving the new one in -- a window
+-- measured in milliseconds. Keeping it afterwards costs a second full copy for
+-- as long as the file exists, and on a 1 MB disk that is the difference between
+-- comfortable and full: active_zones.dat and its backup were 183,454 and 183,513
+-- bytes on 2026-09-06, 37% of the disk for one file.
+--
+-- Deleted only after the replacement is confirmed present and non-empty, so the
+-- crash window the backup exists for is exactly as covered as it was before.
+local function dropBackupAfterVerify(path)
+    local bak = path .. ".bak"
+    if not fs.exists(bak) then return end
+    -- The move did not land. Keeping the backup is the entire point.
+    if not fs.exists(path) then return end
+    local ok, size = pcall(fs.getSize, path)
+    if not ok or type(size) ~= "number" or size <= 0 then return end
+    pcall(fs.delete, bak)
+end
+
+-- P7: the system must report its own degradation. A full disk stops job state
+-- being saved, and the operator's first sign of it was the disk already being
+-- full. Warn while there is still room to act.
+local _lastDiskWarn = 0
+local DISK_WARN_BYTES  = 120000
+local DISK_WARN_EVERY  = 300000   -- 5 min; a line per save would bury the log
+local function warnIfDiskTight()
+    local ok, free = pcall(fs.getFreeSpace, "/")
+    if not ok or type(free) ~= "number" or free >= DISK_WARN_BYTES then return end
+    local now = os.epoch("utc")
+    if now - _lastDiskWarn < DISK_WARN_EVERY then return end
+    _lastDiskWarn = now
+    logWarn(string.format(
+        "Disk low on the server computer: %d bytes free. Job state stops saving "
+        .. "when it runs out. Largest consumers are jobs.dat and active_zones.dat "
+        .. "(zones are also in the cloud store, so the disk copy is expendable).",
+        free))
+end
+
 local function saveJobs()
     -- Persist all active jobs (including SUPPORT_FOLLOW) so original turtles
     -- can be re-linked on server reboot. Terminal states are not worth keeping.
@@ -540,7 +580,9 @@ local function saveJobs()
             fs.move(JOB_SAVE_FILE, JOB_SAVE_FILE .. ".bak")
         end
         fs.move("jobs.tmp", JOB_SAVE_FILE)
+        dropBackupAfterVerify(JOB_SAVE_FILE)
     end)
+    if ok then warnIfDiskTight() end
     if not ok then
         -- Name the condition rather than surfacing a line number out of fs. An
         -- operator reading "saveJobs failed: /startup.lua:433: Out of space" has
@@ -679,6 +721,7 @@ local function savePersistentZones(changedKey)
             fs.move(ZONE_SAVE_FILE, ZONE_SAVE_FILE .. ".bak")
         end
         fs.move("zones.tmp", ZONE_SAVE_FILE)
+        dropBackupAfterVerify(ZONE_SAVE_FILE)
     end)
     if not ok then
         state.zoneStoreHealthy = false
@@ -1318,10 +1361,27 @@ function jobQueue.add(jobType, params, priority)
     return id
 end
 
+-- Job history is diagnostic and must be BOUNDED.
+--
+-- jobQueue.progress appends one entry per STATUS_UPDATE, and a miner working a
+-- 20-sector zone sends hundreds of them. Nothing trimmed it, and jobs.dat holds
+-- every ACTIVE job in full -- so the file grew for as long as the job ran.
+--
+-- Observed 2026-09-06 on the live server: jobs.dat.bak at 326,661 bytes, a third
+-- of the 1 MB disk, while jobs.dat itself was 35 bytes. Two files plus their
+-- backups had taken the server to 36 KB free, which is the condition that
+-- already destroyed a save once (see the fs.move note in saveJobs).
+--
+-- The oldest entries are the least useful: what a job did most recently is what
+-- explains where it is now. 40 covers a full sector cycle several times over.
+local JOB_HISTORY_MAX = 40
+
 function jobQueue._hist(jobId, event, detail)
     local job = state.jobs[jobId]
     if not job then return end
-    table.insert(job.history, { ts = os.epoch("utc"), event = event, detail = detail or "" })
+    local h = job.history
+    h[#h + 1] = { ts = os.epoch("utc"), event = event, detail = detail or "" }
+    while #h > JOB_HISTORY_MAX do table.remove(h, 1) end
 end
 
 -- Populate the forward-declared cancelJobInline now that jobQueue._hist exists.
@@ -4345,6 +4405,11 @@ if _G.__CC_SERVER_TEST then
         -- server.run's closure and cannot be reached, but the due-check itself
         -- carries the seconds/milliseconds boundary worth pinning down.
         isDue = isDue,
+        -- Persistence, so the disk-exhaustion fixes are covered rather than
+        -- inferred. saveJobs is the writer; dropBackupAfterVerify is the half
+        -- that decides whether a second full copy of every file survives.
+        saveJobs = saveJobs,
+        dropBackupAfterVerify = dropBackupAfterVerify,
     }
     return server
 end

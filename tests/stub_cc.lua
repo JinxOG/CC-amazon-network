@@ -452,6 +452,16 @@ function M.install(opts)
             }
         end,
         exists = function(path) return files[path] ~= nil end,
+        -- EIGHTH fidelity gap. fs.getSize did not exist, so any code verifying a
+        -- file it had just written -- the atomic-write pattern that lets a save
+        -- drop its backup and reclaim the space -- failed inside the missing
+        -- function and silently took the safe branch. The fix would have looked
+        -- like it did nothing, which is the same shape as os.cancelTimer.
+        -- Real CC throws on a missing path rather than returning nil.
+        getSize = function(path)
+            if files[path] == nil then error("No such file", 0) end
+            return #files[path]
+        end,
         delete = function(path)
             freeSpace = freeSpace + sizeOf(path)
             files[path] = nil
