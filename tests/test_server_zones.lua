@@ -545,6 +545,64 @@ return {
             .. "entire reason the backup exists")
     end,
 
+    -- Knowing what is actually running.
+    --
+    -- Twice now a machine has run different code from the source being read: an
+    -- OTA where protocol.lua landed and the 211 KB server did not, and a fleet
+    -- updated while the server was not. Both were diagnosed for hours against
+    -- the wrong source. A node's reported proto.VERSION is the only evidence
+    -- available, and nothing was looking at it.
+    ["a node reporting a different version is counted, not just stored"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        T.registry.register("node_a", proto.ROLE.MINER, 100, 100, { x=0, y=64, z=0 }, false)
+        T.registry.register("node_b", proto.ROLE.MINER, 100, 100, { x=0, y=64, z=0 }, false)
+
+        T.registry.update("node_a", proto.STATUS.IDLE, 100, nil, nil, proto.VERSION)
+        local agreeing = T.registry.versionMismatchCount()
+
+        T.registry.update("node_b", proto.STATUS.IDLE, 100, nil, nil, "1.0.0-ancient")
+        local mismatched = T.registry.versionMismatchCount()
+
+        -- A node that has never reported one is unknown, not mismatched --
+        -- counting it would make the number meaningless at every boot.
+        T.state.registry["node_a"].version = nil
+        local silentNotCounted = T.registry.versionMismatchCount()
+        restore()
+
+        assert_eq(agreeing, 0, "a node on the server's own version is not a mismatch")
+        assert_eq(mismatched, 1, "a node on different code must be counted")
+        assert_eq(silentNotCounted, 1,
+            "a node that has not reported a version yet is unknown, not wrong")
+    end,
+
+    -- SOURCE-ONLY, weaker: the guard lives inside server.run's event loop, which
+    -- the harness cannot enter.
+    ["a failed update must not reboot the server (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("central_server.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+
+        local runAt = src:find("if fs%.exists%(\"updater%.lua\"%) then shell%.run%(\"updater\"%) end")
+        assert_eq(runAt ~= nil, true, "the server's updater invocation moved or vanished")
+
+        -- Bound the window to the update block so a reboot elsewhere in the file
+        -- cannot satisfy this.
+        -- 3000, not 2200: the explanatory comment between the two is ~1500
+        -- characters, so a tighter window ended before the reboot and the
+        -- ordering assertion failed on the window rather than on the code.
+        local tail = src:sub(runAt, runAt + 3000)
+        local guardAt  = tail:find("if fs%.exists%(\"update_failed%.txt\"%) then")
+        local rebootAt = guardAt and tail:find("os%.reboot%(%)", guardAt)
+        assert_eq(guardAt ~= nil, true,
+            "the reboot must be gated on the updater's own failure marker — the "
+            .. "updater already decides not to reboot, and this caller used to "
+            .. "override it and boot into a half-applied update")
+        assert_eq(rebootAt ~= nil and guardAt < rebootAt, true,
+            "the guard must come BEFORE the reboot, or it does nothing")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)

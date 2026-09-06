@@ -303,7 +303,34 @@ function registry.update(id, status, fuel, position, jobId, version)
     t.lastSeen = os.epoch("utc")
     t.online   = true
     t.offlineSince = nil   -- back online via heartbeat — don't prune
-    if version then t.version = version end
+    -- A node running different code from the server is the single most
+    -- expensive thing to not know. It has happened twice: an OTA where the small
+    -- files landed and the 211 KB server did not, and a fleet updated while the
+    -- server was not. Both times the symptom was diagnosed for hours against
+    -- source that was not the source running.
+    --
+    -- Reported on CHANGE only, so a fleet legitimately mid-rollout produces one
+    -- line per node rather than one per heartbeat.
+    if version and version ~= t.version then
+        t.version = version
+        if version ~= proto.VERSION then
+            logWarn(string.format(
+                "VERSION MISMATCH: %s reports %s, server is %s — one of them is "
+                .. "running code you are not reading",
+                id, tostring(version), tostring(proto.VERSION)))
+        end
+    end
+end
+
+-- How many known nodes report a proto.VERSION different from this server's.
+-- Published so a mismatch is visible on the dashboard rather than only in a log
+-- line that scrolled away an hour ago.
+function registry.versionMismatchCount()
+    local n = 0
+    for _, t in pairs(state.registry) do
+        if t.version and t.version ~= proto.VERSION then n = n + 1 end
+    end
+    return n
 end
 
 function registry.getIdle(role)
@@ -3797,6 +3824,10 @@ function server.run()
         local payload = '{"turtles":'      .. js(turtles,             "{}",  "turtles") ..
                         ',"jobs":'         .. jobs ..
                         ',"version":'      .. js(proto.VERSION,        '"?"', "version") ..
+                        -- Nodes reporting a different proto.VERSION from this
+                        -- server. Non-zero means someone is reading the wrong
+                        -- source for at least one machine.
+                        ',"versionMismatch":' .. tostring(registry.versionMismatchCount()) ..
                         -- How long the PREVIOUS assembly took, in ms. This
                         -- function is synchronous, so that number is exactly how
                         -- long the server was deaf to the radio -- the window in
@@ -4121,10 +4152,40 @@ function server.run()
                             logWarn("UPDATE_ALL — updating server in 3s...")
                             sleep(3)
                             if fs.exists("updater.lua") then shell.run("updater") end
-                            -- Always reboot after update attempt: sleep() and shell.run() consume
-                            -- timer events, leaving dispatchTimer/bridgeTimer/healthTimer stale.
-                            -- A clean reboot is the only safe recovery.
-                            os.reboot()
+                            -- DO NOT REBOOT INTO A FAILED UPDATE.
+                            --
+                            -- The updater already decides this correctly: on any
+                            -- failure it prints "NOT rebooting", writes
+                            -- update_failed.txt, and returns without rebooting.
+                            -- This caller then rebooted anyway and overrode that
+                            -- decision -- which is exactly how a dispatch
+                            -- computer came up running an old server while
+                            -- advertising a new proto.VERSION. protocol.lua is
+                            -- small and lands; central_server.lua is 211 KB and
+                            -- does not. Two rounds of diagnosis went into code
+                            -- that was not running.
+                            --
+                            -- The old justification was that sleep() and
+                            -- shell.run() eat timer events, leaving
+                            -- dispatchTimer/bridgeTimer/healthTimer stale, so a
+                            -- reboot was the only safe recovery. That was true
+                            -- when written and is not any more: since 6f7d1c6
+                            -- the wakeup timer is re-armed unconditionally at
+                            -- the bottom of every iteration, and every periodic
+                            -- task has a wall-clock fallback that does not
+                            -- depend on its timer surviving. Losing them costs
+                            -- one late tick, not the loop.
+                            --
+                            -- So: reboot on success, stay up on known-good code
+                            -- on failure. Running the old version knowingly is
+                            -- strictly better than running an unknown mixture.
+                            if fs.exists("update_failed.txt") then
+                                logError("UPDATE FAILED — NOT rebooting. This server is still "
+                                    .. "running its previous code; see update_failed.txt. "
+                                    .. "Free disk space and re-run 'updater'.")
+                            else
+                                os.reboot()
+                            end
                         end
                     end
                 else

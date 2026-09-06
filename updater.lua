@@ -178,22 +178,52 @@ end
 -- ─── Download files ───────────────────────────────────────────────────────────
 
 local failed = 0
+-- Every destination this run is supposed to produce, and how big the content we
+-- downloaded for it was. Checked against the disk at the end.
+local expected = {}
+
+local function record(dst, size) expected[#expected + 1] = { dst = dst, size = size } end
 
 print("Downloading common files...")
 for _, file in ipairs(COMMON) do
-    if not download(file) then failed = failed + 1 end
+    if download(file) then record(file) else failed = failed + 1 end
 end
 
 print("Downloading " .. role .. " files...")
 for _, entry in ipairs(ROLE_FILES[role]) do
-    local ok
+    local ok, dst
     if type(entry) == "string" then
-        ok = download(entry)
+        ok, dst = download(entry), entry
     else
-        ok = download(entry.src, entry.dst)
+        ok, dst = download(entry.src, entry.dst), entry.dst
     end
-    if not ok then failed = failed + 1 end
+    if ok then record(dst) else failed = failed + 1 end
 end
+
+-- ─── Verify what is actually on disk ─────────────────────────────────────────
+--
+-- Every step above reports success from what it did, not from what survived.
+-- A write can report OK and leave nothing usable: the disk fills between the
+-- write and the close, the move lands on a full volume, or a later file in the
+-- same run consumes the space the earlier one is sitting in.
+--
+-- This is the check the whole "verify before you reboot" idea rests on, and
+-- without it "all files updated successfully" is a statement about intentions.
+-- A dispatch computer once came up running an old 211 KB server while
+-- advertising a new proto.VERSION, because the small file landed and the big
+-- one did not -- and everything reported success on the way past.
+print("Verifying...")
+for _, e in ipairs(expected) do
+    local ok, size = pcall(fs.getSize, e.dst)
+    if not fs.exists(e.dst) then
+        print("  MISSING: " .. e.dst)
+        failed = failed + 1
+    elseif not ok or type(size) ~= "number" or size == 0 then
+        print("  EMPTY: " .. e.dst)
+        failed = failed + 1
+    end
+end
+if failed == 0 then print("  all " .. #expected .. " files present and non-empty") end
 
 -- ─── Done ────────────────────────────────────────────────────────────────────
 
