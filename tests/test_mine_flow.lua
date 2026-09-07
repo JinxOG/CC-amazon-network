@@ -244,8 +244,9 @@ return {
     -- minecraft:turtle_egg -- a real block, and one that never moves. Refusing
     -- it is not a safe default here: the callers below respond to a refusal by
     -- skipping the square, so an egg under a scan level would silently cost the
-    -- level. (In turtle_base the same match is worse: tryVertical WAITS on a
-    -- would_dig_turtle, and an egg never leaves. Reported to W3 separately.)
+    -- level. (turtle_base survives the same match: tryMove's turtle-blocked
+    -- branch has a 120-second deadline and then returns a failed move, so an
+    -- egg costs two minutes there rather than hanging. Reported to W3 anyway.)
     ["digGuarded does not confuse a vanilla turtle egg with a fleet turtle"] =
     function(assert_eq)
         local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
