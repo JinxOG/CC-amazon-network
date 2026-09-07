@@ -125,6 +125,62 @@ end
 local function report(phase, detail) _hooks.reportPhase(phase, detail) end
 local function log(msg) _hooks.log(msg) end
 
+-- Never dig a turtle -- the MINING half of the guard.
+--
+-- turtle_base has this for NAVIGATION digs (its local digGuarded, added
+-- 2026-08-22 after node_139 docked carrying node_119, a MINER, as an item).
+-- That commit touched turtle_base.lua and nothing else, so it covered moving
+-- through terrain, the bypass, and tunnelling out when surrounded -- while
+-- every dig a miner performs AS A MINER stayed blind: clearing a square for
+-- the geo scanner, for the fuel ender chest, for the ore ender chest. It
+-- happened again on 2026-09-06.
+--
+-- Hardware loss is not recoverable the way terrain loss is. The victim takes
+-- its computer ID, its files and its loader_state with it, its placed loader
+-- is orphaned permanently with nothing left that knows to reclaim it, and the
+-- whole thing is silent -- the registry simply stops hearing from it. Worse,
+-- the victim then rides home in a payload slot and gets banked into the ender
+-- chest with the ore, where it is indistinguishable from a spare.
+--
+-- Refusal is reported distinctly from failure ("would_dig_turtle" vs a plain
+-- false) because the two deserve opposite responses: a turtle means leave this
+-- block alone, bedrock means try another face.
+--
+-- Closures rather than captured function references, for the reason BANK_FACES
+-- documents below: a test replaces turtle.dig* after this module loads.
+local GUARD_INSPECT = {
+    forward = function() return turtle.inspect()     end,
+    up      = function() return turtle.inspectUp()   end,
+    down    = function() return turtle.inspectDown() end,
+}
+local GUARD_DIG = {
+    forward = function() return turtle.dig()     end,
+    up      = function() return turtle.digUp()   end,
+    down    = function() return turtle.digDown() end,
+}
+
+-- Deliberately narrower than turtle_base's bare name:find("turtle"): that also
+-- matches minecraft:turtle_egg, a real block that never moves. Refusing an egg
+-- costs a scan level here for nothing. No vanilla block is a fleet member, so
+-- excluding the whole minecraft: namespace is the cheap, safe cut.
+local function isFleetTurtle(name)
+    if type(name) ~= "string" then return false end
+    if name:sub(1, 10) == "minecraft:" then return false end
+    return name:find("turtle") ~= nil
+end
+
+-- Returns the dig's own result, or false, "would_dig_turtle" when the block in
+-- that direction is a fleet member.
+function mine_flow.digGuarded(dir)
+    local inspect, dig = GUARD_INSPECT[dir], GUARD_DIG[dir]
+    if not inspect or not dig then return false, "no_dig_for_dir" end
+    local seen, block = inspect()
+    if seen and type(block) == "table" and isFleetTurtle(block.name) then
+        return false, "would_dig_turtle"
+    end
+    return dig()
+end
+
 -- One block ahead of the miner -- where turtle.place() will put the loader.
 local function aheadBlock(p)
     local dx, dz = 0, 0
@@ -575,6 +631,12 @@ function mine_flow.retrieveLoader()
         return false, "retrieval_equipment_invalid"
     end
 
+    -- The ONE dig in this codebase that must NOT go through digGuarded: the
+    -- block in front is our chunk loader, which IS a turtle, so the guard would
+    -- refuse every retrieval and strand a loader on every job. What makes this
+    -- safe instead is the check above -- position AND identity against the
+    -- recorded placement -- which is strictly stronger than "is it a turtle".
+    -- Do not "fix" this to match the others.
     local dug = turtle.dig()
     if not dug then
         -- Put comms back before reporting the failure. Chunky stays on
@@ -866,20 +928,21 @@ end
 --
 -- Faces are resolved through closures rather than captured up front so a test
 -- can replace turtle.dropDown after this module loads and still be seen.
+-- No `dig` field, deliberately: every clearing dig here goes through
+-- mine_flow.digGuarded(f.name), and `name` is exactly its direction key. An
+-- unguarded dig closure sitting in this table is how the guard gets bypassed
+-- again by someone reaching for the obvious-looking field.
 local BANK_FACES = {
     { name = "down",
       detect = function() return turtle.detectDown() end,
-      dig    = function() return turtle.digDown()    end,
       place  = function() return turtle.placeDown()  end,
       drop   = function() return turtle.dropDown()   end },
     { name = "forward",
       detect = function() return turtle.detect()     end,
-      dig    = function() return turtle.dig()        end,
       place  = function() return turtle.place()      end,
       drop   = function() return turtle.drop()       end },
     { name = "up",
       detect = function() return turtle.detectUp()   end,
-      dig    = function() return turtle.digUp()      end,
       place  = function() return turtle.placeUp()    end,
       drop   = function() return turtle.dropUp()     end },
 }
@@ -906,7 +969,18 @@ function mine_flow.bankPayload(opts)
             -- refuse, which is the whole reason "down" cannot be the only face:
             -- the deepest scan level bottoms out in the bedrock layer, where
             -- digDown() fails every time.
-            f.dig()
+            --
+            -- Never clear it by destroying a fleet member. This runs at the end
+            -- of every full job and tries all three faces, so unguarded it was
+            -- three chances to mine a neighbour per trip. Refusing leaves the
+            -- face occupied, so the place() below is skipped and the loop moves
+            -- to the next face on its own; if all three are turtles we fall out
+            -- at chest_not_placed with the payload still aboard. A miner flying
+            -- home loaded is a bad trip. A mined turtle is gone.
+            local dug, why = mine_flow.digGuarded(f.name)
+            if not dug and why == "would_dig_turtle" then
+                log("Bank: a turtle is " .. f.name .. " — refusing to dig it")
+            end
             if opts.afterDig then opts.afterDig() end
             turtle.select(chestSlot)
         end
@@ -930,7 +1004,7 @@ function mine_flow.bankPayload(opts)
     end
 
     turtle.select(chestSlot)
-    face.dig()
+    mine_flow.digGuarded(face.name)
     return true, face.name
 end
 

@@ -198,6 +198,123 @@ end
 
 return {
 
+    -- Never dig a turtle: the MINING half of the guard ------------------------
+    --
+    -- 2026-08-22, node_139 docked carrying node_119 -- a MINER -- as an item.
+    -- The fix (30b330f) added digGuarded to turtle_base.lua and touched no
+    -- other file, so it covered NAVIGATION only: moving through terrain, the
+    -- bypass, tunnelling out when surrounded. Every dig a miner performs as a
+    -- miner stayed blind -- clearing a square for the geo scanner, for the fuel
+    -- chest, for the ore chest. It happened again on 2026-09-06.
+    --
+    -- Hardware loss is not recoverable the way terrain loss is: the victim
+    -- takes its computer ID, its files and its loader_state with it, and its
+    -- placed loader is orphaned permanently with nothing left that knows to
+    -- reclaim it. It is also silent -- the registry just stops hearing from it.
+    ["digGuarded refuses to dig a fleet turtle"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        c.world[below] = "computercraft:turtle_advanced"
+
+        local dug, why = flow.digGuarded("down")
+
+        assert_eq(dug, false, "a turtle must never be dug")
+        assert_eq(why, "would_dig_turtle", "and the refusal must be nameable")
+        assert_eq(c.world[below], "computercraft:turtle_advanced",
+            "the fleet member is still standing there")
+    end,
+
+    -- The refusal has to be distinguishable from "I could not", because the two
+    -- deserve opposite responses: a turtle is a reason to leave the block
+    -- alone, bedrock is a reason to try another face.
+    ["digGuarded digs ordinary terrain"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        c.world[below] = "minecraft:stone"
+
+        local dug = flow.digGuarded("down")
+
+        assert_eq(dug, true, "terrain is still diggable")
+        assert_eq(c.world[below], nil, "and really gone")
+    end,
+
+    -- turtle_base's predicate is a bare name:find("turtle"), which also matches
+    -- minecraft:turtle_egg -- a real block, and one that never moves. Refusing
+    -- it is not a safe default here: the callers below respond to a refusal by
+    -- skipping the square, so an egg under a scan level would silently cost the
+    -- level. (In turtle_base the same match is worse: tryVertical WAITS on a
+    -- would_dig_turtle, and an egg never leaves. Reported to W3 separately.)
+    ["digGuarded does not confuse a vanilla turtle egg with a fleet turtle"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        c.world[below] = "minecraft:turtle_egg"
+
+        local dug = flow.digGuarded("down")
+
+        assert_eq(dug, true, "a vanilla egg is terrain, not a fleet member")
+        assert_eq(c.world[below], nil, "so it clears normally")
+    end,
+
+    -- bankPayload clears whichever face it wants to put the ore chest on, and
+    -- it tries all three. At the end of a full job that is three chances to
+    -- destroy a neighbour. A face holding a turtle must simply be skipped --
+    -- the existing detect/place sequence then moves on by itself.
+    ["bankPayload skips a face holding a turtle and banks on another"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        c.world[below] = "computercraft:turtle_advanced"
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+
+        local ok, face = flow.bankPayload({
+            chestSlot  = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+        })
+
+        assert_eq(ok, true, "the bank still succeeds on a free face")
+        assert_eq(face ~= "down", true, "but never by digging the turtle")
+        assert_eq(c.world[below], "computercraft:turtle_advanced",
+            "the fleet member below is untouched")
+        assert_eq(#banked, 1, "the payload still reaches the chest")
+        assert_eq(#ground, 0, "and none of it reaches the ground")
+    end,
+
+    -- Boxed in by fleet members on every side. Keeping the payload aboard is
+    -- the correct outcome and it already is one: refusing to dig leaves the
+    -- face occupied, so place() is never reached and chest_not_placed falls out
+    -- of the existing logic. Losing a trip is recoverable. A turtle is not.
+    ["bankPayload drops NOTHING when every face is a turtle"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        local faces = {
+            wkey(c.pos.x, c.pos.y - 1, c.pos.z),
+            wkey(c.pos.x, c.pos.y + 1, c.pos.z),
+            wkey(c.pos.x, c.pos.y, c.pos.z - 1),
+        }
+        for _, k in ipairs(faces) do c.world[k] = "computercraft:turtle_advanced" end
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+
+        local ok, why = flow.bankPayload({
+            chestSlot  = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+        })
+
+        assert_eq(ok, false, "it must report the failure, not dig its way out")
+        assert_eq(why, "chest_not_placed", "and say why")
+        for _, k in ipairs(faces) do
+            assert_eq(c.world[k], "computercraft:turtle_advanced",
+                "every neighbour survives")
+        end
+        assert_eq(#banked, 0, "nothing banked")
+        assert_eq(#ground, 0, "and NOT ONE ITEM on the ground")
+        assert_eq(c.inv[5] ~= nil and c.inv[5].count, 40, "the payload stays aboard")
+    end,
+
     -- Scan filtering ---------------------------------------------------------
     -- The scanner reads 33 blocks wide; a lease is 32, half-open so leases tile.
     -- So the sx+16 and sz+16 planes are scanned but unreachable -- 6.0% of the

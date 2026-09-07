@@ -620,7 +620,20 @@ local function refuelFromEC(jobId)
     local ecName = protectedSlotNames[S_FUEL_EC]
     if ecItem and ecName and ecItem.name == ecName then
         turtle.select(S_FUEL_EC)
-        if turtle.detectDown() then turtle.digDown() end
+        -- Never clear this square by destroying a fleet member. A field refuel
+        -- happens wherever the miner happens to be, including squares another
+        -- turtle is standing on. Going without the refuel is survivable and
+        -- reported; mining a neighbour is neither.
+        if turtle.detectDown() then
+            local dug, why = mine_flow.digGuarded("down")
+            if not dug and why == "would_dig_turtle" then
+                print("[FUEL] A turtle is directly below — refusing to dig it, "
+                    .. "so the fuel chest cannot go here")
+                base.sendProgress("refuel_blocked_by_turtle, fuel="
+                    .. turtle.getFuelLevel())
+                return
+            end
+        end
         if turtle.placeDown() then
             -- Suck only as much as slot 14 can hold to prevent overflow into slot 15.
             turtle.select(S_COAL)
@@ -642,7 +655,11 @@ local function refuelFromEC(jobId)
                 end
             end
             turtle.select(S_FUEL_EC)
-            turtle.digDown()
+            -- Guarded for the same reason as the clearing dig above. Nothing
+            -- but our own chest should be here, so a refusal means something is
+            -- badly wrong -- and the check below already handles the chest not
+            -- coming back.
+            mine_flow.digGuarded("down")
             -- Safety: if EC landed in a mining slot despite precautions, rescue it now.
             local recovered = turtle.getItemDetail(S_FUEL_EC)
             if not recovered or recovered.name ~= ecName then
@@ -1116,7 +1133,23 @@ local function scanSector()
     end
 
     turtle.select(S_SCANNER)
-    if turtle.detectDown() then turtle.digDown() end
+    -- The rule stated 36 lines up -- "identity check before digging, never
+    -- turtle.detectDown() alone" -- was written for the recovery path and not
+    -- applied here, to the dig that actually runs on every scan of every level
+    -- of every job. This is the site with the most chances to destroy a fleet
+    -- member, so it gets the strictest response: give up the level entirely and
+    -- say so. Losing a scan level costs some ore. Mining a miner costs a miner.
+    if turtle.detectDown() then
+        local dug, why = mine_flow.digGuarded("down")
+        if not dug and why == "would_dig_turtle" then
+            local pb = base.getPos()
+            print("[SCAN] A turtle is directly below — refusing to dig it, "
+                .. "skipping this scan level")
+            base.sendProgress(string.format(
+                "scan_blocked_by_turtle at %d,%d,%d", pb.x, pb.y, pb.z))
+            return {}
+        end
+    end
 
     -- Record BEFORE placing, exactly as loader_state does: a crash between the
     -- write and the place leaves a false positive that recovery resolves
@@ -1141,7 +1174,8 @@ local function scanSector()
     if not sc then
         print("[SCAN] ERROR: peripheral.wrap('bottom') returned nil")
         turtle.select(S_SCANNER)
-        if turtle.digDown() then scannerClear() end
+        -- A refusal keeps the record, which is what boot recovery needs.
+        if mine_flow.digGuarded("down") then scannerClear() end
         return {}
     end
     print("[SCAN] Scanning radius " .. SCAN_RADIUS .. "...")
@@ -1151,7 +1185,7 @@ local function scanSector()
     -- throw for reasons outside this program.
     local scanOk, raw = pcall(sc.scan, SCAN_RADIUS)
     turtle.select(S_SCANNER)
-    if turtle.digDown() then
+    if mine_flow.digGuarded("down") then
         scannerClear()
     else
         print("[SCAN] WARNING: scanner left placed — record kept for boot recovery")

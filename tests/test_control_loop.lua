@@ -708,11 +708,53 @@ function(assert_eq)
         "a failed record write must stop the placement")
 
     -- The scan must not be able to skip the recovery by throwing.
+    --
+    -- The recovery dig is spelled mine_flow.digGuarded("down"), not
+    -- turtle.digDown(): every dig in scanSector goes through the guard as of
+    -- 1.9.84. Pinning the guarded spelling here means reverting to a raw dig
+    -- fails this test as well as the dedicated ones.
     local pcallAt = src:find("pcall%(sc%.scan, SCAN_RADIUS%)", scanAt)
     assert_eq(pcallAt ~= nil, true, "sc.scan must be pcall'd so the dig still runs")
-    local digAt = src:find("turtle%.digDown%(%)", pcallAt)
+    local digAt = src:find('mine_flow%.digGuarded%("down"%)', pcallAt)
     assert_eq(digAt ~= nil and digAt > pcallAt, true,
         "the recovery dig must follow the guarded scan")
+end
+
+-- Never dig a turtle, the mining half -----------------------------------------
+--
+-- turtle_base's digGuarded (30b330f, after node_139 docked carrying node_119 as
+-- an item) covered NAVIGATION only -- that commit touched one file. Every dig
+-- ore_turtle performs as a miner stayed blind, and on 2026-09-06 it destroyed
+-- fleet members again.
+--
+-- SOURCE-ONLY because ore_turtle.lua self-executes and cannot be required
+-- headlessly; the guard's BEHAVIOUR is covered in tests/test_mine_flow.lua.
+-- Comment lines are stripped first so the many comments that legitimately
+-- discuss turtle.dig() cannot mask a real one.
+suite["no dig in ore_turtle is unguarded (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local code = {}
+    for line in src:gmatch("[^\n]*") do
+        if not line:match("^%s*%-%-") then code[#code + 1] = line end
+    end
+    code = table.concat(code, "\n")
+
+    -- The one permitted exception: the scanner boot recovery, which has already
+    -- proved by name that the block below IS the geo scanner. That check is
+    -- strictly stronger than "is it a turtle", so it does not need the guard.
+    local recoveryAt = code:find("block%.name == SCANNER_NAME")
+    assert_eq(recoveryAt ~= nil, true, "the identity-checked recovery moved or vanished")
+
+    local n = 0
+    for at in code:gmatch("()turtle%.dig") do
+        -- Allow only the dig inside the identity-checked recovery branch.
+        if at < recoveryAt or at > recoveryAt + 400 then n = n + 1 end
+    end
+    assert_eq(n, 0, "every other dig must go through mine_flow.digGuarded")
 end
 
 suite["scanner recovery runs at boot and verifies identity (SOURCE-ONLY, weaker)"] =
