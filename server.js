@@ -343,7 +343,22 @@ function logFormatLine(source, entry) {
     // Newlines collapsed: one entry must be exactly one line, or grep reports a
     // match at a line that does not show the node it came from.
     const msg = String(entry.msg ?? '').replace(/\r?\n/g, ' ');
-    return `${ts}  ${source.padEnd(9)} ${logLevelOf(entry).padEnd(6)} ${msg}\n`;
+    // The sequence is written into the line, joined to the source with '#'.
+    //
+    // Without it the file cannot be AUDITED. Delivery was provable live -- send
+    // a probe and watch it land -- but nobody could open yesterday's log and
+    // show that nothing went missing, which is the question you actually want to
+    // ask of a log. The number already existed; it was used for de-duplication
+    // and then thrown away at formatting time.
+    //
+    // Joined to the source rather than given its own column, so `grep node_118`
+    // and `grep WARN` both keep working unchanged.
+    //
+    // No bootId in the line: a reboot restarts seq at 1, so a DECREASE is a
+    // reboot and a FORWARD SKIP is a gap. That inference needs no extra field
+    // and no marker line.
+    const src = entry.seq != null ? `${source}#${entry.seq}` : source;
+    return `${ts}  ${src.padEnd(14)} ${logLevelOf(entry).padEnd(6)} ${msg}\n`;
 }
 
 function ingestLogs(body) {
@@ -693,7 +708,16 @@ const LOG_LINE_RE = /^(\S+)\s{2}(\S+)\s+(\S+)\s+([\s\S]*)$/;
 function parseLogLine(line) {
     const m = LOG_LINE_RE.exec(line);
     if (!m) return null;
-    return { ts: m[1], source: m[2], level: m[3], msg: m[4] };
+    // `source#seq` since 1.9.88; a bare source is a line written before that,
+    // or one from a node too old to send a sequence. Both must still parse -- a
+    // log you cannot read the old half of is not much of a log.
+    const hash = m[2].lastIndexOf('#');
+    const source = hash > 0 ? m[2].slice(0, hash) : m[2];
+    const seqRaw = hash > 0 ? Number(m[2].slice(hash + 1)) : NaN;
+    return {
+        ts: m[1], source, level: m[3], msg: m[4],
+        seq: Number.isFinite(seqRaw) ? seqRaw : null,
+    };
 }
 
 // Only ever a date this module could have produced. Without this, `date` is a
@@ -740,6 +764,8 @@ app.get('/logs/:date', (req, res) => {
     // can pass a bare date, a whole timestamp, or anything in between.
     const out = [];
     let matched = 0;
+    const audit = String(q.audit || '') === '1';
+    const seen = {};   // source -> continuity state, only for audit
 
     const rl = readline.createInterface({
         input: fs.createReadStream(file, { encoding: 'utf8' }),
@@ -756,6 +782,28 @@ app.get('/logs/:date', (req, res) => {
         if (until    && e.ts > until)                   return;
         if (contains && !e.msg.includes(contains))      return;
         matched++;
+        if (audit) {
+            // Only lines that carry a sequence can be audited. Lines written
+            // before 1.9.88, or by a node too old to send one, are counted but
+            // contribute no continuity claim -- saying "no gaps" about lines
+            // that cannot show one would be worse than saying nothing.
+            const st = seen[e.source] || (seen[e.source] =
+                { n: 0, unsequenced: 0, first: null, last: null,
+                  gaps: 0, missing: 0, reboots: 0, prev: null });
+            st.n++;
+            if (e.seq == null) { st.unsequenced++; return; }
+            if (st.first === null) st.first = e.seq;
+            st.last = e.seq;
+            if (st.prev !== null) {
+                if (e.seq < st.prev) st.reboots++;
+                else if (e.seq > st.prev + 1) {
+                    st.gaps++;
+                    st.missing += e.seq - st.prev - 1;
+                }
+            }
+            st.prev = e.seq;
+            return;   // audit counts lines; it does not collect them
+        }
         out.push(e);
         // Head stops early; tail keeps a sliding window so memory stays bounded
         // however large the file is.
@@ -764,6 +812,28 @@ app.get('/logs/:date', (req, res) => {
     });
 
     rl.on('close', () => {
+        if (audit) {
+            // Per-source continuity. Computed HERE rather than by the caller,
+            // because the alternative is pulling every line of a 10 MB file
+            // across the network to count them -- which is exactly the work
+            // this endpoint exists to avoid, and which this bridge does instead
+            // of answering the dispatch server.
+            const out2 = {};
+            for (const [src, st] of Object.entries(seen)) {
+                out2[src] = {
+                    lines: st.n,
+                    first: st.first,
+                    last: st.last,
+                    // A FORWARD skip is loss. A DECREASE is a reboot -- seq
+                    // restarts at 1 -- and is reported separately so it is never
+                    // mistaken for a gap.
+                    gaps: st.gaps,
+                    missing: st.missing,
+                    reboots: st.reboots,
+                };
+            }
+            return res.json({ file: path.basename(file), scanned: matched, sources: out2 });
+        }
         if (asText) {
             res.type('text/plain').send(out.map(e =>
                 `${e.ts}  ${e.source.padEnd(9)} ${e.level.padEnd(6)} ${e.msg}`).join('\n'));

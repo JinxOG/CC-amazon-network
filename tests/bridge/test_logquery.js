@@ -72,6 +72,81 @@ const M = loadPure(mutIdx > -1 ? process.argv[mutIdx + 1].split('|||') : null)(p
         JSON.stringify(M.parseLogLine('not a log line')));
 }
 
+// ─── Sequence numbers in the line (1.9.88) ──────────────────────────────────
+//
+// Delivery was already provable LIVE -- send a probe, watch it land. What was
+// impossible was opening yesterday's file and showing that nothing went
+// missing, which is the question you actually want to ask of a log.
+
+{
+    const line = '2026-09-08T16:07:21.791Z  server#27      INFO   Bridge cmd: LOGPROBE';
+    const e = M.parseLogLine(line);
+    check('a sequenced line splits source from seq',
+        e && e.source === 'server' && e.seq === 27, JSON.stringify(e));
+    check('and keeps the message intact',
+        e && e.msg === 'Bridge cmd: LOGPROBE', e && e.msg);
+}
+
+{
+    const line = '2026-09-08T00:43:11.002Z  node_118#1043  INFO   [node_118][INFO] phase: SCANNING';
+    const e = M.parseLogLine(line);
+    check('a node id survives the split unchanged',
+        e && e.source === 'node_118' && e.seq === 1043, JSON.stringify(e));
+}
+
+{
+    // Lines written before 1.9.88, and lines from any node too old to send a
+    // sequence, must still parse. A log you cannot read the older half of is
+    // not much of a log.
+    const line = '2026-09-08T08:02:49.923Z  server    WARN   Bridge push timed out (>4s)';
+    const e = M.parseLogLine(line);
+    check('an unsequenced line still parses, with seq null',
+        e && e.source === 'server' && e.seq === null, JSON.stringify(e));
+}
+
+{
+    // A '#' inside the MESSAGE must not be mistaken for the sequence join. The
+    // split is on the source token only, which never contains a space.
+    //
+    // NOTE, so a future mutation run is not misread: the parser uses
+    // lastIndexOf rather than indexOf, and NO test distinguishes them. Source
+    // names are 'server' and 'node_NNN' -- none contains a '#' -- so the two are
+    // identical in every reachable case. That choice is defensive, not
+    // load-bearing, and its mutant surviving is the correct result rather than a
+    // hole in the suite.
+    const line = '2026-09-08T16:07:21.791Z  server#27      INFO   chest #4 is full';
+    const e = M.parseLogLine(line);
+    check('a hash in the message is not treated as a sequence',
+        e && e.seq === 27 && e.msg === 'chest #4 is full', JSON.stringify(e));
+}
+
+// SOURCE-ONLY, weaker: the writer and the auditor both live outside this
+// extracted block -- the writer in the fleetlog block, the auditor inside the
+// route handler.
+{
+    const src = fs.readFileSync(SERVER, 'utf8');
+
+    check('the writer actually puts the sequence in the line',
+        src.includes('entry.seq != null ? `${source}#${entry.seq}` : source'),
+        'without this the parser above has nothing to parse');
+
+    const start = src.indexOf(START);
+    const route = src.slice(start, src.indexOf("app.get('/state'", start));
+
+    // The distinction that makes the audit trustworthy rather than alarming: a
+    // reboot restarts seq at 1, and counting that as 1042 missing lines would
+    // report a catastrophe every time a turtle reboots.
+    check('the audit counts a DECREASE as a reboot, not as a gap',
+        route.includes('if (e.seq < st.prev) st.reboots++;'));
+    check('and only counts a FORWARD skip as missing lines',
+        route.includes('st.missing += e.seq - st.prev - 1;'));
+    check('unsequenced lines make no continuity claim',
+        route.includes('if (e.seq == null) { st.unsequenced++; return; }'),
+        'claiming "no gaps" about lines that cannot show one is worse than silence');
+    check('the audit is computed on the bridge, not by shipping every line',
+        route.includes('return res.json({ file: path.basename(file), scanned: matched'));
+}
+
 // ─── The path guard, which is the one with teeth ────────────────────────────
 
 {
