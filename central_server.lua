@@ -100,6 +100,11 @@ local state = {
     -- only does once entries carry seq -- so an old bridge and a new server
     -- degrade to the fixed window rather than to nothing.
     logAck          = {},
+    -- The bridge's boot identity, so a bridge restart can be told from a
+    -- quiet one. Its display buffers are in memory and die with it, but
+    -- logAck lives HERE and survives -- so without this the server keeps
+    -- believing it already delivered lines the bridge no longer has.
+    bridgeBootId    = nil,
     recentFailures  = {},   -- bounded ring of terminal job outcomes — see recordFailure
 }
 
@@ -2276,6 +2281,29 @@ local LOG_PUSH_MAX = 40
 -- an entry with no seq can never be acknowledged -- so treating "no seq" as
 -- "unacknowledged" would re-send that node's whole window on every push, for
 -- ever. The bridge's own (source, ts, msg) dedupe already covers those.
+-- A bridge that has restarted has lost every display buffer it held, but this
+-- server's logAck survived in memory -- so it would keep sending only what is
+-- new and the dashboard's log panel would stay empty until something happened.
+-- The file on disk is unaffected either way; this is about the live view.
+--
+-- Clearing the acks re-sends the rings, drained at LOG_PUSH_MAX per push, and
+-- the bridge dedupes on (source, bootId, seq) so nothing is written twice.
+--
+-- Only a CHANGE counts, and only after we have seen one: a first sighting is a
+-- server that just booted alongside a bridge that did not, and clearing acks we
+-- never set would be a no-op with a misleading log line attached.
+local function noteBridgeBoot(id)
+    if type(id) ~= "number" then return false end
+    local prev = state.bridgeBootId
+    state.bridgeBootId = id
+    if prev == nil or prev == id then return false end
+    state.logAck = {}
+    logWarn(string.format(
+        "Bridge restarted (boot %d -> %d) — replaying log rings so its panel "
+        .. "is not blank until the next thing happens", prev, id))
+    return true
+end
+
 local function logSelect(ring, source, windowN)
     local newest = ring[#ring]
     if not newest then return {} end
@@ -4225,6 +4253,10 @@ function server.run()
                             -- Absent entirely until the bridge has seen a seq,
                             -- so an old bridge simply never advances the ack and
                             -- every source stays on the fixed window.
+                            -- Before logAck, so a restart clears the map and
+                            -- this push's ack does not immediately re-fill it
+                            -- with the acks of a bridge that no longer exists.
+                            pcall(noteBridgeBoot, tonumber(data.bridgeBootId))
                             if type(data.logAck) == "table" then
                                 for source, a in pairs(data.logAck) do
                                     if type(a) == "table" and type(a.seq) == "number" then
@@ -4564,6 +4596,7 @@ if _G.__CC_SERVER_TEST then
         -- here: the cap that keeps the payload bounded, and the fixed-window
         -- fallback that keeps a mixed-version fleet from re-sending for ever.
         logSelect = logSelect,
+        noteBridgeBoot = noteBridgeBoot,
     }
     return server
 end

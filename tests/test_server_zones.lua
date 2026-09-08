@@ -691,6 +691,58 @@ return {
             .. "the next push 3 seconds later")
     end,
 
+    -- A bridge restart must replay, or its log panel stays blank.
+    --
+    -- The bridge's display buffers die with the process; this server's logAck
+    -- does not. Without noticing the restart, the server keeps sending only what
+    -- is new and the panel shows nothing until the fleet next speaks -- which on
+    -- an idle fleet is a long time. Observed 2026-09-08.
+    ["a restarted bridge gets the rings replayed"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+
+        -- First sighting: a server that booted alongside a bridge that did not.
+        -- Clearing acks we never set would be a no-op with a misleading warning.
+        local firstSighting = T.noteBridgeBoot(1000)
+        T.state.logAck["server"]  = { bootId = 5, seq = 42 }
+        T.state.logAck["node_1"]  = { bootId = 5, seq = 7 }
+
+        local sameBoot = T.noteBridgeBoot(1000)
+        local keptAcks = T.state.logAck["server"] ~= nil
+
+        local restarted = T.noteBridgeBoot(2000)
+        local clearedAcks = next(T.state.logAck) == nil
+        restore()
+
+        assert_eq(firstSighting, false,
+            "a first sighting is not a restart — there is nothing to replay")
+        assert_eq(sameBoot, false, "an unchanged boot id is a quiet bridge, not a new one")
+        assert_eq(keptAcks, true,
+            "and must not throw away acks that are still good — that would "
+            .. "replay the rings on every single push")
+        assert_eq(restarted, true, "a changed boot id is a restart")
+        assert_eq(clearedAcks, true,
+            "which must clear every ack, so the rings are re-sent and the "
+            .. "bridge's panel refills instead of waiting for new activity")
+    end,
+
+    ["a malformed bridge boot id is ignored rather than trusted"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        T.noteBridgeBoot(1000)
+        T.state.logAck["server"] = { bootId = 5, seq = 42 }
+        -- An old bridge sends no bridgeBootId at all, and tonumber(nil) is nil.
+        -- Treating that as a change would replay the rings on every push for
+        -- ever -- the exact payload cost the delta exists to remove.
+        local a = T.noteBridgeBoot(nil)
+        local b = T.noteBridgeBoot("not a number")
+        local stillAcked = T.state.logAck["server"] ~= nil
+        restore()
+        assert_eq(a, false, "a missing boot id is not a restart")
+        assert_eq(b, false, "nor is a non-numeric one")
+        assert_eq(stillAcked, true,
+            "an old bridge that never sends one must not trigger a replay every "
+            .. "3 seconds for ever")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)

@@ -6,6 +6,7 @@ const http      = require('http');
 const fs        = require('fs');
 const crypto    = require('crypto');
 const { exec }  = require('child_process');
+const readline  = require('readline');
 
 // Minimal .env loader — avoids pulling in dotenv for three values.
 (function loadEnv() {
@@ -218,6 +219,17 @@ const EXPLICITLY_MERGED = new Set([
     'turtles', 'jobs', 'version', 'storage', 'storageTs', 'mineZones', 'serverLog',
     'turtleLogs',
 ]);
+
+// This bridge's boot identity, sent with every /update reply.
+//
+// The display buffers below live in memory and die with the process, but the CC
+// server's logAck survives in ITS memory -- so after a bridge restart it would
+// keep sending only what is new, and the panel would stay blank until the fleet
+// happened to say something. Seeing this change is how it knows to replay.
+//
+// A timestamp rather than a counter, for the same reason the log bootIds are:
+// comparable, no state on disk, and two boots cannot collide.
+const BRIDGE_BOOT_ID = Date.now();
 
 let pendingCommands = [];   // commands queued by dashboard, picked up by CC on next poll
 let markerExists    = {};   // track which turtle markers already exist on Dynmap
@@ -651,12 +663,125 @@ app.post('/update', async (req, res) => {
     // list the CC server iterates and dispatches, so a non-command entry there
     // would have to be filtered by every consumer. Sent only once W3's Phase 2
     // starts attaching `seq`, so today it is absent rather than an empty object.
-    const reply = { ok: true, commands: pendingCommands.splice(0) };
+    const reply = { ok: true, commands: pendingCommands.splice(0),
+                    bridgeBootId: BRIDGE_BOOT_ID };
     if (Object.keys(logSeqHigh).length > 0) reply.logAck = logSeqHigh;
     res.json(reply);
 });
 
 // Dashboard reads current state
+// ─── Log query API ───────────────────────────────────────────────────────────
+//
+// The file is the record, but an agent diagnosing something cannot read a file
+// on this host -- it can only speak HTTP to this bridge, which is how every
+// other question about the fleet already gets answered.
+//
+// STREAMED, NEVER READ WHOLE. A day's file is 129 KB today and the measured
+// volume is ~10 MB/day with two miners working. readFileSync on that would block
+// the event loop, and this process also answers POST /update every 3 seconds --
+// time spent blocked there is time the CC server waits, and a CC server waiting
+// is a CC server deaf to its own radio. That is the mechanism behind every
+// dropped heartbeat this system has had. So: readline over a stream, filtering
+// as it goes, holding only the result window in memory.
+
+const LOG_QUERY_DEFAULT = 500;
+const LOG_QUERY_MAX     = 5000;
+
+// "2026-09-08T08:02:49.923Z  server    WARN   message text"
+const LOG_LINE_RE = /^(\S+)\s{2}(\S+)\s+(\S+)\s+([\s\S]*)$/;
+
+function parseLogLine(line) {
+    const m = LOG_LINE_RE.exec(line);
+    if (!m) return null;
+    return { ts: m[1], source: m[2], level: m[3], msg: m[4] };
+}
+
+// Only ever a date this module could have produced. Without this, `date` is a
+// path fragment and ../../etc/passwd is a valid one.
+function logFileFor(date) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    return path.join(LOG_DIR, `${date}.txt`);
+}
+
+app.get('/logs', (req, res) => {
+    fs.readdir(LOG_DIR, (err, files) => {
+        if (err) return res.status(500).json({ error: 'cannot read log directory' });
+        const days = files
+            .filter(f => /^\d{4}-\d{2}-\d{2}\.txt$/.test(f))
+            .sort()
+            .map(f => {
+                let size = null;
+                try { size = fs.statSync(path.join(LOG_DIR, f)).size; } catch { /* raced a prune */ }
+                return { date: f.slice(0, 10), bytes: size };
+            });
+        res.json({ dir: LOG_DIR, retentionDays: LOG_RETENTION_DAYS, days });
+    });
+});
+
+app.get('/logs/:date', (req, res) => {
+    const file = logFileFor(req.params.date);
+    if (!file) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'no log for that date' });
+
+    const q        = req.query;
+    const source   = q.node   ? String(q.node)               : null;
+    const level    = q.level  ? String(q.level).toUpperCase(): null;
+    const contains = q.contains ? String(q.contains)         : null;
+    const since    = q.since  ? String(q.since)              : null;
+    const until    = q.until  ? String(q.until)              : null;
+    const head     = String(q.order || 'tail') === 'head';
+    const asText   = String(q.format || 'json') === 'text';
+    let limit = parseInt(q.limit, 10);
+    if (!Number.isFinite(limit) || limit <= 0) limit = LOG_QUERY_DEFAULT;
+    limit = Math.min(limit, LOG_QUERY_MAX);
+
+    // Timestamps are ISO-8601 in the file, which sorts lexicographically in
+    // chronological order -- so a string compare IS a time compare, and callers
+    // can pass a bare date, a whole timestamp, or anything in between.
+    const out = [];
+    let matched = 0;
+
+    const rl = readline.createInterface({
+        input: fs.createReadStream(file, { encoding: 'utf8' }),
+        crlfDelay: Infinity,
+    });
+
+    rl.on('line', (line) => {
+        if (!line) return;
+        const e = parseLogLine(line);
+        if (!e) return;
+        if (source   && e.source !== source)            return;
+        if (level    && e.level  !== level)             return;
+        if (since    && e.ts < since)                   return;
+        if (until    && e.ts > until)                   return;
+        if (contains && !e.msg.includes(contains))      return;
+        matched++;
+        out.push(e);
+        // Head stops early; tail keeps a sliding window so memory stays bounded
+        // however large the file is.
+        if (head && out.length >= limit) rl.close();
+        else if (!head && out.length > limit) out.shift();
+    });
+
+    rl.on('close', () => {
+        if (asText) {
+            res.type('text/plain').send(out.map(e =>
+                `${e.ts}  ${e.source.padEnd(9)} ${e.level.padEnd(6)} ${e.msg}`).join('\n'));
+        } else {
+            res.json({
+                file: path.basename(file),
+                matched,                       // before the limit was applied
+                returned: out.length,
+                truncated: matched > out.length,
+                order: head ? 'head' : 'tail',
+                lines: out,
+            });
+        }
+    });
+
+    rl.on('error', () => res.status(500).json({ error: 'cannot read log file' }));
+});
+
 app.get('/state', (req, res) => {
     res.json({ ...state, serverTime: Date.now() });
 });
