@@ -187,7 +187,8 @@ let state = {
     storage:   [],   // RS storage snapshot [{name, displayName, amount, craftable}]
     storageTs: 0,    // unix ms when CC last successfully polled rsBridge.listItems()
     mineZones: {},   // { [jobId]: { bounds, total, done, pct, eta, oreFound, oreMined } }
-    serverLog: [],   // last 100 log lines from CC server: [{ ts, level, msg }]
+    serverLog: [],   // rolling display buffer, appended from each push's delta
+    turtleLogs: {},  // [nodeId] = rolling display buffer, same shape
     players:   [],   // online players from Dynmap: [{ name, x, y, z, health, world }]
     locations,       // named delivery locations { [name]: { name, x, y, z } }
     updatedAt: null,
@@ -215,6 +216,7 @@ const BRIDGE_OWNED = new Set(['locations', 'players', 'updatedAt']);
 // Listed so the generic merge skips them rather than assigning twice.
 const EXPLICITLY_MERGED = new Set([
     'turtles', 'jobs', 'version', 'storage', 'storageTs', 'mineZones', 'serverLog',
+    'turtleLogs',
 ]);
 
 let pendingCommands = [];   // commands queued by dashboard, picked up by CC on next poll
@@ -234,6 +236,10 @@ let markerExists    = {};   // track which turtle markers already exist on Dynma
 
 const LOG_DIR             = path.join(__dirname, 'logs');
 const LOG_RETENTION_DAYS  = 14;
+// Display buffers for /state. Separate from the file on disk: the file is the
+// record, these are what the dashboard's log panel renders.
+const LOG_DISPLAY_MAX     = 200;    // server lines kept for the panel
+const TURTLE_DISPLAY_MAX  = 30;     // per node
 const LOG_DEDUPE_MAX      = 5000;   // ~75 min at two-miner volume. Only needs to
                                     // outlast the re-send window, which is seconds.
 const LOG_PRUNE_INTERVAL  = 6 * 60 * 60 * 1000;
@@ -589,7 +595,33 @@ app.post('/update', async (req, res) => {
     if (Array.isArray(storage))      state.storage   = storage;
     if (typeof storageTs === 'number' && storageTs > 0) state.storageTs = storageTs;
     if (mineZones)                   state.mineZones = mineZones;
-    if (Array.isArray(req.body?.serverLog)) state.serverLog = req.body.serverLog;
+    // ACCUMULATE, do not replace. W3's Phase 2 (1.9.85) changed what these two
+    // fields mean: they were "the last N lines", a window safe to overwrite with,
+    // and they are now "what the bridge has not acknowledged writing" -- a delta.
+    // Once the ack loop closes that is normally empty, so replacing the display
+    // copy with it blanked the dashboard's log panel: observed live at 1.9.85
+    // with serverLog down to one entry and turtleLogs to none at all.
+    //
+    // The file on disk is unaffected either way -- ingestLogs() has already taken
+    // these lines and it is the durable record. These buffers exist only so
+    // /state can still render a recent view without reading the file back.
+    //
+    // A re-sent delta (an ack that did not reach the server) can duplicate a line
+    // here. That is cosmetic in a scrolling panel and not worth carrying seq
+    // state for; the file's own dedupe is where correctness lives.
+    if (Array.isArray(req.body?.serverLog) && req.body.serverLog.length) {
+        state.serverLog = state.serverLog
+            .concat(req.body.serverLog)
+            .slice(-LOG_DISPLAY_MAX);
+    }
+    if (req.body?.turtleLogs && typeof req.body.turtleLogs === 'object') {
+        if (!state.turtleLogs || typeof state.turtleLogs !== 'object') state.turtleLogs = {};
+        for (const [id, entries] of Object.entries(req.body.turtleLogs)) {
+            if (!Array.isArray(entries) || entries.length === 0) continue;
+            const cur = Array.isArray(state.turtleLogs[id]) ? state.turtleLogs[id] : [];
+            state.turtleLogs[id] = cur.concat(entries).slice(-TURTLE_DISPLAY_MAX);
+        }
+    }
 
     // Everything else the server sends passes straight through.
     //
