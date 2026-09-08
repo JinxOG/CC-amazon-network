@@ -58,8 +58,18 @@ local _self = {
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
 
+-- Set for the duration of one print() so the queue below can record the level
+-- as a real FIELD. Only log() knows it: by the time a line reaches print it is
+-- text, and the bridge would have to recover it with a regex. W5 keeps that
+-- regex for the bare print() calls elsewhere that never had a level to lose --
+-- but a parsed level and a known one should not be the same thing, or
+-- `grep WARN` quietly answers for only half the fleet.
+local _pendingLevel = nil
+
 local function log(level, msg)
+    _pendingLevel = level
     print(string.format("[%s][%s] %s", _self.id or "?", level, msg))
+    _pendingLevel = nil
 end
 local function logInfo(m)  log("INFO",  m) end
 local function logWarn(m)  log("WARN",  m) end
@@ -68,6 +78,23 @@ local function logError(m) log("ERROR", m) end
 -- ─── Remote Log Queue ────────────────────────────────────────────────────────
 -- Captures every print() call (from any module) and batches lines to the
 -- server every 15 seconds so turtle activity is visible without local console.
+-- Identity of this run, for the continuous fleet log (W5 Phase 2).
+--
+-- seq is monotonic per boot and never repeats, so the bridge knows exactly what
+-- it has already written and the server can send only what is NEW rather than a
+-- fixed window. That is what closes the burst gap: a turtle printing more than
+-- the window between pushes used to lose its oldest lines silently.
+--
+-- bootId is a wall-clock stamp taken ONCE, not a counter in a file. It has to be
+-- comparable -- higher is newer -- because a turtle's ring lives on the SERVER
+-- and survives the turtle rebooting, so one push window can straddle two boots.
+-- A persisted counter would survive a backwards clock step and would cost a disk
+-- write every boot; the server computer filled its 1 MB disk on 2026-09-06, and
+-- that trade is not worth making against a failure nobody has seen. Agreed with
+-- W5 in 2026-09-08-W3-to-W5-bootid-will-be-comparable.md.
+local _logBootId = os.epoch("utc")
+local _logSeq    = 0
+
 local _logQueue    = {}
 local LOG_QUEUE_MAX = 40
 do
@@ -76,7 +103,13 @@ do
         _rawPrint(...)
         local line = table.concat({...}, "\t")
         if #_logQueue >= LOG_QUEUE_MAX then table.remove(_logQueue, 1) end
-        table.insert(_logQueue, { ts = os.epoch("utc"), msg = line })
+        _logSeq = _logSeq + 1
+        table.insert(_logQueue, {
+            ts    = os.epoch("utc"),
+            msg   = line,
+            seq   = _logSeq,
+            level = _pendingLevel,
+        })
     end
 end
 
@@ -478,7 +511,9 @@ local function flushLogQueue()
     if not _self.modem or #_logQueue == 0 then return end
     local batch = _logQueue
     _logQueue = {}
-    comms.toServer(proto.MSG.TURTLE_LOG, { lines = batch })
+    -- bootId rides once per BATCH, not per line: it is the same 13 digits for
+    -- every entry and this payload crosses the radio every 15 seconds.
+    comms.toServer(proto.MSG.TURTLE_LOG, { lines = batch, bootId = _logBootId })
 end
 
 -- Throttled position push: sends current position as STATUS_UPDATE at most once

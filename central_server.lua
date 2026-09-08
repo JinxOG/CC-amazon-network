@@ -94,13 +94,26 @@ local state = {
     miningZones     = {},   -- [jobId] = { pending={sectors}, total=n, done=n, scanY=n }
     persistentZones = {},   -- [zoneKey] = { bounds, total, doneSectors, oreFound, oreMined, … }
     turtleLogs      = {},   -- [id] = ring buffer of {ts, msg} entries from TURTLE_LOG messages
+    -- Highest log entry the BRIDGE says it has durably written, per source:
+    -- [source] = { bootId = <number>, seq = <number> }. Drives the delta
+    -- push below. Empty until the bridge starts sending logAck, which it
+    -- only does once entries carry seq -- so an old bridge and a new server
+    -- degrade to the fixed window rather than to nothing.
+    logAck          = {},
     recentFailures  = {},   -- bounded ring of terminal job outcomes — see recordFailure
 }
 
 -- ─── Logging ─────────────────────────────────────────────────────────────────
 
+-- See turtle_base's note for why bootId is a wall-clock stamp rather than a
+-- persisted counter. Same reasoning, same disk.
+local _logBootId = os.epoch("utc")
+local _logSeq    = 0
+
 local function log(level, msg)
-    local entry = { ts = os.epoch("utc"), level = level, msg = msg }
+    _logSeq = _logSeq + 1
+    local entry = { ts = os.epoch("utc"), level = level, msg = msg,
+                    seq = _logSeq, bootId = _logBootId }
     table.insert(state.log, entry)
     if #state.log > CFG.LOG_MAX_LINES then table.remove(state.log, 1) end
     print(string.format("[%s] %s", level, msg))
@@ -2246,13 +2259,68 @@ local TURTLE_LOG_BUFFER = 60
 -- every push to display nothing.
 local TURTLE_LOG_PUSH_WINDOW = 10
 
+-- How many unacknowledged entries one source may put in a single push.
+--
+-- The cap is the whole safety property. buildBridgePayload is synchronous, so
+-- its duration is exactly how long the server is deaf to the radio -- that is
+-- what dropped heartbeats on 2026-08-30, when shipping 60 entries per node made
+-- the payload 96 KB of 190 KB. A delta is normally a handful of lines, but a
+-- backlog after a bridge outage is not, and without a bound the recovery push
+-- would be far worse than the outage.
+local LOG_PUSH_MAX = 40
+
+-- The entries a source has produced that the bridge has not confirmed writing.
+--
+-- Falls back to the old fixed window for any source whose entries carry no seq.
+-- That is not a nicety: the fleet runs mixed versions during every rollout, and
+-- an entry with no seq can never be acknowledged -- so treating "no seq" as
+-- "unacknowledged" would re-send that node's whole window on every push, for
+-- ever. The bridge's own (source, ts, msg) dedupe already covers those.
+local function logSelect(ring, source, windowN)
+    local newest = ring[#ring]
+    if not newest then return {} end
+
+    if newest.seq == nil then
+        local out = {}
+        for i = math.max(1, #ring - (windowN - 1)), #ring do out[#out + 1] = ring[i] end
+        return out
+    end
+
+    local ack = state.logAck[source]
+    local out = {}
+    for i = 1, #ring do
+        local e = ring[i]
+        local newer
+        if not ack or e.seq == nil then
+            newer = true
+        elseif (e.bootId or 0) ~= (ack.bootId or 0) then
+            -- Higher bootId is a later boot. Comparable by construction; see the
+            -- note on _logBootId.
+            newer = (e.bootId or 0) > (ack.bootId or 0)
+        else
+            newer = e.seq > (ack.seq or 0)
+        end
+        if newer then
+            out[#out + 1] = e
+            if #out >= LOG_PUSH_MAX then break end
+        end
+    end
+    return out
+end
+
 handlers[proto.MSG.TURTLE_LOG] = function(msg)
     local lines = msg.payload.lines
     if type(lines) ~= "table" then return end
     if not state.turtleLogs[msg.from] then state.turtleLogs[msg.from] = {} end
     local buf = state.turtleLogs[msg.from]
+    -- bootId arrives once per batch and is stamped onto each entry here, so a
+    -- ring that straddles a turtle reboot -- which it does, because this ring
+    -- lives on the server and outlives the turtle -- carries the identity of the
+    -- boot each line came from.
+    local bootId = msg.payload.bootId
     for _, entry in ipairs(lines) do
         if type(entry) == "table" and entry.msg then
+            entry.bootId = entry.bootId or bootId
             table.insert(buf, entry)
         end
     end
@@ -3779,10 +3847,10 @@ function server.run()
         end
         -- Include last 100 log lines so the bridge can expose them for monitoring.
         local logSlice = {}
-        local logStart = math.max(1, #state.log - 99)
-        for i = logStart, #state.log do
-            table.insert(logSlice, state.log[i])
-        end
+        -- Only what the bridge has not confirmed writing, capped. Was the last
+        -- 100 entries every push regardless: the same lines re-serialised every
+        -- 3 seconds to deliver nothing, which is time the server spends deaf.
+        logSlice = logSelect(state.log, "server", 100)
         -- Ship only a recent window of each turtle's log, not its whole buffer.
         --
         -- state.turtleLogs holds 60 entries per node and every one of them was
@@ -3802,10 +3870,10 @@ function server.run()
         -- retain and it is what a live diagnosis reads.
         local logsOut = {}
         for id, buf in pairs(state.turtleLogs) do
-            local out   = {}
-            local start = math.max(1, #buf - (TURTLE_LOG_PUSH_WINDOW - 1))
-            for i = start, #buf do out[#out + 1] = buf[i] end
-            logsOut[id] = out
+            local out = logSelect(buf, id, TURTLE_LOG_PUSH_WINDOW)
+            -- An acknowledged source contributes nothing rather than an empty
+            -- list, so an idle fleet costs no payload at all.
+            if #out > 0 then logsOut[id] = out end
         end
 
         -- Can we still hear the fleet? P7: a deaf server otherwise reports
@@ -4142,9 +4210,30 @@ function server.run()
                         logWarn("Bridge HTTP " .. tostring(code) .. ": " .. (body or ""):sub(1, 60))
                     else
                         local ok2, data = pcall(textutils.unserialiseJSON, body)
-                        if ok2 and type(data) == "table" and type(data.commands) == "table" then
-                            for _, cmd in ipairs(data.commands) do
-                                pcall(handleBridgeCommand, cmd)
+                        if ok2 and type(data) == "table" then
+                            if type(data.commands) == "table" then
+                                for _, cmd in ipairs(data.commands) do
+                                    pcall(handleBridgeCommand, cmd)
+                                end
+                            end
+                            -- logAck rides as a SIBLING of commands, not inside
+                            -- it: commands is a list this server iterates and
+                            -- dispatches, so a non-command entry there would
+                            -- have to be recognised and filtered by every
+                            -- consumer for ever. W5's call, and the right one.
+                            --
+                            -- Absent entirely until the bridge has seen a seq,
+                            -- so an old bridge simply never advances the ack and
+                            -- every source stays on the fixed window.
+                            if type(data.logAck) == "table" then
+                                for source, a in pairs(data.logAck) do
+                                    if type(a) == "table" and type(a.seq) == "number" then
+                                        state.logAck[source] = {
+                                            bootId = tonumber(a.bootId) or 0,
+                                            seq    = a.seq,
+                                        }
+                                    end
+                                end
                             end
                         end
                         if pendingUpdate then
@@ -4471,6 +4560,10 @@ if _G.__CC_SERVER_TEST then
         -- that decides whether a second full copy of every file survives.
         saveJobs = saveJobs,
         dropBackupAfterVerify = dropBackupAfterVerify,
+        -- The continuous-log delta selector. Every interesting property lives
+        -- here: the cap that keeps the payload bounded, and the fixed-window
+        -- fallback that keeps a mixed-version fleet from re-sending for ever.
+        logSelect = logSelect,
     }
     return server
 end

@@ -603,6 +603,94 @@ return {
             "the guard must come BEFORE the reboot, or it does nothing")
     end,
 
+    -- ─── Continuous fleet log: the delta push (Phase 2) ─────────────────────
+    --
+    -- The server used to ship a fixed window every 3s -- the last 100 of its own
+    -- lines and the last 10 per node -- whether or not the bridge had already
+    -- written them. Two costs: a turtle printing more than 10 lines between
+    -- pushes lost the rest before the bridge ever saw them, and the same lines
+    -- were re-serialised for ever. That serialisation time is exactly how long
+    -- the server is deaf to the radio.
+    ["an acknowledged source contributes nothing to the next push"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local ring = {
+            { ts = 1, msg = "a", seq = 1, bootId = 100 },
+            { ts = 2, msg = "b", seq = 2, bootId = 100 },
+            { ts = 3, msg = "c", seq = 3, bootId = 100 },
+        }
+        local before = #T.logSelect(ring, "node_1", 10)
+        T.state.logAck["node_1"] = { bootId = 100, seq = 3 }
+        local after = T.logSelect(ring, "node_1", 10)
+        T.state.logAck["node_1"] = { bootId = 100, seq = 1 }
+        local partial = T.logSelect(ring, "node_1", 10)
+        restore()
+
+        assert_eq(before, 3, "precondition: with no ack, everything is unsent")
+        assert_eq(#after, 0,
+            "a fully acknowledged source must cost nothing — an idle fleet "
+            .. "re-sending its window is the payload that made the server deaf")
+        assert_eq(#partial, 2, "only entries past the ack may be sent")
+        assert_eq(partial[1].msg, "b", "and they must start just after it")
+    end,
+
+    ["a later boot outranks a higher sequence from an earlier one"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        -- A turtle ring lives on the SERVER and survives the turtle rebooting,
+        -- so one window legitimately straddles two boots: high seq from the old
+        -- boot, then seq restarting at 1 under a new bootId. Comparing seq alone
+        -- would discard everything the turtle has said since it came back.
+        local ring = {
+            { ts = 1, msg = "old-900", seq = 900, bootId = 100 },
+            { ts = 2, msg = "new-1",   seq = 1,   bootId = 200 },
+            { ts = 3, msg = "new-2",   seq = 2,   bootId = 200 },
+        }
+        T.state.logAck["node_1"] = { bootId = 100, seq = 900 }
+        local out = T.logSelect(ring, "node_1", 10)
+        restore()
+
+        assert_eq(#out, 2, "the new boot's lines must survive a stale ack")
+        assert_eq(out[1].msg, "new-1", "and start at the new boot's first line")
+    end,
+
+    ["a source with no sequence numbers keeps the old fixed window"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        -- The fleet runs mixed versions during every rollout. An entry with no
+        -- seq can never be acknowledged, so treating "no seq" as "unsent" would
+        -- re-send that node's whole window on every push, for ever.
+        local ring = {}
+        for i = 1, 25 do ring[i] = { ts = i, msg = "line " .. i } end
+        local out = T.logSelect(ring, "node_old", 10)
+        T.state.logAck["node_old"] = { bootId = 0, seq = 999 }
+        local stillWindowed = T.logSelect(ring, "node_old", 10)
+        restore()
+
+        assert_eq(#out, 10, "a pre-1.9.84 source must keep the fixed window")
+        assert_eq(out[1].msg, "line 16", "and it must be the NEWEST 10, not the oldest")
+        assert_eq(#stillWindowed, 10,
+            "an ack it can never satisfy must not silence it either")
+    end,
+
+    ["a backlog is capped so recovery cannot cost more than the outage"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        -- The bridge being down for a while leaves everything unacknowledged.
+        -- Uncapped, the first push after it returns would be the whole ring --
+        -- and buildBridgePayload is synchronous, so that is dead air on the
+        -- radio at exactly the moment the fleet needs to be heard.
+        local ring = {}
+        for i = 1, 500 do ring[i] = { ts = i, msg = "line " .. i, seq = i, bootId = 100 } end
+        local out = T.logSelect(ring, "server", 100)
+        restore()
+
+        assert_eq(#out, 40, "a backlog must be capped at LOG_PUSH_MAX")
+        assert_eq(out[1].msg, "line 1",
+            "and drain oldest-first, so nothing is skipped — the rest follow on "
+            .. "the next push 3 seconds later")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)

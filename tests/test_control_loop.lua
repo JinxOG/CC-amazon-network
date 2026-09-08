@@ -239,6 +239,81 @@ function(assert_eq)
     end)
 end
 
+-- The wire format W5's bridge actually consumes (Phase 2).
+--
+-- Every line needs a monotonic seq so the bridge can tell what it has already
+-- written, and the server can send only what is new instead of a fixed window --
+-- which is what closes the gap where a turtle printing a burst between pushes
+-- lost its oldest lines silently.
+--
+-- The level must be a real FIELD, not something recovered from the message text
+-- with a regex. A level column populated for the server and blank for turtles
+-- means `grep WARN` returns server warnings only, and that reads as a quiet
+-- fleet rather than a broken filter.
+suite["turtle log lines carry a sequence and a level, with one bootId per batch"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local sent = {}
+        local printed = 0
+        local function emit(base)
+            base.getModem().transmit = function(_, _, payload)
+                sent[#sent + 1] = tostring(payload)
+            end
+            printed = printed + 1
+            -- A BARE print: no level, which is the honest majority of lines in
+            -- this codebase and the case W5's regex fallback exists for.
+            print("test line " .. printed)
+            -- And one that goes through log(), which is where a level exists to
+            -- be recorded. FORCE_REFUEL away from the dock is the cheapest
+            -- levelled line available from a real code path: the handler logs a
+            -- warning and does nothing else, so this cannot move the turtle or
+            -- touch its inventory.
+            base.routeMessage(proto.encode(proto.MSG.FORCE_REFUEL, "server",
+                base.getSelfId(), { reason = "test" }))
+        end
+
+        -- Six iterations at 5s of fake clock each: past the 15s log flush.
+        runControlLoop(repeated(serverBroadcastEvent, 6), emit)
+
+        local batch
+        for _, msgText in ipairs(sent) do
+            if msgText:find("TURTLE_LOG", 1, true) then batch = msgText end
+        end
+
+        assert_eq(batch ~= nil, true,
+            "precondition: a TURTLE_LOG batch must actually have been sent — "
+            .. "without one this test asserts nothing")
+        assert_eq(batch and batch:find("bootId", 1, true) ~= nil, true,
+            "the batch must carry a bootId, once, so the bridge can order two "
+            .. "boots of the same turtle inside one ring")
+        -- COUNTED, not merely present. Every proto.encode envelope carries its
+        -- own `seq` and its own `ts`, so a bare find("seq") matched the envelope
+        -- and passed with the field deleted from every log line -- a green test
+        -- proving nothing, caught only because the mutation run is mandatory.
+        --
+        -- Each log entry carries both ts and seq, and so does the envelope, so
+        -- the two counts must be equal. Dropping seq from the lines leaves ts
+        -- ahead by exactly the number of lines.
+        local function countOf(hay, needle)
+            local n, at = 0, hay:find(needle, 1, true)
+            while at do n = n + 1; at = hay:find(needle, at + 1, true) end
+            return n
+        end
+        local tsCount, seqCount = countOf(batch, "ts ="), countOf(batch, "seq =")
+        assert_eq(tsCount > 1, true,
+            "precondition: the batch must actually contain log lines, not just "
+            .. "an envelope — got " .. tsCount)
+        assert_eq(seqCount, tsCount,
+            "every line needs a sequence number or the bridge cannot dedupe on "
+            .. "anything better than the message text")
+        assert_eq(batch and batch:find("level", 1, true) ~= nil, true,
+            "and a level as a field on the lines that have one, not buried in "
+            .. "the message text for a regex to guess at")
+        assert_eq(batch and batch:find('level = "WARN"', 1, true) ~= nil, true,
+            "specifically the level log() knew, carried through verbatim")
+    end)
+end
+
 suite["a JOB_ASSIGN that arrived via the queue is still accepted"] =
 function(assert_eq)
     withFakeRuntime(function()
