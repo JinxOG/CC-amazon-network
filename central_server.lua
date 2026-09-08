@@ -76,7 +76,25 @@ local CFG = {
     -- on the assumption the call was expensive; the measurement says otherwise.
     -- If listItems ever gets slow (a much larger network), raise this rather than
     -- letting the poll eat the event loop the fleet dispatcher runs on.
-    STORAGE_INTERVAL  = 5,
+    -- 7, NOT 5, AND IT MUST NOT GO BACK TO 5.
+    --
+    -- At 5 this equalled the fleet's HEARTBEAT_INTERVAL, and equal periods
+    -- phase-lock. listItems() yields for 45-150ms and CC destroys every event
+    -- that arrives during a yield, so once a synchronised heartbeat round
+    -- drifted into that window the ENTIRE round was lost -- every turtle, every
+    -- 5s, until the phase moved. Three such rounds is MAX_MISSED and the whole
+    -- fleet declares the server dead.
+    --
+    -- Measured 2026-09-08: fourteen episodes in an hour, 8-14 turtles each,
+    -- declaring the server unreachable within 6-12ms of one another while the
+    -- server was awake and answering.
+    --
+    -- The real fix is the jitter in turtle_base -- a spread round cannot be
+    -- eaten whole. This is the cheap half: with 5 and 7 the alignment cannot
+    -- persist, it only recurs at the beat frequency and moves through it. Same
+    -- reasoning as BRIDGE_PUSH_TIMEOUT, which had the identical bug against this
+    -- identical constant.
+    STORAGE_INTERVAL  = 7,
     -- listCraftableItems is the slow one and its answer rarely changes: it only
     -- moves when a recipe or machine chain is added in-world.
     CRAFTABLE_INTERVAL = 60,

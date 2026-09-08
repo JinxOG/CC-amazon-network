@@ -1992,6 +1992,56 @@ end
 
 -- ─── Heartbeat ───────────────────────────────────────────────────────────────
 
+-- THE FLEET MUST NOT HEARTBEAT IN UNISON.
+--
+-- Measured from the fleet log on 2026-09-08: fourteen episodes in an hour where
+-- 8-14 turtles declared the server unreachable within 6-12 MILLISECONDS of each
+-- other, while the server was awake and logged every subsequent re-registration
+-- as a success. Independent per-message loss cannot do that. Whole heartbeat
+-- ROUNDS were being destroyed.
+--
+-- The mechanism is a phase lock, and it is the same shape as the bridge push
+-- timeout that used to equal STORAGE_INTERVAL:
+--
+--   1. A fleet-wide re-registration resets every turtle's heartbeat clock at
+--      once -- they land within 60ms of each other -- so the fleet becomes one
+--      synchronised round arriving every 5 seconds.
+--   2. The server's RS poll also runs every 5 seconds and yields for 45-150ms.
+--      Any event arriving during a yield is destroyed; CC does not queue it.
+--   3. Equal periods mean the phase between the round and the poll window
+--      drifts slowly. When it drifts into alignment the ENTIRE round is lost,
+--      not a fraction of it.
+--   4. Three aligned rounds is 15s, which is MAX_MISSED. The whole fleet
+--      declares the server down together, re-registers together, and is
+--      re-synchronised -- which is why it recurs every one to three minutes.
+--
+-- Jitter breaks step 1. A spread round can only ever lose the fraction that
+-- lands in the window, and no turtle can lose three in a row to one cause.
+--
+-- RANDOM PER INTERVAL, not a fixed per-node offset. A fixed offset would spread
+-- the fleet but freeze each turtle's phase relative to the poll -- so a turtle
+-- unlucky in its offset would lose EVERY heartbeat, for ever. That is worse
+-- than the fault being fixed.
+local HEARTBEAT_JITTER = 0.4   -- +/-40%: a 5s interval becomes 3-7s
+
+-- SEED PER NODE OR THIS DOES NOTHING.
+--
+-- Lua's generator is deterministic from its seed, and nothing in this codebase
+-- seeded it. Every turtle would draw the identical "random" sequence, stay
+-- exactly as synchronised as before, and the fix would look applied while
+-- changing nothing at all. The computer ID is unique per machine by definition.
+do
+    local id = 0
+    pcall(function() id = os.getComputerID() or 0 end)
+    math.randomseed(id * 7919 + (os.epoch("utc") % 100000))
+end
+
+local function heartbeatGap()
+    local spread = (math.random() * 2 - 1) * HEARTBEAT_JITTER
+    return CFG.HEARTBEAT_INTERVAL * 1000 * (1 + spread)
+end
+base._heartbeatGap = heartbeatGap   -- test seam
+
 local _missedHeartbeats = 0
 local MAX_MISSED = 3  -- re-register after this many missed ACKs
 local _heartbeatCount = 0
@@ -2208,6 +2258,7 @@ end
 function base.run(jobHandler)
     -- Wall-clock heartbeat: immune to timer events being consumed by sleep() inside ensureFuel()
     local lastHeartbeatWall = os.epoch("utc")
+    local heartbeatTarget   = heartbeatGap()
     local lastLogFlushWall  = os.epoch("utc")
     local wakeupTimer       = os.startTimer(CFG.HEARTBEAT_INTERVAL)
     local pendingJob        = nil   -- job table waiting to be started
@@ -2373,9 +2424,12 @@ function base.run(jobHandler)
 
             -- Wall-clock heartbeat check (survives timer events being swallowed by sleep())
             local now = os.epoch("utc")
-            if now - lastHeartbeatWall >= CFG.HEARTBEAT_INTERVAL * 1000 then
+            if now - lastHeartbeatWall >= heartbeatTarget then
                 sendHeartbeat()
                 lastHeartbeatWall = now
+                -- Re-drawn every beat: a single draw would just move this
+                -- turtle's fixed slot, not stop it having one.
+                heartbeatTarget = heartbeatGap()
             end
             -- Batch-forward accumulated print() lines to server every 15 seconds.
             if now - lastLogFlushWall >= 15000 then

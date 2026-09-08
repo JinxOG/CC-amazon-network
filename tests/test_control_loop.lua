@@ -314,6 +314,103 @@ function(assert_eq)
     end)
 end
 
+-- The fleet must not heartbeat in unison.
+--
+-- Measured 2026-09-08: fourteen episodes in an hour where 8-14 turtles declared
+-- the server unreachable within 6-12 MILLISECONDS of each other, while the
+-- server was awake and logged every re-registration that followed as a success.
+-- Independent per-message loss cannot produce that. Whole synchronised rounds
+-- were landing inside the RS poll's yield window and being destroyed entire.
+suite["the heartbeat interval is jittered, so the fleet cannot arrive as one round"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        clearModules()
+        stub.install({ fuel = 100000 })
+        gps = { locate = function() return 0, 64, 0 end }
+        os.getComputerID = function() return 118 end
+        local base = require("turtle_base")
+
+        local gaps, lo, hi = {}, math.huge, -math.huge
+        for i = 1, 200 do
+            local g = base._heartbeatGap()
+            gaps[i] = g
+            if g < lo then lo = g end
+            if g > hi then hi = g end
+        end
+        local sum = 0
+        for _, g in ipairs(gaps) do sum = sum + g end
+        local mean = sum / #gaps
+
+        assert_eq(hi > lo, true,
+            "the gap must actually vary — a constant interval is what let the "
+            .. "whole fleet be eaten by one 150ms yield")
+        -- Wide enough that a round is spread across seconds, not milliseconds.
+        assert_eq(hi - lo > 1500, true,
+            "and vary widely enough to spread a 15-turtle round: got a range of "
+            .. math.floor(hi - lo) .. "ms")
+        -- But still a heartbeat: the server's absent-turtle logic and the
+        -- bridge push timeout are both reasoned against a ~5s beat.
+        assert_eq(mean > 4200 and mean < 5800, true,
+            "the mean must stay near the configured interval, or every timeout "
+            .. "reasoned against it is wrong — got " .. math.floor(mean))
+        assert_eq(lo > 2000, true,
+            "and never so short that three misses trip serverDown faster than "
+            .. "the bridge's own 4s recovery — got " .. math.floor(lo))
+    end)
+end
+
+-- The seeding trap, which is what makes the fix real rather than decorative.
+suite["two turtles do not draw the same jitter sequence"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local function sequenceFor(id)
+            clearModules()
+            stub.install({ fuel = 100000 })
+            gps = { locate = function() return 0, 64, 0 end }
+            os.getComputerID = function() return id end
+            local base = require("turtle_base")
+            local out = {}
+            for i = 1, 8 do out[i] = base._heartbeatGap() end
+            return table.concat(out, ",")
+        end
+
+        local a, b = sequenceFor(118), sequenceFor(139)
+
+        -- Lua's generator is deterministic from its seed and nothing in this
+        -- codebase seeded it. Unseeded, every turtle draws the IDENTICAL
+        -- sequence -- so the fleet stays exactly as synchronised as before and
+        -- the fix looks applied while changing nothing at all.
+        assert_eq(a ~= b, true,
+            "two computer IDs must produce different sequences, or the jitter "
+            .. "is the same on every turtle and the fleet is still one round")
+    end)
+end
+
+-- SOURCE-ONLY, weaker: the gap must be RE-DRAWN on every beat.
+--
+-- The two tests above exercise the jitter function, not the loop's use of it,
+-- so deleting the re-draw left them green -- caught by mutation. It matters:
+-- drawing once gives each turtle a fixed slot in the 5s cycle instead of a
+-- moving one, and a turtle whose fixed slot lands inside the RS poll's yield
+-- window would then lose EVERY heartbeat rather than an occasional round. That
+-- is worse than the fault being fixed, which is exactly why a fixed per-node
+-- offset was rejected in the first place.
+suite["the heartbeat gap is re-drawn every beat (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local sendAt = src:find("if now %- lastHeartbeatWall >= heartbeatTarget then")
+    assert_eq(sendAt ~= nil, true, "the jittered heartbeat check moved or vanished")
+    -- Bounded to the branch itself, so the initial draw at base.run entry
+    -- cannot satisfy this.
+    local branch = src:sub(sendAt, sendAt + 500)
+    assert_eq(branch:find("heartbeatTarget = heartbeatGap%(%)") ~= nil, true,
+        "the gap must be re-drawn inside the branch that just fired, or each "
+        .. "turtle keeps one fixed slot in the cycle for its whole life")
+end
+
 suite["a JOB_ASSIGN that arrived via the queue is still accepted"] =
 function(assert_eq)
     withFakeRuntime(function()
