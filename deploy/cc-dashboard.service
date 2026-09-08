@@ -1,3 +1,27 @@
+# ⚠ THIS FILE IS NOT WHAT IS INSTALLED ON THE SERVER PC (as of 2026-09-08).
+#
+# The running service on 192.168.86.35 is a hand-written `cc-dashboard.service`
+# from 3 June: plain unit name, no template, no hardening directives at all,
+# running as `shamar` with its working directory inside that user's own home.
+#
+# This file is a TEMPLATE unit (`cc-dashboard@.service`), so following it gives
+# you `systemctl restart cc-dashboard@$USER` -- which fails with "Unit not
+# found" on the actual host. That cost an operator round-trip on 2026-09-08,
+# which is the entire reason this warning exists.
+#
+# Until someone reconciles the two, the commands that work on the live host are:
+#
+#     systemctl cat cc-dashboard.service                    # what is really installed
+#     kill $(systemctl show -p MainPID --value cc-dashboard.service)
+#                                                           # Restart=always brings it back;
+#                                                           # there is no passwordless sudo
+#
+# Adopting the hardening below is a real change to a service that has been
+# stable for three months, and it needs ReadWritePaths verified against
+# ~/cc-dashboard/logs/ before anyone tries it. Worth doing deliberately, with
+# someone watching -- not as a side effect of reading this file and assuming it
+# describes reality.
+
 [Unit]
 # The Node bridge. §4.2 requires it to start with its host — "manual restart
 # after a reboot is a defect, not a workflow." It has been running under
