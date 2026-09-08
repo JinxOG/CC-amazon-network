@@ -220,6 +220,159 @@ const EXPLICITLY_MERGED = new Set([
 let pendingCommands = [];   // commands queued by dashboard, picked up by CC on next poll
 let markerExists    = {};   // track which turtle markers already exist on Dynmap
 
+// ─── Continuous log to disk (Phase 1 of W3's 2026-09-07 memo) ────────────────
+//
+// The CC server already captures its own log and every turtle's print() output,
+// and already ships a slice of both in the /update payload. Nothing wrote it
+// down. This does, on the only disk in the system with room for it — the CC
+// computer has 1 MB, and this is order of 10 MB/day.
+//
+// The hard constraint is that none of it may delay the /update response. The CC
+// server is synchronous: time spent answering is time it is deaf to the radio,
+// which is what loses heartbeats. So this queues formatted lines in memory and
+// returns; a single writer drains the queue behind the response.
+
+const LOG_DIR             = path.join(__dirname, 'logs');
+const LOG_RETENTION_DAYS  = 14;
+const LOG_DEDUPE_MAX      = 5000;   // ~75 min at two-miner volume. Only needs to
+                                    // outlast the re-send window, which is seconds.
+const LOG_PRUNE_INTERVAL  = 6 * 60 * 60 * 1000;
+
+try { fs.mkdirSync(LOG_DIR, { recursive: true }); }
+catch (e) { console.error('[LOG] Cannot create log directory:', e.message); }
+
+let logQueue   = [];
+let logWriting = false;
+
+// One append in flight at a time. fs.appendFile does not order concurrent
+// callers, so two pushes landing during a disk stall could interleave and
+// corrupt the one-entry-per-line property the whole file exists for. Draining
+// through a single writer also means a slow disk grows this queue instead of
+// ever reaching the response path.
+function flushLogQueue() {
+    if (logWriting || logQueue.length === 0) return;
+    logWriting = true;
+
+    const batch = logQueue.join('');
+    logQueue = [];
+
+    const day  = new Date().toISOString().slice(0, 10);
+    const file = path.join(LOG_DIR, `${day}.txt`);
+
+    fs.appendFile(file, batch, (err) => {
+        logWriting = false;
+        if (err) console.error('[LOG] append failed:', err.message);
+        if (logQueue.length) flushLogQueue();
+    });
+}
+
+// Overlapping windows arrive every 3s, so the same line is delivered many times.
+// Keyed on (source, ts, msg) today; on (source, bootId, seq) the moment W3's
+// Phase 2 adds them, which is the one forward-compatibility they asked for.
+const logSeen      = new Set();
+const logSeenOrder = [];
+
+function logDedupeKey(source, entry) {
+    if (entry.seq != null) return `${source}|${entry.bootId ?? ''}|${entry.seq}`;
+    return `${source}|${entry.ts}|${entry.msg}`;
+}
+
+function logAlreadyWritten(key) {
+    if (logSeen.has(key)) return true;
+    logSeen.add(key);
+    logSeenOrder.push(key);
+    if (logSeenOrder.length > LOG_DEDUPE_MAX) {
+        for (const k of logSeenOrder.splice(0, logSeenOrder.length - LOG_DEDUPE_MAX)) {
+            logSeen.delete(k);
+        }
+    }
+    return false;
+}
+
+// Highest sequence seen per source, for the Phase 2 ack. Populated only once W3
+// ships `seq`; until then it stays empty and no ack is sent.
+const logSeqHigh = {};
+
+function logNoteSeq(source, entry) {
+    if (entry.seq == null) return;
+    const cur = logSeqHigh[source];
+    // A reboot restarts seq at 1 under a new bootId, so a changed bootId adopts
+    // the new boot's numbering rather than treating 1 as "older".
+    if (!cur || cur.bootId !== (entry.bootId ?? null)) {
+        logSeqHigh[source] = { bootId: entry.bootId ?? null, seq: entry.seq };
+    } else if (entry.seq > cur.seq) {
+        cur.seq = entry.seq;
+    }
+}
+
+// Turtle entries carry no `level` field — the level is inside the message, which
+// turtles capture from print() verbatim as `[node_118][INFO] ...`. Lifting it
+// into its own column is what makes `grep WARN` find turtle warnings and not
+// just server ones; without it the column would be server-only and requirement 1
+// would be half met.
+const LOG_LEVEL_RE = /^\[[^\]]*\]\[([A-Z]+)\]/;
+
+function logLevelOf(entry) {
+    if (typeof entry.level === 'string' && entry.level) return entry.level;
+    const m = LOG_LEVEL_RE.exec(String(entry.msg ?? ''));
+    return m ? m[1] : '-';
+}
+
+function logFormatLine(source, entry) {
+    const ts = Number.isFinite(entry.ts)
+        ? new Date(entry.ts).toISOString()
+        : new Date().toISOString();
+    // Newlines collapsed: one entry must be exactly one line, or grep reports a
+    // match at a line that does not show the node it came from.
+    const msg = String(entry.msg ?? '').replace(/\r?\n/g, ' ');
+    return `${ts}  ${source.padEnd(9)} ${logLevelOf(entry).padEnd(6)} ${msg}\n`;
+}
+
+function ingestLogs(body) {
+    const lines = [];
+
+    const take = (source, entries) => {
+        if (!Array.isArray(entries)) return;
+        for (const e of entries) {
+            if (!e || typeof e !== 'object') continue;
+            logNoteSeq(source, e);
+            if (logAlreadyWritten(logDedupeKey(source, e))) continue;
+            lines.push(logFormatLine(source, e));
+        }
+    };
+
+    take('server', body.serverLog);
+
+    if (body.turtleLogs && typeof body.turtleLogs === 'object') {
+        for (const [nodeId, entries] of Object.entries(body.turtleLogs)) take(nodeId, entries);
+    }
+
+    if (lines.length === 0) return;
+
+    // Every line starts with an ISO-8601 timestamp, which sorts lexicographically
+    // in chronological order — so this reads as a timeline rather than as
+    // server-then-turtles.
+    lines.sort();
+    logQueue.push(...lines);
+    flushLogQueue();
+}
+
+// Deletes only files this module creates: an exact YYYY-MM-DD.txt name. Anything
+// else an operator leaves in the directory is left alone.
+function pruneOldLogs() {
+    fs.readdir(LOG_DIR, (err, files) => {
+        if (err) return;
+        const cutoff = Date.now() - LOG_RETENTION_DAYS * 86400000;
+        for (const f of files) {
+            const m = /^(\d{4}-\d{2}-\d{2})\.txt$/.exec(f);
+            if (!m) continue;
+            if (new Date(`${m[1]}T00:00:00Z`).getTime() < cutoff) {
+                fs.unlink(path.join(LOG_DIR, f), () => {});
+            }
+        }
+    });
+}
+
 // ─── RCON ────────────────────────────────────────────────────────────────────
 // PERF #58: Persistent singleton connection — reuse across calls instead of
 // creating a new TCP connection for every marker write.
@@ -457,7 +610,18 @@ app.post('/update', async (req, res) => {
 
     state.updatedAt = now;
 
-    res.json({ ok: true, commands: pendingCommands.splice(0) });
+    // Queues formatted lines and returns immediately — the disk write happens
+    // behind the response. Never await this: see the note on LOG_DIR above.
+    try { ingestLogs(req.body || {}); }
+    catch (e) { console.error('[LOG] ingest failed:', e.message); }
+
+    // `logAck` rides as a sibling of `commands`, not inside it: `commands` is a
+    // list the CC server iterates and dispatches, so a non-command entry there
+    // would have to be filtered by every consumer. Sent only once W3's Phase 2
+    // starts attaching `seq`, so today it is absent rather than an empty object.
+    const reply = { ok: true, commands: pendingCommands.splice(0) };
+    if (Object.keys(logSeqHigh).length > 0) reply.logAck = logSeqHigh;
+    res.json(reply);
 });
 
 // Dashboard reads current state
@@ -536,5 +700,8 @@ app.use((err, req, res, next) => {
 
 app.listen(CFG.port, () => {
     console.log(`CC Dashboard bridge listening on http://localhost:${CFG.port}`);
+    console.log(`[LOG] Fleet log -> ${path.join(LOG_DIR, 'YYYY-MM-DD.txt')} (${LOG_RETENTION_DAYS}-day retention)`);
     initMarkerSet();
+    pruneOldLogs();
+    setInterval(pruneOldLogs, LOG_PRUNE_INTERVAL);
 });
