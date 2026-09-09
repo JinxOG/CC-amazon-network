@@ -4184,6 +4184,44 @@ function server.run()
     -- Re-armed unconditionally at the bottom of every iteration, so a pending
     -- timer always exists no matter which event woke us or which timers have
     -- died.
+    -- ── The server's own stall reporting ────────────────────────────────
+    --
+    -- Until now the fleet reported an outage fifteen times and this server
+    -- reported it ZERO times. W1 spent an afternoon reconstructing a stall from
+    -- two log sources on 2026-09-09 because of that asymmetry; the server was
+    -- the only party that knew and the only one not talking.
+    --
+    -- What is measured is the BUSY window: the time between os.pullEventRaw
+    -- returning and the next call to it. That is not a proxy for the thing that
+    -- matters, it IS the thing that matters -- every event arriving inside it is
+    -- destroyed, because CC hands an event to a coroutine that is not waiting
+    -- and drops it. Blocking in pullEventRaw is free; working is not.
+    --
+    -- Scale to expect, so a reader can judge a number rather than just see one:
+    -- a turtle needs ~15s of silence to give up (MAX_MISSED 3 x a 3-7s jittered
+    -- heartbeat). The RS poll's worst measured pause is 267ms. Anything capable
+    -- of causing a fleet-wide disconnect has to be seconds long, so a busy
+    -- window over half a second is already interesting and one over five is the
+    -- thing we are hunting.
+    local LOOP_BUSY_WARN_MS = 500
+    local LOOP_ROLLUP_MS    = 60000
+
+    local loopIters, loopBusySum, loopBusyMax, loopSlowCount = 0, 0, 0, 0
+    local loopBusyMaxOp   = "-"
+    local loopLastRollup  = os.epoch("utc")
+    local stepName, stepMs = "-", 0
+
+    -- Wraps one step so a stall can name the thing that caused it instead of
+    -- reporting a duration and leaving the reader to guess. Returns exactly what
+    -- pcall returns, so every existing `local ok, err =` call site is unchanged.
+    local function timed(name, fn)
+        local t0 = os.epoch("utc")
+        local ok, err = pcall(fn)
+        local ms = os.epoch("utc") - t0
+        if ms > stepMs then stepMs, stepName = ms, name end
+        return ok, err
+    end
+
     local WAKEUP_INTERVAL = 1
     local wakeupTimer = os.startTimer(WAKEUP_INTERVAL)
 
@@ -4200,6 +4238,12 @@ function server.run()
         -- 02:29 in the morning. The cost is that Ctrl+T no longer stops it;
         -- reboot the computer to do that.
         local event, p1, p2, p3, p4 = os.pullEventRaw()
+
+        -- The busy window opens HERE, not at the top of the loop body: the time
+        -- spent blocked in pullEventRaw above is time this server is listening,
+        -- which is the opposite of the problem.
+        local busyStart = os.epoch("utc")
+        stepName, stepMs = "-", 0
 
         if event == "terminate" then
             -- Double-press to stop. The first Ctrl+T is ignored and says so on
@@ -4234,7 +4278,7 @@ function server.run()
                 if valid then
                     local handler = handlers[msg.type]
                     if handler then
-                        local ok, err = pcall(handler, msg)
+                        local ok, err = timed("handler:" .. tostring(msg.type), function() handler(msg) end)
                         if not ok then logError("Handler [" .. msg.type .. "]: " .. tostring(err)) end
                     end
                 end
@@ -4342,7 +4386,7 @@ function server.run()
 
         elseif event == "timer" then
             if p1 == dispatchTimer then
-                local ok, err = pcall(function()
+                local ok, err = timed("dispatch", function()
                     jobQueue.checkAckTimeouts()
                     dispatcher.tick()
                 end)
@@ -4403,12 +4447,12 @@ function server.run()
                 bridgeTimer = os.startTimer(CFG.BRIDGE_INTERVAL)
 
             elseif p1 == staleTimer then
-                local ok, err = pcall(checkStaleSupports)
+                local ok, err = timed("staleSupports", checkStaleSupports)
                 if not ok then logError("Stale support check: " .. tostring(err)) end
                 staleTimer = os.startTimer(30)
 
             elseif p1 == oreWatchdogTimer then
-                local ok, err = pcall(checkOreThresholds)
+                local ok, err = timed("oreWatchdog", checkOreThresholds)
                 if not ok then logError("Ore watchdog: " .. tostring(err)) end
                 oreWatchdogTimer = os.startTimer(60)
 
@@ -4425,12 +4469,12 @@ function server.run()
                 -- is an independent trigger, so without this both fire and the poll
                 -- runs twice per interval -- observed live as two refreshes two
                 -- seconds apart. The fallback is a safety net, not a second poll.
-                pcall(refreshStorage)
+                timed("refreshStorage", refreshStorage)
                 lastStorageWC = os.epoch("utc")
                 storageTimer = os.startTimer(CFG.STORAGE_INTERVAL)
 
             elseif p1 == craftableTimer then
-                pcall(refreshCraftable)
+                timed("refreshCraftable", refreshCraftable)
                 lastCraftableWC = os.epoch("utc")
                 craftableTimer = os.startTimer(CFG.CRAFTABLE_INTERVAL)
 
@@ -4462,7 +4506,7 @@ function server.run()
             -- yield. See that call site.
             -- Dispatch tick — essential: if dispatchTimer drops, miners sit idle indefinitely
             if (wc - lastDispatchWC) >= (CFG.DISPATCH_INTERVAL * 1000) then
-                local ok_d, err_d = pcall(function()
+                local ok_d, err_d = timed("dispatch", function()
                     jobQueue.checkAckTimeouts()
                     dispatcher.tick()
                 end)
@@ -4471,7 +4515,7 @@ function server.run()
             end
             -- Health checks — essential: if healthTimer drops, ghost/absent jobs never clear
             if (wc - lastHealthWC) >= (CFG.HEARTBEAT_TIMEOUT * 1000) then
-                local ok_h, err_h = pcall(function()
+                local ok_h, err_h = timed("health", function()
                     registry.checkTimeouts()
                     jobQueue.checkGhosts()
                     checkOrphanedMiners()
@@ -4494,24 +4538,24 @@ function server.run()
             -- off the dispatch computer entirely is the real fix (W6 owns RS);
             -- this makes it survivable in the meantime.
             if isDue(wc, lastStorageWC, CFG.STORAGE_INTERVAL) then
-                local ok_s, err_s = pcall(refreshStorage)
+                local ok_s, err_s = timed("refreshStorage", refreshStorage)
                 if not ok_s then logError("Storage refresh WC: " .. tostring(err_s)) end
                 lastStorageWC = wc
             end
             if isDue(wc, lastCraftableWC, CFG.CRAFTABLE_INTERVAL) then
-                local ok_c, err_c = pcall(refreshCraftable)
+                local ok_c, err_c = timed("refreshCraftable", refreshCraftable)
                 if not ok_c then logError("Craftable refresh WC: " .. tostring(err_c)) end
                 lastCraftableWC = wc
             end
             -- Same single-point-of-failure shape, same fix. Neither is as
             -- visible as storage going stale, which is why both went unnoticed.
             if isDue(wc, lastStaleWC, 30) then
-                local ok_ss, err_ss = pcall(checkStaleSupports)
+                local ok_ss, err_ss = timed("staleSupports", checkStaleSupports)
                 if not ok_ss then logError("Stale support WC: " .. tostring(err_ss)) end
                 lastStaleWC = wc
             end
             if isDue(wc, lastOreWatchdogWC, 60) then
-                local ok_o, err_o = pcall(checkOreThresholds)
+                local ok_o, err_o = timed("oreWatchdog", checkOreThresholds)
                 if not ok_o then logError("Ore watchdog WC: " .. tostring(err_o)) end
                 lastOreWatchdogWC = wc
             end
@@ -4554,7 +4598,7 @@ function server.run()
                 -- Called unconditionally rather than under "not bridgePending":
                 -- startBridgePush holds the force-clear that recovers a stuck
                 -- push, and guarding here would stop that path ever running.
-                local ok_bp, err_bp = pcall(startBridgePush)
+                local ok_bp, err_bp = timed("bridgePush", startBridgePush)
                 if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
                 lastBridgePushWC = pushWc
             end
@@ -4567,6 +4611,45 @@ function server.run()
         -- only run because this guarantees the loop keeps turning.
         os.cancelTimer(wakeupTimer)
         wakeupTimer = os.startTimer(WAKEUP_INTERVAL)
+
+        -- ── Close the busy window and report ────────────────────────────────
+        do
+            local busy = os.epoch("utc") - busyStart
+            loopIters   = loopIters + 1
+            loopBusySum = loopBusySum + busy
+            if busy > loopBusyMax then loopBusyMax, loopBusyMaxOp = busy, stepName end
+
+            if busy >= LOOP_BUSY_WARN_MS then
+                loopSlowCount = loopSlowCount + 1
+                logWarn(string.format(
+                    "LOOP STALL: deaf for %dms — slowest step %s (%dms). "
+                    .. "Every message that arrived in that window is gone.",
+                    busy, stepName, stepMs))
+            end
+
+            -- EMITTED UNCONDITIONALLY, every minute, and that is deliberate.
+            --
+            -- If the stall lines above were the only output, their absence would
+            -- mean either "nothing stalled" or "the instrument is broken", and
+            -- those must not look alike. That shape has now cost this project
+            -- four wrong conclusions in a week. A rollup of zeros is a
+            -- measurement; a MISSING rollup means the instrument stopped.
+            --
+            -- It carries the denominator for the same reason: "slow=0" alone is
+            -- a shrug, "slow=0 iters=4200" is a result.
+            local now2 = os.epoch("utc")
+            if now2 - loopLastRollup >= LOOP_ROLLUP_MS then
+                logInfo(string.format(
+                    "loop rollup: iters=%d busy_ms_avg=%.1f busy_ms_max=%d "
+                    .. "slowest=%s slow=%d",
+                    loopIters,
+                    loopIters > 0 and (loopBusySum / loopIters) or 0,
+                    loopBusyMax, loopBusyMaxOp, loopSlowCount))
+                loopIters, loopBusySum, loopBusyMax, loopSlowCount = 0, 0, 0, 0
+                loopBusyMaxOp  = "-"
+                loopLastRollup = now2
+            end
+        end
     end
 end
 

@@ -55,18 +55,22 @@ return {
     function(assert_eq)
         local body = loopBody(serverSource())
 
-        local pushAt = body:find("pcall%(startBridgePush%)")
+        -- Anchored on the ARGUMENT, not the wrapper: these calls were bare pcall
+        -- until the stall instrumentation wrapped them in timed(), and an
+        -- assertion pinned to the wrapper name goes red on a change that did
+        -- not touch the property it guards.
+        local pushAt = body:find(", startBridgePush%)")
         assert_eq(pushAt ~= nil, true, "the loop no longer pushes at all")
 
         -- refreshStorage is the yield that eats the response. Both its triggers
         -- -- the storageTimer handler and the wall-clock fallback -- must come
         -- before the push, or the adjacency is back.
         local lastPollAt = nil
-        local at = body:find("pcall%(refreshStorage%)")
+        local at = body:find(", refreshStorage%)")
         assert_eq(at ~= nil, true, "the RS poll moved or vanished from the loop")
         while at do
             lastPollAt = at
-            at = body:find("pcall%(refreshStorage%)", at + 1)
+            at = body:find(", refreshStorage%)", at + 1)
         end
         assert_eq(lastPollAt < pushAt, true,
             "every refreshStorage call must precede the push: the bridge answers "
@@ -74,7 +78,7 @@ return {
             .. "destroys the http_success it is waiting for")
 
         -- Same argument for the craftable poll, which is the same peripheral.
-        local craftAt = body:find("pcall%(refreshCraftable%)")
+        local craftAt = body:find(", refreshCraftable%)")
         assert_eq(craftAt ~= nil and craftAt < pushAt, true,
             "the craftable poll must precede the push for the same reason")
     end,
@@ -83,13 +87,13 @@ return {
     function(assert_eq)
         local body = loopBody(serverSource())
 
-        -- pcall(startBridgePush), NOT startBridgePush(): the loop only ever
-        -- calls it through pcall, so the bare-call pattern matched nothing but
+        -- Matched on the argument position, NOT `startBridgePush()`: the loop
+        -- never uses the bare-call form, so that pattern matched nothing but
         -- the prose mentioning it -- a count that was 1 whatever the code did.
-        local n, at = 0, body:find("pcall%(startBridgePush%)")
+        local n, at = 0, body:find(", startBridgePush%)")
         while at do
             n = n + 1
-            at = body:find("pcall%(startBridgePush%)", at + 1)
+            at = body:find(", startBridgePush%)", at + 1)
         end
         -- Two triggers were the original defect on this line: the bridgeTimer
         -- branch pushed WITHOUT stamping lastBridgePushWC, so it and the

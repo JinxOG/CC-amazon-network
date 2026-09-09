@@ -743,6 +743,79 @@ return {
             .. "3 seconds for ever")
     end,
 
+    -- The server must report its own stalls (SOURCE-ONLY, weaker).
+    --
+    -- Until 1.9.90 the fleet reported an outage fifteen times and this server
+    -- reported it zero times. W1 spent an afternoon on 2026-09-09
+    -- reconstructing one from two log sources because of that asymmetry: the
+    -- server was the only party that knew and the only one not talking.
+    --
+    -- The loop lives inside server.run and cannot be entered under this harness,
+    -- so what is pinned here is the shape rather than the behaviour.
+    ["the server measures and reports its own deaf windows (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("central_server.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+
+        local pullAt = src:find("local event, p1, p2, p3, p4 = os%.pullEventRaw%(%)")
+        assert_eq(pullAt ~= nil, true, "the event loop moved or vanished")
+
+        -- The window must OPEN after the pull returns. Opening it at the top of
+        -- the loop body would include the time blocked in pullEventRaw, which is
+        -- time the server is listening -- the opposite of the thing measured.
+        local openAt = src:find("local busyStart = os%.epoch", pullAt)
+        assert_eq(openAt ~= nil and openAt - pullAt < 400, true,
+            "the busy window must open immediately after the event is pulled, "
+            .. "or it measures time spent listening as though it were deafness")
+
+        -- And close at the bottom, after the work, before blocking again.
+        local closeAt = src:find("local busy = os%.epoch%(\"utc\"%) %- busyStart", openAt)
+        assert_eq(closeAt ~= nil and closeAt > openAt, true,
+            "the busy window must be closed after the iteration's work")
+
+        assert_eq(src:find("LOOP STALL") ~= nil, true,
+            "a stall must produce a line naming itself")
+        assert_eq(src:find("slowest step %%s") ~= nil, true,
+            "and name the step that caused it — a duration with no attribution "
+            .. "is what made the last one take an afternoon")
+        -- The message SAYING it names a step is not the same as anything
+        -- recording one. Deleting the recorder left the format string intact and
+        -- this test green, reporting "-" for every stall for ever.
+        assert_eq(src:find("stepMs, stepName = ms, name", 1, true) ~= nil, true,
+            "something must actually record the slowest step, or the attribution "
+            .. "is a placeholder that never fills in")
+        -- And each step must be wrapped, or there is nothing to record.
+        local wrapped = 0
+        local at = src:find('timed("', 1, true)
+        while at do wrapped = wrapped + 1; at = src:find('timed("', at + 1, true) end
+        assert_eq(wrapped >= 8, true,
+            "the loop's expensive steps must be wrapped for timing — got "
+            .. wrapped .. " call sites")
+
+        -- Emitted unconditionally, for the reason that is now four-for-four in
+        -- this project: an absent stall line means either "nothing stalled" or
+        -- "the instrument broke", and those must not look alike.
+        -- Emitted unconditionally, for the reason that is now four-for-four in
+        -- this project: an absent stall line means either "nothing stalled" or
+        -- "the instrument broke", and those must not look alike.
+        --
+        -- Plain finds and offsets throughout: no patterns, no escapes. Two
+        -- earlier attempts put a newline escape inside a Lua pattern here
+        -- and it collapsed into a real line break, breaking the suite.
+        local rollupAt = src:find("loop rollup: iters=", 1, true)
+        assert_eq(rollupAt ~= nil, true, "a periodic rollup must exist")
+        local before = src:sub(math.max(1, rollupAt - 160), rollupAt)
+        assert_eq(before:find("logInfo", 1, true) ~= nil, true,
+            "the rollup must be logged unconditionally as INFO, not raised only "
+            .. "when something was slow")
+        -- It carries its denominator: "slow=0" alone is a shrug, "slow=0
+        -- iters=4200" is a result.
+        local rollupLine = src:sub(rollupAt, rollupAt + 200)
+        assert_eq(rollupLine:find("slow=", 1, true) ~= nil, true,
+            "the rollup must carry the slow count alongside the iteration count")
+    end,
+
     -- The fallback exists precisely for the case where the timer never fires
     -- again, so a task that has never run must become due on its own.
     ["a task whose timer never fired still becomes due"] = function(assert_eq)
