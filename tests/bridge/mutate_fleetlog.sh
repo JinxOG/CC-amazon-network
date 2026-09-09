@@ -32,6 +32,14 @@ run "level extraction removed"    "return m ? m[1] : '-';|||return '-';"
 run "seq no longer preferred"     'if (entry.seq != null) return|||if (false) return'
 run "bootId reset removed"        'cur.bootId !== (entry.bootId ?? null)|||false'
 run "retention cutoff neutered"   'Date.now() - LOG_RETENTION_DAYS * 86400000|||0'
+run "loss ignores the gap"          'Math.max(0, span - c.count)|||span'
+run "no-data loss reported as 0%"   'expected > 0 ? +((missing / expected) * 100).toFixed(1) : null|||0'
+run "reboots not counted"           'reboots: c ? c.reboots + 1 : 0|||reboots: 0'
+run "window never extends down"     'if (entry.seq < c.min) c.min = entry.seq;|||;'
+run "slow-push line suppressed"     'if (totalMs >= BUSY_SLOW_PUSH_MS) {|||if (false) {'
+run "zero-activity rollup dropped"  'if (b.pushes === 0 && b.writes === 0) {|||if (false) {'
+run "log share not computed"        'b.pushMsTotal > 0 ? (b.logMsTotal / b.pushMsTotal) * 100 : null|||null'
+run "bridge lines unsequenced"      'bridgeSeq++;|||;'
 run "prune deletes non-log files" 'if (!m) continue;|||if (!m) { fs.unlink(path.join(LOG_DIR, f), function(){}); continue; }'
 
 echo ""

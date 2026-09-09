@@ -45,11 +45,15 @@ function loadLogModule(mutation) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleetlog-'));
     block = block.replace("path.join(__dirname, 'logs')", 'TEST_LOG_DIR');
 
-    const factory = new Function('fs', 'path', 'console', 'TEST_LOG_DIR', block + `
-        return { ingestLogs, logSeqHigh, pruneOldLogs,
+    // BRIDGE_BOOT_ID is declared above the extracted block, so it is injected
+    // rather than sliced in — logLossSummary reports it as the window start.
+    const factory = new Function('fs', 'path', 'console', 'TEST_LOG_DIR', 'BRIDGE_BOOT_ID', block + `
+        return { ingestLogs, logSeqHigh, pruneOldLogs, logLossSummary,
+                 recordPush, emitBusyRollup, logLocal,
+                 busy: () => busy, lastBusyRollup: () => lastBusyRollup,
                  queueLen: () => logQueue.length, LOG_DIR };
     `);
-    return { mod: factory(fs, path, console, dir), dir };
+    return { mod: factory(fs, path, console, dir, 1), dir };
 }
 
 // The writer drains behind the response, so tests wait for it rather than
@@ -155,7 +159,112 @@ async function run(mutation) {
         mod.logSeqHigh.server.bootId === 'b2' && mod.logSeqHigh.server.seq === 1,
         JSON.stringify(mod.logSeqHigh.server));
 
-    // ── 6. retention prunes only this module's own files ────────────────────
+    // ── 6. live loss accounting (W1 proposal 5) ─────────────────────────────
+    {
+        const { mod: m } = loadLogModule(mutation);
+
+        // Nothing sequenced yet: this must be "no data", never "0% loss".
+        check('loss is null before any sequenced line arrives',
+            m.logLossSummary().lossPct === null,
+            JSON.stringify(m.logLossSummary().lossPct));
+
+        // seq 1,2,3,5 — one hole at 4.
+        m.ingestLogs({ turtleLogs: { node_7: [1, 2, 3, 5].map((s) => (
+            { ts: T0 + s * 10, msg: `line ${s}`, seq: s, bootId: 'b1' })) } });
+        await settle(m);
+        let sum = m.logLossSummary();
+        check('counts a hole in the sequence',
+            sum.missing === 1 && sum.lossPct === 20, JSON.stringify(sum));
+
+        // The retry W3 ships at 1.9.89 delivers seq 4 late. A running-prev
+        // counter would have booked it as permanent loss; min/max/count heals.
+        m.ingestLogs({ turtleLogs: { node_7: [
+            { ts: T0 + 45, msg: 'line 4', seq: 4, bootId: 'b1' }] } });
+        await settle(m);
+        sum = m.logLossSummary();
+        check('a late-arriving line heals the hole',
+            sum.missing === 0 && sum.lossPct === 0, JSON.stringify(sum));
+
+        // A duplicate must not push count past the span and invent negative loss.
+        m.ingestLogs({ turtleLogs: { node_7: [
+            { ts: T0 + 30, msg: 'line 3', seq: 3, bootId: 'b1' }] } });
+        await settle(m);
+        sum = m.logLossSummary();
+        check('a re-sent duplicate does not distort the count',
+            sum.missing === 0 && sum.sources.node_7.received === 5, JSON.stringify(sum.sources.node_7));
+
+        // A source whose FIRST delivered line is not its lowest: the window must
+        // extend downwards, or the span is measured from the wrong floor and the
+        // loss rate is wrong for every source that starts mid-flight.
+        const { mod: m2 } = loadLogModule(mutation);
+        m2.ingestLogs({ turtleLogs: { node_8: [
+            { ts: T0 + 50, msg: 'five', seq: 5, bootId: 'b1' }] } });
+        await settle(m2);
+        m2.ingestLogs({ turtleLogs: { node_8: [2, 3, 4].map((s) => (
+            { ts: T0 + s * 10, msg: `line ${s}`, seq: s, bootId: 'b1' })) } });
+        await settle(m2);
+        // Asserted on `expected` (the span), not on `missing`. missing is
+        // clamped with Math.max(0, …), so a span measured from the wrong floor
+        // still reports 0 missing and the bug hides behind the clamp — the
+        // first version of this check was blind for exactly that reason.
+        const late = m2.logLossSummary();
+        check('the window extends down when an earlier line arrives later',
+            late.expected === 4 && late.received === 4 && late.missing === 0,
+            JSON.stringify(late));
+
+        // A reboot restarts seq at 1; that must not read as a huge backwards gap.
+        m.ingestLogs({ turtleLogs: { node_7: [
+            { ts: T0 + 900, msg: 'after reboot', seq: 1, bootId: 'b2' }] } });
+        await settle(m);
+        sum = m.logLossSummary();
+        check('a reboot is counted as a reboot, not as loss',
+            sum.sources.node_7.reboots === 1 && sum.sources.node_7.missing === 0,
+            JSON.stringify(sum.sources.node_7));
+    }
+
+    // ── 7. busy instrumentation (W1 proposals 1 and 2) ──────────────────────
+    {
+        const { mod: m } = loadLogModule(mutation);
+
+        // The rollup must be emitted even when nothing happened — that is what
+        // makes its absence mean "instrumentation down" rather than "quiet".
+        m.emitBusyRollup();
+        await settle(m);
+        check('a zero-activity rollup is still emitted',
+            /bridge#\d+\s+INFO\s+busy rollup: pushes=0 writes=0/.test(readLog(m.LOG_DIR)),
+            JSON.stringify(readLog(m.LOG_DIR).trim().split('\n').pop()));
+
+        // A fast push produces no line of its own.
+        m.recordPush(5, 1);
+        await settle(m);
+        check('a fast push writes no slow-push line',
+            !readLog(m.LOG_DIR).includes('slow push'));
+
+        // A slow one does, and carries the log system's share of it.
+        m.recordPush(250, 200);
+        await settle(m);
+        check('a slow push is recorded with its log-system share',
+            /WARN\s+slow push: 250\.0ms total, 200\.0ms of it in the log system/
+                .test(readLog(m.LOG_DIR)),
+            JSON.stringify(readLog(m.LOG_DIR).trim().split('\n').pop()));
+
+        // log_share is the number that answers proposal 2. 201/255 ≈ 78.8%.
+        m.emitBusyRollup();
+        await settle(m);
+        const roll = m.lastBusyRollup();
+        check('rollup reports pushes, slow count and log share',
+            roll.pushes === 2 && roll.slowPushes === 1 && roll.logSharePct === 78.8,
+            JSON.stringify(roll));
+        check('rollup line names the log share',
+            /log_share=78\.8%/.test(readLog(m.LOG_DIR)),
+            JSON.stringify(readLog(m.LOG_DIR).trim().split('\n').pop()));
+
+        // Bridge lines are sequenced, so the instrumentation is itself auditable.
+        check('bridge lines carry their own sequence',
+            /bridge#1\s/.test(readLog(m.LOG_DIR)) && /bridge#2\s/.test(readLog(m.LOG_DIR)));
+    }
+
+    // ── 8. retention prunes only this module's own files ────────────────────
     const old = path.join(dir, '2020-01-01.txt');
     const keep = path.join(dir, 'operator-notes.txt');
     fs.writeFileSync(old, 'ancient\n');

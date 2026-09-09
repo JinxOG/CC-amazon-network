@@ -264,6 +264,117 @@ let logCurrentDay  = null;   // drives the current.txt symlink
 let logSymlinkWarned = false;
 let logWriting = false;
 
+// ─── Bridge busy periods (W1's proposals 1 and 2, 2026-09-09) ────────────────
+//
+// W1 measured 561 fleet-wide disconnects that cluster: 30 clusters hitting eight
+// or more nodes within five seconds. Everyone loses the dispatch server at the
+// same instant, which rules out anything per-turtle. The mechanism on the table
+// is the one W3 documented -- bridge busy => CC server waiting => CC server deaf
+// -- and it predicts that clusters land INSIDE bridge-busy windows.
+//
+// That prediction is worth nothing until the busy windows are written down, so
+// this writes them down. Two rules shape it:
+//
+// 1. A LINE PER PUSH WOULD BE 28,800 LINES A DAY on a system already suspected
+//    of being hurt by log volume, so only slow pushes get their own line.
+// 2. BUT SILENCE MUST NOT BE AMBIGUOUS. If slow pushes were the only output,
+//    "no slow lines" would mean either "the bridge was never busy" or "the
+//    instrumentation is broken", and those must never look alike -- that shape
+//    is now three-for-three in this project. So a rollup is emitted every
+//    interval unconditionally, carrying its own denominator. Its ABSENCE means
+//    the instrumentation is down; a rollup of zeros is a real measurement.
+//
+// The rollup separates total handler time from time spent inside the log system.
+// That is proposal 2 answered with a number instead of a code reading: W3
+// believes the log writer costs the push handler nothing, and `log_share` either
+// agrees or does not.
+
+const BUSY_SLOW_PUSH_MS = 100;      // a push at least this slow gets its own line
+const BUSY_ROLLUP_MS    = 60 * 1000;
+
+function freshBusy() {
+    return {
+        pushes: 0, slowPushes: 0, pushMsTotal: 0, pushMsMax: 0,
+        logMsTotal: 0, logMsMax: 0,
+        writes: 0, writeMsTotal: 0, writeMsMax: 0, writeBytes: 0,
+        queueMax: 0,
+    };
+}
+let busy = freshBusy();
+
+// Bridge-authored lines carry their own source and sequence. A separate source
+// from `server` so they never mix into the CC server's continuity audit, and
+// sequenced so the instrumentation is itself auditable -- the one thing worse
+// than no busy data is busy data with silent holes in it.
+let bridgeSeq = 0;
+
+function logLocal(level, msg) {
+    bridgeSeq++;
+    logQueue.push(logFormatLine('bridge', { ts: Date.now(), level, msg, seq: bridgeSeq }));
+    flushLogQueue();
+}
+
+function recordPush(totalMs, logMs) {
+    busy.pushes++;
+    busy.pushMsTotal += totalMs;
+    busy.logMsTotal  += logMs;
+    if (totalMs > busy.pushMsMax) busy.pushMsMax = totalMs;
+    if (logMs   > busy.logMsMax)  busy.logMsMax  = logMs;
+    if (logQueue.length > busy.queueMax) busy.queueMax = logQueue.length;
+
+    if (totalMs >= BUSY_SLOW_PUSH_MS) {
+        busy.slowPushes++;
+        // Timestamped by the log itself, so `?node=bridge&contains=slow push`
+        // gives W1 the busy windows to correlate disconnect clusters against.
+        logLocal('WARN', `slow push: ${totalMs.toFixed(1)}ms total, `
+            + `${logMs.toFixed(1)}ms of it in the log system, queue=${logQueue.length}`);
+    }
+}
+
+// Kept for /state so the dashboard can show the current picture without parsing
+// the log back. Null until the first rollup: "not measured yet" is not "zero".
+let lastBusyRollup = null;
+
+function emitBusyRollup() {
+    const b = busy;
+    busy = freshBusy();
+
+    const avg = (total, n) => (n > 0 ? total / n : 0);
+    const pushAvg = avg(b.pushMsTotal, b.pushes);
+    const logAvg  = avg(b.logMsTotal,  b.pushes);
+    // What share of the bridge's own busy time the log system accounts for.
+    const logShare = b.pushMsTotal > 0 ? (b.logMsTotal / b.pushMsTotal) * 100 : null;
+
+    lastBusyRollup = {
+        at: Date.now(),
+        windowMs: BUSY_ROLLUP_MS,
+        pushes: b.pushes, slowPushes: b.slowPushes,
+        pushMsAvg: +pushAvg.toFixed(2), pushMsMax: +b.pushMsMax.toFixed(2),
+        logMsAvg: +logAvg.toFixed(2),   logMsMax: +b.logMsMax.toFixed(2),
+        logSharePct: logShare === null ? null : +logShare.toFixed(1),
+        writes: b.writes,
+        writeMsAvg: +avg(b.writeMsTotal, b.writes).toFixed(2),
+        writeMsMax: +b.writeMsMax.toFixed(2),
+        writeKb: +(b.writeBytes / 1024).toFixed(1),
+        queueMax: b.queueMax,
+    };
+
+    if (b.pushes === 0 && b.writes === 0) {
+        // Emitted anyway, and this is the whole point: it distinguishes "the
+        // bridge was idle" from "the instrumentation stopped".
+        logLocal('INFO', 'busy rollup: pushes=0 writes=0 — bridge received nothing this interval');
+        return;
+    }
+
+    logLocal('INFO', 'busy rollup: '
+        + `pushes=${b.pushes} slow=${b.slowPushes} `
+        + `push_ms_avg=${pushAvg.toFixed(1)} push_ms_max=${b.pushMsMax.toFixed(1)} `
+        + `log_ms_avg=${logAvg.toFixed(1)} log_ms_max=${b.logMsMax.toFixed(1)} `
+        + `log_share=${logShare === null ? 'n/a' : logShare.toFixed(1) + '%'} `
+        + `writes=${b.writes} write_ms_max=${b.writeMsMax.toFixed(1)} `
+        + `write_kb=${(b.writeBytes / 1024).toFixed(1)} queue_max=${b.queueMax}`);
+}
+
 // One append in flight at a time. fs.appendFile does not order concurrent
 // callers, so two pushes landing during a disk stall could interleave and
 // corrupt the one-entry-per-line property the whole file exists for. Draining
@@ -314,7 +425,17 @@ function flushLogQueue() {
         }
     }
 
+    // Timed so W1 can see whether the disk itself ever stalls. This callback runs
+    // on the main thread, but the write behind it does not: fs.appendFile hands
+    // the I/O to libuv's threadpool, which is the distinction proposal 2 turns on.
+    const writeStart = process.hrtime.bigint();
     fs.appendFile(file, batch, (err) => {
+        const writeMs = Number(process.hrtime.bigint() - writeStart) / 1e6;
+        busy.writes++;
+        busy.writeMsTotal += writeMs;
+        busy.writeBytes   += batch.length;
+        if (writeMs > busy.writeMsMax) busy.writeMsMax = writeMs;
+
         logWriting = false;
         if (err) console.error('[LOG] append failed:', err.message);
         if (logQueue.length) flushLogQueue();
@@ -358,6 +479,67 @@ function logNoteSeq(source, entry) {
     } else if (entry.seq > cur.seq) {
         cur.seq = entry.seq;
     }
+}
+
+// ─── Live loss accounting (W1's proposal 5) ──────────────────────────────────
+//
+// W1 found 19% of lines missing by running ?audit=1, and observed that a figure
+// nobody sees is how it went unnoticed until someone audited for an unrelated
+// reason. So the loss rate becomes a live number the dashboard can render.
+//
+// Counted here rather than by re-running the file audit on a timer, because that
+// audit streams the whole day file -- 10 MB and growing -- on the one thread
+// that must also answer /update every three seconds. Paying that repeatedly to
+// display a number would risk causing the very stall W1 is asking us to measure.
+// These counters are free: the sequences are already in hand.
+//
+// MIN/MAX/COUNT, not a running previous-value. Missing is
+// (max - min + 1) - count, which does not care what order lines arrive in. That
+// matters because W3's 1.9.89 retry deliberately re-sends a withheld batch, and
+// a running-prev counter would book those as loss and never un-book them when
+// they landed. This self-corrects when a hole is filled later.
+const logContinuity = {};
+
+function logNoteContinuity(source, entry) {
+    if (entry.seq == null) return;
+    const boot = entry.bootId ?? null;
+    let c = logContinuity[source];
+    // A reboot restarts the sequence, so each boot is accounted separately and
+    // the restart is never mistaken for a 40,000-line gap.
+    if (!c || c.bootId !== boot) {
+        c = logContinuity[source] = {
+            bootId: boot, min: entry.seq, max: entry.seq, count: 0,
+            reboots: c ? c.reboots + 1 : 0,
+        };
+    }
+    if (entry.seq < c.min) c.min = entry.seq;
+    if (entry.seq > c.max) c.max = entry.seq;
+    c.count++;
+}
+
+function logLossSummary() {
+    let received = 0, expected = 0;
+    const sources = {};
+    for (const [src, c] of Object.entries(logContinuity)) {
+        const span = c.max - c.min + 1;
+        const missing = Math.max(0, span - c.count);
+        received += c.count;
+        expected += span;
+        sources[src] = {
+            received: c.count, missing, reboots: c.reboots,
+            lossPct: span > 0 ? +((missing / span) * 100).toFixed(1) : null,
+        };
+    }
+    const missing = Math.max(0, expected - received);
+    return {
+        since: BRIDGE_BOOT_ID,
+        received, expected, missing,
+        // NULL, NOT ZERO, when nothing sequenced has arrived. A dashboard
+        // rendering 0% for "no data" is the same trap W1 walked into: a pass
+        // state indistinguishable from a no-data state.
+        lossPct: expected > 0 ? +((missing / expected) * 100).toFixed(1) : null,
+        sources,
+    };
 }
 
 // Turtle entries carry no `level` field — the level is inside the message, which
@@ -447,6 +629,12 @@ function ingestLogs(body) {
             if (!e || typeof e !== 'object') continue;
             logNoteSeq(source, e);
             if (logAlreadyWritten(logDedupeKey(source, e))) continue;
+            // AFTER the dedupe check, unlike logNoteSeq above. A re-sent delta
+            // (an ack that did not reach the server) delivers the same line
+            // twice; counting it twice would inflate `count` past the sequence
+            // span and report negative loss. The ack high-water mark above is
+            // idempotent and can safely see duplicates; this cannot.
+            logNoteContinuity(source, e);
             lines.push(logFormatLine(source, e));
         }
     };
@@ -649,6 +837,10 @@ app.get('/dynmap-frame', (req, res) => {
 const CC_RESTART_GAP_MS = 20 * 1000;  // >20s between updates → CC server restarted
 
 app.post('/update', async (req, res) => {
+    // Wall-clock from handler entry to response sent. Express has already parsed
+    // the body by this point, so this does not capture JSON parsing -- worth
+    // knowing when reading the number, since a ~190 KB payload is not free.
+    const pushStart = process.hrtime.bigint();
     const { turtles, jobs, version, storage, storageTs, mineZones } = req.body || {};
     console.log(`[UPDATE] v=${version} turtles=${Object.keys(turtles||{}).length} storage=${Array.isArray(storage)?storage.length:'?'}`);
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
@@ -746,6 +938,11 @@ app.post('/update', async (req, res) => {
 
     state.updatedAt = now;
 
+    // Bracketed so the log system's share of this handler is measurable rather
+    // than argued about — proposal 2. Both calls are CPU on this thread; only
+    // the disk write they queue happens elsewhere.
+    const logStart = process.hrtime.bigint();
+
     // Before both consumers: the file writer and the display buffers below.
     try { repairIncomingLogs(req.body || {}); }
     catch (e) { console.error('[LOG] repair failed:', e.message); }
@@ -755,6 +952,8 @@ app.post('/update', async (req, res) => {
     try { ingestLogs(req.body || {}); }
     catch (e) { console.error('[LOG] ingest failed:', e.message); }
 
+    const logMs = Number(process.hrtime.bigint() - logStart) / 1e6;
+
     // `logAck` rides as a sibling of `commands`, not inside it: `commands` is a
     // list the CC server iterates and dispatches, so a non-command entry there
     // would have to be filtered by every consumer. Sent only once W3's Phase 2
@@ -763,6 +962,12 @@ app.post('/update', async (req, res) => {
                     bridgeBootId: BRIDGE_BOOT_ID };
     if (Object.keys(logSeqHigh).length > 0) reply.logAck = logSeqHigh;
     res.json(reply);
+
+    // After the response, deliberately: recording must never be on the path the
+    // CC server waits on. res.json() has already handed the bytes to the socket,
+    // so the timing includes serialisation but the accounting costs the server
+    // nothing.
+    recordPush(Number(process.hrtime.bigint() - pushStart) / 1e6, logMs);
 });
 
 // Dashboard reads current state
@@ -1004,7 +1209,14 @@ app.get('/logs/:date', (req, res) => {
 });
 
 app.get('/state', (req, res) => {
-    res.json({ ...state, serverTime: Date.now() });
+    // Computed per request rather than stored: both are small derivations over
+    // ~15 sources, and a stale copy of a health number is worse than none.
+    res.json({
+        ...state,
+        serverTime: Date.now(),
+        logLoss:    logLossSummary(),
+        bridgeBusy: lastBusyRollup,   // null until the first rollup lands
+    });
 });
 
 // Dashboard queues a command for CC to pick up
@@ -1082,4 +1294,11 @@ app.listen(CFG.port, () => {
     initMarkerSet();
     pruneOldLogs();
     setInterval(pruneOldLogs, LOG_PRUNE_INTERVAL);
+
+    // Unconditional, so that a missing rollup means the instrumentation stopped
+    // rather than the bridge being quiet. unref() left off deliberately: this
+    // timer should keep the process honest for as long as it is running.
+    logLocal('INFO', `bridge up — busy rollups every ${BUSY_ROLLUP_MS / 1000}s, `
+        + `slow-push threshold ${BUSY_SLOW_PUSH_MS}ms`);
+    setInterval(emitBusyRollup, BUSY_ROLLUP_MS);
 });

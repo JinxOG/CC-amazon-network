@@ -43,13 +43,20 @@
            threshold that matters is whether the next deploy can write. A full
            disk has now silently broken saveJobs, savePersistentZones and the
            updater, each found only while chasing something else. */
-        #disk-badge {
+        #disk-badge, #log-badge {
             margin-left:8px; padding:3px 8px; border:1px solid; border-radius:2px;
             font-size:10px; letter-spacing:1px; white-space:nowrap;
         }
-        #disk-badge.warn { color:#ffaa44; border-color:#ffaa4444; background:#ffaa4408; }
-        #disk-badge.crit { color:#ff4444; border-color:#ff444444; background:#ff444408;
+        #disk-badge.warn, #log-badge.warn { color:#ffaa44; border-color:#ffaa4444; background:#ffaa4408; }
+        #disk-badge.crit, #log-badge.crit { color:#ff4444; border-color:#ff444444; background:#ff444408;
                            animation:stalePulse 1.4s ease-in-out infinite; }
+        /* Healthy and unknown are DIFFERENT, and both are visible. The disk badge
+           hides when healthy, which is right for it — but log loss is the number
+           that went unnoticed for a day precisely because nothing displayed it,
+           so a hidden 0% would leave "no loss" and "meter broken" looking alike.
+           It stays on screen so the operator can see it working. */
+        #log-badge.ok      { color:#44cc88; border-color:#44cc8833; background:#44cc8806; }
+        #log-badge.unknown { color:#888;    border-color:#8888; background:#88888806; }
         @keyframes stalePulse { 0%,100%{opacity:1} 50%{opacity:0.45} }
         #header-stats { margin-left:auto; display:flex; gap:16px; font-size:11px; align-items:center; }
         .stat { color:#7a8a9a; letter-spacing:1px; }
@@ -615,6 +622,7 @@
     <div id="last-update">connecting...</div>
     <div id="feed-badge" class="offline">● —</div>
     <div id="disk-badge" hidden></div>
+    <div id="log-badge" class="unknown">LOG ?</div>
     <div id="header-stats">
         <div class="stat">ONLINE <b id="s-online">0</b></div>
         <div class="stat">ACTIVE <b id="s-active">0</b></div>
@@ -1510,6 +1518,7 @@ async function poll(){
         else{badge.className='live';badge.textContent='● LIVE';}
         if(d.version)document.getElementById('cc-version').textContent=`v${d.version}`;
         renderDisk(d.diskFree);
+        renderLogLoss(d.logLoss,d.bridgeBusy);
         try{renderAll(d);}catch(re){console.error('[render error]',re);}
     }catch(e){
         document.getElementById('status-dot').className='offline';
@@ -2247,6 +2256,50 @@ function renderDisk(free){
     }else{
         el.hidden=true;   // healthy: stay out of the way
     }
+}
+
+// Log delivery loss, from the bridge's live sequence accounting (W1 proposal 5).
+//
+// W1 found 19% of log lines missing by running an audit for an unrelated reason,
+// and named the real problem: "a 19% figure that nobody sees is how this went
+// unnoticed." So this is on screen permanently rather than only when it is bad.
+function renderLogLoss(loss,busy){
+    const el=document.getElementById('log-badge');
+    if(!el)return;
+
+    // No sequenced lines yet — a cold bridge, or a fleet all running pre-1.9.88.
+    // This must never render as 0%: "nothing measured" and "nothing lost" are
+    // the exact pair of states this project keeps confusing for each other.
+    if(!loss||typeof loss.lossPct!=='number'){
+        el.className='unknown';
+        el.textContent='LOG ?';
+        el.title='No sequenced log lines received yet, so delivery loss is unknown '
+            +'— this is NOT the same as zero loss. A node must be running 1.9.88+ '
+            +'to send a sequence.';
+        return;
+    }
+
+    const pct=loss.lossPct;
+    el.className=pct>=5?'crit':pct>0?'warn':'ok';
+    el.textContent='LOG '+pct.toFixed(1)+'%';
+
+    // Worst source first: with fifteen nodes the aggregate hides which one is
+    // actually dropping, and that is the first thing anyone asks next.
+    const worst=Object.entries(loss.sources||{})
+        .filter(([,s])=>s.missing>0)
+        .sort((a,b)=>b[1].missing-a[1].missing)
+        .slice(0,3)
+        .map(([id,s])=>`${id}: ${s.missing} missing (${s.lossPct}%)`);
+
+    let t=`${loss.missing} of ${loss.expected} log lines never arrived `
+        +`(${pct.toFixed(1)}%), counted live since the bridge started.`;
+    if(worst.length)t+='\nWorst: '+worst.join(', ');
+    if(busy){
+        t+=`\nBridge last minute: ${busy.pushes} pushes, ${busy.slowPushes} slow, `
+          +`max ${busy.pushMsMax}ms, log share `
+          +`${busy.logSharePct===null?'n/a':busy.logSharePct+'%'}.`;
+    }
+    el.title=t;
 }
 
 function renderStorage(items,storageTs){
