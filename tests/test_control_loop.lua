@@ -411,6 +411,127 @@ function(assert_eq)
         .. "turtle keeps one fixed slot in the cycle for its whole life")
 end
 
+-- The log must not lose the lines that describe an outage.
+--
+-- flushLogQueue empties the queue BEFORE a fire-and-forget send, so a batch
+-- flushed while the server is deaf was gone for ever -- and that is precisely
+-- when the lines worth having exist. W1 found it in the audit on 2026-09-09:
+-- every gap in the file was an exact multiple of FIVE, sitting between
+-- "Registered successfully" and the next "Server unreachable". A disconnect
+-- cycle prints exactly five lines, so whole cycles were vanishing.
+--
+-- Driven through base.flushLogs rather than the control loop: reaching a second
+-- flush through the loop needs the heartbeat, the stall, the registration and
+-- two 15-second boundaries to line up, and a test that needs that much to line
+-- up is measuring the harness.
+local function turtleWithModem()
+    clearModules()
+    stub.install({ fuel = 100000, equipped = { left = require("equipment").ITEMS.MODEM } })
+    gps = { locate = function() return 0, 64, 0 end }
+    local base = require("turtle_base")
+    base.recoverModem()
+    local sent = {}
+    base.getModem().transmit = function(_, _, payload) sent[#sent + 1] = tostring(payload) end
+    return base, sent
+end
+
+local function logBatches(sent)
+    local n = 0
+    for _, m in ipairs(sent) do if m:find("TURTLE_LOG", 1, true) then n = n + 1 end end
+    return n
+end
+
+suite["an ordinary log batch is sent once"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        print("routine line")
+        base.flushLogs()
+        local first = logBatches(sent)
+        base.flushLogs()
+        local second = logBatches(sent)
+        assert_eq(first, 1, "the line must actually be shipped")
+        assert_eq(second, 1,
+            "and NOT re-sent when nothing went wrong — retrying every batch "
+            .. "would double the fleet's log traffic for no reason")
+    end)
+end
+
+suite["a batch written across a stall is retried, not thrown at the void"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        -- What a real stall does: the turtle declares the server unreachable,
+        -- which is the moment its next batch becomes untrustworthy.
+        base.markLogSuspect()
+        print("Server unreachable - pausing")
+        base.flushLogs()
+        local afterFirst = logBatches(sent)
+
+        base.flushLogs()          -- the retry
+        local afterRetry = logBatches(sent)
+
+        base.flushLogs()          -- and no more than one
+        local afterThird = logBatches(sent)
+
+        assert_eq(afterFirst, 1, "precondition: the batch is sent the first time")
+        assert_eq(afterRetry, 2,
+            "a batch written across a stall must be sent again — retrying is "
+            .. "free because the bridge de-duplicates on sequence, and losing "
+            .. "it costs the only account of the outage")
+        assert_eq(afterThird, 2,
+            "but ONCE. Two consecutive stalls mean worse problems than logging, "
+            .. "and an unbounded retry grows a queue on a 1 MB disk")
+    end)
+end
+
+suite["the retry keeps the outage before the recovery, not after it"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        base.markLogSuspect()
+        print("FIRST unreachable")
+        base.flushLogs()
+        print("SECOND reconnected")
+        base.flushLogs()          -- carries the retry AND the new line
+
+        local batch
+        for _, m in ipairs(sent) do
+            if m:find("TURTLE_LOG", 1, true) and m:find("SECOND", 1, true) then batch = m end
+        end
+        assert_eq(batch ~= nil, true, "precondition: a combined batch must exist")
+        local a, b = batch:find("FIRST", 1, true), batch:find("SECOND", 1, true)
+        assert_eq(a ~= nil and a < b, true,
+            "the withheld lines go back to the FRONT: a log that reports the "
+            .. "outage after the recovery it preceded is worse than one that "
+            .. "lost it")
+    end)
+end
+
+-- SOURCE-ONLY, weaker: the three tests above drive base.markLogSuspect, so none
+-- of them touches the PRODUCTION setter. Deleting it left them all green --
+-- caught by mutation. Without that line the retry never arms in the field and
+-- the whole fix is inert, which is the worst kind of green.
+suite["a real stall arms the log retry (SOURCE-ONLY, weaker)"] = function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+
+    local at = src:find("local function sendHeartbeat")
+    assert_eq(at ~= nil, true, "sendHeartbeat moved or vanished")
+    local body = src:sub(at, at + 2600)
+    local downAt    = body:find("_self%.serverDown = true")
+    -- Plain find, no pattern and no escapes: the comment nearby mentions
+    -- _logSuspect by name, but never as an assignment, so "= true" is what
+    -- separates the code from the prose about it.
+    local suspectAt = body:find("_logSuspect = true", 1, true)
+    assert_eq(downAt ~= nil, true, "the serverDown transition moved or vanished")
+    assert_eq(suspectAt ~= nil, true,
+        "declaring the server unreachable must arm the log retry, or the batch "
+        .. "written across the stall is still thrown at the void")
+    assert_eq(downAt < suspectAt, true,
+        "and it must be armed at the stall, not before one is detected")
+end
+
 suite["a JOB_ASSIGN that arrived via the queue is still accepted"] =
 function(assert_eq)
     withFakeRuntime(function()

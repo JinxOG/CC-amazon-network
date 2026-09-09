@@ -95,6 +95,26 @@ local function logError(m) log("ERROR", m) end
 local _logBootId = os.epoch("utc")
 local _logSeq    = 0
 
+-- The log used to lose exactly the lines that describe an outage.
+--
+-- flushLogQueue empties the queue BEFORE sending, and the send is
+-- fire-and-forget over a radio with no delivery confirmation. So a batch flushed
+-- while the server is deaf is gone for ever -- and the server being deaf is
+-- precisely when the interesting lines exist.
+--
+-- Found by W1 on 2026-09-09 from the audit, and confirmed by the shape of the
+-- damage: every gap in the file was an exact multiple of FIVE, sitting between
+-- "Registered successfully" and the next "Server unreachable". A disconnect
+-- cycle prints exactly five lines, so whole cycles were vanishing rather than
+-- individual lines being dropped -- 37 gaps of 5, three of 10, two of 15.
+--
+-- _logSuspect marks that a stall happened since the last flush; the batch is
+-- then held for one more attempt. Retrying is FREE because every line now
+-- carries a sequence and the bridge de-duplicates on (source, bootId, seq), so
+-- a duplicate costs nothing and a loss costs the account of the failure.
+local _logSuspect = false
+local _logRetry   = nil
+
 local _logQueue    = {}
 local LOG_QUEUE_MAX = 40
 do
@@ -508,13 +528,45 @@ function comms.toServer(msgType, payload)
 end
 
 local function flushLogQueue()
-    if not _self.modem or #_logQueue == 0 then return end
+    if not _self.modem then return end
+
+    -- Anything withheld from the previous flush goes back to the front, so the
+    -- retry keeps the original order rather than reporting the outage after the
+    -- recovery it preceded.
+    if _logRetry then
+        for i = #_logRetry, 1, -1 do table.insert(_logQueue, 1, _logRetry[i]) end
+        _logRetry = nil
+        while #_logQueue > LOG_QUEUE_MAX do table.remove(_logQueue, 1) end
+    end
+
+    if #_logQueue == 0 then return end
     local batch = _logQueue
     _logQueue = {}
+    -- Held for one more attempt only if a stall happened since the last flush.
+    -- One retry, not indefinite: two consecutive stalls mean the fleet has worse
+    -- problems than its logging, and an unbounded retry would grow this queue on
+    -- a computer with 1 MB of disk.
+    if _logSuspect then
+        _logRetry   = batch
+        _logSuspect = false
+    end
     -- bootId rides once per BATCH, not per line: it is the same 13 digits for
     -- every entry and this payload crosses the radio every 15 seconds.
     comms.toServer(proto.MSG.TURTLE_LOG, { lines = batch, bootId = _logBootId })
 end
+
+-- Public, for two reasons beyond testing.
+--
+-- A role's crash handler prints the fatal error and then reboots, and the
+-- control loop that would have flushed it is already dead -- so the single most
+-- valuable line a turtle ever writes is the one least likely to reach the log.
+-- A crash path can now call this before it reboots.
+function base.flushLogs() return flushLogQueue() end
+
+-- Test seam. The production setter is inside sendHeartbeat, where the stall
+-- is actually detected; this exists so the retry can be driven without
+-- standing up a heartbeat, a registration and two 15-second boundaries.
+function base.markLogSuspect() _logSuspect = true end
 
 -- Throttled position push: sends current position as STATUS_UPDATE at most once
 -- per 2 seconds. Intended for support turtles which move constantly but never
@@ -2067,6 +2119,10 @@ local function sendHeartbeat()
                 _self.pos.x, _self.pos.y, _self.pos.z))
             _self.serverDown = true
         end
+        -- Whatever the next flush carries was written across a window where the
+        -- server was not listening, so it does not get thrown at the void once
+        -- and forgotten. See the note on _logSuspect.
+        _logSuspect = true
         _missedHeartbeats = 0
         local ok = pcall(register)
         if not ok then
