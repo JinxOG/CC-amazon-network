@@ -14,9 +14,21 @@ written to a plain text file on the bridge host and served over HTTP.
 
 ```
 file      ~/cc-dashboard/logs/YYYY-MM-DD.txt   on 192.168.86.35
-rotation  daily, 14-day retention
+          ~/cc-dashboard/logs/current.txt      symlink to the file being written
+rotation  daily at UTC midnight, 14-day retention
 volume    ~10 MB/day with two miners working
 ```
+
+> **Filenames are the UTC date. `date +%F` is your LOCAL date.**
+>
+> West of UTC those disagree for the last hours of every day, so
+> `logs/$(date +%F).txt` silently reads *yesterday's finished file* — and returns
+> real, correctly-formatted, hours-old lines rather than an error. On 2026-09-09
+> that cost a wrong conclusion: `seq: null` on every line looked like a broken
+> feature and was actually pre-1.9.88 lines from the previous UTC day.
+>
+> **Never compute the date yourself.** Use `/logs/latest`, or `current.txt`, or
+> `date -u +%F` if you must name one.
 
 **Do not read that file over SSH and do not ask the operator for it.** It is
 served, and the served form filters server-side so you fetch kilobytes instead of
@@ -25,16 +37,30 @@ megabytes.
 ## The two endpoints
 
 ```bash
-# What days exist, and how big
+# What days exist, how big, and what today's UTC date actually is
 curl -s http://192.168.86.35:3000/logs
 
-# Query one day
-curl -s "http://192.168.86.35:3000/logs/2026-09-08?node=node_119&level=WARN&limit=200"
+# The file being written right now — resolved server-side, cannot be the wrong one
+curl -s "http://192.168.86.35:3000/logs/latest?node=node_119&level=WARN&limit=200"
+
+# A specific day, when you mean a specific day
+curl -s "http://192.168.86.35:3000/logs/2026-09-08?level=ERROR&limit=200"
+
+# Did anything go missing? Per-source continuity, computed on the bridge.
+curl -s "http://192.168.86.35:3000/logs/latest?audit=1"
 ```
+
+`?audit=1` reports, per source: `lines`, `first`, `last`, `gaps`, `missing` and
+`reboots`. **A decrease in sequence is a reboot, not a gap** — sequences restart
+at 1 — and the two are counted separately so a routine restart never reads as
+loss. Lines with no sequence (written before 1.9.88) are counted but make no
+continuity claim.
 
 | Parameter | Meaning |
 |---|---|
+| *(path)* | `latest` (file being written), `today` (current UTC day), or `YYYY-MM-DD` |
 | `node` | exact source: a node id, or `server` for the dispatch server |
+| `audit` | `1` to get continuity per source instead of lines |
 | `level` | `INFO` / `WARN` / `ERROR` |
 | `contains` | substring of the message |
 | `since`, `until` | ISO-8601, and a prefix works: `2026-09-08T14` is a valid hour bound |
@@ -95,6 +121,10 @@ curl -s "http://192.168.86.35:3000/logs/2026-09-08?since=2026-09-08T00:43&until=
    had. A few queries while diagnosing is nothing. A poll every second is not.
 
 3. **Quote `matched`, not just what you read.** See above.
+
+3a. **Never build a filename from a local date.** See the box at the top. The
+   failure is silent — you get a real file, full of real lines, from the wrong
+   day.
 
 4. **Timestamps are ISO-8601 in UTC** and sort lexicographically, so string
    comparison is time comparison. The in-game clock in screenshots is not.

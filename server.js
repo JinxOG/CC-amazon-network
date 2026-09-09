@@ -260,6 +260,8 @@ try { fs.mkdirSync(LOG_DIR, { recursive: true }); }
 catch (e) { console.error('[LOG] Cannot create log directory:', e.message); }
 
 let logQueue   = [];
+let logCurrentDay  = null;   // drives the current.txt symlink
+let logSymlinkWarned = false;
 let logWriting = false;
 
 // One append in flight at a time. fs.appendFile does not order concurrent
@@ -274,8 +276,43 @@ function flushLogQueue() {
     const batch = logQueue.join('');
     logQueue = [];
 
+    // UTC, deliberately and permanently: the timestamps INSIDE the file are
+    // ISO-8601 UTC, and a file whose name and contents disagree about which day
+    // it is would be a worse trap than the one this convention caused.
     const day  = new Date().toISOString().slice(0, 10);
     const file = path.join(LOG_DIR, `${day}.txt`);
+    // ...but nobody should have to know that to read the log.
+    //
+    // The documented check was `tail ~/cc-dashboard/logs/$(date +%F).txt`, and
+    // `date +%F` is LOCAL. West of UTC those disagree for the last hours of every
+    // day, so the command silently read yesterday's finished file and returned
+    // real, correctly-formatted, hours-old lines. The maintainer hit it on
+    // 2026-09-09 checking the new sequence field, saw seq:null on every line
+    // (they were pre-1.9.88 lines from the previous UTC day), and was about to
+    // report a working feature broken.
+    //
+    // A check that can return success as failure is worse than no check. So the
+    // date comes out of the human path entirely: current.txt always points at
+    // the file being written.
+    if (day !== logCurrentDay) {
+        logCurrentDay = day;
+        const link = path.join(LOG_DIR, 'current.txt');
+        try {
+            if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })) {
+                fs.unlinkSync(link);
+            }
+        } catch { /* nothing there, or not ours to remove */ }
+        try {
+            fs.symlinkSync(`${day}.txt`, link);
+        } catch (e) {
+            // Degrade quietly rather than failing the write: a filesystem
+            // without symlinks still gets a correct dated log.
+            if (!logSymlinkWarned) {
+                logSymlinkWarned = true;
+                console.error('[LOG] could not maintain current.txt:', e.message);
+            }
+        }
+    }
 
     fs.appendFile(file, batch, (err) => {
         logWriting = false;
@@ -359,6 +396,46 @@ function logFormatLine(source, entry) {
     // and no marker line.
     const src = entry.seq != null ? `${source}#${entry.seq}` : source;
     return `${ts}  ${src.padEnd(14)} ${logLevelOf(entry).padEnd(6)} ${msg}\n`;
+}
+
+// Repair UTF-8 that arrived one byte per character.
+//
+// NOT a bridge bug. CC's textutils.serialiseJSON escapes a Lua string BYTE by
+// byte -- Lua strings are byte strings and it treats each byte as a codepoint --
+// so an em-dash leaves Minecraft as â and arrives here as three
+// perfectly legitimate characters. This writer was recording exactly what it was
+// given. Verified from the live log on 2026-09-09: 0xe2 0x80 0x94, which is the
+// em-dash's UTF-8 encoding expanded into three Latin-1 codepoints.
+//
+// The expansion is exactly reversible, so this reverses it rather than papering
+// over it: map the codepoints back to bytes, decode as UTF-8.
+//
+// GUARDED BOTH WAYS. Untouched unless the string actually contains a character
+// in the 0x80-0xFF range, and the result is discarded unless it decodes as valid
+// UTF-8. A string that is already correct cannot be damaged by this.
+function repairMojibake(str) {
+    if (typeof str !== 'string' || !/[\u0080-\u00ff]/.test(str)) return str;
+    // Anything above 0xFF means this was never byte-expanded Latin-1.
+    if (/[^\u0000-\u00ff]/.test(str)) return str;
+    const decoded = Buffer.from(str, 'latin1').toString('utf8');
+    return decoded.includes('\uFFFD') ? str : decoded;
+}
+
+// Applied ONCE to the incoming payload, before either consumer reads it: the
+// file writer and the /state display buffers both take their text from here, and
+// repairing in one of them would leave the other showing mojibake.
+function repairIncomingLogs(body) {
+    for (const e of (Array.isArray(body?.serverLog) ? body.serverLog : [])) {
+        if (e && typeof e === 'object') e.msg = repairMojibake(e.msg);
+    }
+    const tl = body?.turtleLogs;
+    if (tl && typeof tl === 'object') {
+        for (const entries of Object.values(tl)) {
+            for (const e of (Array.isArray(entries) ? entries : [])) {
+                if (e && typeof e === 'object') e.msg = repairMojibake(e.msg);
+            }
+        }
+    }
 }
 
 function ingestLogs(body) {
@@ -669,6 +746,10 @@ app.post('/update', async (req, res) => {
 
     state.updatedAt = now;
 
+    // Before both consumers: the file writer and the display buffers below.
+    try { repairIncomingLogs(req.body || {}); }
+    catch (e) { console.error('[LOG] repair failed:', e.message); }
+
     // Queues formatted lines and returns immediately — the disk write happens
     // behind the response. Never await this: see the note on LOG_DIR above.
     try { ingestLogs(req.body || {}); }
@@ -738,12 +819,37 @@ app.get('/logs', (req, res) => {
                 try { size = fs.statSync(path.join(LOG_DIR, f)).size; } catch { /* raced a prune */ }
                 return { date: f.slice(0, 10), bytes: size };
             });
-        res.json({ dir: LOG_DIR, retentionDays: LOG_RETENTION_DAYS, days });
+        res.json({ dir: LOG_DIR, retentionDays: LOG_RETENTION_DAYS,
+                   // Stated rather than left to be worked out from a
+                   // timestamp mismatch, which is how it was found.
+                   filenames: 'UTC date; use /logs/latest or logs/current.txt to avoid guessing',
+                   todayUtc: new Date().toISOString().slice(0, 10),
+                   days });
     });
 });
 
 app.get('/logs/:date', (req, res) => {
-    const file = logFileFor(req.params.date);
+    // `latest` and `today` resolve here rather than in the caller. Every client
+    // that computes a date itself can compute the WRONG one -- see the note in
+    // flushLogQueue -- and the failure is silent because the wrong file is a
+    // real file full of real lines.
+    //
+    // `latest` is the newest file that exists; `today` is the current UTC day.
+    // They differ only just after a rollover, when today's file has no lines
+    // yet, and `latest` is the more useful answer there.
+    let dateParam = req.params.date;
+    if (dateParam === 'latest' || dateParam === 'today') {
+        let days = [];
+        try {
+            days = fs.readdirSync(LOG_DIR)
+                .filter(f => /^\d{4}-\d{2}-\d{2}\.txt$/.test(f)).sort();
+        } catch { /* handled below */ }
+        const todayUtc = new Date().toISOString().slice(0, 10);
+        if (dateParam === 'today') dateParam = todayUtc;
+        else if (days.length) dateParam = days[days.length - 1].slice(0, 10);
+        else dateParam = todayUtc;
+    }
+    const file = logFileFor(dateParam);
     if (!file) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
     if (!fs.existsSync(file)) return res.status(404).json({ error: 'no log for that date' });
 
