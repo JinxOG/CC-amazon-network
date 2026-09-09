@@ -153,6 +153,20 @@ const M  = load(mi > -1 ? process.argv[mi + 1].split('|||') : null);
     check('a filesystem without symlinks degrades instead of failing the write',
         src.includes('logSymlinkWarned'));
 
+    // W5 found this on 2026-09-09 while answering whether the log system blocks
+    // the push handler. It fires once per UTC day, so it is not a per-push cost
+    // -- but it sat on the one thread that answers /update, and that thread
+    // going quiet is the failure the whole investigation is about.
+    {
+        const a = src.indexOf('if (day !== logCurrentDay)');
+        const flush = src.slice(a, a + 1600);
+        check('current.txt is maintained without a synchronous filesystem call',
+            !/fs\.(exists|unlink|symlink|lstat)Sync/.test(flush),
+            'a sync fs call on the push path is what we are hunting elsewhere');
+        check('and nothing waits on it — it is a convenience, not a dependency',
+            flush.includes('fs.unlink(link, () =>') && flush.includes('fs.symlink('));
+    }
+
     check("the API resolves 'latest' so no caller computes a date",
         src.includes("dateParam === 'latest' || dateParam === 'today'"));
 

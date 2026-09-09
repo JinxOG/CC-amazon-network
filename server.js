@@ -407,22 +407,30 @@ function flushLogQueue() {
     // the file being written.
     if (day !== logCurrentDay) {
         logCurrentDay = day;
+        // ASYNC, and the callbacks are the point rather than tidiness.
+        //
+        // This was existsSync/unlinkSync/symlinkSync. W5 caught it on 2026-09-09
+        // while answering whether the log system blocks the push handler: it is
+        // guarded to fire once per UTC day, so it is not a per-push cost, but on
+        // a day boundary it blocked the one thread that answers /update -- and
+        // that thread going quiet is the exact failure this whole investigation
+        // is about. A few milliseconds once a day is not a stall; putting a
+        // synchronous filesystem call on that path while hunting one is still
+        // indefensible.
+        //
+        // Nothing waits on the result: current.txt is a convenience for humans,
+        // so it can land whenever it lands.
         const link = path.join(LOG_DIR, 'current.txt');
-        try {
-            if (fs.existsSync(link) || fs.lstatSync(link, { throwIfNoEntry: false })) {
-                fs.unlinkSync(link);
-            }
-        } catch { /* nothing there, or not ours to remove */ }
-        try {
-            fs.symlinkSync(`${day}.txt`, link);
-        } catch (e) {
-            // Degrade quietly rather than failing the write: a filesystem
-            // without symlinks still gets a correct dated log.
-            if (!logSymlinkWarned) {
-                logSymlinkWarned = true;
-                console.error('[LOG] could not maintain current.txt:', e.message);
-            }
-        }
+        fs.unlink(link, () => {
+            fs.symlink(`${day}.txt`, link, (err) => {
+                if (err && !logSymlinkWarned) {
+                    // Degrade quietly rather than failing the write: a filesystem
+                    // without symlinks still gets a correct dated log.
+                    logSymlinkWarned = true;
+                    console.error('[LOG] could not maintain current.txt:', err.message);
+                }
+            });
+        });
     }
 
     // Timed so W1 can see whether the disk itself ever stalls. This callback runs
