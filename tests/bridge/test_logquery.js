@@ -143,8 +143,31 @@ const M = loadPure(mutIdx > -1 ? process.argv[mutIdx + 1].split('|||') : null)(p
     check('unsequenced lines make no continuity claim',
         route.includes('if (e.seq == null) { st.unsequenced++; return; }'),
         'claiming "no gaps" about lines that cannot show one is worse than silence');
+    // Anchored on the PROPERTY, not on a formatting-sensitive literal: the
+    // previous version pinned an exact one-line `return res.json({...})` and
+    // went red when that call was reformatted across lines, which told us
+    // nothing about the code.
     check('the audit is computed on the bridge, not by shipping every line',
-        route.includes('return res.json({ file: path.basename(file), scanned: matched'));
+        route.includes('sources: out2') &&
+        route.includes('// audit counts lines; it does not collect them'));
+
+    // An audit must report its own sufficiency. Without this a one-line window
+    // returns gaps:0 and reads exactly like ten thousand clean ones -- the
+    // third instance of one shape, after an empty display buffer read as a
+    // broken feature and a local-date filename reading yesterday's file.
+    // Anchored on the COMPARISON, not the word. `insufficient` appears in the
+    // response field, the verdict and the note, so matching the identifier
+    // passed with the value hardcoded to false -- caught by mutation, and the
+    // third assertion this session that matched prose instead of logic.
+    check('the audit says when it has too little data to conclude anything',
+        route.includes('sequencedTotal < minLines'),
+        'a clean window and an empty one must not produce identical JSON');
+    check('and says so per source as well as overall',
+        route.includes('conclusive: sequenced >= minLines'));
+    check('unsequenced lines are REPORTED, not merely skipped',
+        route.includes('unsequenced: st.unsequenced'),
+        'a source whose lines all predate the sequence shows gaps:0, and that '
+        + 'zero is a statement about nothing');
 }
 
 // ─── The path guard, which is the one with teeth ────────────────────────────

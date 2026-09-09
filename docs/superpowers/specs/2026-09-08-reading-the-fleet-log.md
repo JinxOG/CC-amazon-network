@@ -108,6 +108,29 @@ print(collections.Counter(l['source'] for l in d['lines']))"
 curl -s "http://192.168.86.35:3000/logs/2026-09-08?since=2026-09-08T00:43&until=2026-09-08T00:50&format=text"
 ```
 
+## A check must be able to fail
+
+Named by the server maintainer on 2026-09-09 after it bit three times in one
+week, in three different places:
+
+| What was checked | What it returned | What it meant |
+|---|---|---|
+| `turtleLogNodes` in `/state` | `0` | the fleet was idle, not the pipeline broken |
+| `tail logs/$(date +%F).txt` | real, well-formed lines | from **yesterday's** file, seven hours stale |
+| `?audit=1` on a fresh window | `gaps: 0` | one line had been seen; the zero meant nothing |
+
+**The shape: a check whose PASS state is indistinguishable from its NO-DATA
+state.** Every one returned a plausible answer, none errored, and each cost
+someone a wrong conclusion before a second look caught it.
+
+So: **anything that reports health must also report whether it had enough
+evidence to say so.** `?audit=1` now returns `insufficient`, `scanned`,
+`sequenced` and a per-source `conclusive` for exactly this reason — a clean
+window and an empty one no longer produce the same JSON.
+
+When you use any check in this document, quote the evidence count alongside the
+verdict. "No gaps across 4,000 lines" is a finding. "No gaps" is not.
+
 ## Rules
 
 1. **Filter server-side.** `?node=` and `?contains=` run against a stream on the

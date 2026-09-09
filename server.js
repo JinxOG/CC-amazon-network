@@ -782,6 +782,10 @@ app.post('/update', async (req, res) => {
 
 const LOG_QUERY_DEFAULT = 500;
 const LOG_QUERY_MAX     = 5000;
+// Below this many SEQUENCED lines, an audit's "no gaps" carries no
+// information. Chosen to be larger than any single turtle's push window
+// so a clean answer has actually seen continuity, not one lucky line.
+const AUDIT_MIN_LINES   = 50;
 
 // "2026-09-08T08:02:49.923Z  server    WARN   message text"
 const LOG_LINE_RE = /^(\S+)\s{2}(\S+)\s+(\S+)\s+([\s\S]*)$/;
@@ -924,10 +928,33 @@ app.get('/logs/:date', (req, res) => {
             // across the network to count them -- which is exactly the work
             // this endpoint exists to avoid, and which this bridge does instead
             // of answering the dispatch server.
+            // AN AUDIT MUST REPORT ITS OWN SUFFICIENCY.
+            //
+            // Without this, a window containing one line returns `gaps: 0` and
+            // reads exactly like a window containing ten thousand clean ones.
+            // The endpoint could not distinguish "delivery is working" from
+            // "nothing was delivered because nothing happened", and the caller
+            // had to know to check `scanned` by hand -- which is the manual
+            // re-proving this endpoint exists to end.
+            //
+            // Named by the server maintainer on 2026-09-09 as the THIRD
+            // instance of one shape: a check whose pass state is
+            // indistinguishable from its no-data state. The other two were an
+            // empty display buffer read as a broken feature, and a local-date
+            // filename reading yesterday's finished file.
+            const minLines = Math.max(1, parseInt(q.minLines, 10) || AUDIT_MIN_LINES);
             const out2 = {};
+            let sequencedTotal = 0;
             for (const [src, st] of Object.entries(seen)) {
+                const sequenced = st.n - st.unsequenced;
+                sequencedTotal += sequenced;
                 out2[src] = {
                     lines: st.n,
+                    // Reported, not just counted. A source whose lines all
+                    // predate 1.9.88 shows gaps:0 -- and that zero is a
+                    // statement about nothing.
+                    sequenced,
+                    unsequenced: st.unsequenced,
                     first: st.first,
                     last: st.last,
                     // A FORWARD skip is loss. A DECREASE is a reboot -- seq
@@ -936,9 +963,27 @@ app.get('/logs/:date', (req, res) => {
                     gaps: st.gaps,
                     missing: st.missing,
                     reboots: st.reboots,
+                    // Does THIS source's zero mean anything?
+                    conclusive: sequenced >= minLines,
                 };
             }
-            return res.json({ file: path.basename(file), scanned: matched, sources: out2 });
+            const insufficient = sequencedTotal < minLines;
+            return res.json({
+                file: path.basename(file),
+                scanned: matched,
+                sequenced: sequencedTotal,
+                minLines,
+                insufficient,
+                verdict: insufficient ? 'insufficient'
+                       : (Object.values(out2).some(v => v.gaps > 0) ? 'gaps' : 'clean'),
+                note: insufficient
+                    ? `only ${sequencedTotal} sequenced line(s) in this window — `
+                      + 'too few to conclude anything. Widen the window, or give '
+                      + 'the fleet something to do and audit with ?since= the '
+                      + 'moment it started.'
+                    : undefined,
+                sources: out2,
+            });
         }
         if (asText) {
             res.type('text/plain').send(out.map(e =>
