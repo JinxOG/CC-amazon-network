@@ -47,13 +47,25 @@ W1 measured 30 clusters of 8+ nodes in 14 hours (`6b4d52a`). Not reproduced in
 the 25-minute loaded window on 2026-09-09 — four disconnects, four different
 nodes, minutes apart, singles rather than clusters.
 
-Both instruments now exist and neither has caught one in the act:
+**Both instruments have now failed to catch one under real load**, which is a
+result rather than a gap:
 
-- Bridge busy: `push_ms_max=3.2, slow=0` under load. **Eliminated.**
-- Server deaf time: worst 647 ms. **20× too small.**
+| Window | Disconnects | Server stalls | Bridge |
+|---|---|---|---|
+| 25 min, idle-ish | 4 across 4 nodes | 4 (all `refreshStorage`) | `slow=0` |
+| Full mining job | **61 across 13 nodes** | 5 | `push_ms_max=3.2, slow=0` |
 
-So the cause is still outstanding and is larger than anything either instrument
-has yet recorded. **Do not close this because the storage poll got fixed.**
+Sixty-one disconnects against five stalls means **the server was responsive for
+substantially all of them**. The bridge measured under a millisecond throughout.
+Both candidates are eliminated by measurement, not argument.
+
+The rate rises with fleet activity, and the events self-heal in about two
+seconds. **The next look must be from the TURTLE side** — what a turtle observes
+in the 15 seconds before it gives up — because the server's side now says
+nothing happened.
+
+**Do not close this because the storage poll got fixed.** 647 ms is 20× too
+small to produce a fleet-wide cluster.
 
 ## 3. Wire the crash handler to flush its dying words — **W1, W4**
 
@@ -69,6 +81,21 @@ The file is not chronological: turtles batch every 15 s while the server pushes
 every 3 s, so a turtle's lines land after server lines that happened later.
 Measured 37 backward steps in one day, up to 4 s. The timestamps are right; the
 order is not. `?sort=ts` on the query endpoint, so nobody has to remember.
+
+## 4b. Single-line log losses — **W3, open**
+
+The whole-job audit on 2026-09-09 showed 46 missing of 2,273 (2.02%), down from
+19%. **38 of those were one burst**, fixed at 1.9.91. The remaining eight are
+single lines, scattered — a different and much smaller mechanism, not yet
+identified. Not worth chasing until 1.9.91 has a job's worth of data to measure
+against.
+
+## 4c. Chunk-loader retrieval position mismatches — **W1, informational**
+
+Two `loader_position_mismatch` retries during the 2026-09-09 job. Both recovered
+on their own and the job succeeded, so this is not a fault — but the retry path
+added weeks ago is still being exercised in normal operation, which is worth
+knowing before anyone treats it as dead code.
 
 ## 5. Warehouse and admin computers forward no logs at all — **unowned**
 
@@ -92,3 +119,14 @@ installed unit's full text and a decision on whether to adopt the hardening.
 | Phase-lock storm | 1.9.87 | 0 fleet-wide episodes in 25 min — **but see item 2** |
 | Equipment swap after the CC:Tweaked upgrade | verified 2026-09-09 | both miners ran `SWAP_TO_PICKAXE` and `RETRIEVING` repeatedly |
 | Bridge as a stall suspect | 2026-09-09 | `log_share` under 10% of a sub-millisecond push |
+| A complete mining job | 2026-09-09 | 17,087 ore, 6/6 sectors, both miners docked and refuelled, loaders retrieved, zero failures |
+
+## Fixed but NOT yet measured — the list's own rule applies
+
+| Item | Fixed at | What would close it |
+|---|---|---|
+| Burst log loss (38 lines in one gap) | 1.9.91 | a full job's audit showing no multi-line gaps |
+
+Written down separately rather than in the closed table, because three entries
+above were once closed on evidence that could not have shown otherwise. A fix is
+a hypothesis until a measurement agrees with it.
