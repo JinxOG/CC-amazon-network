@@ -269,6 +269,21 @@ def run_suite():
 
 
 def main():
+    # THE BASELINE. Without it every verdict below is unsound.
+    #
+    # On 2026-09-10 an assertion in test_stall_witness.lua was already FAILING
+    # -- it anchored on a function's definition rather than its call site -- and
+    # this harness reported every mutant pointed at it as KILLED, because a test
+    # that is red before the mutation is red after it too. Thirteen mutants were
+    # certified by a test that could not pass. A red suite makes "the intended
+    # test went red" mean nothing at all.
+    red = [l for l in run_suite().splitlines() if l.startswith("FAIL  ")]
+    if red:
+        print("BASELINE NOT GREEN -- refusing to mutate. Fix these first:")
+        for l in red:
+            print("  " + l)
+        return 1
+
     problems = []
     for label, path, steps, target in MUTANTS:
         original = io.open(path, encoding="utf-8").read()

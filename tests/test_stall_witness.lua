@@ -242,7 +242,13 @@ function(assert_eq)
         "sendHeartbeat must count the beat, or 'N beats sent' is always 0 and "
         .. "cannot distinguish 'nobody replied' from 'nobody asked'")
 
-    local ackAt = code:find("resetMissedHeartbeats()", 1, true)
+    -- Anchored on the GATE, not on resetMissedHeartbeats: that name's first
+    -- occurrence in the file is its own definition, four hundred lines above the
+    -- only place it is called, and a window measured from the definition can
+    -- never contain the call. This assertion failed for exactly that reason and
+    -- the mutation harness reported the mutant KILLED anyway -- see the baseline
+    -- check now in tests/mutate_logship.py.
+    local ackAt = code:find('if msg.from == "server" then', 1, true)
     assert_eq(ackAt ~= nil, true, "the server-message gate moved or vanished")
     assert_eq(code:sub(ackAt, ackAt + 300):find("witnessAck(", 1, true) ~= nil, true,
         "hearing from the server must clear the window in production too, or "
