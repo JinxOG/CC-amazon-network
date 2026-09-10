@@ -785,6 +785,28 @@ return {
         assert_eq(src:find("stepMs, stepName = ms, name", 1, true) ~= nil, true,
             "something must actually record the slowest step, or the attribution "
             .. "is a placeholder that never fills in")
+
+        -- A step name is not a cause. W6 found on 2026-09-10 that the
+        -- refreshStorage span covers a yielding mod call AND a flat rebuild, and
+        -- that rsPollMs measured only the first -- so an idle figure from one
+        -- span was compared against a loaded figure from the other. The two
+        -- halves behave differently under load, so only a split can be reasoned
+        -- about.
+        -- Both the format string AND the branch that fills it. Asserting the
+        -- literal alone passed with the condition stubbed to false: the text
+        -- stayed in the source and no stall ever carried it. Third time this
+        -- session an assertion matched a string instead of the logic behind it.
+        assert_eq(src:find("listItems %%dms %+ rebuild %%dms") ~= nil, true,
+            "a stall naming refreshStorage must break out the yielding call from "
+            .. "the flat rebuild — the function name alone cannot say which")
+        assert_eq(src:find('stepName == "refreshStorage"', 1, true) ~= nil, true,
+            "and the branch that appends it must actually be reachable")
+        assert_eq(src:find("lastRsBuildMs = storageTs - buildStart", 1, true) ~= nil, true,
+            "and something must measure the rebuild half, or the split is a "
+            .. "format string with nothing behind it")
+        assert_eq(src:find('rsBuildWorstMs":', 1, true) ~= nil, true,
+            "the split must reach /state too, not only the stall line — a number "
+            .. "that appears once an hour cannot be compared against anything")
         -- And each step must be wrapped, or there is nothing to record.
         local wrapped = 0
         local at = src:find('timed("', 1, true)

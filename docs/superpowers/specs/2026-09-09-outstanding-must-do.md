@@ -22,14 +22,24 @@ LOOP STALL: deaf for 617ms — slowest step refreshStorage (617ms)
 
 Measured 2026-09-09, 20:36–21:01 UTC, two miners working a six-sector zone each.
 
-| | Idle | Under load |
-|---|---|---|
-| Worst `refreshStorage` pause | 267 ms | **647 ms** |
+**CORRECTED 2026-09-10 - the 267 vs 647 comparison was meaningless.** W6 checked
+the spans: `rsPollMs` wraps `rsBridge.listItems()` alone, while the loop's timer
+wraps the whole function - the mod call, the rebuild of ~450 items, and a ~44 KB
+`serialiseJSON`. I compared an idle figure from the inner span against a loaded
+figure from the outer one and reported "2.4x worse under load". Two different
+things shared one name; the instrument was honest and the label was not.
 
-**The idle number is what made me under-rate this.** On 2026-09-09 I told the
-operator this task was "hygiene, not a fix," reasoning from 267 ms against the
-~15 s a fleet-wide disconnect needs. Under load it is 2.4× worse, and it is now
-the single largest source of deaf time on the machine that runs the fleet.
+The halves also behave differently, which is what the comparison hid: the mod
+call **yields** and so inflates when the server is busy, while the rebuild and
+serialise are pure Lua and cost the same either way. Only the flat half can be
+judged from an idle sample at all.
+
+Split and published as of 1.9.92 (`rsBuildMs`, and stall lines now read
+`[listItems Xms + rebuild Yms]`), so the next number quoted here is attributable.
+
+**What survives the correction:** four stalls under load, all four in these two
+calls, nothing else on the list. Still item 1, still W6's. What does not survive
+is my account of *why* it got worse, which I do not yet know.
 Everything arriving in those windows is destroyed — CC hands an event to a
 coroutine that is not waiting and drops it.
 

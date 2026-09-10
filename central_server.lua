@@ -3061,8 +3061,24 @@ function server.run()
     -- boot. Published as rsPollMs / rsPollWorstMs. The worst matters more than
     -- the last: this fault is intermittent, and a single slow poll is enough to
     -- drop the events that strand the fleet.
-    local lastRsPollMs  = -1
+    -- THESE TWO NAMES MEASURE THE MOD CALL ONLY, and the name now says so.
+    --
+    -- W6 caught this on 2026-09-10: rsPollMs wraps the rsBridge.listItems()
+    -- pcall, while the loop's timed("refreshStorage", ...) wraps the WHOLE
+    -- function -- the call, the walk over ~450 items, and serialiseJSON
+    -- producing ~44 KB. Two different spans, one name in conversation, and I
+    -- compared an idle figure from the inner span against a loaded figure from
+    -- the outer one and published "2.4x worse under load". That comparison was
+    -- meaningless.
+    --
+    -- Split now, because the two halves behave differently and the difference
+    -- decides the design: the mod call YIELDS and so inflates when the server is
+    -- busy, while the rebuild and serialise are pure Lua and cost the same busy
+    -- or idle. Only the flat half can be reasoned about from an idle sample.
+    local lastRsPollMs  = -1   -- rsBridge.listItems() alone
     local rsPollWorstMs = -1
+    local lastRsBuildMs  = -1  -- rebuild + serialiseJSON, no yield
+    local rsBuildWorstMs = -1
     -- Terminate signals received and ignored since boot. Published so the
     -- source can be correlated against Minecraft restarts, /self-update runs
     -- and player activity without reading crash.log after the fact.
@@ -3203,6 +3219,7 @@ function server.run()
             logWarn("RS listItems returned non-table: " .. type(raw))
             return
         end
+        local buildStart = os.epoch("utc")
         local result = {}
         for _, item in ipairs(raw) do
             if item.name then
@@ -3217,6 +3234,8 @@ function server.run()
         storageItems = result
         storageJSON  = textutils.serialiseJSON(result)
         storageTs    = os.epoch("utc")
+        lastRsBuildMs = storageTs - buildStart
+        if lastRsBuildMs > rsBuildWorstMs then rsBuildWorstMs = lastRsBuildMs end
 
         -- Log only when the item count actually moves.
         --
@@ -3954,6 +3973,13 @@ function server.run()
                         ',"pushBuildMs":'  .. tostring(lastBuildMs) ..
                         ',"rsPollMs":'     .. tostring(lastRsPollMs) ..
                         ',"rsPollWorstMs":' .. tostring(rsPollWorstMs) ..
+                        -- The other half of the storage step. Published
+                        -- separately because it does not yield, so unlike
+                        -- rsPollMs it costs the same whether the server is busy
+                        -- or idle -- and a flat cost is the only one that can be
+                        -- judged from an idle sample.
+                        ',"rsBuildMs":'      .. tostring(lastRsBuildMs) ..
+                        ',"rsBuildWorstMs":' .. tostring(rsBuildWorstMs) ..
                         ',"terminateCount":' .. tostring(terminateCount) ..
                         ',"lastTerminateMs":' .. tostring(lastTerminateMs) ..
                         ',"healthMs":'     .. tostring(lastHealthMs) ..
@@ -4621,10 +4647,19 @@ function server.run()
 
             if busy >= LOOP_BUSY_WARN_MS then
                 loopSlowCount = loopSlowCount + 1
+                -- The RS steps get their split appended, because "slowest
+                -- step refreshStorage (647ms)" names a function, not a cause:
+                -- that span covers a yielding mod call AND a flat rebuild, and
+                -- only one of them can be fixed by moving work off this machine.
+                local detail = ""
+                if stepName == "refreshStorage" then
+                    detail = string.format(" [listItems %dms + rebuild %dms]",
+                        lastRsPollMs, lastRsBuildMs)
+                end
                 logWarn(string.format(
-                    "LOOP STALL: deaf for %dms — slowest step %s (%dms). "
+                    "LOOP STALL: deaf for %dms — slowest step %s (%dms)%s. "
                     .. "Every message that arrived in that window is gone.",
-                    busy, stepName, stepMs))
+                    busy, stepName, stepMs, detail))
             end
 
             -- EMITTED UNCONDITIONALLY, every minute, and that is deliberate.
