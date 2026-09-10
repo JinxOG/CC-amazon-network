@@ -180,4 +180,56 @@ suite["install.lua ships the same modules as updater.lua"] = function(assert_eq)
         "expected real requires to compare, got " .. checked)
 end
 
+-- The manifest above can only be self-consistent. It cannot make the program
+-- that READS it be the current version -- and on 2026-09-10 that distinction
+-- cost the whole fleet.
+--
+-- turtle_base.lua gained `require("logship")` in the same release that added
+-- logship.lua to COMMON. Both tests above passed, because the manifest was
+-- correct. But the updater doing the work on each turtle was the PREVIOUS
+-- version, running from the PREVIOUS list: it shipped the new turtle_base and
+-- the new updater.lua, rebooted, and fifteen turtles came up at a shell prompt
+-- saying "module 'logship' not found".
+--
+-- The fix is that the updater notices it has replaced ITSELF and starts over
+-- before it touches any role file. This test pins that ordering, which is the
+-- entire property: doing the check after the role files have already landed
+-- would be the same bug with more steps.
+--
+-- SOURCE-ORDERING, and weaker than the two above. updater.lua reads role.txt
+-- and starts downloading at load, so its loop is not reachable here. What can
+-- be pinned is the order, which is the thing at risk of being tidied back.
+suite["the updater restarts when it has replaced its own file list (SOURCE-ORDERING, weaker)"] =
+function(assert_eq)
+    -- Comments stripped first. This file's own history: a source assertion in
+    -- test_control_loop.lua matched a COMMENTED-OUT call and stayed green when
+    -- the line was commented out. Every one of the anchors below appears in the
+    -- prose of updater.lua as well as in its code.
+    local src = codeOnly(readFile("updater.lua"))
+
+    local capture  = src:find("local selfBefore = readSelf()", 1, true)
+    local common   = src:find("for _, file in ipairs(COMMON) do", 1, true)
+    local compare  = src:find("selfAfter ~= selfBefore", 1, true)
+    local relaunch = src:find('shell.run("updater")', 1, true)
+    local roleLoop = src:find("for _, entry in ipairs(ROLE_FILES[role]) do", 1, true)
+
+    assert_eq(capture ~= nil, true, "the updater no longer reads its own file")
+    assert_eq(common ~= nil, true, "the COMMON download loop moved or vanished")
+    assert_eq(compare ~= nil, true, "the self-change comparison moved or vanished")
+    assert_eq(relaunch ~= nil, true, "the relaunch moved or vanished")
+    assert_eq(roleLoop ~= nil, true, "the role download loop moved or vanished")
+
+    assert_eq(capture < common, true,
+        "the updater must read its own bytes BEFORE downloading COMMON, or it "
+        .. "compares the new file against itself and never notices the change")
+    assert_eq(common < compare, true,
+        "and compare AFTER, because updater.lua arrives as part of COMMON")
+    assert_eq(compare < roleLoop, true,
+        "and the comparison must come BEFORE the role files are downloaded. "
+        .. "Checking afterwards ships the new turtle_base from the old list "
+        .. "first, which is exactly the failure of 2026-09-10 with more steps")
+    assert_eq(relaunch < roleLoop, true,
+        "the relaunch must happen before any role file lands, for the same reason")
+end
+
 return suite

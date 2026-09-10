@@ -42,6 +42,9 @@ BOOT = "a later boot has a higher bootId"
 LOOP = "the control loop asks the outbox to tick every iteration (SOURCE-ONLY, weaker)"
 STALL = "a real stall arms the log retry (SOURCE-ONLY, weaker)"
 MANIFEST = "every role is sent every module its own files require"
+RELAUNCH = "an updater that predates a new module still ships it"
+ORDER = "the relaunch happens before any role file lands"
+CURRENT = "an updater that is already current does not relaunch"
 INSTALL = "install.lua ships the same modules as updater.lua"
 
 # (label, file, [(old, new), ...], test that must go red)
@@ -110,6 +113,49 @@ MUTANTS = [
     ("a real stall no longer arms the retry", "turtle_base.lua",
      [("        _log:markSuspect()\n        _missedHeartbeats = 0",
        "        _missedHeartbeats = 0")], STALL),
+
+    # The updater's self-refresh. Every one of these anchors also appears in
+    # updater.lua's PROSE, which is why the test strips comments before matching
+    # -- and why the commented-out forms are mutated here explicitly.
+    # The self-refresh. These four killed the two SOURCE-ORDERING assertions
+    # originally written for it -- `if false and ...` leaves the text in place,
+    # and so does moving the readSelf() that feeds it -- which is why the test
+    # they point at now loads updater.lua into a fake CC computer and runs it.
+    ("the self-change comparison can never fire", "updater.lua",
+     [("if selfBefore and selfAfter and selfAfter ~= selfBefore then",
+       "if false and selfBefore and selfAfter and selfAfter ~= selfBefore then")],
+     RELAUNCH),
+
+    ("selfAfter is read before the download instead of after", "updater.lua",
+     [("local selfAfter = readSelf()\n", ""),
+      ("local selfBefore = readSelf()",
+       "local selfBefore = readSelf()\nlocal selfAfter = readSelf()")],
+     RELAUNCH),
+
+    ("the relaunch is commented out", "updater.lua",
+     [('    shell.run("updater")\n    return',
+       '    --[[ shell.run("updater") ]]\n    return')],
+     RELAUNCH),
+
+    # The updater still notices it replaced itself, but only once the role files
+    # have already landed from the stale list -- 2026-09-10 again with an extra
+    # reboot in it.
+    ("the check moves below the role download", "updater.lua",
+     [("local selfAfter = readSelf()\n"
+       "if selfBefore and selfAfter and selfAfter ~= selfBefore then", "if false then"),
+      ('print("Verifying...")',
+       "local selfAfter = readSelf()\n"
+       "if selfBefore and selfAfter and selfAfter ~= selfBefore then\n"
+       '    shell.run("updater")\n    return\nend\n'
+       'print("Verifying...")')],
+     ORDER),
+
+    # Relaunching every single run doubles the traffic of a fifteen-turtle
+    # rollout and doubles the window in which a machine is mid-update.
+    ("the updater relaunches unconditionally", "updater.lua",
+     [("if selfBefore and selfAfter and selfAfter ~= selfBefore then",
+       "if selfBefore and selfAfter then")],
+     CURRENT),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

@@ -191,9 +191,51 @@ local expected = {}
 
 local function record(dst, size) expected[#expected + 1] = { dst = dst, size = size } end
 
+-- Our own file list is the thing in this script most likely to be out of date.
+--
+-- 2026-09-10, and it cost the whole fleet: turtle_base.lua gained a require on a
+-- NEW module in the same release that added that module to COMMON. The updater
+-- doing the work was the PREVIOUS version, running from the PREVIOUS list, so it
+-- shipped the new turtle_base without the file it requires. Every turtle came
+-- back from the reboot unable to start -- "module 'logship' not found", dropped
+-- to a shell prompt, fifteen of them, in the world.
+--
+-- The manifest test added alongside that change verified the manifest was
+-- self-consistent, which it was. A manifest cannot make the RUNNING program read
+-- it. That is this function's job.
+--
+-- So: if this run replaced updater.lua with different bytes, the list above is
+-- stale by definition and the only correct thing to do is start over with the
+-- new one. It terminates after exactly one relaunch, because the second run
+-- reads the file BEFORE downloading it and finds the two identical.
+--
+-- update.lua has always done this -- it re-downloads install.lua before running
+-- it -- and this is the same idea for the over-the-air path.
+local function readSelf()
+    local f = fs.open("updater.lua", "r")
+    if not f then return nil end
+    local ok, content = pcall(function() return f.readAll() end)
+    pcall(function() f.close() end)
+    if not ok then return nil end
+    return content
+end
+
+local selfBefore = readSelf()
+
 print("Downloading common files...")
 for _, file in ipairs(COMMON) do
     if download(file) then record(file) else failed = failed + 1 end
+end
+
+local selfAfter = readSelf()
+if selfBefore and selfAfter and selfAfter ~= selfBefore then
+    print("")
+    print("updater.lua changed in this run.")
+    print("Restarting with the new file list before touching role files --")
+    print("an updater cannot ship a module it does not know about yet.")
+    print("")
+    shell.run("updater")
+    return
 end
 
 print("Downloading " .. role .. " files...")
