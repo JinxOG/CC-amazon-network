@@ -57,6 +57,10 @@ W_NEVER  = "a turtle that never connected says so rather than reporting zero"
 W_CLEAR  = "hearing from the server clears the window"
 W_KEEP   = "reporting does not consume the evidence"
 W_WIRED  = "the unreachable warning carries the verdict (SOURCE-ONLY, weaker)"
+W_RADIO  = "a turtle with its modem swapped out is not reported as a lost message"
+W_UNDECL = "an undeclared radio-less window is called out, not excused"
+W_BOTH   = "a turtle that froze during a swap reports both, not one"
+W_STALE  = "a declaration does not excuse the next window too"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -188,7 +192,7 @@ MUTANTS = [
      [("    _loopGapMax    = 0\nend", "end")], W_CLEAR),
 
     ("an ACK does not clear the beat count", "turtle_base.lua",
-     [("    _beatsSinceAck = 0\n    _loopTurns     = 0", "    _loopTurns     = 0")], W_CLEAR),
+     [("    _beatsSinceAck = 0\n    _beatsUnsent   = 0", "    _beatsUnsent   = 0")], W_CLEAR),
 
     ("a turtle that never connected reports a zero elapsed time", "turtle_base.lua",
      [("    if _lastAckWall == 0 then", "    if false then")], W_NEVER),
@@ -198,15 +202,14 @@ MUTANTS = [
     # (wrong) line -- so "first == second" held and it survived for the wrong
     # reason. A mutant that does not model the fault is not evidence either way.
     ("reporting drains the evidence it just described", "turtle_base.lua",
-     [("    return string.format(\n"
-       '        "%.1fs since last ACK, %d beats sent, loop turned %dx, worst pause %.1fs [%s]",\n'
-       "        (now - _lastAckWall) / 1000, _beatsSinceAck, _loopTurns,\n"
-       "        _loopGapMax / 1000, verdict)",
-       "    local out = string.format(\n"
-       '        "%.1fs since last ACK, %d beats sent, loop turned %dx, worst pause %.1fs [%s]",\n'
-       "        (now - _lastAckWall) / 1000, _beatsSinceAck, _loopTurns,\n"
-       "        _loopGapMax / 1000, verdict)\n"
-       "    _loopGapMax = 0\n    _beatsSinceAck = 0\n    return out")], W_KEEP),
+     [('        _loopGapMax / 1000, table.concat(why, "; "))\nend',
+       '        _loopGapMax / 1000, table.concat(why, "; "))\n'
+       "    _loopGapMax = 0\n    _beatsSinceAck = 0\n    return __drained\nend"),
+      ("    return string.format(\n"
+       '        "%.1fs since last ACK, %d beats attempted, loop turned %dx, worst pause %.1fs [%s]",',
+       "    local __drained = string.format(\n"
+       '        "%.1fs since last ACK, %d beats attempted, loop turned %dx, worst pause %.1fs [%s]",')],
+     W_KEEP),
 
     # The two production setters. Every behavioural test drives a seam instead,
     # so deleting either leaves them all green while the field report is wrong.
@@ -222,6 +225,38 @@ MUTANTS = [
 
     ("the control loop stops witnessing", "turtle_base.lua",
      [("            witnessTurn(now)\n", "")], W_WIRED),
+
+    # ── The third explanation, which the first capture in the world found ──
+    # Guarded by the SOURCE-ONLY wiring test, not by a behavioural one: every
+    # behavioural test reaches this counter through base._witnessBeat instead.
+    ("a beat with no modem counts as sent", "turtle_base.lua",
+     [("    if not _self.modem then _beatsUnsent = _beatsUnsent + 1 end\n", "")], W_WIRED),
+
+    ("the radio clause is dropped from the verdict", "turtle_base.lua",
+     [("    if _beatsUnsent > 0 then", "    if false then")], W_RADIO),
+
+    ("a declared comms gap is never noticed", "turtle_base.lua",
+     [("    if _self.commsGap then _commsGapSeen = true end\n", "")], W_WIRED),
+
+    ("every radio-less window is excused as declared", "turtle_base.lua",
+     [("            _commsGapSeen and \"a declared comms gap, nothing was lost\"",
+       "            true and \"a declared comms gap, nothing was lost\"")], W_UNDECL),
+
+    ("an ACK does not clear the comms-gap flag", "turtle_base.lua",
+     [("    _commsGapSeen  = false\n", "")], W_STALE),
+
+    ("an ACK does not clear the unsent count", "turtle_base.lua",
+     [("    _beatsUnsent   = 0\n", "")], W_CLEAR),
+
+    # Clauses ADDED, not chosen between: an either/or verdict hides whichever
+    # condition it happens to test second.
+    ("the verdict picks one clause instead of adding them", "turtle_base.lua",
+     [("    if _loopGapMax >= WITNESS_FREEZE_MS then\n"
+       '        why[#why + 1] = "this turtle stopped running"\n'
+       "    end",
+       "    if #why == 0 and _loopGapMax >= WITNESS_FREEZE_MS then\n"
+       '        why[#why + 1] = "this turtle stopped running"\n'
+       "    end")], W_BOTH),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

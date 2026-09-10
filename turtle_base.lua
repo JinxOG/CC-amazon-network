@@ -2073,7 +2073,9 @@ local _heartbeatCount = 0
 -- inputs are invisible is one nobody can overrule, and the threshold below is a
 -- judgement call that deserves to be second-guessed from the log.
 local _lastAckWall   = 0   -- epoch of the last message from the server
-local _beatsSinceAck = 0   -- heartbeats sent since then
+local _beatsSinceAck = 0   -- heartbeats ATTEMPTED since then
+local _beatsUnsent   = 0   -- ... of which this many had no modem to go out on
+local _commsGapSeen  = false -- a deliberate modem-off window was flagged
 local _loopTurns     = 0   -- control-loop iterations since then
 local _loopGapMax    = 0   -- longest pause between two consecutive iterations
 local _lastLoopWall  = 0
@@ -2096,38 +2098,78 @@ local function witnessTurn(now)
     end
     _lastLoopWall = now
     _loopTurns    = _loopTurns + 1
+    -- Sampled per iteration rather than read at report time: the flag is
+    -- cleared again when the swap finishes, so by the time the turtle notices
+    -- it has lost the server the window that caused it has usually closed.
+    if _self.commsGap then _commsGapSeen = true end
 end
 
 local function witnessAck(now)
     _lastAckWall   = now
     _beatsSinceAck = 0
+    _beatsUnsent   = 0
+    _commsGapSeen  = false
     _loopTurns     = 0
     _loopGapMax    = 0
 end
 
--- The line that separates A from B. Reads, never mutates: a report that cleared
--- the evidence it had just described would make the SECOND consecutive stall
--- unreadable, and consecutive stalls are the interesting case.
+-- The line that separates the explanations.
+--
+-- THERE WERE THREE, not two, and the first real capture found the one neither
+-- half of this comment predicted. node_138, 2026-09-10 10:08:06, mid-job:
+--
+--   18.7s since last ACK, 3 beats sent, loop turned 102x, worst pause 0.9s
+--
+-- 102 turns and a 0.9s worst pause: emphatically running. So the first version
+-- of this function said "the ACKs did not arrive", which reads as a lost-message
+-- bug. It was not. The turtle was in the loader-retrieval ascent, where
+-- equipment.retrievalSwapIn takes the MODEM off to fit the chunk loader --
+-- chunk loading outranks comms. It had no radio. Nothing was lost, because
+-- nothing was ever transmitted.
+--
+-- "3 beats sent" was the giveaway and the instrument said it anyway: sendHeartbeat
+-- had been CALLED three times, and comms.toServer had pcall'd its way past a nil
+-- peripheral each time. Attempted is not sent, and a witness that cannot tell
+-- those apart hands back a confident wrong answer -- which is worse than the
+-- silence it replaced, because someone will act on it.
+--
+-- The fleet already knows about these windows: _self.commsGap is set for exactly
+-- this reason and the server prints "(comms gap expected)" beside the phase. The
+-- turtle just was not consulting its own flag.
+--
+-- Clauses are ADDED, not chosen between. A turtle can freeze during a swap, and
+-- an either/or verdict would hide whichever it checked second.
 local function witnessVerdict(now)
     -- A turtle that has never heard from the server has no baseline, and
     -- "0.0s since last ACK" would read as a server that answered a moment ago.
     -- Saying so is the difference between a measurement and a plausible lie.
     if _lastAckWall == 0 then
         return string.format(
-            "no ACK since boot, %d beats sent, loop turned %dx, worst pause %.1fs "
+            "no ACK since boot, %d beats attempted, loop turned %dx, worst pause %.1fs "
             .. "[never connected — nothing to compare against]",
             _beatsSinceAck, _loopTurns, _loopGapMax / 1000)
     end
-    local verdict
-    if _loopGapMax >= WITNESS_FREEZE_MS then
-        verdict = "this turtle stopped running — not the radio"
-    else
-        verdict = "this turtle kept running — the ACKs did not arrive"
+
+    local why = {}
+    if _beatsUnsent > 0 then
+        why[#why + 1] = string.format(
+            "no radio for %d of them — %s", _beatsUnsent,
+            _commsGapSeen and "a declared comms gap, nothing was lost"
+                           or "and NO comms gap was declared")
     end
+    if _loopGapMax >= WITNESS_FREEZE_MS then
+        why[#why + 1] = "this turtle stopped running"
+    end
+    -- Only reachable with a radio attached and a loop that kept turning, which
+    -- is the ONLY combination that means a message went missing.
+    if #why == 0 then
+        why[1] = "radio on and loop turning — the ACKs did not arrive"
+    end
+
     return string.format(
-        "%.1fs since last ACK, %d beats sent, loop turned %dx, worst pause %.1fs [%s]",
+        "%.1fs since last ACK, %d beats attempted, loop turned %dx, worst pause %.1fs [%s]",
         (now - _lastAckWall) / 1000, _beatsSinceAck, _loopTurns,
-        _loopGapMax / 1000, verdict)
+        _loopGapMax / 1000, table.concat(why, "; "))
 end
 
 -- Test seams. The production callers are the control loop, the server-message
@@ -2136,11 +2178,19 @@ end
 function base._witnessTurn(now)    witnessTurn(now)    end
 function base._witnessAck(now)     witnessAck(now)     end
 function base._witnessVerdict(now) return witnessVerdict(now) end
-function base._witnessBeat()       _beatsSinceAck = _beatsSinceAck + 1 end
+function base._witnessBeat(noRadio)
+    _beatsSinceAck = _beatsSinceAck + 1
+    if noRadio then _beatsUnsent = _beatsUnsent + 1 end
+end
+function base._witnessCommsGap()   _commsGapSeen = true end
 
 local function sendHeartbeat()
     _heartbeatCount = _heartbeatCount + 1
     _beatsSinceAck  = _beatsSinceAck + 1
+    -- comms.toServer pcalls its way past a detached modem and returns
+    -- nothing, so this is the only place the difference between a beat
+    -- that went out and one that could not is still visible.
+    if not _self.modem then _beatsUnsent = _beatsUnsent + 1 end
     -- Periodic GPS resync so idle or error-state turtles self-correct position drift.
     -- GPS locate needs no movement — just radio signal from beacons. Silent on failure.
     if _heartbeatCount % 12 == 0 then

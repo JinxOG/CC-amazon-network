@@ -87,7 +87,7 @@ suite["a turtle that kept running says the ACKs did not arrive"] = function(asse
         "and must not also carry the opposite verdict")
     assert_eq(line:find("15.0s since last ACK", 1, true) ~= nil, true,
         "and must report the measured gap, not just a verdict — got: " .. line)
-    assert_eq(line:find("3 beats sent", 1, true) ~= nil, true,
+    assert_eq(line:find("3 beats attempted", 1, true) ~= nil, true,
         "including how many heartbeats went out unanswered, which is what "
         .. "separates 'nobody replied' from 'nobody asked' — got: " .. line)
 end
@@ -164,9 +164,14 @@ suite["hearing from the server clears the window"] = function(assert_eq)
     base._witnessAck(T0)
     base._witnessTurn(T0)
     base._witnessTurn(T0 + 20000)          -- a freeze
-    base._witnessBeat()
+    -- ... during a declared, radio-less window. Every counter the window owns
+    -- is dirtied here, so the reset below has all of them to clear.
+    base._witnessCommsGap()
+    base._witnessBeat(true)
     assert_eq(base._witnessVerdict(T0 + 20000):find("stopped running", 1, true) ~= nil,
         true, "precondition: the freeze is seen")
+    assert_eq(base._witnessVerdict(T0 + 20000):find("no radio", 1, true) ~= nil,
+        true, "precondition: the radio-less window is seen")
 
     base._witnessAck(T0 + 21000)           -- ... and then the server comes back
     base._witnessTurn(T0 + 21000)
@@ -179,8 +184,14 @@ suite["hearing from the server clears the window"] = function(assert_eq)
         .. "survives a reconnect makes every later verdict a copy of the first")
     assert_eq(line:find("5.0s since last ACK", 1, true) ~= nil, true,
         "and the elapsed time must restart from the reconnect — got: " .. line)
-    assert_eq(line:find("1 beats sent", 1, true) ~= nil, true,
+    assert_eq(line:find("1 beats attempted", 1, true) ~= nil, true,
         "as must the beat count")
+    assert_eq(line:find("no radio", 1, true), nil,
+        "and the radio-less count must reset, or one loader swap accuses a "
+        .. "turtle of having no modem for the rest of its life")
+    assert_eq(line:find("nothing was lost", 1, true), nil,
+        "and the declared-gap flag with it, or the NEXT window is excused by a "
+        .. "declaration that belonged to the previous one")
 end
 
 -- Reading the verdict must not consume it. Two stalls in a row is the
@@ -198,6 +209,107 @@ suite["reporting does not consume the evidence"] = function(assert_eq)
     assert_eq(first, second,
         "the verdict is a read, not a drain: a turtle that stalls twice without "
         .. "reconnecting must still be able to describe the second one")
+end
+
+-- THE CASE THE FIRST VERSION GOT WRONG, and the reason there is a v2.
+--
+-- node_138, 2026-09-10 10:08:06, the very first capture in the world:
+--   "18.7s since last ACK, 3 beats sent, loop turned 102x, worst pause 0.9s
+--    [this turtle kept running - the ACKs did not arrive]"
+--
+-- 102 turns, 0.9s worst pause: emphatically running. So the instrument reported
+-- a lost-message bug. There was none. The turtle was in the loader-retrieval
+-- ascent, where equipment.retrievalSwapIn takes the MODEM off to fit the chunk
+-- loader. It had no radio. Nothing was lost because nothing was transmitted.
+suite["a turtle with its modem swapped out is not reported as a lost message"] =
+function(assert_eq)
+    local base = freshBase()
+    base._witnessAck(T0)
+    base._witnessCommsGap()                      -- the fleet declared the window
+    for i = 0, 3 do base._witnessTurn(T0 + i * 5000) end
+    base._witnessBeat(true); base._witnessBeat(true); base._witnessBeat(true)
+
+    local line = base._witnessVerdict(T0 + 15000)
+    assert_eq(line:find("the ACKs did not arrive", 1, true), nil,
+        "a turtle with no radio cannot be evidence that a message was lost -- "
+        .. "nothing was ever transmitted -- got: " .. line)
+    assert_eq(line:find("no radio for 3 of them", 1, true) ~= nil, true,
+        "it must say how many beats had nowhere to go -- got: " .. line)
+    assert_eq(line:find("nothing was lost", 1, true) ~= nil, true,
+        "and that the gap was declared, so nobody spends an afternoon on it")
+    assert_eq(line:find("3 beats attempted", 1, true) ~= nil, true,
+        "ATTEMPTED, not sent: comms.toServer pcalls past a detached modem, so "
+        .. "'sent' was the word that made the first capture read as a bug")
+end
+
+-- The same window with nobody having declared it is a different thing entirely:
+-- a turtle that lost its modem without meaning to. Same symptom, opposite
+-- meaning, and the flag is the only thing that separates them.
+suite["an undeclared radio-less window is called out, not excused"] =
+function(assert_eq)
+    local base = freshBase()
+    base._witnessAck(T0)
+    for i = 0, 3 do base._witnessTurn(T0 + i * 5000) end
+    base._witnessBeat(true); base._witnessBeat(true)
+
+    local line = base._witnessVerdict(T0 + 15000)
+    assert_eq(line:find("NO comms gap was declared", 1, true) ~= nil, true,
+        "a turtle that lost its radio WITHOUT the fleet expecting it is a real "
+        .. "fault, and must not be filed under the benign one -- got: " .. line)
+    assert_eq(line:find("nothing was lost", 1, true), nil,
+        "and must not claim nothing was lost, because something might have been")
+end
+
+-- The declared-gap flag has to die with its window.
+--
+-- Mutation found this one: removing the flag's reset from witnessAck left every
+-- test green, because none of them opened a SECOND radio-less window after a
+-- reconnect. In the field that is the common case -- a miner does a loader swap
+-- every sector -- and a flag that survives means the first legitimate swap
+-- excuses every genuine radio failure for the rest of the turtle's life.
+suite["a declaration does not excuse the next window too"] = function(assert_eq)
+    local base = freshBase()
+
+    -- Window one: a proper, declared loader swap.
+    base._witnessAck(T0)
+    base._witnessCommsGap()
+    base._witnessTurn(T0)
+    base._witnessBeat(true)
+    assert_eq(base._witnessVerdict(T0):find("nothing was lost", 1, true) ~= nil, true,
+        "precondition: the declared window is excused")
+
+    -- The server comes back, and then the radio goes away again with nobody
+    -- declaring it. That is a fault, and it must not inherit the excuse.
+    base._witnessAck(T0 + 1000)
+    base._witnessTurn(T0 + 1000)
+    base._witnessTurn(T0 + 6000)
+    base._witnessBeat(true)
+
+    local line = base._witnessVerdict(T0 + 6000)
+    assert_eq(line:find("NO comms gap was declared", 1, true) ~= nil, true,
+        "an undeclared radio-less window after a declared one is still a fault "
+        .. "-- got: " .. line)
+    assert_eq(line:find("nothing was lost", 1, true), nil,
+        "and must NOT be excused by the previous window's declaration")
+end
+
+-- A turtle can freeze DURING a swap. An either/or verdict would report whichever
+-- branch it happened to check first and hide the other.
+suite["a turtle that froze during a swap reports both, not one"] = function(assert_eq)
+    local base = freshBase()
+    base._witnessAck(T0)
+    base._witnessCommsGap()
+    base._witnessTurn(T0)
+    base._witnessTurn(T0 + 20000)                -- and it also stopped running
+    base._witnessBeat(true)
+
+    local line = base._witnessVerdict(T0 + 20000)
+    assert_eq(line:find("no radio for 1 of them", 1, true) ~= nil, true,
+        "the radio clause must be there -- got: " .. line)
+    assert_eq(line:find("stopped running", 1, true) ~= nil, true,
+        "and so must the freeze: clauses are ADDED, because a 20-second pause "
+        .. "is worth knowing about even when the missing radio already explains "
+        .. "the missing ACKs -- got: " .. line)
 end
 
 -- SOURCE-ONLY, weaker: reaching the real warn needs a registration, a modem and
@@ -248,6 +360,22 @@ function(assert_eq)
     -- never contain the call. This assertion failed for exactly that reason and
     -- the mutation harness reported the mutant KILLED anyway -- see the baseline
     -- check now in tests/mutate_logship.py.
+    -- v2 added two more production setters, and mutation found both unguarded
+    -- for the same reason as the first pair: the behavioural tests reach them
+    -- through base._witnessBeat and base._witnessCommsGap. Delete either line
+    -- and every one of those tests stays green while the field report is wrong.
+    assert_eq(code:sub(hbAt, hbAt + 700):find("_beatsUnsent", 1, true) ~= nil, true,
+        "sendHeartbeat must notice a beat that had no modem to go out on -- "
+        .. "'attempted' and 'sent' are the same number without it, and that is "
+        .. "exactly what made the first capture read as a lost-message bug")
+
+    local turnAt = code:find("local function witnessTurn", 1, true)
+    assert_eq(turnAt ~= nil, true, "witnessTurn moved or vanished")
+    assert_eq(code:sub(turnAt, turnAt + 400):find("_self.commsGap", 1, true) ~= nil, true,
+        "the loop must sample the declared-gap flag while the gap is OPEN -- it "
+        .. "is cleared again by the time the turtle notices it lost the server, "
+        .. "so reading it at report time always finds it false")
+
     local ackAt = code:find('if msg.from == "server" then', 1, true)
     assert_eq(ackAt ~= nil, true, "the server-message gate moved or vanished")
     assert_eq(code:sub(ackAt, ackAt + 300):find("witnessAck(", 1, true) ~= nil, true,
