@@ -27,7 +27,9 @@ local stub = require("tests.stub_cc")
 sleep = function() end
 os.epoch = os.epoch or function() return os.time() * 1000 end
 
-local MODULES = { "turtle_base", "mine_flow", "equipment", "geofence", "loader_state" }
+-- logship must clear with turtle_base: it owns the global print, and a stale
+-- instance left in package.loaded keeps capturing into a queue nobody flushes.
+local MODULES = { "turtle_base", "logship", "mine_flow", "equipment", "geofence", "loader_state" }
 
 local function clearModules()
     for _, m in ipairs(MODULES) do package.loaded[m] = nil end

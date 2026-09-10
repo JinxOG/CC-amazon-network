@@ -20,6 +20,13 @@ local COMMON = {
     "protocol.lua",
     "waypoints.lua",
     "updater.lua",
+    -- The fleet log's outbox. COMMON rather than per-role on purpose: the
+    -- warehouse and admin computers are about to start requiring it, and the
+    -- file has to be on disk BEFORE the code that requires it arrives. That
+    -- ordering is not theoretical -- see the cloudstore note under SERVER, and
+    -- 2026-08-27, when an OTA shipped a require ahead of its file and the
+    -- server would not boot.
+    "logship.lua",
 }
 
 -- Role-specific files: string = download as-is, table = {src, dst}

@@ -16,6 +16,7 @@ local FILES = {
     updater         = "updater.lua",
     central_server  = "central_server.lua",
     turtle_base     = "turtle_base.lua",
+    logship         = "logship.lua",
     waypoints       = "waypoints.lua",
     startup_server  = "startup_server.lua",
     delivery_turtle = "delivery_turtle.lua",
@@ -36,6 +37,10 @@ local PROFILES = {
     server = {
         { src = FILES.protocol,       name = "protocol.lua"       },
         { src = FILES.updater,        name = "updater.lua"        },
+        -- Ships to every role: turtle_base requires it at load, and the
+        -- warehouse and admin computers are next. A require that lands before
+        -- its file does not degrade, it refuses to boot.
+        { src = FILES.logship,        name = "logship.lua"        },
         { src = FILES.waypoints,      name = "waypoints.lua"      },
         -- central_server requires this at load. Without it the server does not
         -- start at all -- observed 2026-08-27, "module 'cloudstore' not found"
@@ -47,17 +52,20 @@ local PROFILES = {
     admin = {
         { src = FILES.protocol, name = "protocol.lua" },
         { src = FILES.updater,  name = "updater.lua"  },
+        { src = FILES.logship,  name = "logship.lua"  },
         { src = FILES.admin_ui, name = "startup.lua"  },
     },
     warehouse = {
         { src = FILES.protocol,       name = "protocol.lua"        },
         { src = FILES.updater,        name = "updater.lua"         },
+        { src = FILES.logship,        name = "logship.lua"         },
         { src = FILES.warehouse,      name = "startup.lua"         },
         { src = FILES.warehouse_test, name = "warehouse_test.lua"  },
     },
     delivery = {
         { src = FILES.protocol,        name = "protocol.lua"    },
         { src = FILES.updater,         name = "updater.lua"     },
+        { src = FILES.logship,         name = "logship.lua"     },
         { src = FILES.waypoints,       name = "waypoints.lua"   },
         { src = FILES.turtle_base,     name = "turtle_base.lua" },
         { src = FILES.delivery_turtle, name = "startup.lua"     },
@@ -65,6 +73,7 @@ local PROFILES = {
     support = {
         { src = FILES.protocol,       name = "protocol.lua"    },
         { src = FILES.updater,        name = "updater.lua"     },
+        { src = FILES.logship,        name = "logship.lua"     },
         { src = FILES.waypoints,      name = "waypoints.lua"   },
         { src = FILES.turtle_base,    name = "turtle_base.lua" },
         { src = FILES.support_turtle, name = "startup.lua"     },
@@ -72,6 +81,7 @@ local PROFILES = {
     miner = {
         { src = FILES.protocol,     name = "protocol.lua"     },
         { src = FILES.updater,      name = "updater.lua"      },
+        { src = FILES.logship,      name = "logship.lua"      },
         { src = FILES.waypoints,    name = "waypoints.lua"    },
         { src = FILES.turtle_base,  name = "turtle_base.lua"  },
         { src = FILES.equipment,    name = "equipment.lua"    },
@@ -83,6 +93,7 @@ local PROFILES = {
     loader = {
         { src = FILES.protocol,      name = "protocol.lua" },
         { src = FILES.updater,       name = "updater.lua"  },
+        { src = FILES.logship,       name = "logship.lua"  },
         { src = FILES.loader_turtle, name = "startup.lua"  },
     },
 }

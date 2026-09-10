@@ -17,7 +17,9 @@ package.path = "./?.lua;" .. package.path
 local stub  = require("tests.stub_cc")
 local proto = require("protocol")
 
-local MODULES = { "turtle_base", "mine_flow", "equipment", "geofence", "loader_state" }
+-- logship must clear with turtle_base: it owns the global print, and a stale
+-- instance left in package.loaded keeps capturing into a queue nobody flushes.
+local MODULES = { "turtle_base", "logship", "mine_flow", "equipment", "geofence", "loader_state" }
 
 -- ─── Deterministic clock / event pump ────────────────────────────────────────
 -- Only os.pullEvent advances the clock (by one heartbeat interval), so the
@@ -593,15 +595,49 @@ suite["a backlog keeps asking until it is drained"] = function(assert_eq)
 end
 
 -- SOURCE-ONLY, weaker: the control loop's trigger cannot be reached here.
-suite["the control loop honours the early-flush request (SOURCE-ONLY, weaker)"] =
+--
+-- What this used to assert -- that the trigger short-circuits on the urgent
+-- flag rather than waiting out the 15-second interval -- is now a real
+-- behavioural test, because the pacing moved into logship.lua where it can be
+-- driven directly. See "an urgent outbox does not wait for the interval" in
+-- test_logship.lua. What is left here is the WIRING, which still only exists
+-- inside a loop this harness cannot enter: the loop has to actually call tick,
+-- or logship's pacing is correct and never consulted.
+suite["the control loop asks the outbox to tick every iteration (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("turtle_base.lua", "r"))
     local src = f:read("*a")
     f:close()
-    assert_eq(src:find("if _logUrgent or now - lastLogFlushWall >= 15000 then", 1, true) ~= nil,
-        true,
-        "the flush trigger must short-circuit on the flag, or setting it "
-        .. "changes nothing and the burst still waits for the timer")
+
+    -- Anchored inside base.run, so the setTransport block four hundred lines
+    -- above -- which also mentions the outbox -- cannot satisfy this.
+    local at = src:find("function base.run(jobHandler)", 1, true)
+    assert_eq(at ~= nil, true, "base.run moved or vanished")
+
+    -- Comments stripped BEFORE the search, and this is not tidiness.
+    --
+    -- The first version of this test matched the raw source, so commenting the
+    -- call out left it green: the literal "_log:tick(now)" was still in the
+    -- file, inside a comment. Caught by mutation. It is the fourth time this
+    -- week a source assertion has matched prose about the code instead of the
+    -- code, and a pattern that cannot tell those apart is not a check.
+    --
+    -- Naive on purpose: it would also blank a "--" inside a string literal.
+    -- base.run's body has none, and the alternative is a Lua lexer in a test.
+    -- Newline built with string.char rather than an escape: a backslash-n in
+    -- this position has collapsed into a real newline three times this week
+    -- while editing Lua through a shell heredoc, and the damage is a file that
+    -- looks fine in a diff and does not parse.
+    local NL   = string.char(10)
+    local body = (src:sub(at):gsub("%-%-[^" .. NL .. "]*", ""))
+
+    assert_eq(body:find("_log:tick(now)", 1, true) ~= nil, true,
+        "the control loop must tick the outbox, or nothing ever flushes on the "
+        .. "interval and a burst waits for a crash handler to notice it")
+    assert_eq(body:find("_log:resetInterval(", 1, true) ~= nil, true,
+        "and it must realign the interval on entry: the outbox was created at "
+        .. "module load, and without this the first flush is paced from a clock "
+        .. "reading the loop never took")
 end
 
 suite["lines lost to a full outbox are reported, not silently dropped"] =
@@ -640,10 +676,13 @@ suite["a real stall arms the log retry (SOURCE-ONLY, weaker)"] = function(assert
     assert_eq(at ~= nil, true, "sendHeartbeat moved or vanished")
     local body = src:sub(at, at + 2600)
     local downAt    = body:find("_self%.serverDown = true")
-    -- Plain find, no pattern and no escapes: the comment nearby mentions
-    -- _logSuspect by name, but never as an assignment, so "= true" is what
-    -- separates the code from the prose about it.
-    local suspectAt = body:find("_logSuspect = true", 1, true)
+    -- Plain find, no pattern and no escapes. The comment immediately above the
+    -- call points at logship.lua by name, so it is the RECEIVER and the call
+    -- parentheses -- "_log:markSuspect()" -- that separate the code from the
+    -- prose about it. The string appears twice in the file -- here and in the
+    -- base.markLogSuspect test seam -- but the seam is four hundred lines
+    -- ABOVE sendHeartbeat, so the bounded body below cannot reach it.
+    local suspectAt = body:find("_log:markSuspect()", 1, true)
     assert_eq(downAt ~= nil, true, "the serverDown transition moved or vanished")
     assert_eq(suspectAt ~= nil, true,
         "declaring the server unreachable must arm the log retry, or the batch "

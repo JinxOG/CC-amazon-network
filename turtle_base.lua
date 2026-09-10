@@ -56,110 +56,37 @@ local _self = {
     commsGap    = nil,   -- true while a deliberate modem-off window is expected
 }
 
--- ─── Logging ─────────────────────────────────────────────────────────────────
+-- ─── Logging ───────────────────────────────────────────────────
 
--- Set for the duration of one print() so the queue below can record the level
--- as a real FIELD. Only log() knows it: by the time a line reaches print it is
--- text, and the bridge would have to recover it with a regex. W5 keeps that
--- regex for the bare print() calls elsewhere that never had a level to lose --
--- but a parsed level and a known one should not be the same thing, or
+-- The outbox itself lives in logship.lua.
+--
+-- It used to live here, which meant the warehouse and admin computers -- which
+-- forward no logs at all -- would each have needed their own copy of five rules
+-- that were paid for by five separate outages. Re-typing them is how one copy
+-- quietly loses one of them, so they live in one file now and this one consumes
+-- them like everybody else. Every comment that used to be here is there, next
+-- to the code it governs.
+--
+-- Created at the TOP of this file, before anything else can print, because it
+-- replaces the global print. The transport is attached further down, once
+-- comms.toServer exists to carry a batch.
+local logship = require("logship")
+local _log = logship.new({ source = "turtle" })
+
+-- pendingLevel is set for the duration of one print() so the queue records the
+-- level as a real FIELD. Only log() knows it: by the time a line reaches print
+-- it is text, and the bridge would have to recover it with a regex. W5 keeps
+-- that regex for the bare print() calls elsewhere that never had a level to
+-- lose -- but a parsed level and a known one should not be the same thing, or
 -- `grep WARN` quietly answers for only half the fleet.
-local _pendingLevel = nil
-
 local function log(level, msg)
-    _pendingLevel = level
+    _log.pendingLevel = level
     print(string.format("[%s][%s] %s", _self.id or "?", level, msg))
-    _pendingLevel = nil
+    _log.pendingLevel = nil
 end
 local function logInfo(m)  log("INFO",  m) end
 local function logWarn(m)  log("WARN",  m) end
 local function logError(m) log("ERROR", m) end
-
--- ─── Remote Log Queue ────────────────────────────────────────────────────────
--- Captures every print() call (from any module) and batches lines to the
--- server every 15 seconds so turtle activity is visible without local console.
--- Identity of this run, for the continuous fleet log (W5 Phase 2).
---
--- seq is monotonic per boot and never repeats, so the bridge knows exactly what
--- it has already written and the server can send only what is NEW rather than a
--- fixed window. That is what closes the burst gap: a turtle printing more than
--- the window between pushes used to lose its oldest lines silently.
---
--- bootId is a wall-clock stamp taken ONCE, not a counter in a file. It has to be
--- comparable -- higher is newer -- because a turtle's ring lives on the SERVER
--- and survives the turtle rebooting, so one push window can straddle two boots.
--- A persisted counter would survive a backwards clock step and would cost a disk
--- write every boot; the server computer filled its 1 MB disk on 2026-09-06, and
--- that trade is not worth making against a failure nobody has seen. Agreed with
--- W5 in 2026-09-08-W3-to-W5-bootid-will-be-comparable.md.
-local _logBootId = os.epoch("utc")
-local _logSeq    = 0
-
--- The log used to lose exactly the lines that describe an outage.
---
--- flushLogQueue empties the queue BEFORE sending, and the send is
--- fire-and-forget over a radio with no delivery confirmation. So a batch flushed
--- while the server is deaf is gone for ever -- and the server being deaf is
--- precisely when the interesting lines exist.
---
--- Found by W1 on 2026-09-09 from the audit, and confirmed by the shape of the
--- damage: every gap in the file was an exact multiple of FIVE, sitting between
--- "Registered successfully" and the next "Server unreachable". A disconnect
--- cycle prints exactly five lines, so whole cycles were vanishing rather than
--- individual lines being dropped -- 37 gaps of 5, three of 10, two of 15.
---
--- _logSuspect marks that a stall happened since the last flush; the batch is
--- then held for one more attempt. Retrying is FREE because every line now
--- carries a sequence and the bridge de-duplicates on (source, bootId, seq), so
--- a duplicate costs nothing and a loss costs the account of the failure.
-local _logSuspect = false
-local _logRetry   = nil
-
-local _logQueue    = {}
-
--- Sized and paced against a BURST, because that is when the log matters.
---
--- Measured 2026-09-09 on the first completed mining job: node_119 lost 38 lines
--- in one gap, and the line immediately after it was a geofence refusal. A turtle
--- in trouble talks more, so the outbox overflowed exactly when its contents were
--- worth having -- the same shape as the fire-and-forget flush fixed at 1.9.89,
--- one layer up.
---
--- Three changes rather than just a bigger number:
---   * LOG_QUEUE_MAX 40 -> 96, so an ordinary burst has somewhere to go.
---   * LOG_FLUSH_AT: crossing it asks the control loop to flush NOW rather than
---     at the next 15-second boundary. The loop turns at least once a second, so
---     a burst waits ~1s instead of up to 15.
---   * LOG_BATCH_MAX caps ONE message. A 96-line batch is ~10 KB of radio and
---     ~10 KB for the server to deserialise inside its event loop, and a large
---     payload making the server deaf is the fault this whole month was about.
---     A backlog drains over consecutive flushes instead of arriving as one lump.
-local LOG_QUEUE_MAX = 96
-local LOG_FLUSH_AT  = 24
-local LOG_BATCH_MAX = 48
-local _logUrgent    = false
--- Lines lost to a full queue. Reported rather than silently dropped: a gap in
--- the audit that nobody can explain is worse than one that explains itself.
-local _logDropped   = 0
-do
-    local _rawPrint = print
-    print = function(...)
-        _rawPrint(...)
-        local line = table.concat({...}, "\t")
-        if #_logQueue >= LOG_QUEUE_MAX then
-            table.remove(_logQueue, 1)
-            _logDropped = _logDropped + 1
-        end
-        if #_logQueue >= LOG_FLUSH_AT then _logUrgent = true end
-        _logSeq = _logSeq + 1
-        table.insert(_logQueue, {
-            ts    = os.epoch("utc"),
-            msg   = line,
-            seq   = _logSeq,
-            level = _pendingLevel,
-        })
-    end
-end
 
 -- ─── Public Accessors ────────────────────────────────────────────────────────
 
@@ -555,49 +482,20 @@ function comms.toServer(msgType, payload)
     end
 end
 
-local function flushLogQueue()
-    if not _self.modem then return end
-    _logUrgent = false
+-- The transport, attached now that comms.toServer exists.
+--
+-- ready() is what makes a flush issued before the modem is recovered a complete
+-- no-op rather than a batch handed to a nil peripheral: the lines stay queued
+-- and go out on the flush after recovery, which is the behaviour a turtle that
+-- deliberately unequips its modem mid-job depends on.
+_log:setTransport({
+    ready = function() return _self.modem ~= nil end,
+    send  = function(lines, bootId)
+        comms.toServer(proto.MSG.TURTLE_LOG, { lines = lines, bootId = bootId })
+    end,
+})
 
-    -- Say so BEFORE taking the batch, so the notice travels with the lines that
-    -- survived rather than a flush later. This is what turns an unexplained hole
-    -- in the audit into a recorded one.
-    if _logDropped > 0 then
-        local n = _logDropped
-        _logDropped = 0
-        print(string.format(
-            "[LOG] %d line(s) dropped — the outbox filled faster than it drains", n))
-    end
-
-    -- Anything withheld from the previous flush goes back to the front, so the
-    -- retry keeps the original order rather than reporting the outage after the
-    -- recovery it preceded.
-    if _logRetry then
-        for i = #_logRetry, 1, -1 do table.insert(_logQueue, 1, _logRetry[i]) end
-        _logRetry = nil
-        while #_logQueue > LOG_QUEUE_MAX do table.remove(_logQueue, 1) end
-    end
-
-    if #_logQueue == 0 then return end
-    -- At most LOG_BATCH_MAX per message; the remainder stays queued and the
-    -- urgent flag below brings the next flush along in about a second.
-    local batch = {}
-    for i = 1, math.min(#_logQueue, LOG_BATCH_MAX) do
-        batch[i] = table.remove(_logQueue, 1)
-    end
-    if #_logQueue > 0 then _logUrgent = true end
-    -- Held for one more attempt only if a stall happened since the last flush.
-    -- One retry, not indefinite: two consecutive stalls mean the fleet has worse
-    -- problems than its logging, and an unbounded retry would grow this queue on
-    -- a computer with 1 MB of disk.
-    if _logSuspect then
-        _logRetry   = batch
-        _logSuspect = false
-    end
-    -- bootId rides once per BATCH, not per line: it is the same 13 digits for
-    -- every entry and this payload crosses the radio every 15 seconds.
-    comms.toServer(proto.MSG.TURTLE_LOG, { lines = batch, bootId = _logBootId })
-end
+local function flushLogQueue() return _log:flush() end
 
 -- Public, for two reasons beyond testing.
 --
@@ -610,11 +508,11 @@ function base.flushLogs() return flushLogQueue() end
 -- Test seam. The production setter is inside sendHeartbeat, where the stall
 -- is actually detected; this exists so the retry can be driven without
 -- standing up a heartbeat, a registration and two 15-second boundaries.
-function base.markLogSuspect() _logSuspect = true end
+function base.markLogSuspect() _log:markSuspect() end
 
 -- Test seam. The production reader is the control loop's flush trigger,
 -- which cannot be reached without standing up the whole loop.
-function base.logUrgent() return _logUrgent end
+function base.logUrgent() return _log:urgent() end
 
 -- Throttled position push: sends current position as STATUS_UPDATE at most once
 -- per 2 seconds. Intended for support turtles which move constantly but never
@@ -2169,8 +2067,8 @@ local function sendHeartbeat()
         end
         -- Whatever the next flush carries was written across a window where the
         -- server was not listening, so it does not get thrown at the void once
-        -- and forgotten. See the note on _logSuspect.
-        _logSuspect = true
+        -- and forgotten. See the note on markSuspect in logship.lua.
+        _log:markSuspect()
         _missedHeartbeats = 0
         local ok = pcall(register)
         if not ok then
@@ -2363,7 +2261,10 @@ function base.run(jobHandler)
     -- Wall-clock heartbeat: immune to timer events being consumed by sleep() inside ensureFuel()
     local lastHeartbeatWall = os.epoch("utc")
     local heartbeatTarget   = heartbeatGap()
-    local lastLogFlushWall  = os.epoch("utc")
+    -- The outbox was created at module load, which on a real turtle is a second
+    -- or so ago and on a fake clock is a different clock entirely. Realign it
+    -- with the one this loop actually reads.
+    _log:resetInterval(os.epoch("utc"))
     local wakeupTimer       = os.startTimer(CFG.HEARTBEAT_INTERVAL)
     local pendingJob        = nil   -- job table waiting to be started
     local jobCo             = nil   -- running job coroutine
@@ -2535,13 +2436,11 @@ function base.run(jobHandler)
                 -- turtle's fixed slot, not stop it having one.
                 heartbeatTarget = heartbeatGap()
             end
-            -- Batch-forward accumulated print() lines to server every 15 seconds.
-            -- _logUrgent short-circuits the interval: a burst is exactly the
-            -- case where waiting 15 seconds loses the lines worth having.
-            if _logUrgent or now - lastLogFlushWall >= 15000 then
-                flushLogQueue()
-                lastLogFlushWall = now
-            end
+            -- Batch-forward accumulated print() lines to the server every 15
+            -- seconds. tick() short-circuits that interval when the outbox has
+            -- filled: a burst is exactly the case where waiting 15 seconds
+            -- loses the lines worth having.
+            _log:tick(now)
 
             local event, p1, p2, p3, p4 = os.pullEvent()
 
