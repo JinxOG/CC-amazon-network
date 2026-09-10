@@ -511,6 +511,126 @@ end
 -- of them touches the PRODUCTION setter. Deleting it left them all green --
 -- caught by mutation. Without that line the retry never arms in the field and
 -- the whole fix is inert, which is the worst kind of green.
+-- A burst must not lose the lines that describe it.
+--
+-- Measured 2026-09-09 on the first completed mining job: node_119 lost 38 lines
+-- in one gap, and the line immediately after it was a geofence refusal. A turtle
+-- in trouble talks more, so the outbox overflowed exactly when its contents were
+-- worth having.
+suite["a burst is flushed rather than dropped"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        for i = 1, 60 do print("burst line " .. i) end
+        base.flushLogs()
+
+        local batch, lines = nil, 0
+        for _, m in ipairs(sent) do
+            if m:find("TURTLE_LOG", 1, true) then
+                batch = m
+                local at = m:find("burst line", 1, true)
+                while at do lines = lines + 1; at = m:find("burst line", at + 1, true) end
+            end
+        end
+        assert_eq(batch ~= nil, true, "precondition: a batch must have been sent")
+        -- 60 exceeds the 48-line message cap but not the 96-line queue, so all
+        -- 60 must survive -- some in this message, the rest still queued.
+        assert_eq(lines <= 48, true,
+            "one message must stay bounded: a large payload is what makes the "
+            .. "server deaf while it deserialises — got " .. lines)
+        assert_eq(lines >= 40, true,
+            "but it must carry a full batch, not a trickle — got " .. lines)
+
+        base.flushLogs()
+        local total = 0
+        for _, m in ipairs(sent) do
+            if m:find("TURTLE_LOG", 1, true) then
+                local at = m:find("burst line", 1, true)
+                while at do total = total + 1; at = m:find("burst line", at + 1, true) end
+            end
+        end
+        assert_eq(total >= 60, true,
+            "and the remainder must follow on the next flush rather than being "
+            .. "dropped — got " .. total .. " of 60 across all messages")
+    end)
+end
+
+-- The flag is what makes the fix work in the FIELD. A bigger queue alone still
+-- makes a burst wait up to 15 seconds for the timer; the flag brings the next
+-- flush along in about a second, because the control loop turns at least once
+-- per second.
+suite["a filling outbox asks to be flushed early"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base = turtleWithModem()
+        assert_eq(base.logUrgent(), false, "precondition: nothing to send yet")
+
+        for i = 1, 10 do print("quiet " .. i) end
+        assert_eq(base.logUrgent(), false,
+            "ordinary chatter must NOT force an early flush, or every turtle "
+            .. "transmits on every line and the radio is the bottleneck")
+
+        for i = 1, 30 do print("burst " .. i) end
+        assert_eq(base.logUrgent(), true,
+            "crossing the high-water mark must ask for a flush now")
+
+        base.flushLogs()
+        assert_eq(base.logUrgent(), false,
+            "and the request must clear once served, or the loop transmits "
+            .. "on every iteration for ever")
+    end)
+end
+
+suite["a backlog keeps asking until it is drained"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base = turtleWithModem()
+        -- More than one message can carry, so the first flush leaves a
+        -- remainder. Without re-flagging, that remainder waits out the full
+        -- 15-second interval -- which is the delay this whole change removes.
+        for i = 1, 70 do print("backlog " .. i) end
+        base.flushLogs()
+        assert_eq(base.logUrgent(), true,
+            "lines left over after a capped message must keep the request up")
+    end)
+end
+
+-- SOURCE-ONLY, weaker: the control loop's trigger cannot be reached here.
+suite["the control loop honours the early-flush request (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    assert_eq(src:find("if _logUrgent or now - lastLogFlushWall >= 15000 then", 1, true) ~= nil,
+        true,
+        "the flush trigger must short-circuit on the flag, or setting it "
+        .. "changes nothing and the burst still waits for the timer")
+end
+
+suite["lines lost to a full outbox are reported, not silently dropped"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        -- Well past the 96-line queue, so drops are unavoidable. The point is
+        -- not that nothing is lost; it is that the audit can tell the difference
+        -- between a hole someone should investigate and one already explained.
+        for i = 1, 200 do print("flood " .. i) end
+        -- Drained over several flushes on purpose. The notice is appended to the
+        -- BACK of the queue, so it rides a later message than the one that
+        -- overflowed -- deliberately, because moving it to the front would put
+        -- its sequence number out of order, and the audit reads a backwards
+        -- sequence as a reboot. A notice that corrupts the continuity data is
+        -- worse than a notice that arrives a second late.
+        for _ = 1, 6 do base.flushLogs() end
+
+        local sawNotice = false
+        for _, m in ipairs(sent) do
+            if m:find("line(s) dropped", 1, true) then sawNotice = true end
+        end
+        assert_eq(sawNotice, true,
+            "a full outbox must say how much it lost — an unexplained gap in "
+            .. "the audit costs someone an afternoon, an explained one costs "
+            .. "nothing")
+    end)
+end
+
 suite["a real stall arms the log retry (SOURCE-ONLY, weaker)"] = function(assert_eq)
     local f = assert(io.open("turtle_base.lua", "r"))
     local src = f:read("*a")

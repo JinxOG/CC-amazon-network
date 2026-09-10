@@ -116,13 +116,41 @@ local _logSuspect = false
 local _logRetry   = nil
 
 local _logQueue    = {}
-local LOG_QUEUE_MAX = 40
+
+-- Sized and paced against a BURST, because that is when the log matters.
+--
+-- Measured 2026-09-09 on the first completed mining job: node_119 lost 38 lines
+-- in one gap, and the line immediately after it was a geofence refusal. A turtle
+-- in trouble talks more, so the outbox overflowed exactly when its contents were
+-- worth having -- the same shape as the fire-and-forget flush fixed at 1.9.89,
+-- one layer up.
+--
+-- Three changes rather than just a bigger number:
+--   * LOG_QUEUE_MAX 40 -> 96, so an ordinary burst has somewhere to go.
+--   * LOG_FLUSH_AT: crossing it asks the control loop to flush NOW rather than
+--     at the next 15-second boundary. The loop turns at least once a second, so
+--     a burst waits ~1s instead of up to 15.
+--   * LOG_BATCH_MAX caps ONE message. A 96-line batch is ~10 KB of radio and
+--     ~10 KB for the server to deserialise inside its event loop, and a large
+--     payload making the server deaf is the fault this whole month was about.
+--     A backlog drains over consecutive flushes instead of arriving as one lump.
+local LOG_QUEUE_MAX = 96
+local LOG_FLUSH_AT  = 24
+local LOG_BATCH_MAX = 48
+local _logUrgent    = false
+-- Lines lost to a full queue. Reported rather than silently dropped: a gap in
+-- the audit that nobody can explain is worse than one that explains itself.
+local _logDropped   = 0
 do
     local _rawPrint = print
     print = function(...)
         _rawPrint(...)
         local line = table.concat({...}, "\t")
-        if #_logQueue >= LOG_QUEUE_MAX then table.remove(_logQueue, 1) end
+        if #_logQueue >= LOG_QUEUE_MAX then
+            table.remove(_logQueue, 1)
+            _logDropped = _logDropped + 1
+        end
+        if #_logQueue >= LOG_FLUSH_AT then _logUrgent = true end
         _logSeq = _logSeq + 1
         table.insert(_logQueue, {
             ts    = os.epoch("utc"),
@@ -529,6 +557,17 @@ end
 
 local function flushLogQueue()
     if not _self.modem then return end
+    _logUrgent = false
+
+    -- Say so BEFORE taking the batch, so the notice travels with the lines that
+    -- survived rather than a flush later. This is what turns an unexplained hole
+    -- in the audit into a recorded one.
+    if _logDropped > 0 then
+        local n = _logDropped
+        _logDropped = 0
+        print(string.format(
+            "[LOG] %d line(s) dropped — the outbox filled faster than it drains", n))
+    end
 
     -- Anything withheld from the previous flush goes back to the front, so the
     -- retry keeps the original order rather than reporting the outage after the
@@ -540,8 +579,13 @@ local function flushLogQueue()
     end
 
     if #_logQueue == 0 then return end
-    local batch = _logQueue
-    _logQueue = {}
+    -- At most LOG_BATCH_MAX per message; the remainder stays queued and the
+    -- urgent flag below brings the next flush along in about a second.
+    local batch = {}
+    for i = 1, math.min(#_logQueue, LOG_BATCH_MAX) do
+        batch[i] = table.remove(_logQueue, 1)
+    end
+    if #_logQueue > 0 then _logUrgent = true end
     -- Held for one more attempt only if a stall happened since the last flush.
     -- One retry, not indefinite: two consecutive stalls mean the fleet has worse
     -- problems than its logging, and an unbounded retry would grow this queue on
@@ -567,6 +611,10 @@ function base.flushLogs() return flushLogQueue() end
 -- is actually detected; this exists so the retry can be driven without
 -- standing up a heartbeat, a registration and two 15-second boundaries.
 function base.markLogSuspect() _logSuspect = true end
+
+-- Test seam. The production reader is the control loop's flush trigger,
+-- which cannot be reached without standing up the whole loop.
+function base.logUrgent() return _logUrgent end
 
 -- Throttled position push: sends current position as STATUS_UPDATE at most once
 -- per 2 seconds. Intended for support turtles which move constantly but never
@@ -2488,7 +2536,9 @@ function base.run(jobHandler)
                 heartbeatTarget = heartbeatGap()
             end
             -- Batch-forward accumulated print() lines to server every 15 seconds.
-            if now - lastLogFlushWall >= 15000 then
+            -- _logUrgent short-circuits the interval: a burst is exactly the
+            -- case where waiting 15 seconds loses the lines worth having.
+            if _logUrgent or now - lastLogFlushWall >= 15000 then
                 flushLogQueue()
                 lastLogFlushWall = now
             end
