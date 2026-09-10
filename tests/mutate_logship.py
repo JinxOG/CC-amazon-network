@@ -47,6 +47,17 @@ ORDER = "the relaunch happens before any role file lands"
 CURRENT = "an updater that is already current does not relaunch"
 INSTALL = "install.lua ships the same modules as updater.lua"
 
+# The stall witness. The instrument that has to separate "the messages were
+# lost" from "the turtle was not running" -- a witness that always says the same
+# thing would end the investigation with a confident wrong answer.
+W_LOST   = "a turtle that kept running says the ACKs did not arrive"
+W_FROZE  = "a turtle whose clock jumped says it stopped running"
+W_IDLE   = "an idle turtle's own wakeup timer is never called a freeze"
+W_NEVER  = "a turtle that never connected says so rather than reporting zero"
+W_CLEAR  = "hearing from the server clears the window"
+W_KEEP   = "reporting does not consume the evidence"
+W_WIRED  = "the unreachable warning carries the verdict (SOURCE-ONLY, weaker)"
+
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
     ("seq never advances", "logship.lua",
@@ -156,6 +167,61 @@ MUTANTS = [
      [("if selfBefore and selfAfter and selfAfter ~= selfBefore then",
        "if selfBefore and selfAfter then")],
      CURRENT),
+
+    # ── Stall witness ────────────────────────────────────────────────────
+    ("freeze bar drawn from the busy case, not the idle one", "turtle_base.lua",
+     [("local WITNESS_FREEZE_MS = CFG.HEARTBEAT_INTERVAL * 1000 * 2",
+       "local WITNESS_FREEZE_MS = CFG.HEARTBEAT_INTERVAL * 1000 / 2")], W_IDLE),
+
+    ("freeze bar set so high nothing reaches it", "turtle_base.lua",
+     [("local WITNESS_FREEZE_MS = CFG.HEARTBEAT_INTERVAL * 1000 * 2",
+       "local WITNESS_FREEZE_MS = CFG.HEARTBEAT_INTERVAL * 1000 * 100")], W_FROZE),
+
+    ("the worst pause is never recorded", "turtle_base.lua",
+     [("        if gap > _loopGapMax then _loopGapMax = gap end",
+       "        if false then _loopGapMax = gap end")], W_FROZE),
+
+    ("loop turns are not counted", "turtle_base.lua",
+     [("    _loopTurns    = _loopTurns + 1", "    _loopTurns    = _loopTurns")], W_IDLE),
+
+    ("an ACK does not clear the worst pause", "turtle_base.lua",
+     [("    _loopGapMax    = 0\nend", "end")], W_CLEAR),
+
+    ("an ACK does not clear the beat count", "turtle_base.lua",
+     [("    _beatsSinceAck = 0\n    _loopTurns     = 0", "    _loopTurns     = 0")], W_CLEAR),
+
+    ("a turtle that never connected reports a zero elapsed time", "turtle_base.lua",
+     [("    if _lastAckWall == 0 then", "    if false then")], W_NEVER),
+
+    # The drain must land AFTER the string is built. An earlier version of this
+    # mutant zeroed the gap on ENTRY, which makes both calls return the same
+    # (wrong) line -- so "first == second" held and it survived for the wrong
+    # reason. A mutant that does not model the fault is not evidence either way.
+    ("reporting drains the evidence it just described", "turtle_base.lua",
+     [("    return string.format(\n"
+       '        "%.1fs since last ACK, %d beats sent, loop turned %dx, worst pause %.1fs [%s]",\n'
+       "        (now - _lastAckWall) / 1000, _beatsSinceAck, _loopTurns,\n"
+       "        _loopGapMax / 1000, verdict)",
+       "    local out = string.format(\n"
+       '        "%.1fs since last ACK, %d beats sent, loop turned %dx, worst pause %.1fs [%s]",\n'
+       "        (now - _lastAckWall) / 1000, _beatsSinceAck, _loopTurns,\n"
+       "        _loopGapMax / 1000, verdict)\n"
+       "    _loopGapMax = 0\n    _beatsSinceAck = 0\n    return out")], W_KEEP),
+
+    # The two production setters. Every behavioural test drives a seam instead,
+    # so deleting either leaves them all green while the field report is wrong.
+    ("sendHeartbeat stops counting the beat", "turtle_base.lua",
+     [("    _beatsSinceAck  = _beatsSinceAck + 1\n", "")], W_WIRED),
+
+    ("hearing from the server no longer clears the window", "turtle_base.lua",
+     [("            witnessAck(os.epoch(\"utc\"))\n", "")], W_WIRED),
+
+    ("the warning drops the verdict again", "turtle_base.lua",
+     [("                witnessVerdict(os.epoch(\"utc\"))))", '                "waiting for reconnect..."))')],
+     W_WIRED),
+
+    ("the control loop stops witnessing", "turtle_base.lua",
+     [("            witnessTurn(now)\n", "")], W_WIRED),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

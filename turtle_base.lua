@@ -2044,8 +2044,103 @@ local _missedHeartbeats = 0
 local MAX_MISSED = 3  -- re-register after this many missed ACKs
 local _heartbeatCount = 0
 
+-- ────────────────────────────────────────────────────────────────── Stall witness
+--
+-- Why a turtle now says HOW it lost the server, not just that it did.
+--
+-- Measured 2026-09-10 across a full day of fleet log: 291 disconnect events in
+-- 68 clusters, five of them hitting 12-15 nodes at once. Two server-side
+-- explanations were tested against that log and both are dead. Bridge pushes
+-- are NEGATIVELY correlated with the clusters -- 5 near-hits where chance alone
+-- predicts 9. And the server never stopped: its 60-second loop rollup arrives
+-- on cadence straight through every fleet-wide dropout, reporting ~100ms worst
+-- busy time, while the bridge (a separate process, outside the game) keeps its
+-- own 60s cadence unbroken.
+--
+-- So the server was running and every turtle stopped hearing it anyway. Two
+-- explanations remain, and they are indistinguishable from the server side:
+--
+--   A. The messages are genuinely being lost. The turtle kept running, sent its
+--      three heartbeats, and no ACK came back.
+--   B. The turtle itself stopped running -- the game paused -- and fifteen
+--      seconds of wall clock passed in what the turtle experienced as one
+--      moment.
+--
+-- Only the turtle can separate those, and only by reporting what its OWN loop
+-- did during the window. That is all this section is.
+--
+-- It prints the raw numbers next to the verdict deliberately. A verdict whose
+-- inputs are invisible is one nobody can overrule, and the threshold below is a
+-- judgement call that deserves to be second-guessed from the log.
+local _lastAckWall   = 0   -- epoch of the last message from the server
+local _beatsSinceAck = 0   -- heartbeats sent since then
+local _loopTurns     = 0   -- control-loop iterations since then
+local _loopGapMax    = 0   -- longest pause between two consecutive iterations
+local _lastLoopWall  = 0
+
+-- The control loop blocks on os.pullEvent, and when nothing else is happening
+-- the only thing that wakes it is the wakeup timer at CFG.HEARTBEAT_INTERVAL.
+-- So a five-second pause on an idle turtle is not a stall, it is the design.
+--
+-- Set at TWICE that, because a threshold drawn from the busy case is how the
+-- phase-stuck detector cried wolf fourteen times on 2026-09-09: its bar came
+-- from the fast early phases, and DUMPING legitimately lasts most of a sector.
+-- Nothing schedules a ten-second gap, so at or above it the turtle was not
+-- running.
+local WITNESS_FREEZE_MS = CFG.HEARTBEAT_INTERVAL * 1000 * 2
+
+local function witnessTurn(now)
+    if _lastLoopWall > 0 then
+        local gap = now - _lastLoopWall
+        if gap > _loopGapMax then _loopGapMax = gap end
+    end
+    _lastLoopWall = now
+    _loopTurns    = _loopTurns + 1
+end
+
+local function witnessAck(now)
+    _lastAckWall   = now
+    _beatsSinceAck = 0
+    _loopTurns     = 0
+    _loopGapMax    = 0
+end
+
+-- The line that separates A from B. Reads, never mutates: a report that cleared
+-- the evidence it had just described would make the SECOND consecutive stall
+-- unreadable, and consecutive stalls are the interesting case.
+local function witnessVerdict(now)
+    -- A turtle that has never heard from the server has no baseline, and
+    -- "0.0s since last ACK" would read as a server that answered a moment ago.
+    -- Saying so is the difference between a measurement and a plausible lie.
+    if _lastAckWall == 0 then
+        return string.format(
+            "no ACK since boot, %d beats sent, loop turned %dx, worst pause %.1fs "
+            .. "[never connected — nothing to compare against]",
+            _beatsSinceAck, _loopTurns, _loopGapMax / 1000)
+    end
+    local verdict
+    if _loopGapMax >= WITNESS_FREEZE_MS then
+        verdict = "this turtle stopped running — not the radio"
+    else
+        verdict = "this turtle kept running — the ACKs did not arrive"
+    end
+    return string.format(
+        "%.1fs since last ACK, %d beats sent, loop turned %dx, worst pause %.1fs [%s]",
+        (now - _lastAckWall) / 1000, _beatsSinceAck, _loopTurns,
+        _loopGapMax / 1000, verdict)
+end
+
+-- Test seams. The production callers are the control loop, the server-message
+-- gate in dispatchControl and sendHeartbeat, none of which can be reached
+-- without standing up a registration, a modem and three heartbeat boundaries.
+function base._witnessTurn(now)    witnessTurn(now)    end
+function base._witnessAck(now)     witnessAck(now)     end
+function base._witnessVerdict(now) return witnessVerdict(now) end
+function base._witnessBeat()       _beatsSinceAck = _beatsSinceAck + 1 end
+
 local function sendHeartbeat()
     _heartbeatCount = _heartbeatCount + 1
+    _beatsSinceAck  = _beatsSinceAck + 1
     -- Periodic GPS resync so idle or error-state turtles self-correct position drift.
     -- GPS locate needs no movement — just radio signal from beacons. Silent on failure.
     if _heartbeatCount % 12 == 0 then
@@ -2061,8 +2156,9 @@ local function sendHeartbeat()
     if _missedHeartbeats >= MAX_MISSED then
         if not _self.serverDown then
             logWarn(string.format(
-                "Server unreachable — pausing at %d,%d,%d and waiting for reconnect...",
-                _self.pos.x, _self.pos.y, _self.pos.z))
+                "Server unreachable — pausing at %d,%d,%d — %s",
+                _self.pos.x, _self.pos.y, _self.pos.z,
+                witnessVerdict(os.epoch("utc"))))
             _self.serverDown = true
         end
         -- Whatever the next flush carries was written across a window where the
@@ -2301,6 +2397,10 @@ function base.run(jobHandler)
         -- inside pumpFor was filed and never acted on.
         if msg.from == "server" then
             resetMissedHeartbeats()
+            -- Same gate, same reason: only the server's own traffic is
+            -- evidence that the server is alive, so only it may clear the
+            -- window this turtle would otherwise have to report on.
+            witnessAck(os.epoch("utc"))
         end
 
         if msg.type == proto.MSG.JOB_ASSIGN and not _self.busy then
@@ -2429,6 +2529,12 @@ function base.run(jobHandler)
 
             -- Wall-clock heartbeat check (survives timer events being swallowed by sleep())
             local now = os.epoch("utc")
+            -- One reading per iteration, so the gap between two of them
+            -- spans the os.pullEvent at the bottom of this loop. That is
+            -- where a paused game hides: the turtle is not slow, it is
+            -- absent, and the only trace is that its clock moved while it
+            -- did not.
+            witnessTurn(now)
             if now - lastHeartbeatWall >= heartbeatTarget then
                 sendHeartbeat()
                 lastHeartbeatWall = now

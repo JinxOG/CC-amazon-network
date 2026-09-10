@@ -111,7 +111,30 @@ function Ship:capturePrint()
     local inst = self
     print = function(...)
         raw(...)
-        inst:add(table.concat({ ... }, "\t"), inst.pendingLevel)
+        -- The outbox must never be able to break the thing it is wrapping.
+        --
+        -- This capture replaces the GLOBAL print, so anything that can throw in
+        -- here throws out of every print() on the computer -- including the ones
+        -- a crash handler makes on its way down. A logger that takes stdout with
+        -- it costs far more than every line it was ever going to ship.
+        --
+        -- Found on 2026-09-10, when a test released a fake clock while the
+        -- capture was still installed: os.epoch went away, add() raised, and the
+        -- TEST RUNNER died in the middle of reporting. In CC os.epoch is always
+        -- there, so this guards the class rather than that instance.
+        --
+        -- A failure is counted as a dropped line, so it leaves through the
+        -- notice that already exists instead of becoming a silent hole.
+        -- Flattened out here rather than inside the pcall because a closure
+        -- cannot see its enclosing function's `...`. Safe in this order: raw()
+        -- above has already stringified every argument without throwing, so by
+        -- the time this runs tostring is proven not to raise on them.
+        local parts = {}
+        for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+        local ok = pcall(function()
+            inst:add(table.concat(parts, "\t"), inst.pendingLevel)
+        end)
+        if not ok then inst._dropped = inst._dropped + 1 end
     end
 end
 
