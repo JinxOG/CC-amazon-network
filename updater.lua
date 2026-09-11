@@ -58,7 +58,6 @@ local ROLE_FILES = {
         -- OTA that ships the server without it bricks the boot.
         "cloudstore.lua",
         { src = "central_server.lua", dst = "startup.lua" },
-        "stress_test.lua",
     },
     ADMIN     = {
         { src = "admin_ui.lua", dst = "startup.lua" },
