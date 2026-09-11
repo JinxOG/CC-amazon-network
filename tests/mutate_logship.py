@@ -62,6 +62,16 @@ W_UNDECL = "an undeclared radio-less window is called out, not excused"
 W_BOTH   = "a turtle that froze during a swap reports both, not one"
 W_STALE  = "a declaration does not excuse the next window too"
 
+# A send that KNOWS it failed. Found in the jobs 0039-0042 audit: the outbox and
+# the witness both trusted the modem HANDLE, which a swap never clears.
+S_FAILKEEP = "a send that reports failure keeps the batch"
+S_BACKOFF  = "a failed send waits for the interval, not every loop turn"
+S_NILOK    = "a transport that returns nothing still counts as sent"
+C_DETACH   = "a log batch flushed through a detached modem is kept"
+C_GAP      = "a declared comms gap holds the outbox instead of transmitting into it"
+W_UNSENT   = "a heartbeat into a detached modem is counted as unsent"
+W_SENTOK   = "a heartbeat through a working modem is not counted as unsent"
+
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
     ("seq never advances", "logship.lua",
@@ -98,9 +108,9 @@ MUTANTS = [
     # single-anchor version of this is an equivalent mutant -- see below.
     ("ready() moved below the queue drain", "logship.lua",
      [("    if self._ready and not self._ready() then return false end\n", ""),
-      ("    self._send(batch, self._bootId)\n    return true",
+      ("    if self._send(batch, self._bootId) == false then",
        "    if self._ready and not self._ready() then return false end\n"
-       "    self._send(batch, self._bootId)\n    return true")], RADIO),
+       "    if self._send(batch, self._bootId) == false then")], RADIO),
 
     ("capture chains instead of replacing", "logship.lua",
      [("    if _G[RAW_KEY] == nil then _G[RAW_KEY] = print end\n    local raw  = _G[RAW_KEY]",
@@ -229,8 +239,11 @@ MUTANTS = [
     # ── The third explanation, which the first capture in the world found ──
     # Guarded by the SOURCE-ONLY wiring test, not by a behavioural one: every
     # behavioural test reaches this counter through base._witnessBeat instead.
+    # Now guarded BEHAVIOURALLY. Its first two versions were guarded only by a
+    # source assertion -- and the check itself (`not _self.modem`) could never
+    # fire in the field, which no source assertion could have noticed.
     ("a beat with no modem counts as sent", "turtle_base.lua",
-     [("    if not _self.modem then _beatsUnsent = _beatsUnsent + 1 end\n", "")], W_WIRED),
+     [("    if not sent then _beatsUnsent = _beatsUnsent + 1 end\n", "")], W_UNSENT),
 
     ("the radio clause is dropped from the verdict", "turtle_base.lua",
      [("    if _beatsUnsent > 0 then", "    if false then")], W_RADIO),
@@ -257,6 +270,38 @@ MUTANTS = [
        "    if #why == 0 and _loopGapMax >= WITNESS_FREEZE_MS then\n"
        '        why[#why + 1] = "this turtle stopped running"\n'
        "    end")], W_BOTH),
+
+    # ── A send that knows it failed ──────────────────────────────────────
+    ("a failed send drops the batch", "logship.lua",
+     [("        for i = #batch, 1, -1 do table.insert(self._queue, 1, batch[i]) end\n", "")],
+     S_FAILKEEP),
+
+    ("a transport returning nothing counts as failure", "logship.lua",
+     [("    if self._send(batch, self._bootId) == false then",
+       "    if not self._send(batch, self._bootId) then")], S_NILOK),
+
+    ("a failed send is retried on every loop turn", "logship.lua",
+     [("    if self._sendFailed and now - self._lastFlush < self.INTERVAL_MS then return false end\n", "")],
+     S_BACKOFF),
+
+    ("a successful send never lifts the backoff", "logship.lua",
+     [("    self._sendFailed = false\n    return true", "    return true")], S_BACKOFF),
+
+    ("a successful send reports nothing", "turtle_base.lua",
+     [("        _sendFailures = 0\n        return true", "        _sendFailures = 0\n        return")],
+     W_SENTOK),
+
+    ("a failed send reports nothing", "turtle_base.lua",
+     [("        pcall(base.recoverModem)\n    end\n    return false\nend",
+       "        pcall(base.recoverModem)\n    end\nend")], C_DETACH),
+
+    ("the log transport discards the send result", "turtle_base.lua",
+     [("        return comms.toServer(proto.MSG.TURTLE_LOG", "        comms.toServer(proto.MSG.TURTLE_LOG")],
+     C_DETACH),
+
+    ("the outbox ignores a declared comms gap", "turtle_base.lua",
+     [("return _self.modem ~= nil and not _self.commsGap end", "return _self.modem ~= nil end")],
+     C_GAP),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

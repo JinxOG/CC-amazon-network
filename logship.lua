@@ -212,7 +212,32 @@ function Ship:flush()
     end
     -- bootId rides once per BATCH, not per line: it is the same 13 digits for
     -- every entry and this payload crosses the radio every 15 seconds.
-    self._send(batch, self._bootId)
+    --
+    -- A send that KNOWS it failed must not drop the batch.
+    --
+    -- Found 2026-09-10 in the audit of jobs 0039-0042: 190 lines missing, all
+    -- but a handful on the four miners, zero "dropped" notices, and the large
+    -- gaps sitting directly after "Lease released for the retrieval ascent"
+    -- and "Fence armed". equipment.retrievalSwapIn takes the modem off and
+    -- nothing clears the turtle's handle to it, so ready() -- which can only
+    -- see nil -- said yes, the batch came off the queue, the transmit raised
+    -- "No such method transmit", and the batch was gone. The fire-and-forget
+    -- loss 1.9.89 fixed for a deaf SERVER, one hop closer: a deaf TURTLE.
+    --
+    -- Only an explicit false counts as failure. A transport that returns
+    -- nothing -- the warehouse's, and every one written before this -- keeps
+    -- exactly the old behaviour.
+    if self._send(batch, self._bootId) == false then
+        if self._retry == batch then self._retry = nil end   -- requeued below instead
+        for i = #batch, 1, -1 do table.insert(self._queue, 1, batch[i]) end
+        while #self._queue > self.QUEUE_MAX do
+            table.remove(self._queue, 1)
+            self._dropped = self._dropped + 1              -- announced, never silent
+        end
+        self._sendFailed = true
+        return false
+    end
+    self._sendFailed = false
     return true
 end
 
@@ -220,6 +245,12 @@ end
 -- outbox has asked. Returns true if a flush was attempted.
 function Ship:tick(now)
     now = now or os.epoch("utc")
+    -- After a send that failed, urgency waits for the interval. The loop turns
+    -- several times a second on a working miner, and a radio that is off for a
+    -- 110-second ascent would otherwise be asked to transmit on every turn of
+    -- it. The interval still fires, so the backlog goes out within 15 seconds
+    -- of the radio coming back.
+    if self._sendFailed and now - self._lastFlush < self.INTERVAL_MS then return false end
     if self._urgent or now - self._lastFlush >= self.INTERVAL_MS then
         self:flush()
         self._lastFlush = now

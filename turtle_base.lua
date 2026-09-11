@@ -461,10 +461,17 @@ function comms.toServer(msgType, payload)
     -- any role: the message is simply lost, exactly as if the server were not
     -- listening. Throttled warn so a genuinely broken modem is still visible
     -- without a line every heartbeat during an expected gap.
+    --
+    -- Returns true if the message went out and false if it could not. Callers
+    -- used to have no way to know, and two of them needed to: the log outbox,
+    -- which threw away every batch it flushed during a modem swap, and the stall
+    -- witness, which judged "no radio" from the modem HANDLE -- and the handle
+    -- is never cleared by a swap, so it said "radio on" for a turtle with none.
+    -- The result of the send is the only thing that actually knows.
     local ok, err = pcall(proto.send, _self.modem, proto.CH_SERVER, msg)
     if ok then
         _sendFailures = 0
-        return
+        return true
     end
     _sendFailures = _sendFailures + 1
     local now = os.epoch("utc")
@@ -480,6 +487,7 @@ function comms.toServer(msgType, payload)
         _sendFailures = 0
         pcall(base.recoverModem)
     end
+    return false
 end
 
 -- The transport, attached now that comms.toServer exists.
@@ -489,9 +497,20 @@ end
 -- and go out on the flush after recovery, which is the behaviour a turtle that
 -- deliberately unequips its modem mid-job depends on.
 _log:setTransport({
-    ready = function() return _self.modem ~= nil end,
+    -- Two ways to know the radio is off, because there are two ways for it to be.
+    --
+    -- A DECLARED gap -- ore_turtle sets commsGap before retrievalSwapIn -- is
+    -- known in advance, so the outbox does not even try: the lines stay queued
+    -- and leave on the flush after the modem comes back.
+    --
+    -- An UNDECLARED one is only discovered by trying. `_self.modem ~= nil` cannot
+    -- see it: a swap leaves the handle in place, detached, and the jobs 0039-0042
+    -- audit found 190 lines lost exactly that way -- ready() said yes, the batch
+    -- came off the queue, the transmit raised, and it was gone. So send returns
+    -- comms.toServer's result, and a false puts the batch back.
+    ready = function() return _self.modem ~= nil and not _self.commsGap end,
     send  = function(lines, bootId)
-        comms.toServer(proto.MSG.TURTLE_LOG, { lines = lines, bootId = bootId })
+        return comms.toServer(proto.MSG.TURTLE_LOG, { lines = lines, bootId = bootId })
     end,
 })
 
@@ -2187,18 +2206,23 @@ function base._witnessCommsGap()   _commsGapSeen = true end
 local function sendHeartbeat()
     _heartbeatCount = _heartbeatCount + 1
     _beatsSinceAck  = _beatsSinceAck + 1
-    -- comms.toServer pcalls its way past a detached modem and returns
-    -- nothing, so this is the only place the difference between a beat
-    -- that went out and one that could not is still visible.
-    if not _self.modem then _beatsUnsent = _beatsUnsent + 1 end
     -- Periodic GPS resync so idle or error-state turtles self-correct position drift.
     -- GPS locate needs no movement — just radio signal from beacons. Silent on failure.
     if _heartbeatCount % 12 == 0 then
         gpsSync()
     end
-    comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
+    -- Counted from the send's RESULT, not from the modem handle.
+    --
+    -- 1.9.96 checked `not _self.modem`, and that is never true during the very
+    -- window it was written for: equipment.retrievalSwapIn takes the modem off
+    -- and nothing clears the turtle's handle to it. The wrapper stays, detached,
+    -- and every call on it raises. So a radio-less turtle was reported as
+    -- "radio on and loop turning -- the ACKs did not arrive": the first
+    -- version's wrong answer, shipped again one release later as the fix for it.
+    local sent = comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
         _self.status, fuel.level(), base.getPos(), _self.jobId,
         { phase = _self.phase, chunk = _self.chunk, commsGap = _self.commsGap }))
+    if not sent then _beatsUnsent = _beatsUnsent + 1 end
     _missedHeartbeats = _missedHeartbeats + 1
 
     -- If too many heartbeats go unacknowledged, server is unreachable.
@@ -2222,6 +2246,12 @@ local function sendHeartbeat()
         end
     end
 end
+
+-- Test seam. The only way to show the witness counts a beat that could not go
+-- out is to send a real one into a detached modem; everything else reaches the
+-- counter through base._witnessBeat, which is exactly how 1.9.96's wrong test
+-- for "no radio" passed while the production check could never fire.
+base._sendHeartbeat = sendHeartbeat
 
 -- Called when server responds to confirm it's alive (on any valid message back)
 local function resetMissedHeartbeats()

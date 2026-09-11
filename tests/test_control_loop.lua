@@ -594,6 +594,54 @@ suite["a backlog keeps asking until it is drained"] = function(assert_eq)
     end)
 end
 
+-- The loss behind 190 missing lines in the audit of jobs 0039-0042, reproduced
+-- with the real transport. A modem swap leaves the turtle's handle in place,
+-- detached, and every call on it raises; the outbox used to take the batch off
+-- the queue before finding that out.
+suite["a log batch flushed through a detached modem is kept"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        local m = base.getModem()
+        local working = m.transmit
+        m.transmit = function() error("No such method transmit", 0) end
+
+        print("written during the ascent")
+        base.flushLogs()
+        assert_eq(logBatches(sent), 0, "precondition: nothing could go out")
+
+        m.transmit = working
+        base.flushLogs()
+        local found = false
+        for _, s in ipairs(sent) do
+            if s:find("TURTLE_LOG", 1, true) and s:find("written during the ascent", 1, true) then
+                found = true
+            end
+        end
+        assert_eq(found, true,
+            "the line written while the modem was detached must arrive once it "
+            .. "is back -- it is the account of the gap, and it was being thrown "
+            .. "away without so much as a drop notice")
+    end)
+end
+
+-- A DECLARED gap is known in advance, so the outbox should not even try.
+suite["a declared comms gap holds the outbox instead of transmitting into it"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local base, sent = turtleWithModem()
+        base.setPhase("RETRIEVING", nil, true)
+        print("mid-swap")
+        base.flushLogs()
+        assert_eq(logBatches(sent), 0,
+            "with commsGap set the outbox must hold its lines rather than "
+            .. "transmit into a radio the turtle itself took off")
+
+        base.setPhase("TRAVELLING", nil, nil)
+        base.flushLogs()
+        assert_eq(logBatches(sent), 1, "and send them once the gap is over")
+    end)
+end
+
 -- SOURCE-ONLY, weaker: the control loop's trigger cannot be reached here.
 --
 -- What this used to assert -- that the trigger short-circuits on the urgent

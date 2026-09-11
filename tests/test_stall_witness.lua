@@ -312,6 +312,38 @@ suite["a turtle that froze during a swap reports both, not one"] = function(asse
         .. "the missing ACKs -- got: " .. line)
 end
 
+-- 1.9.96 judged "no radio" from the modem HANDLE, and a swap never clears it.
+-- Its tests passed because they drove base._witnessBeat(true) and never sent a
+-- real heartbeat -- so the only thing proving it could fire was a seam that
+-- skipped the check. These send a real one through the real comms path.
+suite["a heartbeat into a detached modem is counted as unsent"] = function(assert_eq)
+    local base = freshBase()
+    base.recoverModem()
+    base.getModem().transmit = function() error("No such method transmit", 0) end
+    base._witnessAck(T0)
+    base._sendHeartbeat()
+
+    local line = base._witnessVerdict(T0 + 5000)
+    assert_eq(line:find("no radio for 1 of them", 1, true) ~= nil, true,
+        "a beat that raised on a detached modem did not go out, and the handle "
+        .. "being non-nil is exactly why 1.9.96 could not see it -- got: " .. line)
+end
+
+suite["a heartbeat through a working modem is not counted as unsent"] = function(assert_eq)
+    local base = freshBase()
+    base.recoverModem()
+    base.getModem().transmit = function() end
+    base._witnessAck(T0)
+    base._sendHeartbeat()
+
+    local line = base._witnessVerdict(T0 + 5000)
+    assert_eq(line:find("1 beats attempted", 1, true) ~= nil, true,
+        "precondition: the beat was counted at all -- got: " .. line)
+    assert_eq(line:find("no radio", 1, true), nil,
+        "and a beat that went out must never be called radio-less, or every "
+        .. "genuine lost message is filed as a modem swap -- got: " .. line)
+end
+
 -- SOURCE-ONLY, weaker: reaching the real warn needs a registration, a modem and
 -- three heartbeat boundaries to line up. What is pinned here is that the
 -- production line actually CARRIES the verdict -- without this the whole

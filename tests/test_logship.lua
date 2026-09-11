@@ -260,4 +260,96 @@ suite["a later boot has a higher bootId"] = function(assert_eq)
     end)
 end
 
+-- ─── A send that knows it failed ─────────────────────────────────────────────
+
+-- Found in the audit of jobs 0039-0042: 190 lines missing, almost all on the
+-- four miners, zero "dropped" notices, the big gaps directly after the modem
+-- swap. The outbox took the batch off the queue, the transmit raised on a
+-- detached modem, and the batch was gone.
+suite["a send that reports failure keeps the batch"] = function(assert_eq)
+    withShip({}, function(c)
+        local up, got = false, {}
+        c.ship:setTransport({ send = function(lines)
+            if not up then return false end
+            got[#got + 1] = lines
+        end })
+        print("dug through granite")
+        print("loader retrieved")
+
+        assert_eq(c.ship:flush(), false, "a send that failed must be reported as not sent")
+        assert_eq(c.ship:_queueDepth(), 2,
+            "and both lines must still be queued -- these are the lines written "
+            .. "while the radio was off, which are the lines that describe why")
+
+        up = true
+        assert_eq(c.ship:flush(), true, "the next send goes out")
+        assert_eq(#got, 1, "as one batch")
+        assert_eq(#got[1], 2, "carrying both lines")
+        assert_eq(got[1][1].msg, "dug through granite", "in the order printed")
+    end)
+end
+
+-- A radio that is off for a 110-second ascent must not be asked to transmit on
+-- every turn of a loop that turns several times a second.
+suite["a failed send waits for the interval, not every loop turn"] = function(assert_eq)
+    withShip({}, function(c)
+        local up, sends = false, 0
+        c.ship:setTransport({ send = function()
+            sends = sends + 1
+            if not up then return false end
+        end })
+        c.ship:resetInterval(c.now())
+        for i = 1, 30 do print("burst " .. i) end
+        assert_eq(c.ship:urgent(), true, "precondition: the outbox has asked")
+
+        c.advance(1000)
+        assert_eq(c.ship:tick(c.now()), true, "the first attempt goes immediately")
+        assert_eq(sends, 1, "and is actually made")
+
+        -- The turtle keeps talking while its radio is off -- a miner prints its
+        -- whole ascent -- so the outbox fills past the high-water mark and asks
+        -- to be flushed again. That request is what the backoff has to refuse.
+        -- The first version of this test printed nothing here, so urgency was
+        -- never set, the next turn declined for the ordinary reason, and
+        -- deleting the backoff left it green. Caught by mutation.
+        for i = 1, 30 do print("still climbing " .. i) end
+        assert_eq(c.ship:urgent(), true, "precondition: the outbox is asking again")
+
+        c.advance(1000)
+        assert_eq(c.ship:tick(c.now()), false,
+            "a radio that just failed must not be retried on the very next turn, "
+            .. "even with the outbox asking")
+        assert_eq(sends, 1, "and nothing is sent")
+
+        up = true
+        c.advance(14000)
+        assert_eq(c.ship:tick(c.now()), true,
+            "but the interval still fires, so the backlog leaves within 15 s of "
+            .. "the radio coming back")
+        assert_eq(sends, 2, "and is sent")
+
+        for i = 1, 30 do print("again " .. i) end
+        c.advance(1000)
+        assert_eq(c.ship:tick(c.now()), true,
+            "and once a send has succeeded, urgency works again -- a backoff "
+            .. "that never lifts turns every burst back into a 15-second wait")
+        assert_eq(sends, 3, "and the burst goes out")
+    end)
+end
+
+-- The warehouse's transport returns nothing, as did every transport written
+-- before this. Treating nil as failure would resend its whole outbox for ever.
+suite["a transport that returns nothing still counts as sent"] = function(assert_eq)
+    withShip({}, function(c)
+        c.ship:setTransport({ send = function(lines) c.sent[#c.sent + 1] = { lines = lines } end })
+        print("[WH] State machine ready.")
+        assert_eq(c.ship:flush(), true, "a nil return is a send")
+        assert_eq(c.ship:_queueDepth(), 0,
+            "and the batch must NOT be put back -- only an explicit false means "
+            .. "the send failed")
+        c.ship:flush()
+        assert_eq(#c.sent, 1, "so it is sent exactly once")
+    end)
+end
+
 return suite
