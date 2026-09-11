@@ -398,7 +398,12 @@ def main():
 
     problems = []
     for label, path, steps, target in MUTANTS:
-        original = io.open(path, encoding="utf-8").read()
+        # The RAW bytes, restored verbatim in the finally below. Reading in text
+        # mode turns CRLF into LF, and writing that back left every mutated
+        # file with rewritten line endings -- a phantom change git would then
+        # refuse to switch branches over. Mutate an LF copy; restore the raw.
+        raw = io.open(path, encoding="utf-8", newline="").read()
+        original = raw.replace(chr(13) + chr(10), chr(10))
         mutated, bad = original, None
         for old, new in steps:
             n = mutated.count(old)
@@ -423,7 +428,7 @@ def main():
                 problems.append(
                     f"SURVIVED   {label}: '{target}' stayed green; red were {red}")
         finally:
-            io.open(path, "w", encoding="utf-8", newline="").write(original)
+            io.open(path, "w", encoding="utf-8", newline="").write(raw)
 
     print()
     if problems:
