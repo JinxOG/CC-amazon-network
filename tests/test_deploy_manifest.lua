@@ -6,13 +6,19 @@
 -- not start at all -- "module 'cloudstore' not found" on boot. A missing
 -- require does not degrade gracefully in CC: the computer refuses to run.
 --
--- WHAT IT DOES NOT CATCH, stated because the sentence above invites the wrong
--- conclusion: central_server's cloudstore require is pcall'd TODAY, so this
--- test would not flag its removal now. It caught that class of failure when the
--- require was unprotected, and it catches it for every unprotected require in
--- the fleet -- but a pcall'd require that the role actually needs is invisible
--- here, because a pcall is the file saying it can live without it. If a module
--- is load-bearing, require it plainly and this test will guard it.
+-- GUARDED REQUIRES (cleanup phase, Wave 2 card 6). Until 2026-09-11 a
+-- pcall(require, ...) was invisible here, because a pcall is the file saying it
+-- can live without the module. That hid two modules the roles DO need: the
+-- server's cloudstore, and the warehouse's logship, which W6 guards on purpose
+-- so a stale disk cannot stop the one computer nobody can see from booting.
+--
+-- The rule now: a guarded require whose file REPORTS the module missing --
+-- a string saying "<module> unavailable" or "<module> not installed" -- is
+-- required for every role that ships the file, exactly like a plain require.
+-- A guarded require that stays silent (turtle_base's geofence) is still
+-- optional. A role that legitimately never runs a reported path is listed in
+-- GUARDED_EXEMPT below WITH ITS REASON, so the default is loud and every
+-- exception is written down.
 --
 -- The check is cheap and the alternative is remembering. Adding a require to a
 -- shared file is a one-line edit that looks harmless in review and bricks every
@@ -90,14 +96,50 @@ end
 -- it" -- turtle_base does exactly that for geofence and equipment, which
 -- delivery and support turtles are never sent -- and treating those as missing
 -- would make this test fail on correct code, which is how a check gets deleted.
+-- The wording a file uses when it tells the operator a guarded module is
+-- missing. Matched as plain text in comment-stripped code, so a comment that
+-- merely discusses a module can never make it required.
+local REPORT_PHRASES = { " unavailable", ".lua unavailable", " not installed", ".lua not installed" }
+
+local function isReported(code, name)
+    for _, phrase in ipairs(REPORT_PHRASES) do
+        if code:find(name .. phrase, 1, true) then return true end
+    end
+    return false
+end
+
+-- A reported, guarded require that a role legitimately never reaches. Each
+-- entry must say WHY -- an exemption without a reason is how a real gap gets
+-- waved through -- and an entry nothing needs any more fails the suite, so the
+-- table cannot quietly outlive the code it describes.
+local GUARDED_EXEMPT = {
+    ["turtle_base.lua"] = {
+        equipment = {
+            DELIVERY = "the load sits inside `if role == proto.ROLE.MINER`; a delivery turtle never runs it",
+            SUPPORT  = "the load sits inside `if role == proto.ROLE.MINER`; a support turtle never runs it",
+        },
+    },
+}
+
+local function exemptReason(src, req, role)
+    local f = GUARDED_EXEMPT[src]
+    local m = f and f[req]
+    return m and m[role] or nil
+end
+
+-- Returns the plain requires, then the guarded ones that report their absence.
 local function hardRequires(path)
     local src = codeOnly(readFile(path))
+    local guarded = {}
+    for name in src:gmatch("pcall%s*%(%s*require%s*,%s*\"([%w_]+)\"") do
+        if isReported(src, name) then guarded[#guarded + 1] = name end
+    end
     -- Blank out the optional form first, so its argument cannot be picked up by
     -- the general pattern below.
     src = src:gsub("pcall%s*%(%s*require%s*,%s*\"[%w_]+\"", "pcall(require")
     local out = {}
     for name in src:gmatch('require%s*%(%s*"([%w_]+)"') do out[#out + 1] = name end
-    return out
+    return out, guarded
 end
 
 local suite = {}
@@ -114,7 +156,7 @@ suite["every role is sent every module its own files require"] = function(assert
         "expected seven roles in updater.lua's ROLE_FILES — a parse that finds "
         .. "none would make every assertion below vacuous")
 
-    local checked = 0
+    local checked, guardedChecked = 0, 0
     for role, files in pairs(roles) do
         local shipped = {}
         for _, e in ipairs(files) do shipped[e.dst] = true end
@@ -127,6 +169,19 @@ suite["every role is sent every module its own files require"] = function(assert
                     .. "role's manifest — on a real update that computer stops "
                     .. "booting entirely", role, e.src, req, req))
             end
+            local _, guarded = hardRequires(e.src)
+            for _, req in ipairs(guarded) do
+                if not exemptReason(e.src, req, role) then
+                    guardedChecked = guardedChecked + 1
+                    assert_eq(shipped[req .. ".lua"] or false, true, string.format(
+                        "%s ships %s, which guards its require of '%s' and then "
+                        .. "reports it missing -- so the role is expected to have "
+                        .. "it -- but %s.lua is not in the manifest. It would "
+                        .. "boot, and quietly run without it. If this role truly "
+                        .. "never reaches that path, add it to GUARDED_EXEMPT "
+                        .. "with the reason", role, e.src, req, req))
+                end
+            end
         end
     end
 
@@ -134,6 +189,11 @@ suite["every role is sent every module its own files require"] = function(assert
         "expected the scan to find real requires across the fleet, got "
         .. checked .. " — a require pattern that matches nothing passes this "
         .. "test whatever the manifest says")
+    -- Warehouse/logship and server/cloudstore at least. Zero would mean the
+    -- guarded scan found nothing and every assertion above it was vacuous.
+    assert_eq(guardedChecked >= 2, true,
+        "expected guarded-and-reported requires to be checked, got "
+        .. guardedChecked)
 end
 
 -- install.lua is the OTHER way a computer gets its files, and it has its own
@@ -174,10 +234,68 @@ suite["install.lua ships the same modules as updater.lua"] = function(assert_eq)
                     .. "not — a fresh computer would install and never boot",
                     req, role))
             end
+            local _, guarded = hardRequires(e.src)
+            for _, req in ipairs(guarded) do
+                if not exemptReason(e.src, req, role) then
+                    assert_eq(set[req .. ".lua"] or false, true, string.format(
+                        "%s guards and reports '%s', so %s needs it, but "
+                        .. "install.lua's profile does not ship it -- a fresh "
+                        .. "install would run without it", e.src, req, role))
+                end
+            end
         end
     end
     assert_eq(checked > 20, true,
         "expected real requires to compare, got " .. checked)
+end
+
+-- The rule itself, on the real files. The two manifest suites above only
+-- notice a missing module; this pins which requires the scanner classifies as
+-- expected, so a scanner that quietly stopped recognising reports fails here
+-- rather than passing everything.
+suite["a guarded require that reports its absence is expected to ship"] =
+function(assert_eq)
+    local function has(list, name)
+        for _, n in ipairs(list) do if n == name then return true end end
+        return false
+    end
+    local _, wh  = hardRequires("warehouse.lua")
+    local _, srv = hardRequires("central_server.lua")
+    local _, tb  = hardRequires("turtle_base.lua")
+    assert_eq(has(wh, "logship"), true,
+        "the warehouse guards logship and says 'logship unavailable' when it "
+        .. "is missing -- W6's case, and the reason this rule exists")
+    assert_eq(has(srv, "cloudstore"), true,
+        "the server guards cloudstore and reports 'cloudstore not installed' -- "
+        .. "the gap this suite's own header used to admit it could not see")
+    assert_eq(has(tb, "equipment"), true,
+        "turtle_base reports 'equipment.lua unavailable', so it is expected "
+        .. "wherever that path runs; delivery and support are exempted by reason")
+    assert_eq(has(tb, "geofence"), false,
+        "turtle_base's geofence load is guarded and SILENT -- genuinely "
+        .. "optional, and must stay so or delivery turtles fail this suite")
+end
+
+suite["every guarded-require exemption has a reason and is still needed"] =
+function(assert_eq)
+    local n = 0
+    for src, mods in pairs(GUARDED_EXEMPT) do
+        local _, guarded = hardRequires(src)
+        for mod, roles in pairs(mods) do
+            local stillReported = false
+            for _, g in ipairs(guarded) do if g == mod then stillReported = true end end
+            assert_eq(stillReported, true, string.format(
+                "GUARDED_EXEMPT lists %s/%s, but %s no longer reports it -- "
+                .. "remove the entry, or it waves through whatever comes next",
+                src, mod, src))
+            for role, why in pairs(roles) do
+                n = n + 1
+                assert_eq(type(why) == "string" and #why >= 30, true, string.format(
+                    "the %s exemption for %s/%s needs a real reason", role, src, mod))
+            end
+        end
+    end
+    assert_eq(n >= 2, true, "precondition: the exemptions table was read")
 end
 
 -- The manifest above can only be self-consistent. It cannot make the program

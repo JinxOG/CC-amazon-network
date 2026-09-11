@@ -72,6 +72,8 @@ C_GAP      = "a declared comms gap holds the outbox instead of transmitting into
 W_UNSENT   = "a heartbeat into a detached modem is counted as unsent"
 W_SENTOK   = "a heartbeat through a working modem is not counted as unsent"
 Z_BAK      = "a live-zone save drops its backup too"
+G_RULE     = "a guarded require that reports its absence is expected to ship"
+G_EXEMPT   = "every guarded-require exemption has a reason and is still needed"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -307,6 +309,31 @@ MUTANTS = [
     # The server disk: the live-zone save's backup, dropped at last.
     ("the live-zone save keeps its backup again", "central_server.lua",
      [("        dropBackupAfterVerify(ACTIVE_ZONES_FILE)\n", "")], Z_BAK),
+
+    # ── Guarded requires the install check can now see ───────────────────
+    # The one this card exists for: before it, removing cloudstore from the
+    # server's list left the whole suite green.
+    ("updater stops shipping cloudstore to the server", "updater.lua",
+     [('        "cloudstore.lua",\n', "")], MANIFEST),
+
+    ("install stops shipping logship to the warehouse", "install.lua",
+     [('        { src = FILES.logship,        name = "logship.lua"         },\n', "")], INSTALL),
+
+    ("the scanner stops recognising reports", "tests/test_deploy_manifest.lua",
+     [("        if code:find(name .. phrase, 1, true) then return true end", "        if false then return true end")],
+     G_RULE),
+
+    ("every guarded require counts, reported or not", "tests/test_deploy_manifest.lua",
+     [("        if isReported(src, name) then guarded[#guarded + 1] = name end",
+       "        guarded[#guarded + 1] = name")], G_RULE),
+
+    ("the delivery exemption is dropped", "tests/test_deploy_manifest.lua",
+     [('            DELIVERY = "the load sits inside `if role == proto.ROLE.MINER`; a delivery turtle never runs it",\n', "")],
+     MANIFEST),
+
+    ("an exemption loses its reason", "tests/test_deploy_manifest.lua",
+     [('            SUPPORT  = "the load sits inside `if role == proto.ROLE.MINER`; a support turtle never runs it",',
+       '            SUPPORT  = "miner only",')], G_EXEMPT),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
