@@ -372,8 +372,31 @@ end
 
 -- The call Invariant G requires. Job handlers and worker coordination use this
 -- instead of proto.receive; control traffic is never returned here.
+--
+-- It also remembers what the job last asked for, until a message is actually
+-- handed over. That is how a reconnecting turtle can tell the server whether it
+-- is WAITING for a sector order -- see base.isAwaiting and register().
+--
+-- Kept across a timeout on purpose. ore_turtle's waitMsg sleeps between calls
+-- while the server is unreachable, and that sleep is exactly when the turtle
+-- re-registers; "inside base.receive right now" would read false at the one
+-- moment the answer matters. Only a delivered message proves the wait is over.
+local AWAIT_ANY   = {}      -- sentinel: a receive with no type filter
+local _jobAwaiting = nil
 function base.receive(timeout, wantType)
-    return pumpFor(_jobInbox, wantType, timeout)
+    _jobAwaiting = (wantType == nil) and AWAIT_ANY or wantType
+    local msg = pumpFor(_jobInbox, wantType, timeout)
+    if msg ~= nil then _jobAwaiting = nil end
+    return msg
+end
+
+-- True if the job's last unanswered receive would accept a message of type t.
+function base.isAwaiting(t)
+    local w = _jobAwaiting
+    if w == nil then return false end
+    if w == AWAIT_ANY then return true end
+    if type(w) == "table" then return w[t] == true end
+    return w == t
 end
 
 -- Control-plane equivalent, for register() waiting on its own ACK.
@@ -1943,6 +1966,13 @@ local function register(maxAttempts)
             fuelMax  = fuel.max(),
             position = base.getPos(),
             midJob   = _self.busy,
+            -- Whether the job is waiting for its next sector order. The server
+            -- used to replay the last SECTOR_ASSIGN to every reconnecting
+            -- miner; one that was mid-sector already had it, so the replay sat
+            -- in its inbox and walked it straight back into the sector it had
+            -- just finished (W6, node_139: 6 replays, 4 repeated sectors in
+            -- jobs 0039-0042). Now the server replays only when this is true.
+            awaitingSector = base.isAwaiting(proto.MSG.SECTOR_ASSIGN),
         })
 
         -- Waits for a REGISTER_ACK SPECIFICALLY, and routes anything else into

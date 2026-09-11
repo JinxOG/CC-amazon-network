@@ -190,7 +190,7 @@ local registry = {}
 -- reSendJob is non-nil when a rebooted turtle had an active job — the caller
 -- must send JOB_ASSIGN AFTER sending REGISTER_ACK so the turtle sets its dock
 -- from the ACK before receiving the job assignment.
-function registry.register(id, role, fuel, fuelMax, position, midJob)
+function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSector)
     local isNew = state.registry[id] == nil
 
     -- Held for the dispatch-hold carry-forward after the entry is REPLACED
@@ -284,9 +284,35 @@ function registry.register(id, role, fuel, fuelMax, position, midJob)
                 if job.type == proto.JOB.MINE then
                     local mz = state.miningZones[job.id]
                     local la = mz and mz.lastAssignments and mz.lastAssignments[id]
-                    if la then
+                    -- ...but only to a miner that is WAITING for it.
+                    --
+                    -- A miner that is mid-sector already holds this order. The
+                    -- replay was queued in its inbox, popped after its next
+                    -- SECTOR_DONE, and sent it straight back into the sector it
+                    -- had just finished; from then on every pop answered the
+                    -- previous request. W6 traced node_139 mining a quarter of
+                    -- its share partly to this: 6 replays, 4 repeated sectors in
+                    -- jobs 0039-0042. The miner's own recovery covers the
+                    -- waiting case anyway -- waitSectorResponse re-sends
+                    -- SECTOR_REQUEST after 20 s -- so the replay only ever saved
+                    -- a waiting miner that much.
+                    --
+                    -- nil means a turtle too old to say, and keeps the old
+                    -- behaviour: a stranded miner costs more than a repeat.
+                    --
+                    -- Withholding is LOGGED, not silent. reSendSector is one of
+                    -- the reconciliation paths the cleanup phase counts as design
+                    -- flaw 1's footprint (2026-09-11-cleanup-phase-design.md
+                    -- section 8), and a count that dropped the withheld cases
+                    -- would read as the flaw getting smaller.
+                    if la and awaitingSector ~= false then
                         reSendSector = { jobId = job.id, x = la.x, z = la.z,
                                          isSurvey = la.isSurvey }
+                    elseif la then
+                        logInfo(string.format(
+                            "Withheld SECTOR_ASSIGN (%d,%d) from %s on re-link: "
+                            .. "mid-sector, it already has its order",
+                            la.x, la.z, id))
                     end
                 end
             else
@@ -2215,7 +2241,7 @@ local handlers = {}
 
 handlers[proto.MSG.REGISTER] = function(msg)
     local p    = msg.payload
-    local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob)
+    local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob, p.awaitingSector)
     -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
         ok       = true,

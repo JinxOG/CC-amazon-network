@@ -22,6 +22,35 @@ package.path = "./?.lua;" .. package.path
 local stub  = require("tests.stub_cc")
 local proto = require("protocol")
 
+-- A mid-job miner reconnecting after the server lost it, with a sector order on
+-- record. Returns how many SECTOR_ASSIGNs the server transmitted, and whether it
+-- logged withholding one. awaiting is what the turtle reports: true, false, or
+-- nil for a turtle too old to send the field.
+local function reconnectMiner(T, awaiting)
+    T.state.miningZones["job_0726"] = {
+        pending = {}, done = 0, total = 2,
+        lastAssignments = { node_118 = { x = 1120, z = -2800, isSurvey = false } },
+    }
+    T.sent = {}
+    T.handlers[proto.MSG.REGISTER]({
+        type = proto.MSG.REGISTER, from = "node_118", to = "server",
+        payload = { role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+                    position = { x = 1120, y = 40, z = -2800 },
+                    midJob = true, awaitingSector = awaiting },
+    })
+    local n = 0
+    for _, s in ipairs(T.sent) do
+        local ok, m = pcall(textutils.unserialise, s.body)
+        local t = (ok and type(m) == "table") and m.type or nil
+        if t == proto.MSG.SECTOR_ASSIGN then n = n + 1 end
+    end
+    local withheld = false
+    for _, e in ipairs(T.state.log) do
+        if e.msg:find("Withheld SECTOR_ASSIGN", 1, true) then withheld = true end
+    end
+    return n, withheld
+end
+
 -- A server with one MINER registered and one MINE job IN_PROGRESS assigned to
 -- it -- the state node_118 was in the moment its JOB_COMPLETE went missing.
 local function serverWithMinerOnJob(stubOpts)
@@ -540,6 +569,43 @@ return {
     -- with sharedZoneKey several jobs hold ONE table by reference, so nilling
     -- state.miningZones[jobId] removes a reference and leaves the table, and the
     -- popped sector, exactly as they were.
+    -- The stale sector order. After a reconnect the server replayed the
+    -- miner's last SECTOR_ASSIGN whatever it was doing; a miner mid-sector
+    -- already had it, so the duplicate walked it back into a finished sector.
+    ["a mid-sector miner is not re-sent its sector order on reconnect"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local nAssign, withheld = reconnectMiner(T, false)
+        restore()
+        assert_eq(nAssign, 0,
+            "a miner that reports it is mid-sector already holds this order -- "
+            .. "replaying it queues a duplicate that sends it back into the "
+            .. "sector it just finished")
+        assert_eq(withheld, true,
+            "and the withholding must be logged, or the flaw-1 count in the "
+            .. "cleanup phase silently loses these cases")
+    end,
+
+    ["a waiting miner is still re-sent its sector order"] = function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local nAssign = reconnectMiner(T, true)
+        restore()
+        assert_eq(nAssign, 1,
+            "a miner waiting for its next order must still get it, or it sits "
+            .. "out a 20-second timeout it did not need to")
+    end,
+
+    -- A turtle too old to send the field keeps the old behaviour. During a
+    -- rollout the server and the fleet do not update in the same instant.
+    ["a turtle that does not say is re-sent, as before"] = function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local nAssign = reconnectMiner(T, nil)
+        restore()
+        assert_eq(nAssign, 1,
+            "no field means an older turtle; stranding it waiting costs more "
+            .. "than a repeated sector")
+    end,
+
     ["a dead holder's sector returns to the pool, even on a shared zone"] =
     function(assert_eq)
         local server, T, advance, restore = serverWithMinerOnJob()
