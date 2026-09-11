@@ -105,8 +105,23 @@ next goes out. When something breaks, exactly one change is suspect.
 - **Exempt:** bridge and dashboard changes (`server.js`, `public/`). They deploy
   on the server PC, not through the fleet updater, so W5 works in parallel.
 - **Waves overlap in development, not in release.** Engineers may build ahead;
-  releases leave the queue in order. Wave 1's installer and updater removals go
-  first, as a single removals-only release.
+  releases leave the queue in order.
+- **Merge order is release order**, because a deploy ships `master`. A commit
+  that changes fleet code — including `install.lua` and `updater.lua` — lands on
+  `master` only when the release before it has passed. Build ahead on a local
+  branch. Docs, tests, `server.js` and `public/` are not in the queue.
+- **Deploying is the user's action.** No engineer triggers `UPDATE_ALL` or
+  `/self-update`.
+
+**Release order — amended 2026-09-11 on W3's evidence**
+(`2026-09-11-spec-owner-to-W3-release-order-and-crash-sign-off.md`):
+
+| Release | Contents |
+|---|---|
+| A | `master` as merged — 1.9.98 (`fd29d34`) and 1.9.99 (`459a2bf`). Two changes, accepted once: different areas, separate signals |
+| B | Wave 1 removals only |
+| C | Bridge push timeout logging — **measure**; gate check 7 depends on it |
+| D onward | §5.2 order, from card 1 |
 
 ### 5.2 Order
 
@@ -117,7 +132,7 @@ next goes out. When something breaks, exactly one change is suspect.
 | 2 | Stop the zone file regrowing on the server disk | W6 | Filled the disk on 2026-09-09 |
 | 3 | Warn about low server disk while there is still room | W3 | So the next one is a warning, not a crisis |
 | 4 | Stop the server re-sending a stale sector order after a reconnect | W3 | Half of why node_139 mined a quarter of its share |
-| 5 | Crash handlers flush their last log lines before rebooting | W1 (`ore_turtle.lua`); W3 (`delivery_turtle.lua`, `support_turtle.lua`) | §7 requires zero missing log lines; a crash guarantees some today |
+| 5 | Crash handlers flush their last log lines before rebooting — **and delivery gets a crash handler at all**: today a control-loop crash leaves it at the shell prompt | W1 (`ore_turtle.lua`); W3 (`delivery_turtle.lua`, `support_turtle.lua` — **signed off 2026-09-11**) | §7 requires zero missing log lines; a crash guarantees some today |
 | 6 | Let the install check see a module the warehouse loads optionally | W3 | Stops a false "all installed" |
 | 7 | **Bridge push timeouts** — ~83/day while the bridge answers in 1–3 ms | W3 | A lost-event fault of its own, never carded. **New card** |
 | Any | Sort the log viewer by time; reconcile the dashboard service file | W5 | Dashboard side — not in the fleet queue |

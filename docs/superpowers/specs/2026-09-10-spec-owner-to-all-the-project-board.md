@@ -53,7 +53,14 @@ From PowerShell: `& "C:\Program Files\GitHub CLI\gh.exe" ...`
 | **Status** (the columns) | `PVTSSF_lAHOByrE-s4BjIXSzhh93j8` | To do `038d3a2b` · In progress `e945401c` · Needs measuring `f2b1031e` · Done `89d626c8` |
 | **Owner** | `PVTSSF_lAHOByrE-s4BjIXSzhh93oM` | W1 `ff18252d` · W3 `a8b1775b` · W4 `4f93c0b3` · W5 `3a49158b` · W6 `ba0dc6f7` · Operator `0e14fb7c` · Unassigned `6eeb5aa6` |
 
-**Edit a card's text:** `"$GH" project item-edit --id <PVTI_...> --title "..." --body "..."`
+**Edit a card's text** — this needs the card's *content* ID (`DI_...`), not its
+card ID (`PVTI_...`); passing a `PVTI_` ID fails with "must be the ID of the draft
+issue content". Corrected 2026-09-11.
+
+```bash
+DI=$("$GH" project item-list 1 --owner JinxOG --format json --limit 100 --jq '.items[] | select(.id=="<PVTI_...>") | .content.id')
+"$GH" project item-edit --id "$DI" --title "..." --body "..."
+```
 
 ## Current assignments
 
