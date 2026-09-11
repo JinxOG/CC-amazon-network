@@ -74,6 +74,13 @@ W_SENTOK   = "a heartbeat through a working modem is not counted as unsent"
 Z_BAK      = "a live-zone save drops its backup too"
 G_RULE     = "a guarded require that reports its absence is expected to ship"
 G_EXEMPT   = "every guarded-require exemption has a reason and is still needed"
+P_SCAN     = "a timeout after a storage scan says the scan ran in the window"
+P_NONE     = "a timeout with nothing after the push says so"
+P_OTHER    = "a window with no storage call says it was not the scan"
+P_HIDDEN   = "a storage call behind a slower step still counts"
+P_CAP      = "a long window is capped and says how much it left out"
+P_STOP     = "a reply that arrived ends the window"
+P_WIRED    = "the push, the reply, the timeout and the loop all feed the witness (SOURCE-ONLY, weaker)"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -334,6 +341,38 @@ MUTANTS = [
     ("an exemption loses its reason", "tests/test_deploy_manifest.lua",
      [('            SUPPORT  = "the load sits inside `if role == proto.ROLE.MINER`; a support turtle never runs it",',
        '            SUPPORT  = "miner only",')], G_EXEMPT),
+
+    # ── The push witness ─────────────────────────────────────────────────────
+    ("the push's own turn is counted", "central_server.lua",
+     [("    if w.skip then w.skip = false; w.cur = {}; return end\n", "")], P_NONE),
+
+    ("the witness blames the scan for every window", "central_server.lua",
+     [("    if PERIPHERAL_STEPS[name] then w.peripheral = true end", "    w.peripheral = true")], P_OTHER),
+
+    ("the witness never blames the scan", "central_server.lua",
+     [("    if PERIPHERAL_STEPS[name] then w.peripheral = true end", "    w.peripheral = false")], P_SCAN),
+
+    ("an empty window is reported as a scan", "central_server.lua",
+     [("    if w.turns == 0 then", "    if false then")], P_NONE),
+
+    ("the trail drops the steps", "central_server.lua",
+     [('    w.cur[#w.cur + 1] = string.format("%s %dms", name, ms)\n', "")], P_HIDDEN),
+
+    ("a capped trail hides what it dropped", "central_server.lua",
+     [('        more > 0 and string.format(" (+%d more)", more) or "",', '        "",')], P_CAP),
+
+    ("the reply does not end the window", "central_server.lua",
+     [("function pushWitness.stop() pushWitness.w = nil end", "function pushWitness.stop() end")], P_STOP),
+
+    ("the timeout line drops the evidence", "central_server.lua",
+     [("                    pushWitness.summary() or \"no window recorded\"))\n                pushWitness.stop()",
+       "                    \"\"))\n                pushWitness.stop()")], P_WIRED),
+
+    ("timed stops recording steps", "central_server.lua",
+     [("        pushWitness.step(name, ms)\n", "")], P_WIRED),
+
+    ("the loop stops counting turns", "central_server.lua",
+     [("            pushWitness.turn(event)\n", "")], P_WIRED),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
