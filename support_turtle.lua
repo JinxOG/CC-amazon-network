@@ -201,6 +201,7 @@ local ok, err = pcall(base.run, supportJob)
 if not ok then
     print("[SUPPORT] Fatal crash: " .. tostring(err))
     print("[SUPPORT] Rebooting in 20s...")
+    pcall(base.flushLogs)
     sleep(20)
 end
 os.reboot()

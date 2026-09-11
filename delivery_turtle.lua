@@ -240,7 +240,7 @@ end
 
 -- ─── Job handler ─────────────────────────────────────────────────────────────
 
-base.run(function(job)
+local ok, err = pcall(base.run, function(job)
     local params = job.params
     if not params.destination or not params.destination.x or not params.destination.z then
         return base.sendFailed("invalid destination params", false)
@@ -585,3 +585,11 @@ base.run(function(job)
         base.sendComplete({ destination = d })
     end
 end)
+
+if not ok then
+    print("[DELIVERY] Fatal crash: " .. tostring(err))
+    print("[DELIVERY] Rebooting in 20s...")
+    pcall(base.flushLogs)
+    sleep(20)
+end
+os.reboot()
