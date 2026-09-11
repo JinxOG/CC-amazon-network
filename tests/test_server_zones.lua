@@ -545,6 +545,33 @@ return {
             .. "entire reason the backup exists")
     end,
 
+    -- The same leak in the third save, which nothing covered. saveMiningZones
+    -- moved active_zones.dat aside and never dropped it, so live zones cost the
+    -- disk twice: 183 KB of backup behind 183 KB of zones. The job-backup test
+    -- above could not catch it -- it only ever drives saveJobs.
+    ["a live-zone save drops its backup too"] =
+    function(assert_eq)
+        local server, T, restore, c = freshServer(fakeKV({}), nil)
+        T.state.miningZones["job_0300"] = {
+            total = 12, done = 3, oreFound = { iron = 40 }, oreMined = { iron = 10 },
+        }
+        -- Twice, for the same reason as the job test: only the second save has
+        -- a previous file to move aside, so one save proves nothing.
+        T.saveMiningZones()
+        local afterFirst = c.files["active_zones.dat"] ~= nil
+        T.saveMiningZones()
+        local live = c.files["active_zones.dat"]
+        local bak  = c.files["active_zones.dat.bak"]
+        restore()
+
+        assert_eq(afterFirst, true, "precondition: the first save must land")
+        assert_eq(live ~= nil, true, "the live file must exist after the save")
+        assert_eq(bak, nil,
+            "the backup must be dropped once the replacement is in place -- "
+            .. "keeping it is a permanent second copy of every live zone, which "
+            .. "is what filled the server disk after the 4-miner job")
+    end,
+
     -- Knowing what is actually running.
     --
     -- Twice now a machine has run different code from the source being read: an

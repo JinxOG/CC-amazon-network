@@ -71,6 +71,7 @@ C_DETACH   = "a log batch flushed through a detached modem is kept"
 C_GAP      = "a declared comms gap holds the outbox instead of transmitting into it"
 W_UNSENT   = "a heartbeat into a detached modem is counted as unsent"
 W_SENTOK   = "a heartbeat through a working modem is not counted as unsent"
+Z_BAK      = "a live-zone save drops its backup too"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -302,6 +303,10 @@ MUTANTS = [
     ("the outbox ignores a declared comms gap", "turtle_base.lua",
      [("return _self.modem ~= nil and not _self.commsGap end", "return _self.modem ~= nil end")],
      C_GAP),
+
+    # The server disk: the live-zone save's backup, dropped at last.
+    ("the live-zone save keeps its backup again", "central_server.lua",
+     [("        dropBackupAfterVerify(ACTIVE_ZONES_FILE)\n", "")], Z_BAK),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

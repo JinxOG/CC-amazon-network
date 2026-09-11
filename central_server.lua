@@ -917,6 +917,15 @@ local function saveMiningZones()
             fs.move(ACTIVE_ZONES_FILE, ACTIVE_ZONES_FILE .. ".bak")
         end
         fs.move("active_zones.tmp", ACTIVE_ZONES_FILE)
+        -- The third save, and the one the helper was written for. 4467dcb
+        -- introduced dropBackupAfterVerify citing active_zones.dat and its
+        -- backup -- 183,454 and 183,513 bytes, 37% of the disk for one file --
+        -- and then wired it into saveJobs and savePersistentZones only. So this
+        -- backup was a permanent second full copy for four more days. Found by
+        -- W6 (2026-09-10-W6-to-W3-spec-owner-the-active-zones-backup-is-never-
+        -- dropped.md); the helper still keeps the backup unless the replacement
+        -- is present and non-empty, which is the only window it exists for.
+        dropBackupAfterVerify(ACTIVE_ZONES_FILE)
     end)
     if not ok then
         -- Invariant K: this writes to disk, so its failure has to be reachable
@@ -4727,6 +4736,7 @@ if _G.__CC_SERVER_TEST then
         -- inferred. saveJobs is the writer; dropBackupAfterVerify is the half
         -- that decides whether a second full copy of every file survives.
         saveJobs = saveJobs,
+        saveMiningZones = saveMiningZones,
         dropBackupAfterVerify = dropBackupAfterVerify,
         -- The continuous-log delta selector. Every interesting property lives
         -- here: the cap that keeps the payload bounded, and the fixed-window
