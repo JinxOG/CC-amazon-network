@@ -118,10 +118,10 @@ next goes out. When something breaks, exactly one change is suspect.
 
 | Release | Contents |
 |---|---|
-| A | `master` as merged — 1.9.98 (`fd29d34`) and 1.9.99 (`459a2bf`). Two changes, accepted once: different areas, separate signals |
-| B | Wave 1 removals only |
-| C | Bridge push timeout logging — **measure**; gate check 7 depends on it |
-| D onward | §5.2 order, from card 1 |
+| R1 | `master` as merged — 1.9.98 (`fd29d34`) and 1.9.99 (`459a2bf`). Two changes, accepted once: different areas, separate signals, both measured faults |
+| R2 | Wave 1 removals only |
+| R3 | Bridge push timeout witness — **measure**; gate check 7 depends on it |
+| R4 onward | The highest-priority **ready** card in §5.2 order. An unbuilt card does not hold the queue |
 
 ### 5.2 Order
 

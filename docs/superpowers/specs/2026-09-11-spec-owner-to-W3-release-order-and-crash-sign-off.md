@@ -4,7 +4,7 @@
 - **To:** W3 — Fleet & Dispatch
 - **Cc:** W1, W6, W5 (code side)
 - **Date:** 2026-09-11
-- **Re:** your two questions on `2026-09-11-cleanup-phase-design.md`
+- **Re:** `2026-09-11-W3-to-spec-owner-five-staged-and-a-release-question.md`
 - **Status:** **Both ruled.** The design doc is amended to match.
 
 ---
@@ -17,14 +17,15 @@ order is release order.** "Wave 1 first, on its own" was never possible with
 
 | Release | Contents | Why this position |
 |---|---|---|
-| **A** | `master` as it stands — **1.9.98** (`fd29d34`, log batches lost through a detached modem) and **1.9.99** (`459a2bf`, drop the live-zone backup) | Already merged; there is no honest way to ship anything else first |
-| **B** | Wave 1 removals only | Removals, no behaviour change |
-| **C** | Bridge push timeout logging | **Measure.** Gate check 7 cannot be judged without it, so it goes early |
-| **D onward** | §5.2 order — W6's storage poll move first | — |
+| **R1** | `master` as it stands — 1.9.97 → **1.9.99** (`fd29d34` detached-modem log loss, `459a2bf` live-zone backup) | Already merged, and both repair measured faults (190 lines lost in one job; the disk filled). **Do not revert them** |
+| **R2** | Wave 1 removals (`w3-wave1-removals`) | Removals only — and the first in-world run of the updater's self-restart |
+| **R3** | Card 7's push witness — **pulled ahead of cards 3 and 4. Approved: cherry-pick it off the stack and renumber** | **Measure.** Gate check 7 cannot be judged without it |
+| **R4 onward** | **The highest-priority *ready* card in §5.2 order.** W6's card 1 outranks your cards 3 and 4, but a card that is not built does not hold the queue — if yours are ready first, they go | — |
+| any time | Card 6 | Test-only; ships nothing to an in-game computer |
 
-**Release A is two changes, and I am accepting that once.** They sit in different
+**R1 is two changes, and I am accepting that once.** They sit in different
 places — turtle log shipping and the server disk — with separate signals, so a
-fault can still be attributed. The one-at-a-time rule starts at B.
+fault can still be attributed. The one-at-a-time rule starts at R2.
 
 ### The rule, restated where it is enforced
 
@@ -32,10 +33,10 @@ fault can still be attributed. The one-at-a-time rule starts at B.
 > only when the release before it has run a complete mining job with no new
 > fault. Until then, build and test it on a local branch.
 
-Commits that ship nothing to the fleet — docs, tests, `server.js`, `public/` —
+Your stacked branches already do this — keep going. Commits that ship nothing to the fleet — docs, tests, `server.js`, `public/` —
 are not in the queue. `install.lua` and `updater.lua` **are**.
 
-**Deploying stays the user's action.** Release A is ready whenever they choose to
+**Deploying stays the user's action.** R1 is ready whenever they choose to
 push the update. No engineer triggers `UPDATE_ALL` or `/self-update`.
 
 ## 2. Crash card — signed off, with scope
@@ -44,11 +45,14 @@ This is the first use of the design's §5.3 cleanup exception to Invariant H. Th
 card is split so each half has one owner:
 
 - **W1** — `ore_turtle.lua`. Not frozen; no sign-off needed.
-- **W3** — `delivery_turtle.lua` and `support_turtle.lua`. **Signed off below.**
+- **W3** — `delivery_turtle.lua` and `support_turtle.lua`. **Signed off below**, and
+  in the body of your new board card, *Crash messages: delivery and support send
+  their last log lines, and delivery reboots after a crash*.
 
 ### What I found reading them
 
-The two files are not the same repair.
+The two files are not the same repair, and your memo's "call `base.flushLogs()`
+before each crash reboot" covers only one of them.
 
 - **`support_turtle.lua`** has the same crash handler as the miner:
   `pcall(base.run, …)`, print, `sleep(20)`, `os.reboot()`. The printed lines reach
