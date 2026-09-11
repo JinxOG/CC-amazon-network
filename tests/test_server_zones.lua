@@ -572,6 +572,129 @@ return {
             .. "is what filled the server disk after the 4-miner job")
     end,
 
+    -- The low-disk warning. On 2026-09-10 one mining job took the server disk
+    -- from 544 KB to 308 KB free and the warning -- set at 120 KB -- said
+    -- nothing. The 48-hour run fails below 300 KB, so the warning has to come
+    -- before that, not at it.
+    ["the disk warning comes before the 300 KB floor, not after it"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local savedFree = fs.getFreeSpace
+        fs.getFreeSpace = function() return 340000 end
+        T.warnIfDiskTight()
+        local hit = nil
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("Disk low", 1, true) then hit = e end
+        end
+        fs.getFreeSpace = savedFree
+        restore()
+        assert_eq(hit ~= nil, true,
+            "340 KB free is 40 KB above the floor the run fails at -- the last "
+            .. "moment a warning is still room to act")
+        assert_eq(hit and hit.level, "WARN", "and at WARN, not yet ERROR")
+    end,
+
+    ["a disk with plenty of room says nothing"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local savedFree = fs.getFreeSpace
+        fs.getFreeSpace = function() return 500000 end
+        T.warnIfDiskTight()
+        local n = 0
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("Disk ", 1, true) then n = n + 1 end
+        end
+        fs.getFreeSpace = savedFree
+        restore()
+        assert_eq(n, 0, "500 KB free must not warn, or the warning is noise")
+    end,
+
+    -- A disk that crosses the floor a minute after the first warning must not
+    -- wait out the five-minute repeat window to say so.
+    ["crossing the floor is reported at once, inside the repeat window"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local savedFree, free = fs.getFreeSpace, 340000
+        fs.getFreeSpace = function() return free end
+        os.epoch = function() return 2000000 end
+        T.warnIfDiskTight()
+        free = 290000
+        os.epoch = function() return 2060000 end   -- one minute later
+        T.warnIfDiskTight()
+        local warns, errors = 0, 0
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("Disk ", 1, true) then
+                if e.level == "ERROR" then errors = errors + 1 else warns = warns + 1 end
+            end
+        end
+        fs.getFreeSpace = savedFree
+        restore()
+        assert_eq(warns, 1, "precondition: the first warning went out")
+        assert_eq(errors, 1,
+            "dropping below the floor must be reported immediately, at ERROR -- "
+            .. "it means the 48-hour run is already lost")
+    end,
+
+    ["the same level repeats only every five minutes"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local savedFree = fs.getFreeSpace
+        fs.getFreeSpace = function() return 340000 end
+        local function count()
+            local n = 0
+            for _, e in ipairs(T.state.log) do
+                if e.msg:find("Disk low", 1, true) then n = n + 1 end
+            end
+            return n
+        end
+        os.epoch = function() return 3000000 end; T.warnIfDiskTight()
+        os.epoch = function() return 3060000 end; T.warnIfDiskTight()
+        local afterMinute = count()
+        os.epoch = function() return 3301000 end; T.warnIfDiskTight()
+        local afterFive = count()
+        fs.getFreeSpace = savedFree
+        restore()
+        assert_eq(afterMinute, 1,
+            "the same level a minute later must not repeat -- it runs every "
+            .. "minute now, and a line a minute buries the log")
+        assert_eq(afterFive, 2, "but it must repeat after five minutes")
+    end,
+
+    -- The old text called the zone files expendable. Live zones are only ever on
+    -- disk, so following that advice deletes every mine in progress.
+    ["the disk warning never calls live state expendable"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local savedFree = fs.getFreeSpace
+        fs.getFreeSpace = function() return 340000 end
+        T.warnIfDiskTight()
+        local msg = ""
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("Disk low", 1, true) then msg = e.msg end
+        end
+        fs.getFreeSpace = savedFree
+        restore()
+        assert_eq(msg:find("active_zones.dat", 1, true) ~= nil, true,
+            "precondition: the warning names the file")
+        assert_eq(msg:find("expendable", 1, true), nil,
+            "and must not call it disposable -- it holds every live mine")
+        assert_eq(msg:find("do not delete", 1, true) ~= nil, true,
+            "it must say plainly that the live files stay")
+    end,
+
+    -- SOURCE-ONLY, weaker: server.run's loop is not reachable here. Comments
+    -- stripped first -- an anchor that matches prose has passed against broken
+    -- code five times on this project.
+    ["the disk is checked every minute, not only after a job save (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("central_server.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        local NL = string.char(10)
+        local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+        local at = code:find("loopLastRollup = now2", 1, true)
+        assert_eq(at ~= nil, true, "the rollup moved or vanished")
+        assert_eq(code:sub(at, at + 200):find("warnIfDiskTight()", 1, true) ~= nil, true,
+            "the minute rollup must check the disk, or an idle server never warns")
+    end,
+
     -- Knowing what is actually running.
     --
     -- Twice now a machine has run different code from the source being read: an

@@ -81,6 +81,12 @@ P_HIDDEN   = "a storage call behind a slower step still counts"
 P_CAP      = "a long window is capped and says how much it left out"
 P_STOP     = "a reply that arrived ends the window"
 P_WIRED    = "the push, the reply, the timeout and the loop all feed the witness (SOURCE-ONLY, weaker)"
+D_EARLY    = "the disk warning comes before the 300 KB floor, not after it"
+D_QUIET    = "a disk with plenty of room says nothing"
+D_FLOOR    = "crossing the floor is reported at once, inside the repeat window"
+D_REPEAT   = "the same level repeats only every five minutes"
+D_SAFE     = "the disk warning never calls live state expendable"
+D_MINUTE   = "the disk is checked every minute, not only after a job save (SOURCE-ONLY, weaker)"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -373,6 +379,32 @@ MUTANTS = [
 
     ("the loop stops counting turns", "central_server.lua",
      [("            pushWitness.turn(event)\n", "")], P_WIRED),
+
+    # ── The low-disk warning ────────────────────────────────────────────────
+    ("the warning threshold goes back to 120 KB", "central_server.lua",
+     [("local DISK_WARN_BYTES  = 350000", "local DISK_WARN_BYTES  = 120000")], D_EARLY),
+
+    ("the warning fires at any free space", "central_server.lua",
+     [("(free < DISK_WARN_BYTES and 1) or 0", "1")], D_QUIET),
+
+    ("a worse level waits for the repeat window", "central_server.lua",
+     [("    if level <= _lastDiskLevel and now - _lastDiskWarn < DISK_WARN_EVERY then return end",
+       "    if now - _lastDiskWarn < DISK_WARN_EVERY then return end")], D_FLOOR),
+
+    ("the floor is only a warning", "central_server.lua",
+     [("    if level == 2 then logError(msg) else logWarn(msg) end", "    logWarn(msg)")], D_FLOOR),
+
+    ("the same level repeats every call", "central_server.lua",
+     [("    if level <= _lastDiskLevel and now - _lastDiskWarn < DISK_WARN_EVERY then return end\n", "")],
+     D_REPEAT),
+
+    ("the warning calls live zones expendable again", "central_server.lua",
+     [('"both LIVE state, do not delete them; a leftover active_zones.dat.bak "',
+       '"zones are also in the cloud store, so the disk copy is expendable; "')], D_SAFE),
+
+    ("the minute rollup stops checking the disk", "central_server.lua",
+     [("                loopLastRollup = now2\n", "                loopLastRollup = now2\n                -- gone\n"),
+      ("                warnIfDiskTight()\n            end", "            end")], D_MINUTE),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
