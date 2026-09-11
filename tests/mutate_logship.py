@@ -87,6 +87,13 @@ D_FLOOR    = "crossing the floor is reported at once, inside the repeat window"
 D_REPEAT   = "the same level repeats only every five minutes"
 D_SAFE     = "the disk warning never calls live state expendable"
 D_MINUTE   = "the disk is checked every minute, not only after a job save (SOURCE-ONLY, weaker)"
+K_MID      = "a mid-sector miner is not re-sent its sector order on reconnect"
+K_WAIT     = "a waiting miner is still re-sent its sector order"
+K_OLD      = "a turtle that does not say is re-sent, as before"
+T_WAIT     = "a job waiting for a sector order still counts as waiting between receives"
+T_GOT      = "a job that has its sector order is no longer waiting for one"
+T_ELSE     = "waiting for something else is not waiting for a sector order"
+T_REG      = "the reconnect tells the server whether it is waiting (SOURCE-ONLY, weaker)"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -405,6 +412,43 @@ MUTANTS = [
     ("the minute rollup stops checking the disk", "central_server.lua",
      [("                loopLastRollup = now2\n", "                loopLastRollup = now2\n                -- gone\n"),
       ("                warnIfDiskTight()\n            end", "            end")], D_MINUTE),
+
+    # ── The stale sector order after a reconnect ─────────────────────────────
+    ("the server replays to every reconnecting miner again", "central_server.lua",
+     [("                    if la and awaitingSector ~= false then", "                    if la then")],
+     K_MID),
+
+    ("the server replays only to a miner that says so", "central_server.lua",
+     [("                    if la and awaitingSector ~= false then",
+       "                    if la and awaitingSector == true then")], K_OLD),
+
+    ("the server never replays", "central_server.lua",
+     [("                    if la and awaitingSector ~= false then",
+       "                    if false then")], K_WAIT),
+
+    ("the handler drops the turtle's answer", "central_server.lua",
+     [("p.midJob, p.awaitingSector)", "p.midJob)")], K_MID),
+
+    ("withholding is silent", "central_server.lua",
+     [('                            "Withheld SECTOR_ASSIGN (%d,%d) from %s on re-link: "',
+       '                            "SECTOR_ASSIGN (%d,%d) %s re-link: "')], K_MID),
+
+    ("receive stops remembering what it waits for", "turtle_base.lua",
+     [("    _jobAwaiting = (wantType == nil) and AWAIT_ANY or wantType\n", "")], T_WAIT),
+
+    ("a timed-out receive forgets the wait", "turtle_base.lua",
+     [("    if msg ~= nil then _jobAwaiting = nil end", "    _jobAwaiting = msg and nil or nil")],
+     T_WAIT),
+
+    ("a delivered message does not end the wait", "turtle_base.lua",
+     [("    if msg ~= nil then _jobAwaiting = nil end\n", "")], T_GOT),
+
+    ("any wait counts as waiting for a sector", "turtle_base.lua",
+     [("    if type(w) == \"table\" then return w[t] == true end", "    if type(w) == \"table\" then return true end")],
+     T_ELSE),
+
+    ("the reconnect stops reporting", "turtle_base.lua",
+     [("            awaitingSector = base.isAwaiting(proto.MSG.SECTOR_ASSIGN),\n", "")], T_REG),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

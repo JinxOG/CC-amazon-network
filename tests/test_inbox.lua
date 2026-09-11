@@ -125,6 +125,60 @@ return {
         assert_eq(jobs, 1, "the unwanted message must remain queued")
     end,
 
+    -- What a reconnecting miner tells the server. Waiting is remembered ACROSS
+    -- a timed-out receive, because ore_turtle's waitMsg sleeps between receives
+    -- while the server is down -- and that is exactly when the turtle
+    -- re-registers.
+    ["a job waiting for a sector order still counts as waiting between receives"] =
+    function(assert_eq)
+        local base = fresh()
+        local set = { [proto.MSG.SECTOR_ASSIGN] = true, [proto.MSG.MINE_COMPLETE] = true }
+        assert_eq(base.receive(0, set), nil, "precondition: nothing has arrived")
+        assert_eq(base.isAwaiting(proto.MSG.SECTOR_ASSIGN), true,
+            "a wait that timed out without its message is still a wait -- this "
+            .. "is what the reconnect reports, and it happens mid-sleep")
+    end,
+
+    ["a job that has its sector order is no longer waiting for one"] =
+    function(assert_eq)
+        local base = fresh()
+        local set = { [proto.MSG.SECTOR_ASSIGN] = true }
+        base.receive(0, set)
+        deliver(base, proto.MSG.SECTOR_ASSIGN)
+        local got = base.receive(0, set)
+        assert_eq(got ~= nil and got.type, proto.MSG.SECTOR_ASSIGN,
+            "precondition: the order was delivered")
+        assert_eq(base.isAwaiting(proto.MSG.SECTOR_ASSIGN), false,
+            "a miner holding its order is mid-sector -- reporting it as waiting "
+            .. "would bring back the duplicate replay this exists to stop")
+    end,
+
+    ["waiting for something else is not waiting for a sector order"] =
+    function(assert_eq)
+        local base = fresh()
+        base.receive(0, { [proto.MSG.LOADER_BEACON] = true })
+        assert_eq(base.isAwaiting(proto.MSG.SECTOR_ASSIGN), false,
+            "a miner waiting on its loader beacon is mid-sector")
+    end,
+
+    -- SOURCE-ONLY, weaker: register() blocks on its ACK and is not driven here.
+    -- Comments stripped first; an anchor matching prose has passed against
+    -- broken code five times on this project.
+    ["the reconnect tells the server whether it is waiting (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("turtle_base.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        local NL = string.char(10)
+        local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+        local at = code:find("comms.toServer(proto.MSG.REGISTER", 1, true)
+        assert_eq(at ~= nil, true, "the REGISTER send moved or vanished")
+        assert_eq(code:sub(at, at + 400):find(
+            "awaitingSector = base.isAwaiting(proto.MSG.SECTOR_ASSIGN)", 1, true) ~= nil, true,
+            "REGISTER must carry awaitingSector, or the server keeps replaying "
+            .. "old orders to miners that already have them")
+    end,
+
     -- An empty queue with a zero timeout must return nil rather than blocking or
     -- raising. register() depends on this to count a failed attempt.
     ["an empty inbox times out cleanly"] = function(assert_eq)
