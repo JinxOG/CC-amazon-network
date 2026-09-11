@@ -94,6 +94,10 @@ T_WAIT     = "a job waiting for a sector order still counts as waiting between r
 T_GOT      = "a job that has its sector order is no longer waiting for one"
 T_ELSE     = "waiting for something else is not waiting for a sector order"
 T_REG      = "the reconnect tells the server whether it is waiting (SOURCE-ONLY, weaker)"
+C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
+C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
+C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
+C5_CLEAN   = "a delivery turtle whose run loop returns reboots without a crash report"
 
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
@@ -449,6 +453,24 @@ MUTANTS = [
 
     ("the reconnect stops reporting", "turtle_base.lua",
      [("            awaitingSector = base.isAwaiting(proto.MSG.SECTOR_ASSIGN),\n", "")], T_REG),
+
+    # -- Crash handlers, delivery and support (card 5, signed off 2026-09-11) --
+    ("support stops flushing on a crash", "support_turtle.lua",
+     [("    pcall(base.flushLogs)\n    sleep(20)", "    sleep(20)")], C5_SUP),
+
+    ("delivery stops flushing on a crash", "delivery_turtle.lua",
+     [('    print("[DELIVERY] Rebooting in 20s...")\n    pcall(base.flushLogs)\n',
+       '    print("[DELIVERY] Rebooting in 20s...")\n')], C5_DEL),
+
+    ("delivery calls its run loop bare again", "delivery_turtle.lua",
+     [("local ok, err = pcall(base.run, function(job)", "local ok, err = true, nil; base.run(function(job)")],
+     C5_REBOOT),
+
+    ("delivery no longer reboots", "delivery_turtle.lua",
+     [("    sleep(20)\nend\nos.reboot()", "    sleep(20)\nend")], C5_REBOOT),
+
+    ("delivery reboots only after a crash", "delivery_turtle.lua",
+     [("    sleep(20)\nend\nos.reboot()", "    sleep(20)\n    os.reboot()\nend")], C5_CLEAN),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
