@@ -586,20 +586,46 @@ end
 -- P7: the system must report its own degradation. A full disk stops job state
 -- being saved, and the operator's first sign of it was the disk already being
 -- full. Warn while there is still room to act.
-local _lastDiskWarn = 0
-local DISK_WARN_BYTES  = 120000
+--
+-- Two levels, and both sit ABOVE the floor rather than at it.
+--
+-- The first version fired below 120 KB. On 2026-09-10 one mining job took the
+-- disk from 544 KB to 308 KB free and it said nothing -- so the next shortage
+-- would still have arrived as a crisis. The cleanup phase's 48-hour run fails if
+-- free space ever drops below 300 KB (2026-09-11-cleanup-phase-design.md §7.2
+-- check 6), so a warning AT 300 KB would announce the failure rather than
+-- prevent it. WARN at 350 KB is the room to act; ERROR below 300 KB is the run
+-- already lost, and says so.
+--
+-- A WORSE level is news and goes out at once, even inside the five-minute
+-- repeat window: a disk that crosses the floor a minute after the first warning
+-- must not wait four more minutes to say it. The same level repeats only every
+-- five minutes, and climbing back out of the band re-arms it.
+local _lastDiskWarn  = 0
+local _lastDiskLevel = 0          -- 0 fine, 1 warned, 2 below the floor
+local DISK_WARN_BYTES  = 350000
+local DISK_FLOOR_BYTES = 300000
 local DISK_WARN_EVERY  = 300000   -- 5 min; a line per save would bury the log
 local function warnIfDiskTight()
     local ok, free = pcall(fs.getFreeSpace, "/")
-    if not ok or type(free) ~= "number" or free >= DISK_WARN_BYTES then return end
+    if not ok or type(free) ~= "number" then return end
+    local level = (free < DISK_FLOOR_BYTES and 2) or (free < DISK_WARN_BYTES and 1) or 0
+    if level == 0 then _lastDiskLevel = 0; return end
     local now = os.epoch("utc")
-    if now - _lastDiskWarn < DISK_WARN_EVERY then return end
-    _lastDiskWarn = now
-    logWarn(string.format(
-        "Disk low on the server computer: %d bytes free. Job state stops saving "
-        .. "when it runs out. Largest consumers are jobs.dat and active_zones.dat "
-        .. "(zones are also in the cloud store, so the disk copy is expendable).",
-        free))
+    if level <= _lastDiskLevel and now - _lastDiskWarn < DISK_WARN_EVERY then return end
+    _lastDiskWarn, _lastDiskLevel = now, level
+    -- The old text called the zone copy "expendable" because zones are also in
+    -- the cloud store. True for FINISHED zones only: live zones are written to
+    -- active_zones.dat and nowhere else. An operator who followed that advice
+    -- would delete the state of every mine in progress. The backup (.bak) is
+    -- the only file here that is safe to remove by hand.
+    local msg = string.format(
+        "Disk %s on the server computer: %d bytes free. Job state stops saving "
+        .. "when it runs out. Largest files are jobs.dat and active_zones.dat -- "
+        .. "both LIVE state, do not delete them; a leftover active_zones.dat.bak "
+        .. "is the only one safe to remove by hand.",
+        level == 2 and "below the 300 KB floor" or "low", free)
+    if level == 2 then logError(msg) else logWarn(msg) end
 end
 
 local function saveJobs()
@@ -4774,6 +4800,11 @@ function server.run()
                 loopIters, loopBusySum, loopBusyMax, loopSlowCount = 0, 0, 0, 0
                 loopBusyMaxOp  = "-"
                 loopLastRollup = now2
+                -- Once a minute as well as after every job save. A check that
+                -- only runs when a job saves cannot see anything else filling
+                -- the disk -- a crash log, an update's temporary copies -- and
+                -- an idle server saves nothing at all.
+                warnIfDiskTight()
             end
         end
     end
@@ -4820,6 +4851,7 @@ if _G.__CC_SERVER_TEST then
         saveJobs = saveJobs,
         saveMiningZones = saveMiningZones,
         pushWitness = pushWitness,
+        warnIfDiskTight = warnIfDiskTight,
         dropBackupAfterVerify = dropBackupAfterVerify,
         -- The continuous-log delta selector. Every interesting property lives
         -- here: the cap that keeps the payload bounded, and the fixed-window
