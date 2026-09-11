@@ -2331,6 +2331,77 @@ local function noteBridgeBoot(id)
     return true
 end
 
+-- ─── Push witness ────────────────────────────────────────────────────────────
+--
+-- What the loop did between a bridge push leaving and its timeout firing.
+--
+-- Cleanup phase, Wave 2 card 7: ~83-123 pushes a day time out after 4 s while
+-- the bridge answers every one in 1-3 ms. So the reply ARRIVES and this server
+-- does not hear it. The suspected mechanism: the push goes out at the bottom of
+-- the loop, the reply is queued a millisecond later, and if another event is
+-- already queued ahead of it, the next turn of the loop handles that one first.
+-- If handling it means a peripheral call -- the storage scan above all -- CC
+-- resumes the call's filtered wait with every queued event in turn and throws
+-- away the ones that do not match, the reply included. The 1.9.77 ordering fix
+-- guarded the SAME turn of the loop, not the next one.
+--
+-- That is a hypothesis, and the cleanup phase repairs only what a measurement
+-- shows. So this records the evidence and the timeout line prints it. The
+-- verdict names only what this server can see: "no events" means nothing here
+-- could have eaten the reply, which is a different finding from "a storage call
+-- ran", and a witness that could not say so would read every timeout as proof.
+--
+-- The cost matters beyond the dashboard: commands clicked on the dashboard ride
+-- back to this server inside those replies, so a lost reply can be a lost
+-- command, not just a stale screen.
+local PUSH_WITNESS_TRAIL = 8
+local PERIPHERAL_STEPS = { refreshStorage = true, refreshCraftable = true }
+local pushWitness = { w = nil }
+
+function pushWitness.start()
+    -- skip: the turn that STARTED the push closes after this call; it is not
+    -- part of the window, and counting it would make every timeout read as
+    -- "one event handled".
+    pushWitness.w = { turns = 0, trail = {}, cur = {}, skip = true, peripheral = false }
+end
+
+function pushWitness.step(name, ms)
+    local w = pushWitness.w
+    if not w or name == "bridgePush" then return end
+    w.cur[#w.cur + 1] = string.format("%s %dms", name, ms)
+    if PERIPHERAL_STEPS[name] then w.peripheral = true end
+end
+
+function pushWitness.turn(event)
+    local w = pushWitness.w
+    if not w then return end
+    if w.skip then w.skip = false; w.cur = {}; return end
+    w.turns = w.turns + 1
+    if #w.trail < PUSH_WITNESS_TRAIL then
+        local steps = (#w.cur > 0) and ("[" .. table.concat(w.cur, ", ") .. "]") or ""
+        w.trail[#w.trail + 1] = tostring(event) .. steps
+    end
+    w.cur = {}
+end
+
+function pushWitness.summary()
+    local w = pushWitness.w
+    if not w then return nil end
+    if w.turns == 0 then
+        return "the loop handled no events between the push and now — nothing "
+            .. "on this server ran that could have discarded the reply"
+    end
+    local more = w.turns - #w.trail
+    return string.format("the loop handled %d event(s) in that window: %s%s [%s]",
+        w.turns, table.concat(w.trail, ", "),
+        more > 0 and string.format(" (+%d more)", more) or "",
+        w.peripheral
+            and "a storage peripheral call ran in the window, and it discards any reply queued behind it"
+            or  "no storage peripheral call ran in the window — not the storage scan")
+end
+
+function pushWitness.stop() pushWitness.w = nil end
+
 local function logSelect(ring, source, windowN)
     local newest = ring[#ring]
     if not newest then return {} end
@@ -4169,9 +4240,11 @@ function server.run()
             -- away from the push, the diagnosis is wrong and this line says so.
             logWarn(string.format(
                 "Bridge push stuck >%ds — force-clearing (dropped events); "
-                .. "last RS poll %dms, %dms before this push",
+                .. "last RS poll %dms, %dms before this push; %s",
                 BRIDGE_FORCE_CLEAR_MS / 1000, lastRsPollMs,
-                bridgePendingSince - lastStorageWC))
+                bridgePendingSince - lastStorageWC,
+                pushWitness.summary() or "no window recorded"))
+            pushWitness.stop()
             bridgePending   = false
             bridgeTimeoutId = nil
         end
@@ -4186,6 +4259,7 @@ function server.run()
             bridgePending     = true
             bridgePendingSince = now
             bridgeTimeoutId   = os.startTimer(BRIDGE_PUSH_TIMEOUT)
+            pushWitness.start()
         else
             logWarn("Bridge: http.request could not start")
         end
@@ -4254,6 +4328,9 @@ function server.run()
         local ok, err = pcall(fn)
         local ms = os.epoch("utc") - t0
         if ms > stepMs then stepMs, stepName = ms, name end
+        -- Every step, not just the slowest: a storage call hidden behind a
+        -- slower step in the same turn would otherwise vanish from the window.
+        pushWitness.step(name, ms)
         return ok, err
     end
 
@@ -4323,6 +4400,7 @@ function server.run()
             -- Async bridge response — process only if it's our push and we're waiting.
             if p1 == CFG.BRIDGE_URL and bridgePending then
                 bridgePending = false
+                pushWitness.stop()
                 if bridgeTimeoutId then os.cancelTimer(bridgeTimeoutId); bridgeTimeoutId = nil end
                 local ok_r, code, body = pcall(function()
                     local c = p2.getResponseCode()
@@ -4415,6 +4493,7 @@ function server.run()
         elseif event == "http_failure" then
             if p1 == CFG.BRIDGE_URL and bridgePending then
                 bridgePending = false
+                pushWitness.stop()
                 if bridgeTimeoutId then os.cancelTimer(bridgeTimeoutId); bridgeTimeoutId = nil end
                 logWarn("Bridge push failed: " .. tostring(p2))
             end
@@ -4494,7 +4573,9 @@ function server.run()
             elseif p1 == bridgeTimeoutId then
                 bridgePending   = false
                 bridgeTimeoutId = nil
-                logWarn(string.format("Bridge push timed out (>%ds)", BRIDGE_PUSH_TIMEOUT))
+                logWarn(string.format("Bridge push timed out (>%ds) — %s", BRIDGE_PUSH_TIMEOUT,
+                    pushWitness.summary() or "no window recorded"))
+                pushWitness.stop()
 
             elseif p1 == storageTimer then
                 -- Runs on its own timer so the peripheral scan never happens
@@ -4649,6 +4730,7 @@ function server.run()
 
         -- ── Close the busy window and report ────────────────────────────────
         do
+            pushWitness.turn(event)
             local busy = os.epoch("utc") - busyStart
             loopIters   = loopIters + 1
             loopBusySum = loopBusySum + busy
@@ -4737,6 +4819,7 @@ if _G.__CC_SERVER_TEST then
         -- that decides whether a second full copy of every file survives.
         saveJobs = saveJobs,
         saveMiningZones = saveMiningZones,
+        pushWitness = pushWitness,
         dropBackupAfterVerify = dropBackupAfterVerify,
         -- The continuous-log delta selector. Every interesting property lives
         -- here: the cap that keeps the payload bounded, and the fixed-window
