@@ -510,7 +510,37 @@ end
 
 local CRASH_LOG_FILE = "wh_crash.log"
 
+-- The fleet-log outbox. Created inside main() rather than at load, so the
+-- test seam never captures the global print of whatever required this file;
+-- module-level so the crash handler at the bottom can flush it on the way down.
+local _log = nil
+
 local function main()
+    -- Forward this computer's log to the fleet log. The shared half is W3's
+    -- logship (1.9.93); until now nothing on this machine reported anything,
+    -- so a frozen state machine or a destroyed handshake step was found out
+    -- only from a delivery that never arrived.
+    --
+    -- pcall'd on purpose, against the manifest test's preference for a plain
+    -- require. A plain require that fails stops this file before its own crash
+    -- handler runs, and before it can receive the UPDATE_ALL that would
+    -- deliver the missing module: the 2026-09-10 fleet outage, on the one
+    -- machine nobody can see. logship is in this role's manifest and in
+    -- COMMON, so the manifest is right either way -- this only decides what a
+    -- stale disk costs. Losing the log is survivable; losing the warehouse
+    -- is not.
+    local okLS, logship = pcall(require, "logship")
+    if okLS then
+        _log = logship.new({
+            source = "warehouse",
+            send   = function(lines, bootId)
+                sendToServer(proto.MSG.TURTLE_LOG, nil, { lines = lines, bootId = bootId })
+            end,
+        })
+    else
+        log("WARNING: logship unavailable (" .. tostring(logship) .. ") — this "
+            .. "computer's log is NOT reaching the fleet log. Run the updater.")
+    end
     log(string.format("Warehouse online v%s (RS bridge / state-machine mode)", proto.VERSION))
     -- Replay the last crash, same as central_server does. Without it the reason
     -- lives in a file nobody opens and the operator sees only that deliveries
@@ -545,15 +575,27 @@ local function main()
     local tickTimer = os.startTimer(1)
 
     while true do
-        local ev, p1, _, _, p4 = os.pullEvent()
+        local ev, _, _, _, p4 = os.pullEvent()
         if ev == "modem_message" then
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
             routeMsg(raw)
-        elseif ev == "timer" and p1 == tickTimer then
-            tickTimer = os.startTimer(1)
         end
         -- Always tick after any event — state machine advances on messages AND time
         tick()
+        if _log then _log:tick() end
+
+        -- Re-arm unconditionally, whatever woke us.
+        --
+        -- This was re-armed ONLY inside its own `p1 == tickTimer` branch. Lose
+        -- that one event -- any yield destroys whatever arrives during it, timer
+        -- events included, and clearEnderChest and UPDATE_ALL both sleep -- and
+        -- the loop has no pending timer. It then advances only when a message
+        -- happens to arrive: timeouts stop firing and an idle warehouse freezes
+        -- while looking perfectly healthy. Byte-for-byte the fault that left
+        -- all 15 turtles alive and deaf on 2026-09-04, fixed the same way the
+        -- server (6f7d1c6) and the turtles (1.9.80) were. W3 found it here.
+        os.cancelTimer(tickTimer)
+        tickTimer = os.startTimer(1)
     end
 end
 
@@ -573,6 +615,7 @@ if _G.__CC_WAREHOUSE_TEST then
         chestsNeeded    = chestsNeeded,
         CFG             = CFG,
         CRASH_LOG_FILE  = CRASH_LOG_FILE,
+        main            = main,
     }
 end
 
@@ -589,7 +632,10 @@ end
 while true do
     local ok, err = pcall(main)
     if ok then break end
+    -- A real level field, so ?level=ERROR finds the one line that matters.
+    if _log then _log.pendingLevel = "ERROR" end
     print("[FATAL] warehouse crashed: " .. tostring(err))
+    if _log then _log.pendingLevel = nil end
     pcall(function()
         local f = fs.open(CRASH_LOG_FILE, "a")
         if f then
@@ -599,6 +645,9 @@ while true do
         end
     end)
     print("Rebooting in 5 seconds...")
+    -- The loop's interval flush never runs again. Send what the outbox holds
+    -- now -- the crash line above most of all -- or it dies with this boot.
+    if _log then pcall(function() _log:flush() end) end
     sleep(5)
     os.reboot()
 end
