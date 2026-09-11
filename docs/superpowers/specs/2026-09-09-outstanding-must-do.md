@@ -4,7 +4,9 @@
 - **Maintained by:** W3 — Fleet & Dispatch
 - **Since 2026-09-11:** the cleanup phase (`2026-09-11-cleanup-phase-design.md`)
   sets the order. W3's staged work and the release question are in
-  `2026-09-11-W3-to-spec-owner-five-staged-and-a-release-question.md`.
+  `2026-09-11-W3-to-spec-owner-five-staged-and-a-release-question.md`; the
+  ruled release order and the rebuilt branches are in
+  `2026-09-11-W3-to-spec-owner-stack-rebuilt-to-your-order.md`.
 - **Rule:** an item leaves this list when it is **measured** as done, not when it
   is written. Three things on it were once believed fixed on evidence that could
   not have shown otherwise.
@@ -106,8 +108,10 @@ writes is the one least likely to arrive. `base.flushLogs()` exists as of
 `support_turtle.lua` need to call it before rebooting.
 
 **Cleanup phase card 5:** W1 has `ore_turtle.lua`; W3 has delivery and support,
-**blocked** until the spec owner writes `Signed off: spec owner, <date>` into the
-card body (§5.3). Not touched.
+**signed off 2026-09-11**. **W3 half built (1.9.104, `w3-r6-crash-handlers`):**
+support flushes before its reboot; delivery, which had no crash handler and
+stranded itself at the shell prompt on a control-loop crash, now has support's.
+Tests seen red first.
 
 ## 4. Sort the log query output by time — **W5** (moved from W3, 2026-09-11)
 
@@ -172,7 +176,7 @@ failing between the two moves. A file listing off the server computer settles it
 
 It fires below 120 KB. A 236 KB drop in one job said nothing.
 
-**Built, staged (1.9.101, `w3-card3-disk-warning`):** WARN below 350 KB, ERROR
+**Built, staged (1.9.102, `w3-r4-disk-warning`):** WARN below 350 KB, ERROR
 below 300 KB — the §7 run's floor — checked every minute as well as after job
 saves. Also removed the old text's advice that the zone files were
 "expendable": live zones are on disk only.
@@ -183,7 +187,7 @@ From W6's node_139 diagnosis: the server replays a miner's last `SECTOR_ASSIGN`
 on re-link even mid-sector, so the miner later re-enters the sector it just
 finished. 6 replays, 4 repeated sectors in jobs 0039–0042.
 
-**Built, staged (1.9.102, `w3-card4-stale-sector`):** the reconnect carries
+**Built, staged (1.9.103, `w3-r5-stale-sector`):** the reconnect carries
 `awaitingSector`; the server replays only when it is not false, and logs every
 withheld replay. `reSendSector` is gated, not removed — the cleanup phase counts
 it as flaw 1's footprint. W1's miner-side half is separate.
@@ -193,7 +197,7 @@ it as flaw 1's footprint. W1's miner-side half is separate.
 W6 loads `logship` on the warehouse with `pcall(require, …)`, which the manifest
 test ignores by design. Add an allowance for guarded-and-reported requires.
 
-**Built, staged (test only, `w3-card6-optional-require`):** a guarded require
+**Done — on `master` (`7c6a934`, test only):** a guarded require
 whose file says "<module> unavailable" / "not installed" is required wherever the
 file ships; per-role exemptions carry their reason. Removing `cloudstore` from
 the server's list now fails the suite — the gap this list used to record.
@@ -203,14 +207,14 @@ the server's list now fails the suite — the gap this list used to record.
 ~83–123 bridge pushes a day time out while the bridge answers in 1–3 ms; one
 hard force-clear on 2026-09-10. Not correlated with the disconnect clusters.
 Suspected: a peripheral call in the turn AFTER a push discards the queued reply.
-**Witness built, staged (1.9.103, `w3-card7-push-witness`)** — every timeout
+**Witness built, staged (1.9.101, `w3-r3-push-witness`, release R3)** — every timeout
 line now says what ran in its window. A lost reply may also be a lost dashboard
 command (asked of W5).
 
 ## 12. Wave 1 removals — **W3 rows built, staged**
 
 `stress_test.lua` out of the updater; `test_turtle.lua` to `tests/inworld/`
-(1.9.100, `w3-wave1-removals`). This release changes `updater.lua` itself, so it
+(1.9.100, `w3-r2-wave1`, release R2). This release changes `updater.lua` itself, so it
 is also the first live run of the 1.9.94 self-restart.
 
 ---
