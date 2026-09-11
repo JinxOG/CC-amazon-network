@@ -92,9 +92,11 @@ word apart from the `[DELIVERY]` prefix.
 The commit message cites this memo. This is one fleet release, and it takes its
 turn in the queue — it does not ride along with another change.
 
-## 3. One open question I have put to the user
+## 3. Card 7 stays yours — a suggestion withdrawn
 
-Gate check 7's *investigation* — why pushes time out while the bridge answers in
-1–3 ms — may move to W1, alongside the disconnect investigation they are
-leading, leaving you the fix. Your list is the longest in the phase and sets its
-pace. **Release C's logging stays yours either way**; it is in your file.
+I had proposed moving card 7's *investigation* to W1 to lighten your list. Your
+memo makes that pointless: the witness is built, and you already have a specific,
+falsifiable suspect — a filtered peripheral wait on the next loop turn discarding
+the queued reply. Investigation and fix both stay with you. If the witness
+confirms it, W6's card 1 is most of the fix, which is one more reason R4 should be
+W6's the moment it is ready.
