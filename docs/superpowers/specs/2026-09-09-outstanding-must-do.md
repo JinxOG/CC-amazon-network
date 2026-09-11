@@ -63,6 +63,16 @@ JSON is not the problem. Worst stall of the whole day: **1,020 ms**.
 
 ## 2. The fleet-wide disconnect clusters — **unexplained, owner unassigned**
 
+**2026-09-11, the witness answers half of it: every disconnect is a lost message.**
+225 `Server unreachable` lines, all read: **225 of 225** say the turtle kept running
+with its radio on and the ACKs did not arrive — zero radio-off, zero declared gap,
+zero paused loop. **21 group disconnects** by the §7.2 definition (≥3 turtles in
+30 s), 5 of them on 1.9.99 where "radio on" means the transmit returned success.
+Server normal throughout (rollups on cadence, `busy_ms_max` ≤ 119 ms, `slow=0`).
+Still unknown: which direction is lost. Proposed next measure — the server logs, at
+re-registration, how long since it last heard that turtle. Details:
+`2026-09-11-W3-to-W1-spec-owner-r1-ran-its-job.md`. **Blocks §7 checks 3 and 4.**
+
 W1 measured 30 clusters of 8+ nodes in 14 hours (`6b4d52a`). Not reproduced in
 the 25-minute loaded window on 2026-09-09 — four disconnects, four different
 nodes, minutes apart, singles rather than clusters.
@@ -122,7 +132,10 @@ every 3 s, so a turtle's lines land after server lines that happened later.
 Measured 37 backward steps in one day, up to 4 s. The timestamps are right; the
 order is not. `?sort=ts` on the query endpoint, so nobody has to remember.
 
-## 4b. Single-line log losses — **W3, open**
+## 4b. Single-line log losses — **W3, closed 2026-09-11**
+
+**R1's job (jobs 0043–0044, 1.9.99): 1,067 lines, 0 missing, `verdict=clean`.** The
+detached-modem gaps and the DUMPING singles both absent. Kept below as the record.
 
 The whole-job audit on 2026-09-09 showed 46 missing of 2,273 (2.02%), down from
 19%. **38 of those were one burst**, fixed at 1.9.91. The remaining eight are
@@ -233,9 +246,9 @@ is also the first live run of the 1.9.94 self-restart.
 
 | Item | Fixed at | What would close it |
 |---|---|---|
-| Burst log loss (38 lines in one gap) | 1.9.91 | a full job's audit showing no multi-line gaps. **Jobs 0039–0042 showed none from overflow** (zero "dropped" notices), but a notice can itself fall in a swap gap — re-measure on 1.9.98 |
+| Burst log loss (38 lines in one gap) | 1.9.91 | **Measured 2026-09-11:** jobs 0043–0044 on 1.9.99, 1,067 lines, **0 missing**, `verdict=clean` — no gaps of any size. Closing with the next row |
 | Updater restarts when its own file list changes | 1.9.94 | a live update that changes `updater.lua` itself, with every node landing |
-| Detached-modem log loss | 1.9.98 | a full job's audit with no gaps after swap lines |
+| Detached-modem log loss | 1.9.98 | **Measured clean 2026-09-11** (same job, 9 modem swaps on node_139 alone, 0 missing). Card moved to Done |
 | Witness verdict from the send result | 1.9.98 | a live capture whose verdict matches the turtle's phase |
 | Live-zone backup dropped | 1.9.99 | a file listing off the server computer with no `active_zones.dat.bak` |
 
