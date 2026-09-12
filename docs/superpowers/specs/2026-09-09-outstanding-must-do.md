@@ -132,10 +132,20 @@ every 3 s, so a turtle's lines land after server lines that happened later.
 Measured 37 backward steps in one day, up to 4 s. The timestamps are right; the
 order is not. `?sort=ts` on the query endpoint, so nobody has to remember.
 
-## 4b. Single-line log losses — **W3, closed 2026-09-11**
+## 4b. Single-line log losses — **W3, REOPENED 2026-09-12**
 
-**R1's job (jobs 0043–0044, 1.9.99): 1,067 lines, 0 missing, `verdict=clean`.** The
-detached-modem gaps and the DUMPING singles both absent. Kept below as the record.
+Closed on 2026-09-11 on R1's job — 1,067 lines, 0 missing — and **that was too
+small a sample to close on**: R1's job mined nothing, so the miners barely ran.
+
+**The first big job on 1.9.100 (jobs 0045–0046, 4,154 lines, 15,490 ore) audits
+as `gaps`: 20 missing, 0.5%.** node_138: six gaps, all single lines, five
+directly after `phase DUMPING`. node_118: three, including **one of 4 lines
+directly after `Lease released for the retrieval ascent`** — a swap window, so
+1.9.98 improved that path (gaps of 9, 11, 24 before) without closing it.
+node_104 one gap of 5; node_143 two, across a reboot.
+
+Close only on a **productive** job auditing `verdict=clean`. The DUMPING singles
+are the larger share and have no identified mechanism.
 
 The whole-job audit on 2026-09-09 showed 46 missing of 2,273 (2.02%), down from
 19%. **38 of those were one burst**, fixed at 1.9.91. The remaining eight are
@@ -265,7 +275,7 @@ zone returns empty until this is fixed. On the board as a W1 card, added
 |---|---|---|
 | Burst log loss (38 lines in one gap) | 1.9.91 | **Measured 2026-09-11:** jobs 0043–0044 on 1.9.99, 1,067 lines, **0 missing**, `verdict=clean` — no gaps of any size. Closing with the next row |
 | Updater restarts when its own file list changes | 1.9.94 | a live update that changes `updater.lua` itself, with every node landing |
-| Detached-modem log loss | 1.9.98 | **Measured clean 2026-09-11** (same job, 9 modem swaps on node_139 alone, 0 missing). Card moved to Done |
+| Detached-modem log loss | 1.9.98 | **Improved, not closed.** 2026-09-11 (1,067 lines) clean; 2026-09-12's productive job (4,154 lines) still has one 4-line gap after a swap line, against gaps of 9/11/24 before the fix. Card back in Needs measuring |
 | Witness verdict from the send result | 1.9.98 | a live capture whose verdict matches the turtle's phase |
 | Live-zone backup dropped | 1.9.99 | a file listing off the server computer with no `active_zones.dat.bak` |
 
