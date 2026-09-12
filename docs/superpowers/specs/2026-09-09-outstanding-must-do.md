@@ -230,6 +230,23 @@ command (asked of W5).
 (1.9.100, `w3-r2-wave1`, release R2). This release changes `updater.lua` itself, so it
 is also the first live run of the 1.9.94 self-restart.
 
+## 13. Miners report ore they cannot dig, and re-mine it forever — **W1**
+
+The deepest scan (Y=−52) sees to Y=−68; `mineOreList` drops everything below
+`MIN_ORE_Y = -58` **silently** — not counted in `skipped`, nothing printed. But
+`sectorFound`, which travels as `SECTOR_DONE.foundOres`, is built *before* that
+filter, so the server is told ore remains, queues a re-mine, and the miner drops
+the same ore again — until "re-mine exhausted". It also inflates the dashboard's
+mined-vs-found percentage.
+
+Diagnosed by W6 on 2026-09-10 (§1 of the node_139 memo): 12 wasted sectors,
+~35 miner-minutes on node_139 alone. **2026-09-11 it cost an entire job:** jobs
+0043/0044 found 454 ores, every one a deepslate variant, and mined **0** — that
+terrain had nothing above Y=−48, so every ore was under the floor. Any deep-only
+zone returns empty until this is fixed. On the board as a W1 card, added
+2026-09-12 at the user's request. Evidence:
+`2026-09-11-W3-to-W1-spec-owner-r1-ran-its-job.md` §2.
+
 ---
 
 ## Recently closed — kept because each was closed wrongly once
