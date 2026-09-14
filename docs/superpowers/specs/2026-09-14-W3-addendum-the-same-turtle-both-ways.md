@@ -112,9 +112,21 @@ population accounts for the whole storm without needing anything else.
 The discriminating experiment needs a turtle working at base. There was not one
 today: the three delivery turtles logged 198–244 lines each, and after the boot
 configuration lines essentially all of it is the register / lose-server /
-reconnect cycle. **They did no deliveries at all.** Whether that is expected or
-is itself a fault is a question for whoever owns the delivery path — flagging it
-here rather than guessing.
+reconnect cycle. They did no deliveries at all.
+
+**Checked, and that is expected — not a fault.** I flagged it as possibly its own
+bug; it is not, and I should have checked before raising it. Miners do not use
+delivery turtles: they dump ore into an **ore ender chest** (`dumpToEC` in
+`ore_turtle.lua`), which goes straight into the storage network. A `DELIVER` job
+— "carry items from warehouse to destination" — is only ever created on explicit
+request, from a `JOB_REQUEST` message or the console's `job <x> <y> <z>` command.
+Nothing in the mining pipeline produces one. Five jobs were queued all day and
+every one was a MINE.
+
+So the delivery turtles were idle because nobody asked for a delivery, and the
+busy-at-base experiment still has no subject. It needs a deliberately created
+delivery job, which is a change to what the fleet is doing rather than an
+observation of it — the operator's call, not mine.
 
 ## It replicates across a week, and it does not need a mining job at all
 
