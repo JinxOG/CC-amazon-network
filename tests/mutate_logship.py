@@ -88,6 +88,15 @@ D_REPEAT   = "the same level repeats only every five minutes"
 D_SAFE     = "the disk warning never calls live state expendable"
 D_MINUTE   = "the disk is checked every minute, not only after a job save (SOURCE-ONLY, weaker)"
 
+# A lost JOB_ACK cost a whole job on 2026-09-14, and the operator says it had
+# happened before without ever being diagnosable.
+A_HB       = "a turtle reporting the job is treated as having accepted it"
+A_SU       = "a status update also counts as the turtle reporting the job"
+A_NORECALL = "the ack timeout does not recall a turtle that is reporting the job"
+A_OTHER    = "a heartbeat naming someone else's job does not accept it"
+A_REQUEUE  = "a job recalled for ack timeout is requeued, not recorded complete"
+A_NORMAL   = "a job that was acknowledged still completes normally"
+
 # (label, file, [(old, new), ...], test that must go red)
 MUTANTS = [
     ("seq never advances", "logship.lua",
@@ -405,6 +414,37 @@ MUTANTS = [
     ("the minute rollup stops checking the disk", "central_server.lua",
      [("                loopLastRollup = now2\n", "                loopLastRollup = now2\n                -- gone\n"),
       ("                warnIfDiskTight()\n            end", "            end")], D_MINUTE),
+
+    # -- A lost JOB_ACK must not cost the job -----------------------------
+    ("the heartbeat stops carrying the evidence", "central_server.lua",
+     [("        jobQueue.noteWorking(p.jobId, msg.from)\n        -- ACK only known turtles", "        -- ACK only known turtles")],
+     A_HB),
+
+    ("the status update stops carrying the evidence", "central_server.lua",
+     [("    jobQueue.noteWorking(p.jobId, msg.from)\n    jobQueue.progress", "    jobQueue.progress")],
+     A_SU),
+
+    ("any turtle can vouch for any job", "central_server.lua",
+     [("    if job.assignedTo ~= turtleId then return end\n", "")], A_OTHER),
+
+    ("the evidence does not clear the ack deadline", "central_server.lua",
+     [("    job.ackBy     = nil\n    job.status    = JOB_STATUS.IN_PROGRESS",
+       "    job.status    = JOB_STATUS.IN_PROGRESS")], A_HB),
+    # Targeted at A_HB, not at the recall test. With the status already set to
+    # IN_PROGRESS, checkAckTimeouts skips the job anyway, so dropping this line
+    # does NOT bring the recall back -- it is belt-and-braces. What actually
+    # guards it is A_HB's assertion that the deadline is cleared.
+
+    ("a recall is not remembered", "central_server.lua",
+     [("            job.recalledForAck = true\n", "")], A_REQUEUE),
+
+    ("a recalled job is recorded complete again", "central_server.lua",
+     [("    if job.recalledForAck and job.status == JOB_STATUS.ASSIGNED then",
+       "    if false then")], A_REQUEUE),
+
+    ("every completion is requeued", "central_server.lua",
+     [("    if job.recalledForAck and job.status == JOB_STATUS.ASSIGNED then",
+       "    if true then")], A_NORMAL),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

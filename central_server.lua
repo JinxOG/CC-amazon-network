@@ -1543,6 +1543,24 @@ end
 function jobQueue.complete(jobId)
     local job = state.jobs[jobId]
     if not job then return end
+    -- Recalled before it ever acknowledged, so it did no work: ASSIGNED means
+    -- acknowledge() never ran. Recording that COMPLETE loses the job silently --
+    -- and §7's "zero jobs end FAILED" would read it as a pass.
+    if job.recalledForAck and job.status == JOB_STATUS.ASSIGNED then
+        local who = job.assignedTo
+        logWarn(string.format(
+            "Job %s came back from an ack-timeout recall having done no work — "
+            .. "re-queuing it rather than recording it complete", jobId))
+        job.status         = JOB_STATUS.PENDING
+        job.assignedTo     = nil
+        job.ackBy          = nil
+        job.recalledForAck = nil
+        job.updatedAt      = os.epoch("utc")
+        jobQueue._hist(jobId, "requeued", "ack-timeout recall, no work done")
+        local t = state.registry[who or ""]
+        if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
+        return
+    end
     job.status    = JOB_STATUS.COMPLETE
     job.updatedAt = os.epoch("utc")
     jobQueue._hist(jobId, "complete", "")
@@ -1729,6 +1747,36 @@ function jobQueue.getPending()
     return pending
 end
 
+-- A turtle that is reporting the job as its own has accepted it, whatever
+-- happened to the JOB_ACK.
+--
+-- 2026-09-14, and the operator says it has happened before without ever being
+-- diagnosable: job_0047 went to node_138, which received it and departed one
+-- second later. Its JOB_ACK never reached the server, so 12 s later
+-- checkAckTimeouts recalled it, and the job was closed having mined nothing.
+-- The server had the evidence all along -- every heartbeat from that turtle
+-- carried jobId = job_0047 -- and was not looking at it.
+--
+-- One lost message should not cost a whole job when the next message two
+-- seconds later says the turtle is working on it.
+function jobQueue.noteWorking(jobId, turtleId)
+    if not jobId or not turtleId then return end
+    local job = state.jobs[jobId]
+    if not job then return end
+    -- ASSIGNED with an ackBy is precisely "dispatched, not yet acknowledged".
+    -- Anything else is already acked, already failed, or someone else's.
+    if job.status ~= JOB_STATUS.ASSIGNED then return end
+    if job.assignedTo ~= turtleId then return end
+    if not job.ackBy then return end
+    job.ackBy     = nil
+    job.status    = JOB_STATUS.IN_PROGRESS
+    job.updatedAt = os.epoch("utc")
+    jobQueue._hist(jobId, "ack", turtleId .. " (implied by its own report)")
+    logInfo(string.format(
+        "Job %s: no JOB_ACK arrived, but %s reports it as its job — accepted on "
+        .. "that evidence rather than recalling it", jobId, turtleId))
+end
+
 function jobQueue.checkAckTimeouts()
     local now = os.epoch("utc")
     for _, job in pairs(state.jobs) do
@@ -1742,6 +1790,12 @@ function jobQueue.checkAckTimeouts()
             if job.assignedTo then
                 sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("ack_timeout"))
             end
+            -- The comment above says the turtle will come back and send
+            -- JOB_FAILED, which would re-queue this. A recalled MINER does not:
+            -- it returns, docks, and sends JOB_COMPLETE, so the job was recorded
+            -- COMPLETE having done nothing (job_0047, 2026-09-14). Remember the
+            -- recall so jobQueue.complete can tell those apart.
+            job.recalledForAck = true
             -- Stop firing this timeout repeatedly while we wait for the recall.
             job.ackBy = nil
         end
@@ -2244,6 +2298,9 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
     local known = state.registry[msg.from] ~= nil
     if known then
         registry.update(msg.from, p.status, p.fuel, p.position, p.jobId, p.version)
+        -- Every heartbeat carries the turtle's current jobId. That is the
+        -- evidence that makes a lost JOB_ACK survivable.
+        jobQueue.noteWorking(p.jobId, msg.from)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
         local t = state.registry[msg.from]
@@ -2304,6 +2361,7 @@ end
 handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     local p = msg.payload
     registry.update(msg.from, p.status, nil, p.position, p.jobId)
+    jobQueue.noteWorking(p.jobId, msg.from)
     jobQueue.progress(p.jobId, p.status, p.detail)
 end
 

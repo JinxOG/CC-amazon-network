@@ -91,6 +91,38 @@ local function heartbeatAsFinished(T)
                       { x = 158, y = 67, z = -2810 }, nil, proto.VERSION)
 end
 
+-- A job dispatched but not yet acknowledged: ASSIGNED with an ackBy in the
+-- future, which is exactly the state checkAckTimeouts watches.
+local function dispatchedTo(T, turtleId, jobId, aheadMs)
+    T.state.jobs[jobId] = {
+        id = jobId, type = proto.JOB.MINE, status = "ASSIGNED",
+        assignedTo = turtleId, params = {}, priority = 5, history = {},
+        createdAt = 1000000, retries = 0,
+        ackBy = 1000000 + (aheadMs or 10000),
+    }
+    T.state.registry[turtleId].jobId  = jobId
+    T.state.registry[turtleId].status = proto.STATUS.TRAVELLING
+    return T.state.jobs[jobId]
+end
+
+local function heartbeat(T, turtleId, jobId)
+    T.handlers[proto.MSG.HEARTBEAT]({
+        type = proto.MSG.HEARTBEAT, from = turtleId, to = "server",
+        payload = { status = proto.STATUS.TRAVELLING, fuel = 100000,
+                    position = { x = 200, y = 70, z = -2800 }, jobId = jobId },
+    })
+end
+
+local function recallsIn(T)
+    local n = 0
+    for _, m in ipairs(T.sent) do
+        local ok, d = pcall(textutils.unserialise, m.body)
+        if ok and type(d) == "table" and d.type == proto.MSG.RECALL then n = n + 1 end
+    end
+    return n
+end
+
+
 return {
     -- The precondition, asserted so the test below cannot pass for the wrong
     -- reason. The guard is deliberate and stays: it is what stops a stale IDLE
@@ -138,6 +170,112 @@ return {
     -- entirely, taking the reason with it, leaving "no jobs running" as the only
     -- visible symptom. Three incidents were read as "dispatch is broken" when one
     -- turtle was refusing work.
+    -- One lost message should not cost a whole job.
+    --
+    -- 2026-09-14: job_0047 went to node_138, which received it and departed a
+    -- second later. Its JOB_ACK never arrived, so the server recalled it 12 s
+    -- in and the job was recorded COMPLETE having mined nothing. The operator
+    -- reports this has happened before and was never diagnosable. Every
+    -- heartbeat from that turtle carried the job's id the whole time.
+    ["a turtle reporting the job is treated as having accepted it"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        dispatchedTo(T, "node_118", "job_0800")
+        heartbeat(T, "node_118", "job_0800")
+        local st, ack = T.state.jobs["job_0800"].status, T.state.jobs["job_0800"].ackBy
+        restore()
+        assert_eq(st, "IN_PROGRESS",
+            "a turtle whose heartbeat names the job has plainly got the job -- "
+            .. "that evidence must count, whatever happened to the JOB_ACK")
+        assert_eq(ack, nil, "and the ack deadline must be cleared with it")
+    end,
+
+    ["a status update also counts as the turtle reporting the job"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        dispatchedTo(T, "node_118", "job_0801")
+        T.handlers[proto.MSG.STATUS_UPDATE]({
+            type = proto.MSG.STATUS_UPDATE, from = "node_118", to = "server",
+            payload = { jobId = "job_0801", status = proto.STATUS.TRAVELLING, detail = "departing" },
+        })
+        local st = T.state.jobs["job_0801"].status
+        restore()
+        assert_eq(st, "IN_PROGRESS", "the other message that carries a jobId must count too")
+    end,
+
+    -- The whole point: no recall.
+    ["the ack timeout does not recall a turtle that is reporting the job"] =
+    function(assert_eq)
+        local _, T, advance, restore = serverWithMinerOnJob()
+        dispatchedTo(T, "node_118", "job_0802")
+        heartbeat(T, "node_118", "job_0802")     -- the evidence arrives first
+        T.sent = {}
+        advance(30)                               -- well past the 10 s deadline
+        T.jobQueue.checkAckTimeouts()
+        local recalls, st = recallsIn(T), T.state.jobs["job_0802"].status
+        restore()
+        assert_eq(recalls, 0,
+            "a turtle that has told the server it is working the job must not be "
+            .. "recalled off it -- that is what cost job_0047")
+        assert_eq(st, "IN_PROGRESS", "and the job stays live")
+    end,
+
+    -- The guard. Evidence from the WRONG turtle must not accept a job.
+    ["a heartbeat naming someone else's job does not accept it"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        dispatchedTo(T, "node_118", "job_0803")
+        T.state.registry["node_119"] = {
+            id = "node_119", role = proto.ROLE.MINER, status = proto.STATUS.IDLE,
+            fuel = 100000, online = true, lastSeen = 1000000,
+            position = { x = 158, y = 67, z = -2810 },
+        }
+        heartbeat(T, "node_119", "job_0803")
+        local st = T.state.jobs["job_0803"].status
+        restore()
+        assert_eq(st, "ASSIGNED",
+            "only the turtle the job was given to can vouch for it")
+    end,
+
+    -- And if the recall did happen, the bookkeeping must tell the truth.
+    ["a job recalled for ack timeout is requeued, not recorded complete"] =
+    function(assert_eq)
+        local _, T, advance, restore = serverWithMinerOnJob()
+        dispatchedTo(T, "node_118", "job_0804")
+        advance(30)
+        T.jobQueue.checkAckTimeouts()             -- recalls, no evidence arrived
+        local recalled = recallsIn(T)
+        -- the turtle flies home and reports complete, as a recalled miner does
+        T.handlers[proto.MSG.JOB_COMPLETE]({
+            type = proto.MSG.JOB_COMPLETE, from = "node_118", to = "server",
+            payload = { jobId = "job_0804" },
+        })
+        local job = T.state.jobs["job_0804"]
+        local st, who, tst = job.status, job.assignedTo, T.state.registry["node_118"].status
+        restore()
+        assert_eq(recalled, 1, "precondition: the recall went out")
+        assert_eq(st, "PENDING",
+            "a job whose turtle was recalled before it ever started did NO work; "
+            .. "recording it COMPLETE loses it silently, and the 48-hour gate's "
+            .. "'zero jobs FAILED' would read that as a pass")
+        assert_eq(who, nil, "and it must be free for another miner")
+        assert_eq(tst, proto.STATUS.IDLE, "and the turtle must be idle again")
+    end,
+
+    -- Regression: a job that really was worked still completes.
+    ["a job that was acknowledged still completes normally"] = function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        dispatchedTo(T, "node_118", "job_0805")
+        heartbeat(T, "node_118", "job_0805")      -- accepted
+        T.handlers[proto.MSG.JOB_COMPLETE]({
+            type = proto.MSG.JOB_COMPLETE, from = "node_118", to = "server",
+            payload = { jobId = "job_0805" },
+        })
+        local st = T.state.jobs["job_0805"].status
+        restore()
+        assert_eq(st, "COMPLETE", "ordinary completion must be untouched")
+    end,
+
     ["a permanently failed job keeps its reason"] = function(assert_eq)
         local server, T, advance, restore = serverWithMinerOnJob()
         local job = T.state.jobs["job_0726"]
