@@ -81,4 +81,39 @@ normal range of earlier hours (10 to 68). **There is no evidence that the ack fi
 changed the disconnect rate**, and it was never meant to. I checked because the
 first partial hour looked low, and it was an artefact of the hour being partial.
 
+## How immune is "immune", exactly
+
+The tables above are true as written, but an hour is a coarse bucket: a turtle
+can be in a sector for part of an hour and back at the dock for the rest, and it
+gets marked "working" either way. Scored over the whole day that way, the three
+miners come out:
+
+| | while working | while parked |
+|---|---|---|
+| node_118 | 0.2 / hour | 2.7 / hour |
+| node_138 | 1.0 / hour | 2.6 / hour |
+| node_139 | 1.7 / hour | 3.3 / hour |
+
+So working turtles are **not** absolutely immune — roughly two to ten times
+better, not infinitely better. The clean zeros in the tables above are real
+hours, not the whole story.
+
+The precise claim remains the coordinate one, which does not depend on bucketing
+at all: **536 of 539 warnings carry a dock-area position**. A turtle marked
+"working" for an hour that logs a disconnect is, on the evidence of the
+coordinate in its own warning, almost always back at base when it does.
+
+A consistency check on the size: about 12 turtles parked at ~2.6–3.3 per hour
+predicts roughly 31–40 fleet-wide per hour, against 26–68 observed. The parked
+population accounts for the whole storm without needing anything else.
+
+## Why there is no busy-at-base measurement yet
+
+The discriminating experiment needs a turtle working at base. There was not one
+today: the three delivery turtles logged 198–244 lines each, and after the boot
+configuration lines essentially all of it is the register / lose-server /
+reconnect cycle. **They did no deliveries at all.** Whether that is expected or
+is itself a fault is a question for whoever owns the delivery path — flagging it
+here rather than guessing.
+
 — W3
