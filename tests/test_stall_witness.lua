@@ -67,6 +67,92 @@ end
 
 local suite = {}
 
+-- ── The healthy baseline ─────────────────────────────────────────────────────
+--
+-- Every number the witness reports comes from a window where the turtle had
+-- ALREADY lost the server, because witnessAck resets the counters on any
+-- message. Measured 2026-09-14, that gave a median 1.77 loop turns/second
+-- against a floor of 3.0 inbound messages/second -- which reads as a receiver
+-- that cannot keep up, but is equally consistent with a loop that normally runs
+-- fast and only sags in the bad windows. Nothing in the log could separate
+-- those, and they are different faults.
+--
+-- These tests are for the control group that settles it.
+
+suite["the baseline reports the rate its own window actually saw"] = function(assert_eq)
+    local base = freshBase()
+    -- 20 turns across 10 seconds is 2.0/s, and nothing here touches the server.
+    for i = 0, 19 do base._witnessTurn(T0 + i * 500) end
+    local line = base._reportBaseline(T0 + 10000)
+    assert_eq(line ~= nil, true, "a turtle that turned its loop has a baseline to report")
+    assert_eq(line:find("2.00 turns/s", 1, true) ~= nil, true,
+        "20 turns over 10s is 2.00/s -- the arithmetic is the instrument: " .. tostring(line))
+    assert_eq(line:find("20 turns", 1, true) ~= nil, true,
+        "the raw count rides along with the rate so the rate can be checked")
+end
+
+-- THE WHOLE REASON THIS EXISTS. witnessAck clears every other counter, which is
+-- correct for the verdict and fatal for a baseline: if it cleared these too, the
+-- only samples would once again be the ones taken mid-disconnect, and the
+-- comparison this instrument was built to make would be impossible.
+suite["hearing from the server does not reset the baseline"] = function(assert_eq)
+    local base = freshBase()
+    for i = 0, 9 do base._witnessTurn(T0 + i * 1000) end
+    base._witnessAck(T0 + 10000)          -- a perfectly healthy ACK arrives
+    for i = 10, 19 do base._witnessTurn(T0 + i * 1000) end
+    local line = base._reportBaseline(T0 + 20000)
+    assert_eq(line:find("20 turns", 1, true) ~= nil, true,
+        "the ACK must not eat the first half of the window -- a baseline that "
+        .. "resets on every ACK can only ever sample disconnects, which is the "
+        .. "exact bias it was built to remove: " .. tostring(line))
+end
+
+suite["each baseline line describes its own window, not a lifetime average"] =
+function(assert_eq)
+    local base = freshBase()
+    for i = 0, 19 do base._witnessTurn(T0 + i * 500) end       -- 2.0/s
+    base._reportBaseline(T0 + 10000)
+    -- Second window: 5 turns in 10s is 0.5/s. A reporter that failed to reset
+    -- would blend this with the first and report something near 1.25/s.
+    for i = 0, 4 do base._witnessTurn(T0 + 10000 + i * 2000) end
+    local line = base._reportBaseline(T0 + 20000)
+    assert_eq(line:find("0.50 turns/s", 1, true) ~= nil, true,
+        "a window that slowed down must be able to SHOW it slowed down; a "
+        .. "lifetime average converges and stops being able to report a change: "
+        .. tostring(line))
+end
+
+suite["a turtle with nothing to report says nothing"] = function(assert_eq)
+    local base = freshBase()
+    assert_eq(base._reportBaseline(T0) == nil, true,
+        "no turns means no window; a line claiming 0.00 turns/s from a turtle "
+        .. "that simply has not started yet is a fabricated measurement")
+end
+
+-- SOURCE-ONLY, weaker: the call sits inside sendHeartbeat behind a beat counter,
+-- and reaching it behaviourally needs twenty heartbeat boundaries to line up.
+-- What is pinned is that production calls it AT ALL, and that it is gated on
+-- serverDown -- a "healthy baseline" sampled while the turtle believes the
+-- server is gone is the very population this instrument exists to escape.
+suite["the baseline is taken only when the turtle is NOT in trouble (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+
+    local at = code:find("reportBaseline(os.epoch", 1, true)
+    assert_eq(at ~= nil, true,
+        "production never calls reportBaseline -- the instrument would be "
+        .. "exercised only by its own tests and would say nothing in the world")
+    local stmt = code:sub(math.max(1, at - 200), at)
+    assert_eq(stmt:find("serverDown", 1, true) ~= nil, true,
+        "the baseline must be gated on serverDown: a sample taken mid-disconnect "
+        .. "is exactly the biased population this was built to compare against")
+end
+
+
 -- Case A: the loop kept turning the whole time and the ACKs simply never came.
 -- This is the one that means the radio, the server's send path, or the event
 -- queue lost the messages -- i.e. a real bug still to find.

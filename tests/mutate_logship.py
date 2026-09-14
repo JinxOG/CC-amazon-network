@@ -94,6 +94,12 @@ T_WAIT     = "a job waiting for a sector order still counts as waiting between r
 T_GOT      = "a job that has its sector order is no longer waiting for one"
 T_ELSE     = "waiting for something else is not waiting for a sector order"
 T_REG      = "the reconnect tells the server whether it is waiting (SOURCE-ONLY, weaker)"
+
+B_RATE     = "the baseline reports the rate its own window actually saw"
+B_ACK      = "hearing from the server does not reset the baseline"
+B_WINDOW   = "each baseline line describes its own window, not a lifetime average"
+B_EMPTY    = "a turtle with nothing to report says nothing"
+B_GATE     = "the baseline is taken only when the turtle is NOT in trouble (SOURCE-ONLY, weaker)"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -510,6 +516,32 @@ MUTANTS = [
 
     ("delivery reboots only after a crash", "delivery_turtle.lua",
      [("    sleep(20)\nend\nos.reboot()", "    sleep(20)\n    os.reboot()\nend")], C5_CLEAN),
+
+    # -- The healthy baseline ---------------------------------------------
+    ("the baseline is reset by an ACK like every other counter", "turtle_base.lua",
+     [("    _commsGapSeen  = false\n    _loopTurns     = 0",
+       "    _commsGapSeen  = false\n    _baseTurns     = 0\n    _loopTurns     = 0")], B_ACK),
+
+    ("the baseline never resets, so it becomes a lifetime average", "turtle_base.lua",
+     [("    _baseTurns, _baseGapMax, _baseSince = 0, 0, now\n", "")], B_WINDOW),
+
+    ("the loop stops counting its own turns for the baseline", "turtle_base.lua",
+     [("    _baseTurns    = _baseTurns + 1\n", "")], B_RATE),
+
+    ("a turtle with no turns still claims a rate", "turtle_base.lua",
+     [("    if _baseSince == 0 or _baseTurns == 0 then return nil end",
+       "    if false then return nil end")], B_EMPTY),
+
+    ("the rate is turns per window instead of per second", "turtle_base.lua",
+     [("        _baseTurns / (span / 1000), span / 1000, _baseTurns, _baseGapMax / 1000)",
+       "        _baseTurns, span / 1000, _baseTurns, _baseGapMax / 1000)")], B_RATE),
+
+    ("the baseline is sampled during a disconnect too", "turtle_base.lua",
+     [("if _heartbeatCount % BASELINE_EVERY == 0 and not _self.serverDown then",
+       "if _heartbeatCount % BASELINE_EVERY == 0 then")], B_GATE),
+
+    ("production never takes a baseline at all", "turtle_base.lua",
+     [('        reportBaseline(os.epoch("utc"))\n', "")], B_GATE),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

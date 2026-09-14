@@ -2129,6 +2129,28 @@ local _loopTurns     = 0   -- control-loop iterations since then
 local _loopGapMax    = 0   -- longest pause between two consecutive iterations
 local _lastLoopWall  = 0
 
+-- ── The healthy baseline ─────────────────────────────────────────────────────
+--
+-- Every counter above is reset by witnessAck, which fires on any message from
+-- the server. That is right for the verdict -- it describes the window the
+-- turtle lost -- but it means the loop rate is only ever REPORTED from windows
+-- where ACKs were already going missing.
+--
+-- Measured 2026-09-14: median 1.77 loop turns/second across 666 witness
+-- samples, against a floor of 3.0 inbound messages/second per turtle. Every
+-- private reply from the server rides ONE shared channel, so each turtle
+-- receives all fifteen turtles' traffic and discards fourteen fifteenths of it.
+-- That looks like a receiver that cannot keep up -- but with no healthy sample
+-- to compare against it is equally consistent with a loop that normally runs
+-- fast and merely sags during the bad windows. Those two readings point at
+-- different faults and nothing in the log could tell them apart.
+--
+-- So: counters that are NOT reset by an ACK, reported on a slow cadence. Their
+-- only job is to give that 1.77 something to be measured against.
+local _baseTurns   = 0   -- loop iterations since the last baseline report
+local _baseGapMax  = 0   -- longest pause between two of them, ms
+local _baseSince   = 0   -- epoch this baseline window opened
+
 -- The control loop blocks on os.pullEvent, and when nothing else is happening
 -- the only thing that wakes it is the wakeup timer at CFG.HEARTBEAT_INTERVAL.
 -- So a five-second pause on an idle turtle is not a stall, it is the design.
@@ -2144,9 +2166,12 @@ local function witnessTurn(now)
     if _lastLoopWall > 0 then
         local gap = now - _lastLoopWall
         if gap > _loopGapMax then _loopGapMax = gap end
+        if gap > _baseGapMax then _baseGapMax = gap end
     end
     _lastLoopWall = now
     _loopTurns    = _loopTurns + 1
+    _baseTurns    = _baseTurns + 1
+    if _baseSince == 0 then _baseSince = now end
     -- Sampled per iteration rather than read at report time: the flag is
     -- cleared again when the swap finishes, so by the time the turtle notices
     -- it has lost the server the window that caused it has usually closed.
@@ -2233,9 +2258,38 @@ function base._witnessBeat(noRadio)
 end
 function base._witnessCommsGap()   _commsGapSeen = true end
 
+-- One line every BASELINE_EVERY beats (~100s at a 5s interval). Deliberately
+-- INFO, not WARN: it is not a fault, it is the control group. Reported only
+-- when the turtle is NOT in trouble -- a baseline taken during a disconnect
+-- would be the very sample we already have too much of.
+local BASELINE_EVERY = 20
+
+-- Returns the line as well as logging it. A test that had to scrape print()
+-- output would be asserting on the logger, not on the arithmetic, and the
+-- arithmetic is the whole point of this instrument.
+local function reportBaseline(now)
+    if _baseSince == 0 or _baseTurns == 0 then return nil end
+    local span = now - _baseSince
+    if span <= 0 then return nil end
+    local line = string.format(
+        "loop baseline: %.2f turns/s over %.0fs (%d turns, worst pause %.1fs) [healthy]",
+        _baseTurns / (span / 1000), span / 1000, _baseTurns, _baseGapMax / 1000)
+    logInfo(line)
+    -- Reset, so each line describes its OWN window. Without this the rate
+    -- converges on a lifetime average and stops being able to show a change.
+    _baseTurns, _baseGapMax, _baseSince = 0, 0, now
+    return line
+end
+base._reportBaseline = reportBaseline   -- test seam
+
 local function sendHeartbeat()
     _heartbeatCount = _heartbeatCount + 1
     _beatsSinceAck  = _beatsSinceAck + 1
+    -- Skipped while the turtle believes the server is gone: this is the healthy
+    -- control group, so a sample taken mid-disconnect would defeat its purpose.
+    if _heartbeatCount % BASELINE_EVERY == 0 and not _self.serverDown then
+        reportBaseline(os.epoch("utc"))
+    end
     -- Periodic GPS resync so idle or error-state turtles self-correct position drift.
     -- GPS locate needs no movement — just radio signal from beacons. Silent on failure.
     if _heartbeatCount % 12 == 0 then
