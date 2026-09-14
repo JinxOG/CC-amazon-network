@@ -11,7 +11,8 @@ publishes it. So for each "Server unreachable — 20 s since last ACK, 3 beats
 attempted", we can ask whether the server's clock for that turtle kept moving
 during the window the turtle spent believing it was alone.
 
-Ten disconnects captured live, **ten of ten the same**:
+The probe ran to completion: **nineteen disconnects, nineteen of nineteen the
+same**. The first ten, in full:
 
     18:27:37 node_103   lastSeen +13398 ms over a 15001 ms window
     18:27:39 node_102   lastSeen +10003 ms over a 10001 ms window
@@ -29,8 +30,9 @@ turtle the entire time it was being declared unreachable.
 
 **The obvious objection, checked and dead:** a turtle re-registers the instant it
 gives up, and that also stamps `lastSeen`. Cross-referencing the server's
-`Re-registered` lines against all ten windows: **0 of 10** had a re-registration
-inside the window. The advance is from heartbeats and nothing else.
+`Re-registered` lines against all nineteen windows — there were 20 re-registrations
+in the probe period, so the check had something to find: **0 of 19** fell inside a
+window. The advance is from heartbeats and nothing else.
 
 The window also ends strictly *at* the warning, not after it. An earlier version
 of this probe ran to three seconds past the warning and would have returned
