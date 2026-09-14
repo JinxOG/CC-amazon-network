@@ -116,4 +116,47 @@ reconnect cycle. **They did no deliveries at all.** Whether that is expected or
 is itself a fault is a question for whoever owns the delivery path — flagging it
 here rather than guessing.
 
+## It replicates across a week, and it does not need a mining job at all
+
+Same coordinate test applied to every day of logs still on the server:
+
+| day | disconnects | at base | in the field | miner-hours worked |
+|---|---|---|---|---|
+| 2026-09-08 | 439 | 439 | **0** | **0** |
+| 2026-09-09 | 1220 | 1220 | **0** | 8 |
+| 2026-09-10 | 667 | 661 | 6 | 48 |
+| 2026-09-11 | 378 | 378 | **0** | 6 |
+| 2026-09-12 | 384 | 383 | 1 | 15 |
+| 2026-09-13 | 253 | 253 | **0** | **0** |
+| 2026-09-14 | 616 | 613 | 3 | 22 |
+
+**3,947 of 3,957 at base — 99.7%, over seven days.** All fifteen nodes appear
+every day. This is not an artefact of one job or one release.
+
+The two rows that matter most are 09-08 and 09-13. **Zero miner-hours: nobody
+mined at all, and the fleet still logged 439 and 253 disconnects.** Whatever this
+is, it does not need a job, a sector, a scanner, or a loader swap. It happens to
+a fleet sitting still.
+
+That is the most useful fact in this memo for whoever fixes it: **the fault
+reproduces on an idle fleet.** No mining job required to chase it.
+
+## The congestion-scaling test, and why it is weak
+
+Congestion predicts that the rate per parked turtle should rise with the number
+parked. The trouble is that number barely varies — 13 to 15 parked on every day
+above — so the test has almost no power, and I am not going to pretend it does.
+
+What can be said is that the direction is unhelpful to the congestion story: the
+two days with the **entire** fleet parked (09-08, 09-13) produced among the
+**fewest** disconnects of the week, while 09-10 with 48 miner-hours produced 667.
+Per parked turtle-hour the week ranges from about 0.7 to 3.5 with no visible
+relation to how many were parked. If cluster congestion were the mechanism, the
+fully-parked days should have been the worst. They were the mildest.
+
+That is a hint, not a result. But combined with the idle-fleet reproduction it
+shifts my weight toward the second mechanism — something in the parked code path
+discarding its own ACKs at a roughly constant per-turtle rate — and away from
+radio congestion. I would still run the busy-at-base test before calling it.
+
 — W3
