@@ -80,9 +80,27 @@ own loop rate in every warning. Across **666 witness samples today**:
 Median worst pause inside a window: **4.4 s**, max 5.2 s — during which roughly
 thirteen messages arrive with nothing draining them.
 
-**1.77 processed against 3.0 arriving.** The loop is structurally incapable of
-keeping up with a channel it is subscribed to, and the deficit is not marginal —
-it is close to two to one.
+**1.77 processed against 3.0 arriving** — a deficit close to two to one.
+
+**A selection bias in that figure, and it is mine to own.** The loop-turn count
+is emitted *only* inside the unreachable warning (`turtle_base.lua` 2167, 2189).
+There is no healthy-period sample anywhere in the logs. So 1.77/s is measured
+exclusively during the windows in which ACKs were being lost, and the honest
+claim is the narrower one:
+
+> **When a turtle is losing ACKs, its loop is running at roughly 1.77 turns per
+> second against at least 3.0 messages per second arriving.**
+
+I cannot yet say the loop is *always* too slow, and my first draft of this memo
+said exactly that. If the loop normally runs at 6/s and only sags to 1.77/s in
+these windows, the slowdown is a symptom of something else and the channel
+arithmetic is a red herring.
+
+**The measurement that decides it is cheap:** emit the same turn count and worst
+pause on a healthy heartbeat — say one beat in twenty — so there is a baseline to
+compare against. Without it this section is a correlation with a plausible story
+attached, and it should not be treated as more than that. It does not weaken the
+direction result above, which stands on its own at 19 of 19.
 
 ## Inferred, and labelled as such
 
@@ -104,7 +122,8 @@ measurement.
 
 ## The fix worth doing
 
-**Give each turtle its own private channel.** `CH_PRIVATE` is one number; make it
+**Subject to the baseline measurement above**, give each turtle its own private
+channel. `CH_PRIVATE` is one number; make it
 a base plus the turtle's own index, so a turtle receives only traffic addressed
 to it. Inbound drops from ~3.0/s to ~0.2/s, a fifteen-fold cut, and the loop's
 1.77/s stops being a deficit and becomes eleven times the required rate. The
