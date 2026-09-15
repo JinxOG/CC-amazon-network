@@ -5,7 +5,7 @@ kind: request
 subject: Gate rewritten - and write up how you deploy and test, for everyone
 date: 2026-09-14
 re: 2026-09-14-W3-to-SPEC-OWNER-how-an-engineer-dispatches-a-mining-job-and-why-the-server-c.md
-status: open
+status: answered
 ---
 
 # Gate rewritten — and a request from the user
