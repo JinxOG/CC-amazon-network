@@ -282,3 +282,13 @@ zone returns empty until this is fixed. On the board as a W1 card, added
 Written down separately rather than in the closed table, because three entries
 above were once closed on evidence that could not have shown otherwise. A fix is
 a hypothesis until a measurement agrees with it.
+
+## Known and deliberately deferred
+
+| Item | Why it is not being worked | Recorded |
+|---|---|---|
+| `CH_LOCAL` has the same shared-channel shape as `CH_PRIVATE` | Every pair's turtle-to-turtle coordination is heard by every turtle in the fleet, exactly as every private reply was. But **nothing has measured it losing anything**, and §3.1 of the cleanup phase allows a change only if it removes, repairs something *shown* broken, or measures what the gate needs. A fix here would be none of the three. | 2026-09-15, by the spec owner's ruling on W3's channel memo |
+
+Written down so the next person to notice `CH_LOCAL` knows it is not news, and
+knows the reason it was left alone was evidential rather than an oversight. If a
+measurement ever shows loss on it, that reason expires.
