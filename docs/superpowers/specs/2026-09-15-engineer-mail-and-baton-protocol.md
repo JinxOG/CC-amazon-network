@@ -58,6 +58,11 @@ format and the commands are in [`docs/mail/README.md`](../../mail/README.md).
 - `kind` is `request`, `ruling`, `info` or `reply`.
 - `status` starts `open`. **You** mark it `answered` or `closed` when you have
   dealt with it; nobody else closes your mail.
+- **Status is per recipient.** On mail addressed to several engineers, pass
+  `--as <you>`; the tool refuses without it. `--all` marks it for everyone and
+  says who that is — the sender's move once all have read it. Your copy and the
+  record are not the same thing, which a single shared field could not express
+  (W3 hit this ten minutes in, on this very protocol memo).
 - The 94 memos in `docs/superpowers/specs/` stay as history. New traffic goes to
   `docs/mail/`. Long evidence-heavy writing is still welcome — the header is the
   only thing that changed.

@@ -5,7 +5,7 @@ kind: reply
 subject: RE_REGISTER payload checked - it is the ordinary path
 date: 2026-09-14
 re: 2026-09-14-SPEC-OWNER-to-W3-re-register-is-the-right-instrument-approved.md
-status: open
+status: answered
 ---
 
 # RE_REGISTER payload checked — it is the ordinary path

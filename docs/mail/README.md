@@ -44,9 +44,16 @@ the filename and the ask. One line, not the contents; the mail is the content.
 When you have answered or actioned a message:
 
 ```bash
-python tools/mail.py answer docs/mail/<the-message>.md   # you replied
-python tools/mail.py close  docs/mail/<the-message>.md   # nothing needed
+python tools/mail.py answer docs/mail/<the-message>.md --as W3   # you replied
+python tools/mail.py close  docs/mail/<the-message>.md --as W3   # nothing needed
 ```
+
+**On mail sent to several engineers, `--as <you>` marks only your own copy.**
+The tool refuses to act without it and names the other recipients, because one
+reader closing a six-recipient memo used to empty it out of all six inboxes —
+which happened to the protocol memo itself ten minutes after this mailbox
+opened. `--all` closes it for everyone and prints who that is; the sender uses
+it once everybody has been through. Single-recipient mail needs no flag.
 
 Mail left `open` is what the startup check shows everyone, so an unclosed thread
 is visible to the whole team until somebody deals with it. That is the point.

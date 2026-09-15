@@ -8,8 +8,9 @@ is the only thing that reads or writes that header, so the format cannot drift.
   python tools/mail.py open              everything open, grouped by recipient
   python tools/mail.py open --brief      one screen, for the session-start hook
   python tools/mail.py new --to W6 --from W3 --kind request --subject "..."
-  python tools/mail.py answer <file>     mark answered (the reply says how)
-  python tools/mail.py close <file>      mark closed with no reply needed
+  python tools/mail.py answer <file> [--as W3]   mark answered, for you only
+  python tools/mail.py close <file> [--as W3]    mark closed, for you only
+  python tools/mail.py close <file> --all        close it for every recipient
   python tools/mail.py baton             who holds the baton
   python tools/mail.py who               the session address book
 
@@ -70,15 +71,48 @@ def _messages():
     return out
 
 
-def _is_open(head):
-    return head.get("status", "open").lower() == "open"
+def _recipients(head):
+    return [p.strip().upper() for p in head.get("to", "").split(",") if p.strip()]
+
+
+def _status_map(head):
+    """Status per recipient.
+
+    `status: open` means open for everyone. `status: W1=open,W3=answered`
+    carries one state per reader -- because a six-recipient memo marked closed
+    by one reader used to vanish from the other five inboxes, which happened
+    ten minutes after this mailbox opened.
+    """
+    raw = head.get("status", "open").strip()
+    people = _recipients(head) or ["?"]
+    if "=" not in raw:
+        return dict.fromkeys(people, raw.lower() or "open")
+    out = dict.fromkeys(people, "open")
+    for pair in raw.split(","):
+        if "=" in pair:
+            who, _, st = pair.partition("=")
+            out[who.strip().upper()] = st.strip().lower()
+    return out
+
+
+def _render_status(smap, people):
+    values = {smap.get(w, "open") for w in people}
+    if len(values) == 1:
+        return values.pop()
+    return ",".join("%s=%s" % (w, smap.get(w, "open")) for w in people)
+
+
+def _is_open(head, who=None):
+    smap = _status_map(head)
+    if who:
+        return smap.get(who.upper(), "open") == "open"
+    return any(v == "open" for v in smap.values())
 
 
 def cmd_inbox(args):
     who = args.who.upper()
     rows = [(n, h, s) for n, h, s in _messages()
-            if _is_open(h) and who in [p.strip().upper()
-                                       for p in h.get("to", "").split(",")]]
+            if who in _recipients(h) and _is_open(h, who)]
     if not rows:
         print("%s: no open mail." % who)
         return
@@ -96,9 +130,9 @@ def cmd_open(args):
         return
     by_to = {}
     for name, head, subject in rows:
-        for who in head.get("to", "?").split(","):
-            by_to.setdefault(who.strip().upper() or "?", []).append(
-                (name, head, subject))
+        for who in _recipients(head) or ["?"]:
+            if _is_open(head, who):
+                by_to.setdefault(who, []).append((name, head, subject))
     if args.brief:
         print("Mail - %d open. `python tools/mail.py inbox <W>` for yours."
               % len(rows))
@@ -142,7 +176,14 @@ def cmd_new(args):
     print("docs/mail/%s" % name)
 
 
-def _set_status(path, status):
+def _set_status(path, status, who=None, everyone=False):
+    """Mark one reader's copy, or with everyone=True the whole message.
+
+    A multi-recipient message needs --as or --all. Marking your own copy must
+    not take the message out of five other inboxes: that happened to a binding
+    protocol memo ten minutes after this mailbox opened, and a single shared
+    status field is what allowed it.
+    """
     name = os.path.basename(path)
     full = path if os.path.isabs(path) else os.path.join(MAIL, name)
     if not os.path.exists(full):
@@ -152,22 +193,50 @@ def _set_status(path, status):
     m = HEADER_RE.match(text)
     if not m:
         sys.exit("%s has no header" % name)
+    parsed = _read(full)
+    head_dict = parsed[0] if parsed else {}
+    people = _recipients(head_dict)
+    smap = _status_map(head_dict)
+
+    if everyone:
+        if len(people) > 1:
+            print("closing for all %d recipients: %s"
+                  % (len(people), ", ".join(people)))
+        smap = dict.fromkeys(people or ["?"], status)
+    else:
+        if who:
+            who = who.upper()
+            if people and who not in people:
+                sys.exit("%s is not a recipient of %s (to: %s)"
+                         % (who, name, ", ".join(people)))
+        elif len(people) > 1:
+            sys.exit("%s has %d recipients (%s). "
+                     "Mark your own copy with --as <W>, or mark it for "
+                     "everyone with --all." % (name, len(people),
+                                               ", ".join(people)))
+        else:
+            who = people[0] if people else "?"
+        smap[who] = status
+
+    rendered = _render_status(smap, people or ["?"])
     head = m.group(1)
     if re.search(r"^status:", head, re.M):
-        head = re.sub(r"^status:.*$", "status: %s" % status, head, flags=re.M)
+        head = re.sub(r"^status:.*$", "status: %s" % rendered, head, flags=re.M)
     else:
-        head += "\nstatus: %s" % status
+        head += "\nstatus: %s" % rendered
     with open(full, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("---\n%s\n---\n%s" % (head, text[m.end():]))
-    print("%s: %s" % (name, status))
+    still = [w for w in people if smap.get(w, "open") == "open"]
+    note = " (still open for %s)" % ", ".join(still) if still else ""
+    print("%s: %s%s" % (name, rendered, note))
 
 
 def cmd_answer(args):
-    _set_status(args.file, "answered")
+    _set_status(args.file, "answered", args.as_who, args.everyone)
 
 
 def cmd_close(args):
-    _set_status(args.file, "closed")
+    _set_status(args.file, "closed", args.as_who, args.everyone)
 
 
 def _show_file(filename, missing):
@@ -201,8 +270,14 @@ def main():
     s.add_argument("--subject", required=True)
     s.add_argument("--re", default="")
     s.set_defaults(fn=cmd_new)
-    s = sub.add_parser("answer"); s.add_argument("file"); s.set_defaults(fn=cmd_answer)
-    s = sub.add_parser("close"); s.add_argument("file"); s.set_defaults(fn=cmd_close)
+    for verb, fn in (("answer", cmd_answer), ("close", cmd_close)):
+        s = sub.add_parser(verb)
+        s.add_argument("file")
+        s.add_argument("--as", dest="as_who", default="",
+                       help="mark only this recipient's copy")
+        s.add_argument("--all", dest="everyone", action="store_true",
+                       help="mark it for every recipient")
+        s.set_defaults(fn=fn)
     sub.add_parser("baton").set_defaults(fn=cmd_baton)
     sub.add_parser("who").set_defaults(fn=cmd_who)
     args = p.parse_args()

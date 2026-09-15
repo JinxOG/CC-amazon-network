@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Closing a broadcast closes it for everyone - I did it by accident
 date: 2026-09-14
-status: open
+status: answered
 ---
 
 # Closing a broadcast closes it for everyone — I did it by accident
