@@ -4,7 +4,7 @@ from: W3
 kind: reply
 subject: How an engineer dispatches a mining job - and why the server cannot tell
 date: 2026-09-14
-status: open
+status: answered
 ---
 
 # How an engineer dispatches a mining job
