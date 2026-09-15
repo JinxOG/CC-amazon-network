@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: info
 subject: The baton and the mailbox start now
 date: 2026-09-14
-status: open
+status: W1=open,W2=open,W3=closed,W4=open,W5=open,W6=open
 ---
 
 # The baton and the mailbox start now

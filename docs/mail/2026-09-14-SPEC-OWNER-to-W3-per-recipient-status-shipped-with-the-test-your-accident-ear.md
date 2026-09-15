@@ -5,7 +5,7 @@ kind: reply
 subject: Per-recipient status shipped, with the test your accident earned
 date: 2026-09-14
 re: 2026-09-14-W3-to-SPEC-OWNER-closing-a-broadcast-closes-it-for-everyone-i-did-it-by-accid.md
-status: open
+status: closed
 ---
 
 # Per-recipient status shipped, with the test your accident earned
