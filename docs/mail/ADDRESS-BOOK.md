@@ -10,10 +10,15 @@ last two reversed. W6 spotted it; it is the worst failure mode this book has,
 because ringing the wrong one looks exactly like a delivered message nobody
 answers. Copy the name, never type it.
 
-**`cc-amazon-network-89` currently appears in three rows** (W2, W4, W5). That may
-be correct -- one session can hold several paused workstreams -- but it is
-unconfirmed, so a ring to it may reach an engineer wearing a different hat than
-you meant. The spec owner has asked it to confirm.
+**`cc-amazon-network-89` holds three workstreams** -- W2, W4 and W5 (code side)
+-- confirmed by itself, 2026-09-14. Ringing any of the three reaches the same
+session, so **name the workstream in your first line**: it decides which files
+are in scope.
+
+**W5 is two people.** That session is the code side and writes `server.js` and
+`public/`. The server PC engineer writes no code, is **not a session here**, and
+is reached only through the user -- deploys, restarts and anything needing the
+machine itself. Do not ring 89 for a restart.
 
 ## Add your own row, once
 

@@ -137,7 +137,7 @@ relationships.
 | **Intent** | Node bridge + web dashboard | Auth, project submission, Dynmap drawing, blueprint conversion, monitoring | No new submissions. Fleet unaffected. Fails closed. |
 | **Planning** | `planner` CC computer *(new)* | BOM, stock check, deficit → jobs, project lifecycle | No new projects planned. In-flight jobs still execute. |
 | **Dispatch** | `central_server.lua` | Registry, job queue, assignment, zones, recovery | Work pauses. Turtles still self-recover and return home. |
-| **Execution** | Turtles and Androids | Doing the work | That worker's task is reassigned. |
+| **Execution** | Turtles | Doing the work | That worker's task is reassigned. |
 | **Storage** | `warehouse.lua` + Refined Storage | Item in/out, autocrafting, stock levels | Deliveries stall; nothing is lost. |
 
 ### 4.1 Why the planner is an in-world computer
@@ -277,18 +277,20 @@ area is an unrecoverable freeze. **Retrieval always sacrifices the modem.**
 | **Delivery** | modem + pickaxe | 15 fuel EC, 16 delivery EC | Current. Still paired with support. |
 | **Support** | modem + chunky | — | **Deprecated.** Mining no longer uses it; delivery still does. |
 | **Loader** | chunky | — | Placed, idle, runs no program. Holds 5×5 chunks = 80×80 blocks. |
-| **Android** | 9 hotbar slots, redstone fuel | — | `moveTo` / `useBlock` / `breakBlock` / `grabItemFromContainer`. **Cannot self-chunk-load. Is an entity — can be killed.** |
+| ~~**Android**~~ | — | — | **Retired 2026-08-25 — removed from the modpack.** Kept as a row only so a reader of older sections knows what happened to it. The builder will be a turtle (§16, Probe C). |
 
 ### 6.3 Fleet target
 
-Three classes:
+Two classes, since 2026-08-25:
 
 - **`WORKER`** — general purpose. Self chunk-loads, swaps its own equipment, and
   takes any job it is equipped for: mine, deliver, survey, harvest, excavate.
-- **`ANDROID`** — humanoid placement tasks only, stationed inside a pre-loaded
-  volume.
+  **The builder is a WORKER**, not a class of its own.
 - **`LOADER`** — placed idle chunky turtle. Never dispatched, never runs a
   program.
+
+~~**`ANDROID`**~~ — retired with the mod. Nothing registers as one, and
+`android_base.lua` leaves the installer in Wave 1 of the cleanup.
 
 ### 6.4 Capability → equipment
 
@@ -590,8 +592,10 @@ unblocked to write the upload path.
 
 ### 11.4 Build
 
-**Builder-class-agnostic.** This contract holds whether the builder is an
-Android or a turtle (Probe C), and it assumes builders die (P5).
+**Builder-class-agnostic.** The builder is a turtle — Androids are retired
+(2026-08-25) and Probe C now asks *which block states a turtle can place*, not
+which class to use. The contract is kept class-agnostic anyway, because it costs
+nothing and P5 says builders die whatever they are.
 
 | Message | Direction | Payload |
 |---|---|---|
@@ -785,7 +789,7 @@ workstream that does not own it** — raise a request with the owner instead.
 | Mining execution | `ore_turtle.lua`, `mine_flow.lua` | **W1** | Scan and survey paths only; dispatch stays W3 |
 | Delivery | `delivery_turtle.lua`, `support_turtle.lua` | **none** | **Frozen** (Invariant H) |
 | Resource index | `oreindex.lua`, `oreindex_store.lua` | **W1** | New. Pure functions, fully testable |
-| Android runtime | `android_base.lua` | **W4** | |
+| ~~Android runtime~~ | ~~`android_base.lua`~~ | — | **Retired.** Out of `install.lua` and `updater.lua` in Wave 1 of the cleanup; the file stays in git history for its API reference |
 | Bridge & dashboard | `server.js`, `public/` | **W5** | Never load-bearing |
 | Depot layout & routing | `waypoints.lua` | **W3** | Owns the dispatch/arrivals chokepoints (Invariant I) |
 | Test harness | `tests/run.lua`, `tests/stub_cc.lua` | **W3** | Shared infrastructure |
@@ -962,18 +966,19 @@ fields; capability-matched assignment.
 ### W4 — Construction
 
 **Mission:** Turn a placement set into a built structure.
-**Owns:** `android_base.lua`, new builder module.
+**Owns:** the new builder module. **`android_base.lua` is retired** — Androids
+left the modpack on 2026-08-25, so W4's first cleanup job is taking it out of
+`install.lua` and `updater.lua`, not fixing its two old defects. The file stays
+in git history for its API reference.
 **Depends on:** §11.4 and §11.6 contracts; W3 capabilities.
-**Blocked on:** **Probe C** — do not write the BUILDER role until the builder
-class is decided.
-**First deliverable:** run Probe C, since it gates everything else in this
-stream. The column protocol (§11.4) is builder-agnostic, so it can be specified
-in parallel while the probe is outstanding — but not implemented against a
-specific builder class until the probe resolves.
-**Also owns two known defects** in `android_base.lua`: the refuel mechanism
-(`android_base.lua:63` uses `swapHands` instead of `equipSlot`/`storeItem`), and
-the latent parallel-inbox bug — the Android needs the `base.receive` inbox split
-**before** any builder role lands, not after.
+**Blocked on:** **Probe C** — *can a turtle place the block states a build
+needs?* There is no longer a class decision to make, and **no fallback**: if
+`use()` cannot place them, bare `turtle.place()` with its slab and stair limits
+is what you get.
+**First deliverable:** run Probe C. The column protocol (§11.4) can be specified
+in parallel, but not implemented until the probe resolves.
+**Frozen during the cleanup phase** (`2026-09-11-cleanup-phase-design.md` §3.2).
+W4's only live work is the Wave 1 removal above.
 
 ### W5 — Bridge, Dashboard & Generators
 
@@ -1061,7 +1066,7 @@ write, inside its own files, and must read them before building on top.
 | **W1** | Yes | — |
 | **W2** | Yes — contracts are fixed | — |
 | **W6** | Yes — `warehouse.lua` exists and works | — |
-| **W4** | Partly | Run **Probe C**; fix the two `android_base.lua` defects |
+| **W4** | Partly | Run **Probe C** (turtle block states). Retire `android_base.lua` from the installer — the two old defects in it are moot |
 | **W5** | Partly | Bridge auto-start as a service; placement-set format; dashboard UI |
 
 **Start W3 first, or have it land the §15 hooks before the others get far.** All
@@ -1263,11 +1268,11 @@ built on an assumption about their answer.**
 
 | # | Question | Blocks |
 |---|---|---|
-| **V1 / Probe C** | What block states can a *turtle* actually place, versus an Android's `useBlock`? | The builder class. Highest decision weight of any open item. **Run first.** |
-| **V2 / Probe A** | Can an Android hold and place a loader turtle? Does `chunk_controller` fit a pocket slot? | Whether builds need a turtle bootstrap step |
-| **V3 / Probe B** | Does a static loader blanket keep an Android ticking across distance? | §12.4 |
+| **V1 / Probe C** | What block states can a *turtle* actually place — bare `turtle.place()` versus Turtlematic `use()`? | What a build can contain. Highest decision weight of any open item, and there is **no fallback class** any more. **Run first.** |
+| ~~**V2 / Probe A**~~ | ~~Can an Android hold and place a loader turtle?~~ | **Retired with the Android class.** The equivalent turtle question is already answered — miners carry and place loaders today |
+| ~~**V3 / Probe B**~~ | ~~Does a static loader blanket keep an Android ticking?~~ | **Retired with the Android class.** A builder turtle chunk-loads itself, which was the whole reason this question existed |
 | **V4** | Does this modpack require an axe/shovel for the **drops** we want, or does a diamond pickaxe suffice? Speed is settled and is not part of this question (§6.5). Test: dig a modded log with a pickaxe turtle, check the inventory. | Whether extra tool slots are worth their cost (§6.5) |
-| **V5 / Probe D** | Android failure modes: chunk unload, death, inventory, clean reboot and re-register | Whether unattended overnight builds are realistic |
+| **V5 / Probe D** | Builder **turtle** failure modes: chunk unload, inventory, clean reboot and re-register. *Death* is off the list — a turtle is a block, not an entity | Whether unattended overnight builds are realistic |
 | **V6** | Single modem message ceiling — an unfiltered ~8 KB assign payload is the largest thing on the wire | Whether chunked transfer is needed |
 | **V7** | Can a turtle equip **shears** as an upgrade in this pack? CC:Tweaked ships upgrades for the diamond tools; shears may need a datapack. | Only whether leaf **blocks** are obtainable as a material. Sustainable forestry does **not** depend on this (§6.5) |
 | **V8** | ~~`computer_space_limit`~~ and ~~what consumes the dispatch disk~~ — **both answered 2026-08-28** (1,000,000 bytes exactly; a stale build plus a 190 KB partial write, since cleared). **Still open, narrowed:** are **CC disk drives** available and permitted in this modpack? | Only whether disk drives are the in-world alternative to putting Tier 2 on the bridge (§7.1). The tier placement decision stands either way. |
