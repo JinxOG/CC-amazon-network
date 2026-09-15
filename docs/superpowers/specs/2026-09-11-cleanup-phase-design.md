@@ -199,7 +199,7 @@ target.
 
 | # | Check | Measured by |
 |---|---|---|
-| 1 | **Real load.** At least one mining job in progress for **at least 36 of the 48 hours**, and **zero jobs end FAILED** | Job records. An idle fleet cannot fail, so it cannot pass |
+| 1 | **Real load.** At least one mining job in progress for **at least 36 of the 48 hours**, and **zero jobs end FAILED**. The work may be fed by engineers, by the user, or both — see §7.4 | Job records **and the zone list** (§7.4). An idle fleet cannot fail, so it cannot pass |
 | 2 | **No server restart or crash** | `bootId` unchanged for the full window; `crash.log` unchanged |
 | 3 | **No group disconnect** — never **3 or more distinct turtles** logging `Server unreachable` within **30 seconds** | Fleet log |
 | 4 | **Every single-turtle disconnect explained** — the turtle's witness verdict names a cause (radio off, comms gap, loop paused). **"Radio on and loop turning" is an unexplained lost message and fails the run** | Witness lines, 1.9.96+ |
@@ -215,6 +215,45 @@ target.
 - **The report is written by W1**, and must state its evidence counts — jobs,
   turtles, hours of log audited, lines audited — so that an empty log cannot read
   as a clean one. The spec owner checks it; the user gets it in plain language.
+
+### 7.4 Who feeds the run — added 2026-09-14
+
+**Engineers may dispatch the mining jobs that keep the run fed.** The user
+granted agents the authority to start jobs on 2026-09-14; W3 supplied the
+mechanism in
+`docs/mail/2026-09-14-W3-to-SPEC-OWNER-how-an-engineer-dispatches-a-mining-job-and-why-the-server-c.md`
+and was right to say that a mail supplies mechanism, not permission. The gate no
+longer depends on the user being awake.
+
+**The work is not merely comparable to user-started work — it is the same work.**
+`ORDER_MINE` posted to the bridge lands in the same handler as the dashboard
+button, and nothing downstream carries an origin field. W3 showed this rather
+than asserting it: the server logged their own two dispatches as
+`Dashboard mine job_0052 [1/2]`, because "Dashboard" is the only phrase the
+handler knows.
+
+**The corollary is the reason for the extra evidence.** A badly-aimed engineer
+dispatch is equally indistinguishable, and would sit in the gate evidence looking
+like genuine work. So:
+
+1. **The run report lists every job**: job id, zone bounds, sector count, miner
+   count. "36 of 48 hours" is audited, not trusted.
+2. **Fresh, non-overlapping ground each time**, checked against historical zones
+   **and the running one** — a live zone is keyed by its job id in
+   `/state.mineZones`, not by `zone:`, and W3's first overlap check missed
+   exactly that and proposed a zone on top of the job then mining. Leave a
+   margin: sharing a boundary re-works a column.
+3. **No collapsed axis.** A coordinate that is an exact multiple of 32 makes
+   `floor == ceil` on that axis, halving the sectors and silently costing a
+   miner. `tools/next_zone.py` picks a compliant point and prints its reasoning.
+4. **Never dispatch during a deploy, never deploy with a job running.** Dispatch
+   itself does not need an idle fleet — jobs queue — but a deploy does.
+5. **Check the server log, not the HTTP reply.** The bridge answers `{"ok":true}`
+   to an unknown command type while the server logs a WARN, so a typo'd type
+   looks exactly like a successful dispatch. `ORDER_MINE`, never
+   `DISPATCH_MINE`. The same applies to `CANCEL_JOB`.
+6. **A cancelled job inside the window is fine if it is logged; a silently
+   abandoned one is not.**
 
 ## 8. The redesign decision
 
