@@ -93,7 +93,10 @@ user's action" in the cleanup design §5.1.
 
 - Work in your own files; commit; push; open branches.
 - **Deploy to the fleet and test it in the world** — the point of a fix is a fix
-  that has been seen working. Conditions:
+  that has been seen working. **Follow
+  `2026-09-15-W3-deploying-and-testing-unattended.md`** — the standard procedure,
+  written from W3's own mistakes at the user's request. Read it before your first
+  unattended deploy, not after. Conditions:
   - **The fleet must be idle.** No job in progress. Check before, not after: a
     deploy reboots every turtle and strands a miner mid-job.
   - **Never during a gate run** (cleanup design §7.3) — it restarts the clock.

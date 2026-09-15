@@ -110,6 +110,10 @@ next goes out. When something breaks, exactly one change is suspect.
   that changes fleet code — including `install.lua` and `updater.lua` — lands on
   `master` only when the release before it has passed. Build ahead on a local
   branch. Docs, tests, `server.js` and `public/` are not in the queue.
+- **How to deploy and test unattended:**
+  `2026-09-15-W3-deploying-and-testing-unattended.md` is the standard for every
+  engineer — the loop, what "fleet idle" means, confirming the deploy landed on
+  every node rather than on the server, rollback, and the mistakes behind each.
 - **Deploying is the engineer's own call, with the fleet idle** — superseded
   2026-09-15 by `2026-09-15-engineer-mail-and-baton-protocol.md` §5, on the
   user's standing grant. No job in progress, never during a gate run, announced
