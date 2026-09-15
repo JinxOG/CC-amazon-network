@@ -2280,11 +2280,23 @@ function base._witnessBeat(noRadio)
 end
 function base._witnessCommsGap()   _commsGapSeen = true end
 
--- One line every BASELINE_EVERY beats (~100s at a 5s interval). Deliberately
--- INFO, not WARN: it is not a fault, it is the control group. Reported only
--- when the turtle is NOT in trouble -- a baseline taken during a disconnect
--- would be the very sample we already have too much of.
-local BASELINE_EVERY = 20
+-- One line every BASELINE_EVERY beats. Deliberately INFO, not WARN: it is not a
+-- fault, it is the control group. Reported only when the turtle is NOT in
+-- trouble -- a baseline taken during a disconnect would be the very sample we
+-- already have too much of.
+--
+-- WAS 20 (~100 s), AND THAT WAS TOO OFTEN. Measured 2026-09-15 on 1.9.106:
+-- 438 of the fleet's 1,143 log lines per hour were this one line -- 38% of all
+-- traffic -- and log loss rose to 2.50% against 0.1-0.7% on every earlier
+-- reading. An instrument that is more than a third of the traffic is not
+-- observing the system, it is loading it, and this one was loading the very
+-- channel whose losses it exists to measure.
+--
+-- 60 (~5 min) cuts it to ~13% of traffic. The numbers it was built for are
+-- already banked -- 480 healthy samples inside three hours, far more than the
+-- comparison needed -- so the cadence can drop by two thirds and still deliver
+-- a usable sample over any run long enough to matter.
+local BASELINE_EVERY = 60
 
 -- Returns the line as well as logging it. A test that had to scrape print()
 -- output would be asserting on the logger, not on the arithmetic, and the
