@@ -122,6 +122,52 @@ function(assert_eq)
         .. tostring(line))
 end
 
+-- ── The drain ────────────────────────────────────────────────────────────────
+--
+-- Loop rate alone cannot settle whether the mailbox is the bottleneck: a slow
+-- loop that keeps pace with its traffic is not one. The ruling asks for messages
+-- handled against messages arriving, and the per-turtle version of "arriving"
+-- that needs no fleet-size assumption is beats sent -- the server ACKs every
+-- heartbeat from a known turtle, exactly once.
+
+suite["the baseline reports acks against beats sent"] = function(assert_eq)
+    local base = freshBase()
+    for i = 0, 9 do base._witnessTurn(T0 + i * 1000) end
+    base._baselineBump(30, 8, 10)          -- 30 messages seen, 8 acks, 10 beats
+    local line = base._reportBaseline(T0 + 10000)
+    assert_eq(line:find("8 acks for 10 beats", 1, true) ~= nil, true,
+        "a turtle must say how much of what was definitely sent to it arrived; "
+        .. "two of ten heartbeats went unanswered here and the line must show it: "
+        .. tostring(line))
+end
+
+suite["the baseline reports the rate its mailbox was drained at"] = function(assert_eq)
+    local base = freshBase()
+    for i = 0, 9 do base._witnessTurn(T0 + i * 1000) end
+    base._baselineBump(30, 10, 10)         -- 30 messages over 10s is 3.00/s
+    local line = base._reportBaseline(T0 + 10000)
+    assert_eq(line:find("3.00 msgs/s handled", 1, true) ~= nil, true,
+        "30 messages over 10s is 3.00/s -- this is the number that decides "
+        .. "whether the mailbox is the bottleneck: " .. tostring(line))
+end
+
+suite["the drain counters reset with their window"] = function(assert_eq)
+    local base = freshBase()
+    for i = 0, 9 do base._witnessTurn(T0 + i * 1000) end
+    base._baselineBump(30, 10, 10)
+    base._reportBaseline(T0 + 10000)
+    for i = 10, 19 do base._witnessTurn(T0 + i * 1000) end
+    base._baselineBump(5, 1, 2)
+    local line = base._reportBaseline(T0 + 20000)
+    assert_eq(line:find("1 acks for 2 beats", 1, true) ~= nil, true,
+        "each line must describe its own window; counters that carry over turn "
+        .. "a sudden loss into a slowly-moving average that never alarms: "
+        .. tostring(line))
+    assert_eq(line:find("0.50 msgs/s handled", 1, true) ~= nil, true,
+        "5 messages over 10s is 0.50/s, not 3.5/s blended with the last window: "
+        .. tostring(line))
+end
+
 suite["a turtle with nothing to report says nothing"] = function(assert_eq)
     local base = freshBase()
     assert_eq(base._reportBaseline(T0) == nil, true,
@@ -134,6 +180,37 @@ end
 -- What is pinned is that production calls it AT ALL, and that it is gated on
 -- serverDown -- a "healthy baseline" sampled while the turtle believes the
 -- server is gone is the very population this instrument exists to escape.
+-- SOURCE-ONLY, weaker: the three counters are bumped from places a unit test
+-- cannot reach. Without this, base._baselineBump keeps every drain test green
+-- while production counts nothing and every turtle reports a perfect mailbox.
+suite["production actually counts messages, acks and beats (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+
+    -- Anchored INSIDE controlLoop. There are two modem_message branches and the
+    -- first belongs to the timed receive path, so a bare find() checks the wrong
+    -- one -- which is how this assertion failed against correct production code.
+    local cl = code:find("local function controlLoop", 1, true)
+    assert_eq(cl ~= nil, true, "controlLoop moved or vanished")
+    local at = code:find('if event == "modem_message" then', cl, true)
+    assert_eq(at ~= nil and code:sub(at, at + 200):find("_baseMsgs", 1, true) ~= nil, true,
+        "the control loop must count every message it handles -- that count IS "
+        .. "the drain rate the ruling asks for")
+
+    local sv = code:find('if msg.from == "server" then', 1, true)
+    assert_eq(sv ~= nil and code:sub(sv, sv + 200):find("_baseAcks", 1, true) ~= nil, true,
+        "server traffic must be counted where the ACK gate already is, or the "
+        .. "acks-against-beats comparison has no numerator")
+
+    local hb = code:find("local function sendHeartbeat", 1, true)
+    assert_eq(hb ~= nil and code:sub(hb, hb + 300):find("_baseBeats", 1, true) ~= nil, true,
+        "beats sent must be counted, or there is nothing to compare acks against")
+end
+
 suite["the baseline is taken only when the turtle is NOT in trouble (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("turtle_base.lua", "r"))

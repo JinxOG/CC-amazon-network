@@ -100,6 +100,10 @@ B_ACK      = "hearing from the server does not reset the baseline"
 B_WINDOW   = "each baseline line describes its own window, not a lifetime average"
 B_EMPTY    = "a turtle with nothing to report says nothing"
 B_GATE     = "the baseline is taken only when the turtle is NOT in trouble (SOURCE-ONLY, weaker)"
+D_ACKS     = "the baseline reports acks against beats sent"
+D_RATE     = "the baseline reports the rate its mailbox was drained at"
+D_RESET    = "the drain counters reset with their window"
+D_WIRED    = "production actually counts messages, acks and beats (SOURCE-ONLY, weaker)"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -533,8 +537,8 @@ MUTANTS = [
        "    if false then return nil end")], B_EMPTY),
 
     ("the rate is turns per window instead of per second", "turtle_base.lua",
-     [("        _baseTurns / (span / 1000), span / 1000, _baseTurns, _baseGapMax / 1000)",
-       "        _baseTurns, span / 1000, _baseTurns, _baseGapMax / 1000)")], B_RATE),
+     [("        _baseTurns / (span / 1000), _baseMsgs / (span / 1000),",
+       "        _baseTurns, _baseMsgs / (span / 1000),")], B_RATE),
 
     ("the baseline is sampled during a disconnect too", "turtle_base.lua",
      [("if _heartbeatCount % BASELINE_EVERY == 0 and not _self.serverDown then",
@@ -542,6 +546,30 @@ MUTANTS = [
 
     ("production never takes a baseline at all", "turtle_base.lua",
      [('        reportBaseline(os.epoch("utc"))\n', "")], B_GATE),
+
+    # -- The drain measurement --------------------------------------------
+    ("the loop stops counting the messages it handles", "turtle_base.lua",
+     [("                _baseMsgs = _baseMsgs + 1\n", "")], D_WIRED),
+
+    ("server traffic is not counted", "turtle_base.lua",
+     [("            _baseAcks = _baseAcks + 1\n", "")], D_WIRED),
+
+    ("beats sent are not counted", "turtle_base.lua",
+     [("    _baseBeats      = _baseBeats + 1\n", "")], D_WIRED),
+
+    ("the drain counters survive the window and become a lifetime average",
+     "turtle_base.lua",
+     [("    _baseMsgs, _baseAcks, _baseBeats = 0, 0, 0\n", "")], D_RESET),
+
+    ("the drain rate is messages per window instead of per second",
+     "turtle_base.lua",
+     [("        _baseTurns / (span / 1000), _baseMsgs / (span / 1000),",
+       "        _baseTurns / (span / 1000), _baseMsgs,")], D_RATE),
+
+    ("acks and beats are reported the wrong way round", "turtle_base.lua",
+     [("        _baseAcks, _baseBeats, span / 1000, _baseTurns, _baseGapMax / 1000)",
+       "        _baseBeats, _baseAcks, span / 1000, _baseTurns, _baseGapMax / 1000)")],
+     D_ACKS),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

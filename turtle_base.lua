@@ -2151,6 +2151,23 @@ local _baseTurns   = 0   -- loop iterations since the last baseline report
 local _baseGapMax  = 0   -- longest pause between two of them, ms
 local _baseSince   = 0   -- epoch this baseline window opened
 
+-- THE DRAIN, which is the number that actually settles it.
+--
+-- Loop rate alone cannot: a slow loop that still keeps pace with its mailbox is
+-- not a bottleneck. The spec owner's ruling asks for messages arriving against
+-- messages handled, and would drop the per-turtle-channel proposal on this alone
+-- if handled keeps pace.
+--
+-- Queue depth is not readable -- CC exposes no API -- so "arriving" cannot be
+-- counted directly. But the server ACKs every heartbeat from a known turtle,
+-- unconditionally and exactly once. So over a healthy window, acks seen against
+-- beats sent counts how much of what was DEFINITELY sent to this turtle reached
+-- its control loop. No fleet-size assumption, no inference, and a shortfall is
+-- loss rather than evidence of it.
+local _baseMsgs    = 0   -- every modem_message the control loop handled
+local _baseAcks    = 0   -- ... of which came from the server, to us
+local _baseBeats   = 0   -- heartbeats this turtle sent in the window
+
 -- The control loop blocks on os.pullEvent, and when nothing else is happening
 -- the only thing that wakes it is the wakeup timer at CFG.HEARTBEAT_INTERVAL.
 -- So a five-second pause on an idle turtle is not a stall, it is the design.
@@ -2272,19 +2289,35 @@ local function reportBaseline(now)
     local span = now - _baseSince
     if span <= 0 then return nil end
     local line = string.format(
-        "loop baseline: %.2f turns/s over %.0fs (%d turns, worst pause %.1fs) [healthy]",
-        _baseTurns / (span / 1000), span / 1000, _baseTurns, _baseGapMax / 1000)
+        "loop baseline: %.2f turns/s, %.2f msgs/s handled, %d acks for %d beats "
+        .. "over %.0fs (%d turns, worst pause %.1fs) [healthy]",
+        _baseTurns / (span / 1000), _baseMsgs / (span / 1000),
+        _baseAcks, _baseBeats, span / 1000, _baseTurns, _baseGapMax / 1000)
     logInfo(line)
     -- Reset, so each line describes its OWN window. Without this the rate
     -- converges on a lifetime average and stops being able to show a change.
     _baseTurns, _baseGapMax, _baseSince = 0, 0, now
+    _baseMsgs, _baseAcks, _baseBeats = 0, 0, 0
     return line
 end
 base._reportBaseline = reportBaseline   -- test seam
 
+-- Test seam for the drain counters. They are bumped from three production
+-- places the tests cannot reach -- the control loop's modem_message branch, the
+-- server-message gate, and sendHeartbeat -- so the ARITHMETIC is exercised
+-- through here and the WIRING is pinned by source assertions. Neither alone is
+-- enough: a seam-only test passes against production that never counts, and a
+-- source-only test passes against arithmetic that is wrong.
+function base._baselineBump(msgs, acks, beats)
+    _baseMsgs  = _baseMsgs  + (msgs  or 0)
+    _baseAcks  = _baseAcks  + (acks  or 0)
+    _baseBeats = _baseBeats + (beats or 0)
+end
+
 local function sendHeartbeat()
     _heartbeatCount = _heartbeatCount + 1
     _beatsSinceAck  = _beatsSinceAck + 1
+    _baseBeats      = _baseBeats + 1
     -- Skipped while the turtle believes the server is gone: this is the healthy
     -- control group, so a sample taken mid-disconnect would defeat its purpose.
     if _heartbeatCount % BASELINE_EVERY == 0 and not _self.serverDown then
@@ -2560,6 +2593,7 @@ function base.run(jobHandler)
         -- direct-pull path only, so an ACK that arrived while this coroutine was
         -- inside pumpFor was filed and never acted on.
         if msg.from == "server" then
+            _baseAcks = _baseAcks + 1
             resetMissedHeartbeats()
             -- Same gate, same reason: only the server's own traffic is
             -- evidence that the server is alive, so only it may clear the
@@ -2715,6 +2749,7 @@ function base.run(jobHandler)
             local event, p1, p2, p3, p4 = os.pullEvent()
 
             if event == "modem_message" then
+                _baseMsgs = _baseMsgs + 1
                 local parsed = type(p4) == "table" and p4 or textutils.unserialise(p4)
                 if parsed then
                     local valid, msg = proto.decode(parsed)
