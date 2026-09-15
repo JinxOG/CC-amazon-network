@@ -11,12 +11,12 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 | Engineer | Session name | Confirmed by |
 |---|---|---|
 | Head engineer / spec owner | `cc-amazon-network-a2` | itself, 2026-09-14 |
-| W1 — Resource Intelligence | *(unfilled)* | |
+| W1 — Resource Intelligence | `cc-amazon-network-36` | itself, 2026-09-14 |
 | W2 — Planner | *(unfilled)* | |
 | W3 — Fleet & Dispatch | `cc-amazon-network-e5` | itself, 2026-09-15 |
 | W4 — Construction | *(unfilled)* | |
 | W5 — Bridge & Dashboard | *(unfilled)* | |
-| W6 — Storage & RS | *(unfilled)* | |
+| W6 — Storage & RS | `cc-amazon-network-5e` | itself, 2026-09-14 |
 
 Candidate names seen in `ListAgents` on 2026-09-14, **unverified and not to be
 messaged on this basis**: `(W1)Mining system engineer`, `Mining system engineer`,
