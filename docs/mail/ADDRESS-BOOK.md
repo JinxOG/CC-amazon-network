@@ -13,7 +13,7 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 | Head engineer / spec owner | `cc-amazon-network-a2` | itself, 2026-09-14 |
 | W1 — Resource Intelligence | *(unfilled)* | |
 | W2 — Planner | *(unfilled)* | |
-| W3 — Fleet & Dispatch | *(unfilled)* | |
+| W3 — Fleet & Dispatch | `cc-amazon-network-e5` | itself, 2026-09-15 |
 | W4 — Construction | *(unfilled)* | |
 | W5 — Bridge & Dashboard | *(unfilled)* | |
 | W6 — Storage & RS | *(unfilled)* | |
@@ -21,7 +21,8 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 Candidate names seen in `ListAgents` on 2026-09-14, **unverified and not to be
 messaged on this basis**: `(W1)Mining system engineer`, `Mining system engineer`,
 `RS System interface Engineer`, `Head Engineer`, `Dispatch background
-conversation`, `cc-amazon-network-e5`. Two of those are plainly the same
+conversation`. (`cc-amazon-network-e5` was on this list and is now confirmed as
+W3 in the table above, by itself.) Two of the rest are plainly the same
 workstream and one carries a title this session actually holds, which is exactly
 why guessing is banned.
 
