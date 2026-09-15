@@ -73,7 +73,7 @@ No fleet behaviour changes.
 
 | What | Action | Owner |
 |---|---|---|
-| `android_base.lua`, `android_main.lua`, `android_update.lua` | Drop from `install.lua`, `updater.lua`, and `server.js`'s `/lua/` file list. **Leave the files in git history** — the builder work may want the API reference | W4; W5 for `server.js` |
+| `android_base.lua`, `android_main.lua`, `android_update.lua` | Drop the two entries from `server.js`'s `/lua/` whitelist and fix its "turtles and androids" comment. **Leave the files in git history** — the builder work may want the API reference. **Corrected 2026-09-14:** `install.lua` and `updater.lua` never referenced them (`git log -S android` on both files returns nothing), so the original wording — mine, from the 2026-09-02 ruling — described a removal that had nothing to remove. Nothing in the repo fetches that endpoint either, so this is tidy-up, not a deploy fix | **W5** (was W4) |
 | `stress_test.lua` | Stop shipping it to the server (`updater.lua` file list) | W3 |
 | `warehouse_test.lua` | Stop installing it on the warehouse computer; move to `tests/inworld/` | W6 |
 | `test_turtle.lua` | Move to `tests/inworld/` — nothing references it | W3 |

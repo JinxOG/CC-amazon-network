@@ -289,8 +289,9 @@ Two classes, since 2026-08-25:
 - **`LOADER`** — placed idle chunky turtle. Never dispatched, never runs a
   program.
 
-~~**`ANDROID`**~~ — retired with the mod. Nothing registers as one, and
-`android_base.lua` leaves the installer in Wave 1 of the cleanup.
+~~**`ANDROID`**~~ — retired with the mod. Nothing registers as one. The runtime
+file was never in the installer at all (see §13); the only live reference left is
+two entries in `server.js`'s file-server whitelist.
 
 ### 6.4 Capability → equipment
 
@@ -789,7 +790,7 @@ workstream that does not own it** — raise a request with the owner instead.
 | Mining execution | `ore_turtle.lua`, `mine_flow.lua` | **W1** | Scan and survey paths only; dispatch stays W3 |
 | Delivery | `delivery_turtle.lua`, `support_turtle.lua` | **none** | **Frozen** (Invariant H) |
 | Resource index | `oreindex.lua`, `oreindex_store.lua` | **W1** | New. Pure functions, fully testable |
-| ~~Android runtime~~ | ~~`android_base.lua`~~ | — | **Retired.** Out of `install.lua` and `updater.lua` in Wave 1 of the cleanup; the file stays in git history for its API reference |
+| ~~Android runtime~~ | ~~`android_base.lua`~~ | — | **Retired.** It was never in `install.lua` or `updater.lua` — verified 2026-09-14, no match today and no commit that ever added or removed one. Only `server.js`'s `/lua/` whitelist still names it, and that is W5's one-line Wave 1 job. The file stays in git history for its API reference |
 | Bridge & dashboard | `server.js`, `public/` | **W5** | Never load-bearing |
 | Depot layout & routing | `waypoints.lua` | **W3** | Owns the dispatch/arrivals chokepoints (Invariant I) |
 | Test harness | `tests/run.lua`, `tests/stub_cc.lua` | **W3** | Shared infrastructure |
@@ -967,9 +968,10 @@ fields; capability-matched assignment.
 
 **Mission:** Turn a placement set into a built structure.
 **Owns:** the new builder module. **`android_base.lua` is retired** — Androids
-left the modpack on 2026-08-25, so W4's first cleanup job is taking it out of
-`install.lua` and `updater.lua`, not fixing its two old defects. The file stays
-in git history for its API reference.
+left the modpack on 2026-08-25, so its two old defects are moot. W4 has nothing
+to remove: the file was never in `install.lua` or `updater.lua`, and the last
+reference lives in `server.js`, which is W5's. The file stays in git history for
+its API reference.
 **Depends on:** §11.4 and §11.6 contracts; W3 capabilities.
 **Blocked on:** **Probe C** — *can a turtle place the block states a build
 needs?* There is no longer a class decision to make, and **no fallback**: if
@@ -1066,7 +1068,7 @@ write, inside its own files, and must read them before building on top.
 | **W1** | Yes | — |
 | **W2** | Yes — contracts are fixed | — |
 | **W6** | Yes — `warehouse.lua` exists and works | — |
-| **W4** | Partly | Run **Probe C** (turtle block states). Retire `android_base.lua` from the installer — the two old defects in it are moot |
+| **W4** | Partly | Run **Probe C** (turtle block states). Nothing to retire — `android_base.lua` was never installed, and its two old defects are moot |
 | **W5** | Partly | Bridge auto-start as a service; placement-set format; dashboard UI |
 
 **Start W3 first, or have it land the §15 hooks before the others get far.** All
