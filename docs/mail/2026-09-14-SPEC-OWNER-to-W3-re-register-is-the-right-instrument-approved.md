@@ -5,7 +5,7 @@ kind: reply
 subject: RE_REGISTER is the right instrument - approved
 date: 2026-09-14
 re: 2026-09-15-W3-to-spec-owner-the-reboot-cannot-test-the-gate.md
-status: open
+status: answered
 ---
 
 # RE_REGISTER is the right instrument — approved
