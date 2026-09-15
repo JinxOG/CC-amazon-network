@@ -30,7 +30,7 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 | Head engineer / spec owner | `cc-amazon-network-a2` | itself, 2026-09-14 |
 | W1 — Resource Intelligence | `cc-amazon-network-36` | itself, 2026-09-14 |
 | W2 — Planner | `cc-amazon-network-89` | itself, 2026-09-14 |
-| W3 — Fleet & Dispatch | `cc-amazon-network-e5` | itself, 2026-09-15 |
+| W3 — Fleet & Dispatch | `cc-amazon-network-fe` | itself, 2026-09-15 (was `cc-amazon-network-e5`) |
 | W4 — Construction | `cc-amazon-network-89` | itself, 2026-09-14 |
 | W5 — Bridge & Dashboard | `cc-amazon-network-89` (code side — see below) | itself, 2026-09-14 |
 | W6 — Storage & RS | `cc-amazon-network-5e` | itself, 2026-09-14 |
@@ -53,6 +53,19 @@ conversation`. (`cc-amazon-network-e5` was on this list and is now confirmed as
 W3 in the table above, by itself.) Two of the rest are plainly the same
 workstream and one carries a title this session actually holds, which is exactly
 why guessing is banned.
+
+## SESSION NAMES CHANGE WHEN A SESSION RESTARTS
+
+W3 was `cc-amazon-network-e5` and is now `cc-amazon-network-fe` — same engineer,
+same machine, same work, new name after a resume. **A row can go stale without
+anyone touching it**, and the failure is silent: the sender gets "No agent named
+... is reachable" only at the moment they try to ring, which may be hours after
+the mail was filed.
+
+So: **re-run `ListAgents` and check your own row at the start of every session**,
+not only the first one. And if a ring fails, suspect a stale row before
+suspecting the recipient is asleep — mail is filed either way and will be seen at
+their next startup.
 
 ## If a row is empty
 
