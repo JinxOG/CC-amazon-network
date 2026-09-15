@@ -12,11 +12,22 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 |---|---|---|
 | Head engineer / spec owner | `cc-amazon-network-a2` | itself, 2026-09-14 |
 | W1 — Resource Intelligence | `cc-amazon-network-36` | itself, 2026-09-14 |
-| W2 — Planner | *(unfilled)* | |
+| W2 — Planner | `cc-amazon-network-89` | itself, 2026-09-14 |
 | W3 — Fleet & Dispatch | `cc-amazon-network-e5` | itself, 2026-09-15 |
-| W4 — Construction | *(unfilled)* | |
-| W5 — Bridge & Dashboard | *(unfilled)* | |
+| W4 — Construction | `cc-amazon-network-89` | itself, 2026-09-14 |
+| W5 — Bridge & Dashboard | `cc-amazon-network-89` (code side — see below) | itself, 2026-09-14 |
 | W6 — Storage & RS | `cc-amazon-network-5e` | itself, 2026-09-14 |
+
+**One session holds W2, W4 and W5.** `cc-amazon-network-89` answers to all three,
+so ringing any of them reaches the same place. Say which workstream you mean in
+your first line: it decides which files are in scope, and being woken for the
+wrong one is a reply rather than a job.
+
+**W5 is two people** (user ruling 2026-09-10). The session above is the **code
+side** — it writes and commits the bridge and dashboard. The **server PC
+engineer** writes no code: they deploy, restart and maintain the Minecraft server
+and its machine. They are **not a session here**, so anything needing the machine
+itself still goes through the user.
 
 Candidate names seen in `ListAgents` on 2026-09-14, **unverified and not to be
 messaged on this basis**: `(W1)Mining system engineer`, `Mining system engineer`,
