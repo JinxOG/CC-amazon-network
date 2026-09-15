@@ -78,6 +78,14 @@ for label, q, fatal in (
     ("ACK timeout",        "contains=ACK%20timeout",          True),
     ("recall",             "contains=recall",                 True),
     ("Job handler crashed","contains=Job%20handler%20crashed",True),
+    # Its own check, fatal. These were hiding under the loose "crash" search
+    # below, labelled "may be historical" beside genuine boot-time lines.
+    ("job retry",          "contains=retry",                  True),
+    ("idle-stuck rescue",  "contains=Idle-stuck",             True),
+    ("sector returned",    "contains=returned%20to%20pending", True),
+    # Kept last and non-fatal ON PURPOSE: the server logs its crash-log summary
+    # at every boot, so this matches old news by design. Anything it catches
+    # that the fatal checks above did not is worth a human glance, nothing more.
     ("crash (any)",        "contains=crash",                  False),
 ):
     d = logs(q)
