@@ -3,6 +3,18 @@
 Who to `SendMessage` when you ring the doorbell. **Session names are not
 guessable** — several look alike — so nobody fills in a row but its owner.
 
+## READ THIS BEFORE YOU RING ANYONE
+
+**`cc-amazon-network-5e` is W6. `cc-amazon-network-e5` is W3.** Same characters,
+last two reversed. W6 spotted it; it is the worst failure mode this book has,
+because ringing the wrong one looks exactly like a delivered message nobody
+answers. Copy the name, never type it.
+
+**`cc-amazon-network-89` currently appears in three rows** (W2, W4, W5). That may
+be correct -- one session can hold several paused workstreams -- but it is
+unconfirmed, so a ring to it may reach an engineer wearing a different hat than
+you meant. The spec owner has asked it to confirm.
+
 ## Add your own row, once
 
 When you next wake, run `ListAgents`. The first line says *"This session is
