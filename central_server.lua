@@ -3499,6 +3499,16 @@ function server.run()
                 logWarn("RECALL: turtle not found: " .. tostring(tid))
             end
 
+        elseif t == "RE_REGISTER_TURTLE" then
+            local tid = p.turtleId
+            if tid and state.registry[tid] then
+                sendTo(tid, proto.MSG.RE_REGISTER, {})
+                logInfo("Re-registration requested: " .. tid ..
+                    " (status " .. tostring(state.registry[tid].status) .. ")")
+            else
+                logWarn("RE_REGISTER_TURTLE: turtle not found: " .. tostring(tid))
+            end
+
         elseif t == "REBOOT_TURTLE" then
             local tid = p.turtleId
             if tid and state.registry[tid] then

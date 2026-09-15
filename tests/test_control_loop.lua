@@ -2048,4 +2048,72 @@ suite["the reboot does not fail the job on its way out"] = function(assert_eq)
         .. "happens to a turtle it still thinks is working")
 end
 
+
+-- ── RE_REGISTER, and why the reboot could not do this job ────────────────────
+--
+-- The stale-sector replay the server gates at 1.9.104 sits behind `if midJob`,
+-- and midJob is the turtle reporting _self.busy -- whether its job coroutine is
+-- still alive. A REBOOTED turtle starts fresh and reports false, so the server
+-- takes the rebooted-turtle branch and the gate is never reached. The withheld
+-- line could not appear however well the fix worked.
+--
+-- RE_REGISTER reintroduces the turtle WITHOUT rebooting, so the coroutine lives
+-- and midJob stays true. These tests pin the difference, because if it is lost
+-- the instrument still looks like it works while proving nothing.
+
+suite["RE_REGISTER is a control type"] = function(assert_eq)
+    local proto = require("protocol")
+    assert_eq(type(proto.MSG.RE_REGISTER), "string", "RE_REGISTER type is missing")
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a"); f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+    local a = code:find("local CTRL_TYPES = {", 1, true)
+    local b = code:find("}", a, true)
+    assert_eq(code:sub(a, b):find("proto.MSG.RE_REGISTER", 1, true) ~= nil, true,
+        "RE_REGISTER must be in CTRL_TYPES or it lands in _jobInbox and is "
+        .. "silently dropped")
+end
+
+suite["RE_REGISTER keeps the turtle busy, or it tests nothing"] = function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a"); f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+
+    local at = code:find("msg.type == proto.MSG.RE_REGISTER", 1, true)
+    assert_eq(at ~= nil, true, "the RE_REGISTER branch moved or vanished")
+    local branch = code:sub(at, at + 420)
+    assert_eq(branch:find("register", 1, true) ~= nil, true,
+        "RE_REGISTER must actually re-register")
+    assert_eq(branch:find("_self.busy", 1, true) == nil, true,
+        "the branch must not touch _self.busy: it becomes midJob, and midJob "
+        .. "false sends the server down the rebooted-turtle branch, which is "
+        .. "the exact path that makes a reboot useless for this test")
+    assert_eq(branch:find("os.reboot", 1, true) == nil, true,
+        "RE_REGISTER must NOT reboot -- rebooting loses the job coroutine and "
+        .. "with it the only thing that makes this instrument work")
+end
+
+-- The register payload is what the server decides on. If midJob stops being
+-- _self.busy, every reconnect looks like a fresh boot and the gate is dead.
+suite["the register payload still reports midJob from busy"] = function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a"); f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+    -- Anchored on the SEND, not the bare type name: "proto.MSG.REGISTER" also
+    -- matches proto.MSG.REGISTER_ACK, and the first such match is nowhere near
+    -- the payload -- which is how this assertion first failed against correct code.
+    local at = code:find("comms.toServer(proto.MSG.REGISTER, {", 1, true)
+    assert_eq(at ~= nil, true, "the REGISTER send moved or vanished")
+    local payload = code:sub(at, at + 600)
+    assert_eq(payload:find("midJob   = _self.busy", 1, true) ~= nil, true,
+        "midJob must come from _self.busy -- the server's whole reconnect "
+        .. "decision, including the sector gate, hangs on it")
+    assert_eq(payload:find("awaitingSector", 1, true) ~= nil, true,
+        "the payload must carry awaitingSector, or the server cannot tell a "
+        .. "waiting miner from a mid-sector one and withholds from neither")
+end
+
 return suite

@@ -70,6 +70,13 @@ proto.MSG = {
     -- WORKING miner could take days -- working miners are the population
     -- least affected by the disconnect fault.
     REBOOT          = "REBOOT",
+    -- server → ONE turtle: reintroduce yourself, but keep running.
+    -- The turtle re-registers with its job coroutine intact, so it reports
+    -- midJob=true -- which a REBOOT cannot, having lost the coroutine. That
+    -- distinction is the whole point: the stale-sector replay the server
+    -- gates at 1.9.104 only happens on the midJob branch, so a reboot never
+    -- reaches the code under test and a rebooted turtle proves nothing.
+    RE_REGISTER     = "RE_REGISTER",
 
 
     -- Warehouse ↔ server ↔ turtle delivery handshake

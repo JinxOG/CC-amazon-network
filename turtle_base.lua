@@ -231,6 +231,7 @@ local CTRL_TYPES = {
     -- here. Left out, it would land in _jobInbox where no handler asks for
     -- it, and the reboot would silently never happen.
     [proto.MSG.REBOOT]        = true,
+    [proto.MSG.RE_REGISTER]   = true,
 }
 
 -- Types that are only meaningful LIVE and must never be queued.
@@ -2665,6 +2666,17 @@ function base.run(jobHandler)
                     _self.status, fuel.level(), base.getPos(), _self.jobId))
             elseif not base.isInsideBuilding(_self.pos) then
                 logWarn("FORCE_REFUEL ignored — turtle not at dock")
+            end
+
+        elseif msg.type == proto.MSG.RE_REGISTER then
+            -- _self.busy is deliberately left ALONE. It is what becomes
+            -- midJob in the register payload, and clearing it would send
+            -- the server down the rebooted-turtle branch -- the very path
+            -- that makes a reboot useless for testing the sector gate.
+            logWarn("RE_REGISTER received — reintroducing without rebooting")
+            local ok, err = pcall(register)
+            if not ok then
+                logWarn("RE_REGISTER failed: " .. tostring(err))
             end
 
         elseif msg.type == proto.MSG.REBOOT then

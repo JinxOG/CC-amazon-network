@@ -107,6 +107,9 @@ D_WIRED    = "production actually counts messages, acks and beats (SOURCE-ONLY, 
 R_MEMBER   = "every type the control loop acts on is in CTRL_TYPES"
 R_CTRL     = "REBOOT is a control type, or the reboot silently never happens"
 R_NOFAIL   = "the reboot does not fail the job on its way out"
+RR_CTRL    = "RE_REGISTER is a control type"
+RR_BUSY    = "RE_REGISTER keeps the turtle busy, or it tests nothing"
+RR_PAY     = "the register payload still reports midJob from busy"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -585,6 +588,23 @@ MUTANTS = [
     ("the reboot branch does not reboot", "turtle_base.lua",
      [("            sleep(1)\n            os.reboot()",
        "            sleep(1)")], R_NOFAIL),
+    # -- RE_REGISTER -------------------------------------------------------
+    ("RE_REGISTER is dropped from CTRL_TYPES", "turtle_base.lua",
+     [("    [proto.MSG.RE_REGISTER]   = true,\n", "")], RR_CTRL),
+
+    ("re-registering clears busy, so it reads as a fresh boot", "turtle_base.lua",
+     [("            local ok, err = pcall(register)",
+       "            _self.busy = false\n            local ok, err = pcall(register)")],
+     RR_BUSY),
+
+    ("re-registering reboots after all", "turtle_base.lua",
+     [("            local ok, err = pcall(register)",
+       "            os.reboot()")], RR_BUSY),
+
+    ("midJob stops coming from busy", "turtle_base.lua",
+     [("            midJob   = _self.busy,",
+       "            midJob   = false,")], RR_PAY),
+
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
      [('    "logship.lua",\n', "")], MANIFEST),
