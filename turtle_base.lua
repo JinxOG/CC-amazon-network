@@ -227,6 +227,10 @@ local CTRL_TYPES = {
     [proto.MSG.UPDATE_ALL]    = true,
     [proto.MSG.FORCE_REFUEL]  = true,
     [proto.MSG.JOB_ASSIGN]    = true,
+    -- The control loop acts on it, so the membership rule above REQUIRES it
+    -- here. Left out, it would land in _jobInbox where no handler asks for
+    -- it, and the reboot would silently never happen.
+    [proto.MSG.REBOOT]        = true,
 }
 
 -- Types that are only meaningful LIVE and must never be queued.
@@ -2662,6 +2666,17 @@ function base.run(jobHandler)
             elseif not base.isInsideBuilding(_self.pos) then
                 logWarn("FORCE_REFUEL ignored — turtle not at dock")
             end
+
+        elseif msg.type == proto.MSG.REBOOT then
+            -- Deliberately does NOT call sendFailed. The job is meant to
+            -- survive as far as the server is concerned: what is under test
+            -- is whether the server replays a sector order to a turtle that
+            -- comes back mid-job. Failing the job first would remove the
+            -- very condition being tested.
+            logWarn("REBOOT received — rebooting now (requested)")
+            _log:urgent()
+            sleep(1)
+            os.reboot()
 
         elseif msg.type == proto.MSG.UPDATE_ALL then
             logWarn("UPDATE_ALL received — running updater then rebooting...")

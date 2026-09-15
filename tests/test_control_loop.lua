@@ -1961,4 +1961,91 @@ function(assert_eq)
         "a post-hoc type check means the non-matching message was already popped")
 end
 
+
+-- ── The CTRL_TYPES membership rule ───────────────────────────────────────────
+--
+-- turtle_base states it exactly: CTRL_TYPES is the set of messages the CONTROL
+-- LOOP acts on. Nothing else may be in it, and nothing the loop handles may be
+-- left out -- the control loop is the only thing that drains _ctrlInbox, and
+-- _jobInbox is drained only by whichever handler happens to be waiting.
+--
+-- JOB_ASSIGN was the omission that proved it: routed while the loop sat inside
+-- pumpFor, it landed in _jobInbox where no job handler ever asks for it, and a
+-- turtle silently declined work it had already been given.
+--
+-- Nothing tested this. The rule was a comment, and a comment cannot fail.
+suite["every type the control loop acts on is in CTRL_TYPES"] = function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+
+    local tabAt = code:find("local CTRL_TYPES = {", 1, true)
+    assert_eq(tabAt ~= nil, true, "CTRL_TYPES moved or vanished")
+    local tabEnd = code:find("}", tabAt, true)
+    local members = {}
+    for name in code:sub(tabAt, tabEnd):gmatch("proto%.MSG%.([A-Z_]+)") do
+        members[name] = true
+    end
+
+    local dispAt = code:find("local function dispatchControl", 1, true)
+    assert_eq(dispAt ~= nil, true, "dispatchControl moved or vanished")
+    -- The dispatcher ends where the next top-level local function begins.
+    local dispEnd = code:find(NL .. "    local function ", dispAt + 10, true)
+                    or code:find(NL .. "local function ", dispAt + 10, true)
+                    or #code
+    local handled, missing = 0, {}
+    for name in code:sub(dispAt, dispEnd):gmatch("msg%.type == proto%.MSG%.([A-Z_]+)") do
+        handled = handled + 1
+        if not members[name] then missing[#missing + 1] = name end
+    end
+
+    assert_eq(handled > 0, true,
+        "the scan found no handled types at all -- it is looking in the wrong "
+        .. "place, and would pass against any code whatsoever")
+    assert_eq(#missing, 0,
+        "a type the control loop acts on is NOT in CTRL_TYPES, so it will be "
+        .. "routed to _jobInbox where nothing asks for it and will be silently "
+        .. "dropped: " .. table.concat(missing, ", "))
+end
+
+suite["REBOOT is a control type, or the reboot silently never happens"] =
+function(assert_eq)
+    local proto = require("protocol")
+    assert_eq(type(proto.MSG.REBOOT), "string", "REBOOT message type is missing")
+
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+    local tabAt  = code:find("local CTRL_TYPES = {", 1, true)
+    local tabEnd = code:find("}", tabAt, true)
+    assert_eq(code:sub(tabAt, tabEnd):find("proto.MSG.REBOOT", 1, true) ~= nil, true,
+        "REBOOT must be in CTRL_TYPES -- left out it lands in _jobInbox, no "
+        .. "handler asks for it, and the turtle never reboots")
+end
+
+-- The reboot exists to create a mid-sector re-registration for the stale-sector
+-- test. Failing the job first would destroy the very condition under test: the
+-- server only replays a sector order to a turtle it still believes is mid-job.
+suite["the reboot does not fail the job on its way out"] = function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a")
+    f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+
+    local at = code:find("msg.type == proto.MSG.REBOOT", 1, true)
+    assert_eq(at ~= nil, true, "the REBOOT branch moved or vanished")
+    local branch = code:sub(at, at + 400)
+    assert_eq(branch:find("os.reboot", 1, true) ~= nil, true,
+        "the REBOOT branch must actually reboot")
+    assert_eq(branch:find("sendFailed", 1, true) == nil, true,
+        "REBOOT must NOT fail the job -- the server would stop believing the "
+        .. "turtle is mid-job, and the stale-sector replay being tested only "
+        .. "happens to a turtle it still thinks is working")
+end
+
 return suite

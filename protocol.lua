@@ -63,6 +63,13 @@ proto.MSG = {
 
     -- Over-the-air update
     UPDATE_ALL      = "UPDATE_ALL",      -- server → all: download latest files and reboot
+    -- server → ONE turtle: reboot now, without updating and without failing
+    -- the job. Exists to produce a genuine mid-sector re-registration on
+    -- demand, which is the only way to test the stale-sector gate (1.9.104):
+    -- its precondition is a reconnect, and waiting for one to happen to a
+    -- WORKING miner could take days -- working miners are the population
+    -- least affected by the disconnect fault.
+    REBOOT          = "REBOOT",
 
 
     -- Warehouse ↔ server ↔ turtle delivery handshake

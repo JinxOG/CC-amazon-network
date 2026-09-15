@@ -3499,6 +3499,16 @@ function server.run()
                 logWarn("RECALL: turtle not found: " .. tostring(tid))
             end
 
+        elseif t == "REBOOT_TURTLE" then
+            local tid = p.turtleId
+            if tid and state.registry[tid] then
+                sendTo(tid, proto.MSG.REBOOT, {})
+                logInfo("Reboot requested: " .. tid ..
+                    " (status " .. tostring(state.registry[tid].status) .. ")")
+            else
+                logWarn("REBOOT_TURTLE: turtle not found: " .. tostring(tid))
+            end
+
         elseif t == "RECALL_ALL" then
             server.recallAll(p.reason or "admin_recall")
 

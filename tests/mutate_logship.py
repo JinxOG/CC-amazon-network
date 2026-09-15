@@ -104,6 +104,9 @@ D_ACKS     = "the baseline reports acks against beats sent"
 D_RATE     = "the baseline reports the rate its mailbox was drained at"
 D_RESET    = "the drain counters reset with their window"
 D_WIRED    = "production actually counts messages, acks and beats (SOURCE-ONLY, weaker)"
+R_MEMBER   = "every type the control loop acts on is in CTRL_TYPES"
+R_CTRL     = "REBOOT is a control type, or the reboot silently never happens"
+R_NOFAIL   = "the reboot does not fail the job on its way out"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -571,6 +574,17 @@ MUTANTS = [
        "        _baseBeats, _baseAcks, span / 1000, _baseTurns, _baseGapMax / 1000)")],
      D_ACKS),
 
+    # -- REBOOT, and the membership rule -----------------------------------
+    ("REBOOT is dropped from CTRL_TYPES", "turtle_base.lua",
+     [("    [proto.MSG.REBOOT]        = true,\n", "")], R_CTRL),
+
+    ("the reboot fails the job on its way out", "turtle_base.lua",
+     [("            _log:urgent()\n            sleep(1)",
+       "            base.sendFailed(\"reboot\", false)\n            sleep(1)")], R_NOFAIL),
+
+    ("the reboot branch does not reboot", "turtle_base.lua",
+     [("            sleep(1)\n            os.reboot()",
+       "            sleep(1)")], R_NOFAIL),
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
      [('    "logship.lua",\n', "")], MANIFEST),
