@@ -110,8 +110,10 @@ next goes out. When something breaks, exactly one change is suspect.
   that changes fleet code — including `install.lua` and `updater.lua` — lands on
   `master` only when the release before it has passed. Build ahead on a local
   branch. Docs, tests, `server.js` and `public/` are not in the queue.
-- **Deploying is the user's action.** No engineer triggers `UPDATE_ALL` or
-  `/self-update`.
+- **Deploying is the engineer's own call, with the fleet idle** — superseded
+  2026-09-15 by `2026-09-15-engineer-mail-and-baton-protocol.md` §5, on the
+  user's standing grant. No job in progress, never during a gate run, announced
+  as `info` mail, rolled back and reported if it breaks.
 
 **Release order — amended 2026-09-11 on W3's evidence**
 (`2026-09-11-spec-owner-to-W3-release-order-and-crash-sign-off.md`):
