@@ -80,7 +80,12 @@ for label, q, fatal in (
     ("Job handler crashed","contains=Job%20handler%20crashed",True),
     # Its own check, fatal. These were hiding under the loose "crash" search
     # below, labelled "may be historical" beside genuine boot-time lines.
-    ("job retry",          "contains=retry",                  True),
+    # The SERVER's job-retry line specifically ("Job job_0052 retry 1/3: ..."),
+    # not any line containing "retry". The broad version flagged a turtle
+    # retrying a loader-beacon check -- benign, routine, and a false NOT CLEAN.
+    # Widening a check to catch one real fault and then trusting it is how a
+    # gate starts crying wolf, which ends in its verdicts being ignored.
+    ("job retry",          "node=server&contains=%20retry%20",  True),
     ("idle-stuck rescue",  "contains=Idle-stuck",             True),
     ("sector returned",    "contains=returned%20to%20pending", True),
     # Kept last and non-fatal ON PURPOSE: the server logs its crash-log summary
