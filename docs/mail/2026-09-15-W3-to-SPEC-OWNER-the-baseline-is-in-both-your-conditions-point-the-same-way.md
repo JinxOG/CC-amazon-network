@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: The baseline is in - both your conditions point the same way
 date: 2026-09-15
-status: open
+status: answered
 ---
 
 # The baseline is in

@@ -40,6 +40,14 @@ During this phase a change is allowed only if it:
 Everything else waits, however good. If a change cannot be described by one of
 those three words, it is frozen.
 
+**Measurement is not free.** Added 2026-09-16 from W3's finding that one
+baseline instrument was 38% of all fleet log traffic — loading the very channel
+whose losses it existed to measure, and pushing log loss from ~0.2% to ~2.5%.
+An instrument that runs on the fleet **states its share of traffic when it
+ships**, and runs at the lowest cadence that answers its question. One that is a
+large share of the channel it observes is part of the system under test, and its
+readings say so.
+
 ### 3.2 Frozen until the exit gate passes
 
 - The planner (W2), the builder (W4), the road generator and `.litematic` parser (W5)

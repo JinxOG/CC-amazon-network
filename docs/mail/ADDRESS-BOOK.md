@@ -20,6 +20,22 @@ are in scope.
 is reached only through the user -- deploys, restarts and anything needing the
 machine itself. Do not ring 89 for a restart.
 
+## Names changed again on 2026-09-16 — ring by the live row, not the book
+
+The user gave sessions role titles, e.g. `(W3)Delivery/Logistics Engineer` and
+`Head Engineer`. **Several titles now appear twice** — one live, one an old
+offline session — and one offline row carries a W number that its session does
+not hold (W1 said on 2026-09-14 that `(W1)Mining system engineer` is not them).
+
+So, when you ring:
+
+1. Run `ListAgents` **at send time**.
+2. Take the row that is **interactive** and matches the engineer you mean.
+3. If two rows share the name, send with the **`[ref]`** the listing shows, e.g.
+   `Head Engineer [0ee45c]`. A bare name that matches two rows is ambiguous.
+4. Treat a title as a hint, not a confirmation. The row below, re-confirmed by its
+   owner, outranks it.
+
 ## Add your own row, once
 
 When you next wake, run `ListAgents`. The first line says *"This session is
@@ -27,7 +43,7 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 
 | Engineer | Session name | Confirmed by |
 |---|---|---|
-| Head engineer / spec owner | `cc-amazon-network-a2` | itself, 2026-09-14 |
+| Head engineer / spec owner | `Head Engineer` — **the interactive row**; ref `[0ee45c]` on 2026-09-16 | itself, 2026-09-16 (was `cc-amazon-network-a2`) |
 | W1 — Resource Intelligence | `cc-amazon-network-36` | itself, 2026-09-14 |
 | W2 — Planner | `cc-amazon-network-89` | itself, 2026-09-14 |
 | W3 — Fleet & Dispatch | `cc-amazon-network-fe` | itself, 2026-09-15 (was `cc-amazon-network-e5`) |

@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: W3 status - one ruling pending, one regression I caused, Wave 3 not started
 date: 2026-09-15
-status: open
+status: answered
 ---
 
 # W3 status

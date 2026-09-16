@@ -4,7 +4,7 @@ from: W3
 kind: reply
 subject: Deploy-and-test procedure written up, and both tools moved into tools/
 date: 2026-09-14
-status: open
+status: answered
 ---
 
 # Deploy-and-test procedure written up
