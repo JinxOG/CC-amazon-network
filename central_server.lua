@@ -197,6 +197,32 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
     -- below. See the note at that assignment.
     local prev = state.registry[id]
 
+    -- The turtle's own private channel, validated before it is believed.
+    --
+    -- A value outside the per-turtle range is not a channel this server may send
+    -- to: 1-5 are the shared protocol channels (sending a private reply on
+    -- CH_BROADCAST would hand it to the whole fleet), and anything above 65535 or
+    -- fractional is not a channel at all. Recorded as nothing, and said out loud,
+    -- so the turtle simply stays on the shared channel it still hears.
+    --
+    -- The 1-5 clause is redundant with the range while CH_PRIVATE_BASE is 1000.
+    -- It is kept on purpose: it is the one mistake that would be catastrophic
+    -- rather than merely wrong, and it must survive someone changing the base.
+    local reportedChannel = nil
+    if privateChannel ~= nil then
+        local n = tonumber(privateChannel)
+        if n and n == math.floor(n)
+           and n >= proto.CH_PRIVATE_BASE and n <= proto.CH_MAX
+           and not (n >= 1 and n <= 5) then
+            reportedChannel = n
+        else
+            logWarn(string.format(
+                "%s reported private channel %s -- not a valid per-turtle channel "
+                .. "(%d-%d); ignored, it stays on the shared channel",
+                id, tostring(privateChannel), proto.CH_PRIVATE_BASE, proto.CH_MAX))
+        end
+    end
+
     -- Assign or recover a dock
     local dockRole = (role == proto.ROLE.SUPPORT) and "SUPPORT" or "DELIVERY"
     local dock = nil
@@ -230,7 +256,10 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
         -- server does not send on it until step 2, and step 2 is gated on every
         -- turtle having reported one. A number or nil, never guessed from the
         -- node id: that id is the computer LABEL when one is set.
-        privateChannel = tonumber(privateChannel),
+        -- NOT carried forward from prev. A REGISTER without a channel is what a
+        -- rollback to a pre-1.9.108 turtle looks like, and that turtle no longer
+        -- opens the channel: keeping the old number would send it into silence.
+        privateChannel = reportedChannel,
     }
 
     -- Carry the dispatch hold across a re-registration, unless the server had

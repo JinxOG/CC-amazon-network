@@ -118,6 +118,8 @@ C_REPORT   = "REGISTER reports the private channel (SOURCE-ONLY, weaker)"
 C_RECORD   = "the server records the private channel a turtle reports"
 C_PUBLISH  = "/state publishes each turtle's private channel (SOURCE-ONLY, weaker)"
 C_HANDLER  = "the REGISTER handler passes the reported private channel through"
+C_ROLLBACK = "a later REGISTER with no channel clears the stored one"
+C_VALID    = "a reported channel outside the per-turtle range is ignored, loudly"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -636,7 +638,7 @@ MUTANTS = [
      [("            privateChannel = OWN_CHANNEL,\n", "")], C_REPORT),
 
     ("the server drops the reported channel", "central_server.lua",
-     [("        privateChannel = tonumber(privateChannel),\n", "")], C_RECORD),
+     [("        privateChannel = reportedChannel,\n", "")], C_RECORD),
 
     ("the handler does not pass the channel on", "central_server.lua",
      [("p.midJob, p.awaitingSector, p.privateChannel)",
@@ -645,6 +647,32 @@ MUTANTS = [
 
     ("/state stops publishing the channel", "central_server.lua",
      [("                privateChannel = t.privateChannel,\n", "")], C_PUBLISH),
+
+    # -- Step 1: rollback and validation ------------------------------------
+    ("a rollback keeps the old channel", "central_server.lua",
+     [("        privateChannel = reportedChannel,",
+       "        privateChannel = reportedChannel or (prev and prev.privateChannel),")],
+     C_ROLLBACK),
+
+    ("the lower bound is not checked", "central_server.lua",
+     [("           and n >= proto.CH_PRIVATE_BASE and n <= proto.CH_MAX",
+       "           and n <= proto.CH_MAX")], C_VALID),
+
+    ("the upper bound is not checked", "central_server.lua",
+     [("           and n >= proto.CH_PRIVATE_BASE and n <= proto.CH_MAX",
+       "           and n >= proto.CH_PRIVATE_BASE")], C_VALID),
+
+    ("fractional channels are accepted", "central_server.lua",
+     [("        if n and n == math.floor(n)", "        if n")], C_VALID),
+
+    ("an invalid channel is ignored silently", "central_server.lua",
+     [("            logWarn(string.format(\n                \"%s reported private channel",
+       "            (function() end)(string.format(\n                \"%s reported private channel")],
+     C_VALID),
+
+    ("an invalid channel is recorded anyway", "central_server.lua",
+     [("        privateChannel = reportedChannel,",
+       "        privateChannel = tonumber(privateChannel),")], C_VALID),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

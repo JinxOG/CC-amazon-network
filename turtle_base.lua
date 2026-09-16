@@ -189,6 +189,11 @@ local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }
 --
 -- Computed once at load from the COMPUTER ID and reported in REGISTER, so the
 -- server can publish it and step 2 can be gated on every turtle having said so.
+--
+-- FOR STEP 3 (dropping the shared channel): only a turtle that HAS its own
+-- channel may stop opening CH_PRIVATE. One with OWN_CHANNEL == nil -- an id
+-- outside the valid range -- is served on the shared channel forever, and must
+-- keep it open or it goes deaf. (Spec owner, 2026-09-16.)
 local OWN_CHANNEL = nil
 do
     local cid = nil

@@ -457,6 +457,61 @@ return {
             .. "not invent one from 'node_139'")
     end,
 
+    -- A rollback: a turtle that reported a channel comes back on an older build
+    -- and reports none. It no longer listens there, so the server must forget it.
+    ["a later REGISTER with no channel clears the stored one"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        T.registry.register("LOADER-153", proto.ROLE.MINER, 100, 100,
+            { x = 0, y = 64, z = 0 }, false, nil, 1153)
+        local before = T.state.registry["LOADER-153"].privateChannel
+        T.registry.register("LOADER-153", proto.ROLE.MINER, 100, 100,
+            { x = 0, y = 64, z = 0 }, false, nil, nil)
+        local after = T.state.registry["LOADER-153"].privateChannel
+        restore()
+        assert_eq(before, 1153, "precondition: the first report was recorded")
+        assert_eq(after == nil, true,
+            "a silent re-registration is a rollback; keeping 1153 would send "
+            .. "private replies to a channel the turtle no longer opens")
+    end,
+
+    ["a reported channel outside the per-turtle range is ignored, loudly"] =
+    function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        local cases = {
+            { 3,       nil,   "a shared protocol channel (CH_PRIVATE)" },
+            { 999,     nil,   "just below the per-turtle base" },
+            { 65536,   nil,   "just above the channel range" },
+            { 1100.5,  nil,   "fractional" },
+            { "abc",   nil,   "not a number" },
+            { 1000,    1000,  "the bottom of the range" },
+            { 65535,   65535, "the top of the range" },
+            { "1118",  1118,  "a numeric string is still a number" },
+        }
+        local got, warned = {}, {}
+        for i, c in ipairs(cases) do
+            local id = "node_v" .. i
+            local before = #T.state.log
+            T.registry.register(id, proto.ROLE.MINER, 100, 100,
+                { x = 0, y = 64, z = 0 }, false, nil, c[1])
+            got[i] = T.state.registry[id].privateChannel
+            warned[i] = false
+            for k = before + 1, #T.state.log do
+                local e = T.state.log[k]
+                if e.msg:find("reported private channel", 1, true)
+                   and e.msg:find(id, 1, true) then
+                    warned[i] = true
+                end
+            end
+        end
+        restore()
+        for i, c in ipairs(cases) do
+            assert_eq(got[i], c[2], "recorded value for " .. c[3])
+            assert_eq(warned[i], c[2] == nil,
+                (c[2] == nil and "must WARN, naming the node, for " or "must not WARN for ")
+                .. c[3])
+        end
+    end,
+
     -- SOURCE-ONLY, weaker: the /state payload is assembled inside the push.
     ["/state publishes each turtle's private channel (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
