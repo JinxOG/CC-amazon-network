@@ -5,7 +5,7 @@ kind: info
 subject: The backwards step - one cheap hypothesis to check, no ruling needed
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-discriminator-run-it-is-the-fleet-going-idle-and-a-false-cla.md
-status: open
+status: closed
 ---
 
 # The backwards step - one cheap hypothesis to check, no ruling needed
