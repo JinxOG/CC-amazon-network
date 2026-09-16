@@ -143,6 +143,9 @@ C_PUBLISH  = "/state publishes each turtle's private channel (SOURCE-ONLY, weake
 C_HANDLER  = "the REGISTER handler passes the reported private channel through"
 C_ROLLBACK = "a later REGISTER with no channel clears the stored one"
 C_VALID    = "a reported channel outside the per-turtle range is ignored, loudly"
+S2_ONCE    = "a turtle that reported a channel is sent to on it, exactly once"
+S2_FALL    = "a node that reported no channel is still served on the shared one"
+S2_ACK     = "the REGISTER_ACK goes to the channel the REGISTER just reported"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -807,6 +810,21 @@ MUTANTS = [
     ("an invalid channel is recorded anyway", "central_server.lua",
      [("        privateChannel = reportedChannel,",
        "        privateChannel = tonumber(privateChannel),")], C_VALID),
+
+    # -- Per-turtle channel, step 2 ----------------------------------------
+    ("step 2 is reverted: everything still goes on the shared channel",
+     "central_server.lua",
+     [("    proto.send(state.modem, ch, msg)", "    proto.send(state.modem, proto.CH_PRIVATE, msg)")],
+     S2_ONCE),
+
+    ("the server sends on BOTH channels", "central_server.lua",
+     [("    proto.send(state.modem, ch, msg)",
+       "    proto.send(state.modem, ch, msg)\n    if ch ~= proto.CH_PRIVATE then proto.send(state.modem, proto.CH_PRIVATE, msg) end")],
+     S2_ONCE),
+
+    ("a node with no channel gets nothing", "central_server.lua",
+     [("    local ch = state.registry[turtleId].privateChannel or proto.CH_PRIVATE",
+       "    local ch = state.registry[turtleId].privateChannel")], S2_FALL),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",

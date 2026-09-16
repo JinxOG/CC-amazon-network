@@ -153,6 +153,62 @@ end
 
 
 return {
+    -- ── Per-turtle channel, step 2 ─────────────────────────────────────────────
+    ["a turtle that reported a channel is sent to on it, exactly once"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        T.state.registry["node_118"].privateChannel = 1118
+        T.sent = {}
+        T.sendTo("node_118", proto.MSG.RECALL, { reason = "test" })
+        local sent = T.sent
+        restore()
+        assert_eq(#sent, 1,
+            "exactly one transmission -- a turtle still hears BOTH channels until "
+            .. "step 3, so a second copy is a double delivery, and a doubled "
+            .. "JOB_ASSIGN makes the server reassign a live job")
+        assert_eq(sent[1].channel, 1118, "sent on the channel the turtle reported")
+    end,
+
+    ["a node that reported no channel is still served on the shared one"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        T.state.registry["node_118"].privateChannel = nil
+        T.sent = {}
+        T.sendTo("node_118", proto.MSG.RECALL, { reason = "test" })
+        local sent = T.sent
+        restore()
+        assert_eq(#sent, 1, "one transmission")
+        assert_eq(sent[1].channel, proto.CH_PRIVATE,
+            "androids, loaders, the admin screen and rolled-back turtles report "
+            .. "nothing and must stay reachable on CH_PRIVATE")
+    end,
+
+    -- The REGISTER handler records the channel BEFORE it sends REGISTER_ACK, so
+    -- the acknowledgement already goes to the new channel -- which the turtle
+    -- has open, because it opened it before registering.
+    ["the REGISTER_ACK goes to the channel the REGISTER just reported"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        T.sent = {}
+        T.handlers[proto.MSG.REGISTER]({
+            type = proto.MSG.REGISTER, from = "node_118", to = "server",
+            payload = { role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+                        position = { x = 158, y = 67, z = -2810 },
+                        midJob = false, privateChannel = 1118 },
+        })
+        local ackCh, onShared = nil, 0
+        for _, sx in ipairs(T.sent) do
+            local ok, m = pcall(textutils.unserialise, sx.body)
+            if ok and type(m) == "table" and m.type == proto.MSG.REGISTER_ACK then
+                ackCh = sx.channel
+            end
+            if sx.channel == proto.CH_PRIVATE then onShared = onShared + 1 end
+        end
+        restore()
+        assert_eq(ackCh, 1118, "REGISTER_ACK must use the channel just reported")
+        assert_eq(onShared, 0, "nothing private goes on the shared channel for it")
+    end,
+
     -- Per-turtle channel, step 1, through the handler production actually uses.
     -- A test that calls registry.register directly cannot see this line drop the
     -- field -- the mutation harness proved it by letting that mutant survive.

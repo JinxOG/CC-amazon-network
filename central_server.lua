@@ -158,7 +158,25 @@ local function sendTo(turtleId, msgType, payload)
         return
     end
     local msg = proto.encode(msgType, "server", turtleId, payload)
-    proto.send(state.modem, proto.CH_PRIVATE, msg)
+    -- STEP 2 of the per-turtle channel: send on the channel the turtle REPORTED.
+    --
+    -- On the shared CH_PRIVATE every turtle received every turtle's private
+    -- traffic. Measured on 1.9.107, idle fleet: parked turtles lost 17.10% of
+    -- the acknowledgements the server definitely sent them, while working
+    -- miners -- whose loops turn 2.4x faster -- lost 0.92%.
+    --
+    -- A node that reported no channel -- an android, a loader, an admin screen,
+    -- a turtle rolled back to a pre-1.9.108 build, an id outside the range -- is
+    -- still served on CH_PRIVATE, which it still opens.
+    --
+    -- EXACTLY ONE transmission, never both. Until step 3 a turtle listens on
+    -- both channels, so a second copy would be delivered twice -- and a second
+    -- JOB_ASSIGN reaches a turtle already busy with that job, which answers
+    -- JOB_ACK(false, "busy"), and jobQueue.acknowledge then REASSIGNS the job
+    -- away from the turtle doing it. Anything that wants to observe this
+    -- traffic must not be served by mirroring it onto CH_PRIVATE.
+    local ch = state.registry[turtleId].privateChannel or proto.CH_PRIVATE
+    proto.send(state.modem, ch, msg)
 end
 
 local function sendBroadcast(msgType, payload)
@@ -5111,6 +5129,10 @@ if _G.__CC_SERVER_TEST then
         -- The message handlers, so a test can drive the real dispatch path
         -- rather than an internal that only the test calls.
         handlers = handlers,
+        -- The one function every private reply goes through. Exposed so the
+        -- per-turtle channel's "exactly one transmission" rule can be asserted
+        -- directly: a doubled JOB_ASSIGN makes the server reassign a live job.
+        sendTo   = sendTo,
         phaseEta = phaseEta,
         -- Zone persistence, so the KV/disk paths are actually covered. The plan
         -- assumed this file could not be required and treated the harness as a
