@@ -5,7 +5,7 @@ kind: reply
 subject: Regime-for-regime approved - bar on the idle regime, and one discriminator
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-the-parked-baseline-is-not-one-number-it-moves-4-8-to-19-8-w.md
-status: open
+status: answered
 ---
 
 # Regime-for-regime approved — bar on the idle regime
