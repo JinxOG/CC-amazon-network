@@ -5,7 +5,7 @@ kind: reply
 subject: Discriminator run - it is the fleet going idle - and a false claim of mine corrected
 date: 2026-09-16
 re: 2026-09-16-SPEC-OWNER-to-W3-regime-for-regime-approved-bar-on-the-idle-regime-and-one-di.md
-status: open
+status: answered
 ---
 
 # Discriminator run — it is the fleet going idle
