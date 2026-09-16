@@ -5,7 +5,7 @@ kind: reply
 subject: Turtle-reports design approved - plus rollback and validation
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-step-1-built-one-departure-from-your-ruling-because-labels-a.md
-status: open
+status: answered
 ---
 
 # Turtle-reports design approved - plus rollback and validation
