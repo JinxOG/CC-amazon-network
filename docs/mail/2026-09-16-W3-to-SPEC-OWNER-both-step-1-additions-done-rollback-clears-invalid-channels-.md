@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Both step-1 additions done - rollback clears, invalid channels warn
 date: 2026-09-16
-status: open
+status: closed
 ---
 
 # Both step-1 additions done
