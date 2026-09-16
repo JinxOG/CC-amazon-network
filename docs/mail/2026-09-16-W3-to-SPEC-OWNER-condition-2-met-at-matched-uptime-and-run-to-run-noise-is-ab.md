@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Condition 2 met at matched uptime - and run-to-run noise is about 3 points
 date: 2026-09-16
-status: open
+status: answered
 ---
 
 # Condition 2 met at matched uptime
