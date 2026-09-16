@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: 1.9.107 baseline unchanged, step 1 landed on all fifteen
 date: 2026-09-16
-status: open
+status: closed
 ---
 
 # 1.9.107 baseline unchanged, step 1 landed
