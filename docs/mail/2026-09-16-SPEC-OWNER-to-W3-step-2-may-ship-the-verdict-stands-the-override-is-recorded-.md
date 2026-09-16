@@ -5,7 +5,7 @@ kind: reply
 subject: Step 2 may ship - the verdict stands, the override is recorded, not coded
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-screen-unused-so-option-a-and-a-lost-job-assign-on-the-step-.md
-status: open
+status: answered
 ---
 
 # Step 2 may ship - the verdict stands, the override is recorded, not coded

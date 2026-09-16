@@ -21,6 +21,11 @@ whether that node held a job AT THAT LINE'S TIME, from the server's own
 THE TREND IS PRINTED because a single number over a long window hides drift, and
 the first 3 hours of 1.9.106 read very differently from the whole 14.
 
+ONE WINDOW IS NOT A MEASUREMENT. A single baseline line can report MORE acks
+than beats ("61 acks for 60 beats"): an ack for a beat sent just before the
+counters reset lands in the next window. Totals over many windows absorb it;
+one window alone can read as negative loss. This tool only reports totals.
+
 Usage:  python tools/ack_loss.py <since-ISO> [until-ISO]
 """
 import json, urllib.request, re, sys, statistics, collections, datetime
@@ -156,3 +161,5 @@ for h in sorted(hourly):
           f"{pct(*always[h]):>15}")
 print(f"   (always-parked = the {n_always} nodes that held no job anywhere in the window;"
       f" its membership never changes, so a step in it is the fleet, not a newcomer)")
+print("   (totals only: a single baseline window can show acks > beats at a counter"
+      " reset, so never quote one window's loss on its own)")
