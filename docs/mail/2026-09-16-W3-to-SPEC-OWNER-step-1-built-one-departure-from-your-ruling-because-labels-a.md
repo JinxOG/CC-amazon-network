@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Step 1 built - one departure from your ruling, because labels are node ids
 date: 2026-09-16
-status: open
+status: answered
 ---
 
 # Step 1 built — one departure from your ruling
