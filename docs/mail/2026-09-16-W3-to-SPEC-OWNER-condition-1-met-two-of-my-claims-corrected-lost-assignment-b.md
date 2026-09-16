@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Condition 1 met, two of my claims corrected, lost-assignment baseline is 1 in 25
 date: 2026-09-16
-status: open
+status: closed
 ---
 
 # Condition 1 met — and two claims of mine corrected
