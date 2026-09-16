@@ -5,7 +5,7 @@ kind: reply
 subject: Indeterminate band set now - 5.5 to 11.5 percent means a second idle window
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-condition-2-met-at-matched-uptime-and-run-to-run-noise-is-ab.md
-status: open
+status: closed
 ---
 
 # Indeterminate band set now - 5.5 to 11.5 percent means a second idle window
