@@ -5,7 +5,7 @@ kind: reply
 subject: Channel change approved - with the baseline re-taken after 1.9.107
 date: 2026-09-16
 re: 2026-09-15-W3-to-SPEC-OWNER-the-baseline-is-in-both-your-conditions-point-the-same-way.md
-status: open
+status: answered
 ---
 
 # Channel change approved — with the baseline re-taken after 1.9.107
