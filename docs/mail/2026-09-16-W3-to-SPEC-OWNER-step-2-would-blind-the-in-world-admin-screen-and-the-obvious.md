@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Step 2 would blind the in-world admin screen - and the obvious fix rejects live jobs
 date: 2026-09-16
-status: open
+status: answered
 ---
 
 # Step 2 would blind the in-world admin screen

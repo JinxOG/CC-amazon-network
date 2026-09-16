@@ -792,6 +792,7 @@ workstream that does not own it** — raise a request with the owner instead.
 | Resource index | `oreindex.lua`, `oreindex_store.lua` | **W1** | New. Pure functions, fully testable |
 | ~~Android runtime~~ | ~~`android_base.lua`~~ | — | **Retired.** It was never in `install.lua` or `updater.lua` — verified 2026-09-14, no match today and no commit that ever added or removed one. Only `server.js`'s `/lua/` whitelist still names it, and that is W5's one-line Wave 1 job. The file stays in git history for its API reference |
 | Bridge & dashboard | `server.js`, `public/` | **W5** | Never load-bearing |
+| In-world admin screen | `admin_ui.lua` | **W5** (code side) | Assigned 2026-09-16 — it had no owner. A human interface: fleet monitor and RS delivery ordering |
 | Depot layout & routing | `waypoints.lua` | **W3** | Owns the dispatch/arrivals chokepoints (Invariant I) |
 | Test harness | `tests/run.lua`, `tests/stub_cc.lua` | **W3** | Shared infrastructure |
 | Tests | `tests/test_*.lua`, `tests/inworld/` | **per-file owner** | Each stream owns tests covering files it owns |
