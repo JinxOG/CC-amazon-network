@@ -92,6 +92,7 @@ def working_at(node, when):
 per = collections.defaultdict(lambda: {"working": [0, 0], "parked": [0, 0], "turns": []})
 hourly = collections.defaultdict(lambda: {"working": [0, 0], "parked": [0, 0]})
 n_lines = 0
+raw = []
 for l in logs("contains=loop%20baseline"):
     m = re.search(r"loop baseline: ([\d.]+) turns/s, ([\d.]+) msgs/s handled, "
                   r"(\d+) acks for (\d+) beats", l.get("msg") or "")
@@ -105,6 +106,7 @@ for l in logs("contains=loop%20baseline"):
     per[node]["turns"].append(float(m.group(1)))
     hb = hourly[when.strftime("%m-%d %H:00")][grp]
     hb[0] += a; hb[1] += b
+    raw.append((when, node, a, b))
 
 if not n_lines:
     print("NO BASELINE LINES in the window. No verdict.")
@@ -132,7 +134,25 @@ for g in ("working", "parked"):
     print(f"{g.upper():<8}: {a} acks / {b} beats -> "
           + (f"{100*(b-a)/b:.2f}% lost" if b else "no beats"))
 
+# ALWAYS-PARKED: nodes that held no job anywhere in the window. The "parked"
+# column changes membership when a job ends -- the miners join it -- so a step in
+# it can be carried by the newcomers rather than the fleet. The spec owner's
+# discriminator (2026-09-16): watch the turtles whose own state never changed.
+# On 1.9.106 the thirteen always-parked turtles went 7.6% -> 18.1% at the moment
+# the last job ended, so that step was the FLEET going idle, not the two miners.
+ever = {n for n, ws in windows.items()
+        if any(a <= t1 and b >= t0 for a, b in ws)}
+always = collections.defaultdict(lambda: [0, 0])
+for when, node, a, b in raw:
+    if node not in ever:
+        k = always[when.strftime("%m-%d %H:00")]
+        k[0] += a; k[1] += b
+n_always = len({node for _, node, _, _ in raw if node not in ever})
+
 print("\nhourly trend (loss %):")
-print(f"   {'hour':<12}{'working':>9}{'parked':>9}")
+print(f"   {'hour':<12}{'working':>9}{'parked':>9}{'always-parked':>15}")
 for h in sorted(hourly):
-    print(f"   {h:<12}{pct(*hourly[h]['working']):>9}{pct(*hourly[h]['parked']):>9}")
+    print(f"   {h:<12}{pct(*hourly[h]['working']):>9}{pct(*hourly[h]['parked']):>9}"
+          f"{pct(*always[h]):>15}")
+print(f"   (always-parked = the {n_always} nodes that held no job anywhere in the window;"
+      f" its membership never changes, so a step in it is the fleet, not a newcomer)")
