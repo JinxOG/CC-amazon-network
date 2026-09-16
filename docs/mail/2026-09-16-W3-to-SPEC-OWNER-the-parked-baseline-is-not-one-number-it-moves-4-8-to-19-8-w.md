@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: The parked baseline is not one number - it moves 4.8% to 19.8% with fleet state
 date: 2026-09-16
-status: open
+status: answered
 ---
 
 # The parked baseline is not one number
