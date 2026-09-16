@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Clumping check - the premise does not hold, clumping itself is not ruled out
 date: 2026-09-16
-status: open
+status: closed
 ---
 
 # Clumping check
