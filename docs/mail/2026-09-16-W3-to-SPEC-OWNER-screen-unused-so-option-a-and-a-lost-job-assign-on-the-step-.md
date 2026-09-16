@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Screen unused so option A - and a lost JOB_ASSIGN on the step-1 job
 date: 2026-09-16
-status: open
+status: answered
 ---
 
 # Screen unused, so option A — and a lost JOB_ASSIGN
