@@ -190,7 +190,7 @@ local registry = {}
 -- reSendJob is non-nil when a rebooted turtle had an active job — the caller
 -- must send JOB_ASSIGN AFTER sending REGISTER_ACK so the turtle sets its dock
 -- from the ACK before receiving the job assignment.
-function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSector)
+function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSector, privateChannel)
     local isNew = state.registry[id] == nil
 
     -- Held for the dispatch-hold carry-forward after the entry is REPLACED
@@ -226,6 +226,11 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
         lastSeen = os.epoch("utc"),
         online   = true,
         offlineSince = nil,   -- cleared on (re-)register so active turtles aren't pruned
+        -- The channel this turtle says it listens on. Recorded only -- the
+        -- server does not send on it until step 2, and step 2 is gated on every
+        -- turtle having reported one. A number or nil, never guessed from the
+        -- node id: that id is the computer LABEL when one is set.
+        privateChannel = tonumber(privateChannel),
     }
 
     -- Carry the dispatch hold across a re-registration, unless the server had
@@ -2295,7 +2300,7 @@ local handlers = {}
 
 handlers[proto.MSG.REGISTER] = function(msg)
     local p    = msg.payload
-    local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob, p.awaitingSector)
+    local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob, p.awaitingSector, p.privateChannel)
     -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
         ok       = true,
@@ -3932,6 +3937,9 @@ function server.run()
                 blockReason = t.dispatchBlockReason or nil,
                 blockedUntil = t.dispatchBlockedUntil or nil,
                 commsGap = t.commsGap and true or false,
+                -- Scalar, like everything else here. Step 2 of the channel
+                -- rollout is gated on every turtle showing one.
+                privateChannel = t.privateChannel,
                 chunkX   = t.chunk and t.chunk.cx or nil,
                 chunkZ   = t.chunk and t.chunk.cz or nil,
                 dock    = t.dock and string.format("bay%d%s", t.dock.bay, t.dock.row) or nil,

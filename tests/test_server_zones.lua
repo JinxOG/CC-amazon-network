@@ -437,6 +437,39 @@ return {
     -- bench on the next re-registration, and -- being full of fuel, which sorts
     -- it first for dispatch -- was offered work ahead of every healthy miner. It
     -- destroyed two of the operator's four mine jobs, four seconds apart each.
+    -- Step 1 of the per-turtle channel: the server RECORDS what the turtle
+    -- reports and sends nothing new. The number must come from the turtle, never
+    -- from parsing the node id -- that id is the computer LABEL when one is set.
+    ["the server records the private channel a turtle reports"] = function(assert_eq)
+        local server, T, restore = freshServer(fakeKV({}), nil)
+        T.registry.register("LOADER-153", proto.ROLE.MINER, 100, 100,
+            { x = 0, y = 64, z = 0 }, false, nil, 1153)
+        T.registry.register("node_139", proto.ROLE.MINER, 100, 100,
+            { x = 0, y = 64, z = 0 }, false, nil, nil)
+        local labelled = T.state.registry["LOADER-153"].privateChannel
+        local silent   = T.state.registry["node_139"].privateChannel
+        restore()
+        assert_eq(labelled, 1153,
+            "a labelled turtle's reported channel is recorded as reported -- "
+            .. "its name carries no computer id to derive one from")
+        assert_eq(silent == nil, true,
+            "a turtle that reports no channel has none recorded; the server must "
+            .. "not invent one from 'node_139'")
+    end,
+
+    -- SOURCE-ONLY, weaker: the /state payload is assembled inside the push.
+    ["/state publishes each turtle's private channel (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("central_server.lua", "r"))
+        local src = f:read("*a"); f:close()
+        local NL   = string.char(10)
+        local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+        local at = code:find("commsGap = t.commsGap and true or false,", 1, true)
+        assert_eq(at ~= nil, true, "the turtle serialiser moved or vanished")
+        assert_eq(code:sub(at, at + 200):find("privateChannel = t.privateChannel", 1, true) ~= nil,
+            true, "step 2 is gated on every turtle SHOWING a channel in /state")
+    end,
+
     ["a re-registration from a turtle the server still sees does not clear its bench"] =
     function(assert_eq)
         local server, T, restore = freshServer(fakeKV({}), nil)

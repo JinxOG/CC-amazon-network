@@ -2116,4 +2116,83 @@ suite["the register payload still reports midJob from busy"] = function(assert_e
         .. "waiting miner from a mid-sector one and withholds from neither")
 end
 
+
+-- ── Per-turtle private channel, step 1 ───────────────────────────────────────
+--
+-- Step 1 ADDS a channel. It must never take one away: the server still sends
+-- every private reply on the shared CH_PRIVATE until step 2, so a turtle that
+-- stopped listening there would be deaf to its own acknowledgements.
+
+local function loadAs(computerId)
+    clearModules()
+    stub.install({ fuel = 100000 })
+    gps = { locate = function() return 0, 64, 0 end }
+    os.getComputerID = function() return computerId end
+    return require("turtle_base"), require("protocol")
+end
+
+suite["a turtle opens its own channel from its computer id"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base, proto = loadAs(138)
+        assert_eq(base._ownChannel(), 1138, "channel is 1000 + computer id")
+        local found = false
+        for _, ch in ipairs(base._channels()) do
+            if ch == 1138 then found = true end
+        end
+        assert_eq(found, true, "the own channel must actually be in the opened list")
+    end)
+end
+
+suite["step 1 keeps every shared channel open"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base, proto = loadAs(138)
+        local open = {}
+        for _, ch in ipairs(base._channels()) do open[ch] = true end
+        assert_eq(open[proto.CH_PRIVATE], true,
+            "CH_PRIVATE must stay open in step 1 -- the server still sends every "
+            .. "private reply there, and a turtle that dropped it would be deaf")
+        assert_eq(open[proto.CH_BROADCAST], true, "CH_BROADCAST is the recall path")
+        assert_eq(open[proto.CH_LOCAL], true, "CH_LOCAL is untouched by this change")
+    end)
+end
+
+suite["a computer id with no valid channel stays on the shared one, and says so"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local base, proto = loadAs(64536)          -- 1000 + 64536 > 65535
+        assert_eq(base._ownChannel() == nil, true,
+            "no channel outside the valid range")
+        local open = {}
+        for _, ch in ipairs(base._channels()) do open[ch] = true end
+        assert_eq(open[proto.CH_PRIVATE], true,
+            "a turtle without its own channel must still hear the shared one")
+        assert_eq(#base._channels(), 3, "nothing invalid was added to the list")
+    end)
+end
+
+
+suite["the private channel range is bounded and exact"] = function(assert_eq)
+    local proto = require("protocol")
+    assert_eq(proto.privateChannelFor(0), 1000, "base is 1000")
+    assert_eq(proto.privateChannelFor(64535), 65535, "the top of the range is valid")
+    assert_eq(proto.privateChannelFor(64536) == nil, true, "one past the top is not")
+    assert_eq(proto.privateChannelFor(nil) == nil, true, "no id, no channel")
+    assert_eq(proto.privateChannelFor(-1) == nil, true, "no negative ids")
+    assert_eq(proto.privateChannelFor(1.5) == nil, true, "no fractional ids")
+end
+
+-- SOURCE-ONLY, weaker: register() blocks on its ACK and is not driven here.
+suite["REGISTER reports the private channel (SOURCE-ONLY, weaker)"] = function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a"); f:close()
+    local NL   = string.char(10)
+    local code = (src:gsub("%-%-[^" .. NL .. "]*", ""))
+    local at = code:find("comms.toServer(proto.MSG.REGISTER, {", 1, true)
+    assert_eq(at ~= nil, true, "the REGISTER send moved or vanished")
+    local close = code:find("})", at, true)
+    assert_eq(code:sub(at, close):find("privateChannel = OWN_CHANNEL", 1, true) ~= nil, true,
+        "REGISTER must report the channel, or step 2 has no evidence to gate on "
+        .. "and the server has nothing correct to send to")
+end
+
 return suite

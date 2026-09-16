@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.107"
+proto.VERSION = "1.9.108"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -420,6 +420,33 @@ function proto.payloadLoaderBeacon(position, deployedBy)
 end
 
 -- ─── Modem Helpers ───────────────────────────────────────────────────────────
+
+-- ─── Per-turtle private channel ─────────────────────────────────────────────
+--
+-- Every private reply from the server used to ride the single shared
+-- CH_PRIVATE, so every turtle received all fifteen turtles' private traffic and
+-- discarded fourteen fifteenths of it. Measured 2026-09-15: a turtle whose loop
+-- turns 2.7/s loses 4.85% of the acknowledgements the server definitely sent
+-- it; one turning 6.7/s loses 1.07%. The mailbox is the bottleneck.
+--
+-- Each turtle gets its own channel, derived from its COMPUTER ID -- not from
+-- its node id, which is the computer LABEL when one is set (the loaders are
+-- labelled). The turtle computes it and reports it; the server uses what was
+-- reported and never guesses.
+--
+-- Returns nil when the result would leave the valid channel range. The caller
+-- must then stay on the shared channel and say so loudly -- a documented
+-- degradation, never a silent one.
+proto.CH_PRIVATE_BASE = 1000
+proto.CH_MAX          = 65535
+
+function proto.privateChannelFor(computerId)
+    local id = tonumber(computerId)
+    if not id or id < 0 or id ~= math.floor(id) then return nil end
+    local ch = proto.CH_PRIVATE_BASE + id
+    if ch > proto.CH_MAX then return nil end
+    return ch
+end
 
 function proto.openChannels(modem, channels)
     for _, ch in ipairs(channels) do

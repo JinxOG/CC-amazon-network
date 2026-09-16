@@ -181,6 +181,26 @@ local comms = {}
 -- never end up subscribed to a different set than the original.
 local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }
 
+-- This turtle's own private channel -- STEP 1 of the per-turtle rollout.
+--
+-- Opened IN ADDITION to CH_PRIVATE, never instead of it. The server does not
+-- send on it yet (that is step 2), so a turtle that dropped the shared channel
+-- here would be deaf to every private reply and would fall off the fleet.
+--
+-- Computed once at load from the COMPUTER ID and reported in REGISTER, so the
+-- server can publish it and step 2 can be gated on every turtle having said so.
+local OWN_CHANNEL = nil
+do
+    local cid = nil
+    pcall(function() cid = os.getComputerID() end)
+    OWN_CHANNEL = proto.privateChannelFor(cid)
+    if OWN_CHANNEL then
+        CHANNELS[#CHANNELS + 1] = OWN_CHANNEL
+    end
+end
+function base._channels() return CHANNELS end        -- test seam
+function base._ownChannel() return OWN_CHANNEL end   -- test seam
+
 -- ─── Shared inbox (Invariant G) ──────────────────────────────────────────────
 --
 -- Invariant G has mandated base.receive since it was written. It never existed:
@@ -440,7 +460,15 @@ function comms.init()
         error("No modem found. Attach a wireless or ender modem.")
     end
     proto.openChannels(_self.modem, CHANNELS)
-    logInfo("Modem ready.")
+    if OWN_CHANNEL then
+        logInfo("Modem ready. Private channel " .. OWN_CHANNEL
+            .. " open alongside the shared one.")
+    else
+        -- Loud on purpose: this turtle will never move off the shared channel.
+        logWarn("Modem ready, but NO private channel -- computer id gives "
+            .. "a channel outside 0-" .. proto.CH_MAX
+            .. ". Staying on the shared channel.")
+    end
 end
 
 -- Re-acquire the modem after an equipment swap moved it, and re-open the
@@ -1978,6 +2006,11 @@ local function register(maxAttempts)
             -- just finished (W6, node_139: 6 replays, 4 repeated sectors in
             -- jobs 0039-0042). Now the server replays only when this is true.
             awaitingSector = base.isAwaiting(proto.MSG.SECTOR_ASSIGN),
+            -- The channel this turtle ALSO listens on. nil means it could not
+            -- have one and is staying on the shared channel; the server must
+            -- then keep sending there. Placed after awaitingSector so existing
+            -- payload anchors keep their positions.
+            privateChannel = OWN_CHANNEL,
         })
 
         -- Waits for a REGISTER_ACK SPECIFICALLY, and routes anything else into

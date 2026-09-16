@@ -153,6 +153,26 @@ end
 
 
 return {
+    -- Per-turtle channel, step 1, through the handler production actually uses.
+    -- A test that calls registry.register directly cannot see this line drop the
+    -- field -- the mutation harness proved it by letting that mutant survive.
+    ["the REGISTER handler passes the reported private channel through"] =
+    function(assert_eq)
+        local server, T, advance, restore = serverWithMinerOnJob()
+        T.handlers[proto.MSG.REGISTER]({
+            type = proto.MSG.REGISTER, from = "node_118", to = "server",
+            payload = { role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+                        position = { x = 158, y = 67, z = -2810 },
+                        midJob = true, awaitingSector = false,
+                        privateChannel = 1118 },
+        })
+        local ch = T.state.registry["node_118"].privateChannel
+        restore()
+        assert_eq(ch, 1118,
+            "the channel a turtle reports in REGISTER must reach the registry, "
+            .. "or step 2 has nothing to gate on and nothing to send to")
+    end,
+
     -- The precondition, asserted so the test below cannot pass for the wrong
     -- reason. The guard is deliberate and stays: it is what stops a stale IDLE
     -- (sent before JOB_ASSIGN lands) re-opening a turtle for a second dispatch.

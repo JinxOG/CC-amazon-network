@@ -110,6 +110,14 @@ R_NOFAIL   = "the reboot does not fail the job on its way out"
 RR_CTRL    = "RE_REGISTER is a control type"
 RR_BUSY    = "RE_REGISTER keeps the turtle busy, or it tests nothing"
 RR_PAY     = "the register payload still reports midJob from busy"
+C_OWN      = "a turtle opens its own channel from its computer id"
+C_SHARED   = "step 1 keeps every shared channel open"
+C_FALLBACK = "a computer id with no valid channel stays on the shared one, and says so"
+C_RANGE    = "the private channel range is bounded and exact"
+C_REPORT   = "REGISTER reports the private channel (SOURCE-ONLY, weaker)"
+C_RECORD   = "the server records the private channel a turtle reports"
+C_PUBLISH  = "/state publishes each turtle's private channel (SOURCE-ONLY, weaker)"
+C_HANDLER  = "the REGISTER handler passes the reported private channel through"
 C5_SUP     = "a support turtle flushes its log before rebooting after a crash"
 C5_DEL     = "a delivery turtle flushes its log before rebooting after a crash"
 C5_REBOOT  = "a delivery turtle reboots after its control loop crashes"
@@ -486,7 +494,8 @@ MUTANTS = [
        "                    if false then")], K_WAIT),
 
     ("the handler drops the turtle's answer", "central_server.lua",
-     [("p.midJob, p.awaitingSector)", "p.midJob)")], K_MID),
+     [("p.midJob, p.awaitingSector, p.privateChannel)",
+       "p.midJob, nil, p.privateChannel)")], K_MID),
 
     ("withholding is silent", "central_server.lua",
      [('                            "Withheld SECTOR_ASSIGN (%d,%d) from %s on re-link: "',
@@ -604,6 +613,38 @@ MUTANTS = [
     ("midJob stops coming from busy", "turtle_base.lua",
      [("            midJob   = _self.busy,",
        "            midJob   = false,")], RR_PAY),
+
+    # -- Per-turtle channel, step 1 ----------------------------------------
+    ("the turtle never adds its own channel", "turtle_base.lua",
+     [("        CHANNELS[#CHANNELS + 1] = OWN_CHANNEL\n", "")], C_OWN),
+
+    ("step 1 REPLACES the shared channel instead of adding to it", "turtle_base.lua",
+     [("local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }",
+       "local CHANNELS = { proto.CH_BROADCAST, proto.CH_LOCAL }")], C_SHARED),
+
+    ("the base is wrong", "protocol.lua",
+     [("proto.CH_PRIVATE_BASE = 1000", "proto.CH_PRIVATE_BASE = 100")], C_OWN),
+
+    ("the upper bound is not enforced", "protocol.lua",
+     [("    if ch > proto.CH_MAX then return nil end\n", "")], C_RANGE),
+
+    ("fractional or negative ids are accepted", "protocol.lua",
+     [("    if not id or id < 0 or id ~= math.floor(id) then return nil end",
+       "    if not id then return nil end")], C_RANGE),
+
+    ("REGISTER stops reporting the channel", "turtle_base.lua",
+     [("            privateChannel = OWN_CHANNEL,\n", "")], C_REPORT),
+
+    ("the server drops the reported channel", "central_server.lua",
+     [("        privateChannel = tonumber(privateChannel),\n", "")], C_RECORD),
+
+    ("the handler does not pass the channel on", "central_server.lua",
+     [("p.midJob, p.awaitingSector, p.privateChannel)",
+       "p.midJob, p.awaitingSector)")],
+     C_HANDLER),
+
+    ("/state stops publishing the channel", "central_server.lua",
+     [("                privateChannel = t.privateChannel,\n", "")], C_PUBLISH),
 
     # Deploy manifests.
     ("updater drops logship from COMMON", "updater.lua",
