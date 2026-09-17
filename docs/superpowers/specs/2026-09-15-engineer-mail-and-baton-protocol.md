@@ -35,6 +35,43 @@ without the user carrying it.
   engineers awake at once is how the token bill grows without the work moving.
 - Keeps the board current in the same session the work changes.
 
+### The holder runs the cycle without stopping — added 2026-09-17
+
+The user's instruction: **the baton holder does not pause the
+build → deploy → test → next-release cycle for the user.** Finish a release,
+read its verdict, start the next one. Keep going until the queue is empty or a
+real reason to stop appears.
+
+**Stop and get the user only for these:**
+
+- **An abandoned or stranded turtle** — one that needs someone in the world to
+  fetch it, dig it out, or put it back.
+- **Anything that needs the server PC** — a restart, an install, a file pushed
+  or changed on that machine, anything needing `sudo`. That goes to the server
+  PC engineer through the user.
+- The standing list in §7 — a baton move, the redesign decision, accounts,
+  credentials, money.
+
+Everything else is yours to decide: a failed test job, a bad verdict, a rollback,
+the next release in the queue, a question for another engineer.
+
+**When you do stop,** say so where the user will see it — in your own session,
+and with a push notification if your session has one — **and** mail the head
+engineer, who raises it next time the user is here. Say exactly what is needed
+and where: which turtle, its last position, what is on the server PC.
+
+**Do not go idle waiting on a long job.** Nothing wakes an idle session, so a job
+that takes six hours stalls the baton for six hours. Wait in a **background
+watcher** that ends when the thing you are waiting for happens — the job ends,
+the fleet goes idle, a fault line appears. The session wakes when it ends, and
+it costs nothing while it runs. Re-arm it if its window runs out
+(`2026-09-15-W3-deploying-and-testing-unattended.md` §6). Build the next release
+while you wait.
+
+**Rulings still come to the head engineer** — protocol changes, frozen files,
+anything crossing another engineer's files. Ask, then carry on with whatever
+does not depend on the answer.
+
 ### Everybody else
 
 **Asleep.** When woken:
@@ -138,6 +175,8 @@ gets a reply saying so, not compliance.
 
 ## 7. What the user still does
 
+- Fetches **abandoned or stranded turtles** in the world.
+- Passes anything that needs **the server PC** to the server PC engineer.
 - Validates a baton move.
 - Decides the redesign question at the end of the cleanup (design §8).
 - Anything involving the server machine, accounts, or money.
