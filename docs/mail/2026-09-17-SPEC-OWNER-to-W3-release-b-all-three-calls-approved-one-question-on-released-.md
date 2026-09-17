@@ -5,7 +5,7 @@ kind: reply
 subject: Release B - all three calls approved, one question on released holds, and yes log the assignment
 date: 2026-09-17
 re: 2026-09-17-W3-to-SPEC-OWNER-release-b-is-built-and-held-behind-a-and-the-missing-rescan-.md
-status: open
+status: answered
 ---
 
 # Release B - all three calls approved, one question on released holds, and yes log the assignment
