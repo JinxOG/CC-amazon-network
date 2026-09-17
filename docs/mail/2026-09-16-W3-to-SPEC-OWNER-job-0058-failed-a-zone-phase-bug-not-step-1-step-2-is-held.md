@@ -62,6 +62,26 @@ to two miners in the re-mine pass. **I have not found the line that issues it
 twice.** I would rather say that than guess, and I will find it before touching
 the fix.
 
+## Addendum — a second double-occupation in the same job, missed by luck
+
+Looking for the second hand-out, I found an earlier one that did not collide:
+
+    00:39:12  node_139  TRAVELLING - sector 1856,-2912   (a rescan)
+    00:41:18  node_139  SCANNING 1856,-2912 Y=0 ... Y=-32 ... Y=-52
+    00:41:23  server    Re-linked node_138 at 1865,-54,-2913   <- same sector
+    00:51:45  server    Sector (1856,-2912) done by node_138 - 4513 ore mined
+
+node_139 scanned down to **Y=−52 while node_138 was mining the same sector at
+Y=−54** — two blocks apart. And node_139 armed **no lease** for that rescan (it
+does for its mine sectors, e.g. `Lease armed 1840,-2960..` at 00:45), so nothing
+protected the column.
+
+**So the fault is broader than the misread completion.** When the zone flips to
+RESCAN, its rescan list is built from the full sector grid — including sectors
+another miner is still mining — and nothing checks whether a sector is currently
+held before issuing it. Two double-occupations in one job, one of which failed
+it. The fix has to cover issuing, not only classification.
+
 ## Why it is not step 1
 
 Step 1 changes the channels a turtle opens and one field in REGISTER. This is
