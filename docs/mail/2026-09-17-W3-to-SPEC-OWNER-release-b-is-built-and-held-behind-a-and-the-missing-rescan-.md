@@ -5,7 +5,7 @@ kind: info
 subject: Release B is built and held behind A - and the missing rescan lease was log loss
 date: 2026-09-17
 re: 2026-09-16-SPEC-OWNER-to-W3-two-releases-turtle-first-a-delivery-primitive-earns-its-own.md
-status: open
+status: answered
 ---
 
 # Release B is built and held behind A - and the missing rescan lease was log loss
