@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Release A cleared (idle 17.29%); release B 1.9.110 shipped - orphan report added first, then shipped
 date: 2026-09-17
-status: open
+status: closed
 ---
 
 # Release A cleared (idle 17.29%); release B 1.9.110 shipped - orphan report added first, then shipped
