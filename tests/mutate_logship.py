@@ -742,6 +742,14 @@ MUTANTS = [
      [('    logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",\n',
        '    (function() end)(string.format("Assigned sector (%d,%d)%s to %s [%s]",\n')], Z_LOGGED),
 
+    ("the RESCAN-request fix leaves no trace", "central_server.lua",
+     [('        logInfo(string.format("SECTOR_REQUEST from %s during RESCAN of %s',
+       '        (function() end)(string.format("SECTOR_REQUEST from %s during RESCAN of %s')], Z_REQ),
+
+    ("the late-rescan fix leaves no trace", "central_server.lua",
+     [('                logInfo(string.format(\n                    "Late rescan (%d,%d)',
+       '                (function() end)(string.format(\n                    "Late rescan (%d,%d)')], Z_LATE_RS),
+
     # -- Per-turtle channel, step 1 ----------------------------------------
     ("the turtle never adds its own channel", "turtle_base.lua",
      [("        CHANNELS[#CHANNELS + 1] = OWN_CHANNEL\n", "")], C_OWN),

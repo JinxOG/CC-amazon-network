@@ -2744,6 +2744,8 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
         -- MINE_COMPLETE while rescans were still waiting to be done.
         sector, blocked = popUnheld(zone.rescanSectors, zone, msg.from)
         isSurvey = true
+        logInfo(string.format("SECTOR_REQUEST from %s during RESCAN of %s — served from the rescan list",
+            msg.from, jobId))
     else
         if zone.phase == "SURVEY" then zone.phase = "MINE" end
         sector, blocked = popUnheld(zone.pending, zone, msg.from)
@@ -2858,6 +2860,9 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             if not queued then
                 zone.pending = zone.pending or {}
                 table.insert(zone.pending, { x = p.sectorX, z = p.sectorZ })
+                logInfo(string.format(
+                    "Late rescan (%d,%d) by %s found ore after the re-mine list was built — added to it [%s]",
+                    p.sectorX, p.sectorZ, msg.from, p.jobId))
             end
         elseif hasOre then
             zone.rescanPending = zone.rescanPending or {}

@@ -214,7 +214,9 @@ return {
             phase = "RESCAN", rescanSectors = { copy(S3) }, pending = {},
         })
         local got = request(T, A, JA)
+        local line = logged(T, "SECTOR_REQUEST from node_138 during RESCAN of job_0060")
         restore()
+        assert_eq(line ~= nil, true, "the fix has its own log signature")
         assert_eq(got.type, proto.MSG.SECTOR_ASSIGN,
             "rescans are still waiting; MINE_COMPLETE here ends the miner early")
         assert_eq(got.x == S3.x and got.survey, true, "it is a rescan order")
@@ -260,7 +262,9 @@ return {
             lastAssignments = { [B] = { x = S2.x, z = S2.z, phase = "RESCAN", jobId = JB } },
         })
         local got = done(T, B, JB, S2, ORE)
+        local line = logged(T, "Late rescan (2080,-3104) by node_139 found ore after the re-mine list was built")
         restore()
+        assert_eq(line ~= nil, true, "the fix has its own log signature")
         assert_eq(got.type, proto.MSG.SECTOR_ASSIGN,
             "ore found by the late rescan must be mined, not dropped with the old list")
         assert_eq(got.x == S2.x and got.z == S2.z, true, "the order is S2")
