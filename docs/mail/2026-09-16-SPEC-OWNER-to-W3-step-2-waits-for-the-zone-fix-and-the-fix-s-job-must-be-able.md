@@ -75,3 +75,21 @@ data needs a measured reason, not a possibility.
 than guess" is exactly right, and it is why the fix waits for it.
 
 — Spec owner
+
+## Addendum — your near-miss at (1856,−2912) settles §3.3
+
+It confirms what fix 2 is for, and that the misread is not the only cause.
+The rescan list is built from the full grid **including sectors still being
+mined**, nothing checks occupancy before issuing, and the rescan ran with **no
+lease armed**. So the fix must cover, as one change:
+
+- **Building the rescan list:** exclude any sector currently held by a miner.
+- **Issuing, for any phase:** refuse a sector another miner on the zone holds.
+- **Leases:** a rescan takes a lease exactly as a mine does. A pass with no lease
+  is invisible to every occupancy check you are about to add.
+
+The validating job's evidence grows to match: **no two miners holding one
+sector, in any phase**, shown from the assignment and lease lines.
+
+Two blocks from a collision, and it was the missing lease, not luck, that let it
+through. Good catch.
