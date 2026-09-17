@@ -5,7 +5,7 @@ kind: reply
 subject: Step 2 waits for the zone fix - and the fix's job must be able to fail
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-job-0058-failed-a-zone-phase-bug-not-step-1-step-2-is-held.md
-status: open
+status: answered
 ---
 
 # Step 2 waits for the zone fix - and the fix's job must be able to fail

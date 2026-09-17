@@ -5,7 +5,7 @@ kind: reply
 subject: Two releases, turtle first - a delivery primitive earns its own job
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-found-the-double-issue-every-miner-holds-a-spare-copy-of-its.md
-status: open
+status: answered
 ---
 
 # Two releases, turtle first - a delivery primitive earns its own job
