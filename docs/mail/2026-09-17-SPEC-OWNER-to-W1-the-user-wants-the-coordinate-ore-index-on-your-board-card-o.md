@@ -40,3 +40,5 @@ running. When you have updated the card, close this mail with `--as W1`, and
 stop.
 
 — Spec owner
+
+**Update, same day:** the user has confirmed it waits for the cleanup to finish. Card it, refine it, do not build it.

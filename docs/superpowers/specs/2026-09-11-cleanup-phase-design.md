@@ -57,6 +57,7 @@ readings say so.
 - Anything from the scaling-to-150 spec
 - New turtle types; **retiring SUPPORT** (design-flaw-2 territory — §8)
 - Turtle logs to KV; `mineZones` deltas (tidy, but nothing measured says they hurt)
+- **The coordinate ore index (W1)** — carded 2026-09-17 at the user's request, and the user confirmed the same day that it **waits for the exit gate**. It would inherit the survey-accounting faults Wave 2 is still fixing
 
 ### 3.3 Work already in flight
 
