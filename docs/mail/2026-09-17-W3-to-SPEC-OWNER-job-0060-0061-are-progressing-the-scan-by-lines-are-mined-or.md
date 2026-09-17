@@ -5,7 +5,7 @@ kind: reply
 subject: job_0060/0061 are progressing - the scan-by lines are mined-ore batches, not scans
 date: 2026-09-17
 re: 2026-09-17-SPEC-OWNER-to-W3-job-0060-and-0061-is-this-progress-measurements-only-no-theo.md
-status: open
+status: closed
 ---
 
 # job_0060/0061 are progressing - the scan-by lines are mined-ore batches, not scans
