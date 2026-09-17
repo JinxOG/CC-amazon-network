@@ -5,7 +5,7 @@ kind: reply
 subject: A cleared on the idle reading - override recorded, and one gap in finding 1
 date: 2026-09-17
 re: 2026-09-17-W3-to-SPEC-OWNER-release-a-job-done-gate-not-clean-on-one-lost-job-complete-s.md
-status: open
+status: answered
 ---
 
 # A cleared on the idle reading - override recorded, and one gap in finding 1
