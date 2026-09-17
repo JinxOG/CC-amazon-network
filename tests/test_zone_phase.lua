@@ -279,6 +279,58 @@ return {
         assert_eq(holder, nil, "a finished miner must not keep a sector out of reach")
     end,
 
+    -- The question the approval asked: a miner was sent MINE_COMPLETE because
+    -- the last sector was held, and the holder then FAILED. The failure saw the
+    -- first miner's job as still live (it was flying home), so it respawned
+    -- nothing. When that last job completes, the zone must say it was left
+    -- with work, and get a replacement.
+    ["a sector orphaned by a failed holder is reported and respawned when the last miner finishes"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            -- S3 is still listed and B holds it (a rescan's re-mine list can
+            -- look like this): the only sector left is taken.
+            phase = "MINE", pending = { copy(S3) },
+            lastAssignments = {
+                [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA },
+                [B] = { x = S3.x, z = S3.z, phase = "MINE", jobId = JB },
+            },
+        })
+        for _, j in ipairs({ JA, JB }) do
+            T.state.jobs[j].params = { x1 = 2052, z1 = -3080, x2 = 2052, z2 = -3080 }
+        end
+        local aGot = done(T, A, JA, S1)                        -- all left is B's: A is finished
+        T.handlers[proto.MSG.JOB_FAILED]({ from = B, payload = {
+            jobId = JB, reason = "test", recoverable = false } })
+        local requeued = sectorIn(zone.pending, S3)
+        local earlyWarn = logged(T, "unmined sector(s)")
+        T.handlers[proto.MSG.JOB_COMPLETE]({ from = A, payload = { jobId = JA } })
+        local warn = logged(T, "Zone zk left with 1 unmined sector(s) after job_0060 complete")
+        local replacement
+        for id, j in pairs(T.state.jobs) do
+            if id ~= JA and id ~= JB and j.params and j.params.sharedZoneKey == "zk" then
+                replacement = j
+            end
+        end
+        restore()
+        assert_eq(aGot.type, proto.MSG.MINE_COMPLETE, "precondition: A was finished by the block")
+        assert_eq(requeued, true, "the failed holder's sector goes back on the list")
+        assert_eq(earlyWarn, nil, "while A is still live the zone is not orphaned yet")
+        assert_eq(warn ~= nil, true, "when the last miner finishes, the zone says it has work left")
+        assert_eq(replacement ~= nil, true, "and a replacement job is queued to mine it")
+    end,
+
+    ["every hand-out is logged, including the reply to a completion"] = function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S2) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        done(T, A, JA, S1)
+        local line = logged(T, "Assigned sector (2080,-3104) to node_138 [job_0060]")
+        restore()
+        assert_eq(line ~= nil, true,
+            "the gate rebuilds holds from these; an unlogged reply is an invisible hold")
+    end,
+
     ["a hold on a different zone does not block this one"] = function(assert_eq)
         local T, zone, restore = twoMiners({
             phase = "MINE", pending = { copy(S1) },

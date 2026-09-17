@@ -131,6 +131,9 @@ Z_LATE_RS = "a late rescan result after the re-mine list was built is still re-m
 Z_CLEAR   = "being told it is finished clears the miner's hold"
 Z_OTHER   = "a hold on a different zone does not block this one"
 Z_OLD     = "an order recorded before phases were stamped is counted by the zone's phase"
+Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
+Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
+RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
 C_SHARED   = "step 1 keeps every shared channel open"
 C_FALLBACK = "a computer id with no valid channel stays on the shared one, and says so"
 C_RANGE    = "the private channel range is bounded and exact"
@@ -719,6 +722,25 @@ MUTANTS = [
     ("a late rescan result goes to the list that was already used", "central_server.lua",
      [('        if hasOre and zonePhase == "MINE" and zone.postRescan then\n',
        "        if false then\n")], Z_LATE_RS),
+
+    ("a completing job never checks for an orphaned zone", "central_server.lua",
+     [("    respawnIfOrphaned(jobId, job, state.miningZones[jobId])\n    state.miningZones[jobId] = nil\n    saveJobs()\nend\n\nfunction jobQueue.fail",
+       "    state.miningZones[jobId] = nil\n    saveJobs()\nend\n\nfunction jobQueue.fail")], Z_ORPHAN),
+
+    ("an orphaned zone is respawned silently", "central_server.lua",
+     [('        "Zone %s left with %d unmined sector(s) after %s %s and no miner left on it",',
+       '        "Zone %s respawned (%d) after %s %s",')], Z_ORPHAN),
+
+    ("the orphan check counts a live job on the zone as nobody", "central_server.lua",
+     [("                if j2key == zone.persistentKey then return end\n", "")], Z_ORPHAN),
+
+    ("a failed job no longer respawns", "central_server.lua",
+     [("    if job.status == JOB_STATUS.FAILED then\n        respawnIfOrphaned(jobId, job, zone)\n",
+       "    if false then\n        respawnIfOrphaned(jobId, job, zone)\n")], RESPAWN),
+
+    ("hand-outs are not logged", "central_server.lua",
+     [('    logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",\n',
+       '    (function() end)(string.format("Assigned sector (%d,%d)%s to %s [%s]",\n')], Z_LOGGED),
 
     # -- Per-turtle channel, step 1 ----------------------------------------
     ("the turtle never adds its own channel", "turtle_base.lua",

@@ -1601,6 +1601,48 @@ function jobQueue.progress(jobId, status, detail)
     jobQueue._hist(jobId, "progress", string.format("[%s] %s", status, detail or ""))
 end
 
+-- A ZONE NOBODY IS LEFT ON. Called as a MINE job ends, before its zone
+-- reference is dropped. If sectors remain in any list and no other live MINE job
+-- covers the zone, say so and queue one replacement -- otherwise the sectors
+-- are simply never mined.
+--
+-- Two ways to get here with work left: the job failed holding a sector (the
+-- failure path requeues it), or -- since 1.9.110 -- the job was sent
+-- MINE_COMPLETE because every remaining sector was held by another miner, and
+-- that holder then failed while this job was still on its way home, so the
+-- failure saw this job as live and respawned nothing.
+--
+-- The WARN line is a gate finding (tools/gate_check.py): a zone that needed a
+-- replacement did not finish on the miners it was given.
+local function respawnIfOrphaned(jobId, job, zone)
+    if not (job and job.type == proto.JOB.MINE and zone and zone.persistentKey) then return end
+    local remaining = #(zone.pending or {}) + #(zone.surveySectors or {})
+                    + #(zone.rescanSectors or {})
+    if remaining == 0 then return end
+    for jid2, j2 in pairs(state.jobs) do
+        if jid2 ~= jobId and j2.type == proto.JOB.MINE then
+            local st = j2.status
+            if st == JOB_STATUS.PENDING or st == JOB_STATUS.ASSIGNED or st == JOB_STATUS.IN_PROGRESS then
+                local j2zone = state.miningZones[jid2]
+                local j2key  = (j2.params and j2.params.sharedZoneKey)
+                            or (j2zone and j2zone.persistentKey)
+                if j2key == zone.persistentKey then return end
+            end
+        end
+    end
+    local p = job.params or {}
+    local newId = server.submitJob(proto.JOB.MINE, {
+        x1 = p.x1, z1 = p.z1, x2 = p.x2, z2 = p.z2,
+        sharedZoneKey = zone.persistentKey,
+    }, job.priority or 5)
+    logWarn(string.format(
+        "Zone %s left with %d unmined sector(s) after %s %s and no miner left on it",
+        zone.persistentKey, remaining, jobId, string.lower(job.status or "?")))
+    logInfo(string.format(
+        "Auto-respawn: %s → zone %s (%d sectors remain, replaced %s)",
+        newId, zone.persistentKey, remaining, jobId))
+end
+
 function jobQueue.complete(jobId)
     local job = state.jobs[jobId]
     if not job then return end
@@ -1641,6 +1683,7 @@ function jobQueue.complete(jobId)
             -- It will send its own JOB_COMPLETE message which will free it correctly.
         end
     end
+    respawnIfOrphaned(jobId, job, state.miningZones[jobId])
     state.miningZones[jobId] = nil
     saveJobs()
 end
@@ -1730,36 +1773,9 @@ function jobQueue.fail(jobId, reason, recoverable)
             cancelJobInline(job.linkedJob)
         end
     end
-    -- Auto-respawn: if this zone is now orphaned (no other pending/active MINE
-    -- jobs covering it) but still has sectors remaining, queue one replacement.
-    if job.status == JOB_STATUS.FAILED and zone and zone.persistentKey then
-        local remaining = zone.pending and #zone.pending or 0
-        if remaining > 0 then
-            local otherActive = 0
-            for jid2, j2 in pairs(state.jobs) do
-                if jid2 ~= jobId and j2.type == proto.JOB.MINE then
-                    local s = j2.status
-                    if s == JOB_STATUS.PENDING or s == JOB_STATUS.ASSIGNED or s == JOB_STATUS.IN_PROGRESS then
-                        local j2zone = state.miningZones[jid2]
-                        local j2key  = (j2.params and j2.params.sharedZoneKey)
-                                    or (j2zone and j2zone.persistentKey)
-                        if j2key == zone.persistentKey then
-                            otherActive = otherActive + 1
-                        end
-                    end
-                end
-            end
-            if otherActive == 0 then
-                local p = job.params or {}
-                local newId = server.submitJob(proto.JOB.MINE, {
-                    x1 = p.x1, z1 = p.z1, x2 = p.x2, z2 = p.z2,
-                    sharedZoneKey = zone.persistentKey,
-                }, job.priority or 5)
-                logInfo(string.format(
-                    "Auto-respawn: %s → zone %s (%d sectors remain, replaced %s)",
-                    newId, zone.persistentKey, remaining, jobId))
-            end
-        end
+    -- Auto-respawn: a zone left with sectors and nobody on it gets a replacement.
+    if job.status == JOB_STATUS.FAILED then
+        respawnIfOrphaned(jobId, job, zone)
     end
     state.miningZones[jobId] = nil
     saveJobs()
@@ -2175,7 +2191,14 @@ end
 
 -- The phase is recorded WITH the order, so the completion is counted as what
 -- was handed out, not as whatever the shared zone has moved on to since.
+--
+-- Every hand-out is logged here, in one shape, so a gate can rebuild who held
+-- what: the reply to a SECTOR_DONE used to go unlogged, and the miners' own
+-- TRAVELLING lines are lost in comms gaps.
 local function recordAssignment(zone, minerId, jobId, sector, isSurvey)
+    local phase = zone.phase or "MINE"
+    logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",
+        sector.x, sector.z, phase ~= "MINE" and (" [" .. phase .. "]") or "", minerId, jobId))
     zone.lastAssignments = zone.lastAssignments or {}
     zone.lastAssignments[minerId] = { x = sector.x, z = sector.z, isSurvey = isSurvey,
                                       phase = zone.phase or "MINE", jobId = jobId,
@@ -2734,8 +2757,6 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
             jobId, zone.done, zone.total, msg.from))
         mineComplete(zone, jobId, msg.from)
     else
-        logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",
-            sector.x, sector.z, isSurvey and " [SURVEY]" or "", msg.from, jobId))
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
             proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
         recordAssignment(zone, msg.from, jobId, sector, isSurvey)
