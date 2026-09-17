@@ -1306,10 +1306,11 @@ end
 --
 -- Return a holder's in-flight sector to the pool and drop its claim.
 --
--- Assignment was ALWAYS exclusive: nextSector POPS from zone.pending, so a held
--- sector simply is not in the pool and cannot be issued twice. The gap was never
--- double-issue, it was RELEASE -- a holder that died took its sector out of the
--- world with it.
+-- Popping a sector from its list keeps it out of THAT list, but a zone has
+-- three (survey, mine, rescan), and the same sector was issued from two of them
+-- to two miners (job_0058). Since 1.9.110 popUnheld refuses any sector another
+-- live miner holds, in every phase. This function covers the other gap,
+-- RELEASE -- a holder that died took its sector out of the world with it.
 --
 -- jobQueue.reassign looks like it handles this by dropping the runtime zone
 -- (state.miningZones[jobId] = nil) for a clean rebuild. That works for a solo
@@ -2130,11 +2131,72 @@ local function ensureMineZone(jobId, params)
         preDone > 0 and string.format(" [resuming: %d already done]", preDone) or ""))
 end
 
--- Pop the next unassigned sector for a turtle, or nil if all done.
-local function nextSector(jobId)
-    local zone = state.miningZones[jobId]
-    if not zone or #zone.pending == 0 then return nil end
-    return table.remove(zone.pending, 1)
+-- ─── Who holds which sector ─────────────────────────────────────────────────
+--
+-- zone.lastAssignments[miner] is the order that miner is working on. It was
+-- only trustworthy from 1.9.109: before that every miner held a spare copy of
+-- its first order and ran one order behind, so this record was one ahead of
+-- the truth, and two miners were sent into one column (job_0058). With the
+-- record honest, it is the one place that can say a sector is taken.
+--
+-- A hold counts only while the holder's job is live and on THIS zone: a failed
+-- or finished job must not keep a sector out of reach for ever.
+local function holderJobActive(zone, minerId, la)
+    local jobId = la.jobId or (state.registry[minerId] and state.registry[minerId].jobId)
+    local job   = jobId and state.jobs[jobId]
+    if not job or (job.status ~= "ASSIGNED" and job.status ~= "IN_PROGRESS") then
+        return false
+    end
+    return state.miningZones[jobId] == zone
+end
+
+local function sectorHolder(zone, x, z, exceptMiner)
+    for id, la in pairs(zone.lastAssignments or {}) do
+        if id ~= exceptMiner and la.x == x and la.z == z and holderJobActive(zone, id, la) then
+            return id, la
+        end
+    end
+    return nil
+end
+
+-- Take the first sector in `list` that no OTHER miner holds, in any phase.
+-- Returns sector, false -- or nil, true when sectors remain but every one is
+-- held, which is NOT the same as the list being empty: an empty list moves the
+-- zone to its next phase, a blocked one must not.
+local function popUnheld(list, zone, minerId)
+    if not list then return nil, false end
+    for i = 1, #list do
+        if not sectorHolder(zone, list[i].x, list[i].z, minerId) then
+            return table.remove(list, i), false
+        end
+    end
+    return nil, #list > 0
+end
+
+-- The phase is recorded WITH the order, so the completion is counted as what
+-- was handed out, not as whatever the shared zone has moved on to since.
+local function recordAssignment(zone, minerId, jobId, sector, isSurvey)
+    zone.lastAssignments = zone.lastAssignments or {}
+    zone.lastAssignments[minerId] = { x = sector.x, z = sector.z, isSurvey = isSurvey,
+                                      phase = zone.phase or "MINE", jobId = jobId,
+                                      assignedAt = os.epoch("utc") }
+end
+
+-- A miner told it is finished holds nothing any more.
+local function mineComplete(zone, jobId, minerId)
+    if zone and zone.lastAssignments then zone.lastAssignments[minerId] = nil end
+    sendTo(minerId, proto.MSG.MINE_COMPLETE, { jobId = jobId })
+end
+
+-- Every remaining sector is held by another miner. Silence is not an option:
+-- the miner gives up after ~50 s and goes home as a timeout. The holders will
+-- finish those sectors, so this miner is done.
+local function completeBlocked(zone, jobId, minerId)
+    logInfo(string.format(
+        "Zone %s: every remaining %s sector is held by another miner — MINE_COMPLETE to %s",
+        jobId, zone.phase or "MINE", minerId))
+    mineComplete(zone, jobId, minerId)
+    saveMiningZones()
 end
 
 -- ─── Role Map ────────────────────────────────────────────────────────────────
@@ -2650,28 +2712,33 @@ handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
     end
 
     -- Dispatch first sector (or after reconnect): check survey vs mine phase
-    local sector, isSurvey
+    local sector, isSurvey, blocked
     if zone.phase == "SURVEY" and zone.surveySectors and #zone.surveySectors > 0 then
-        sector   = table.remove(zone.surveySectors, 1)
+        sector, blocked = popUnheld(zone.surveySectors, zone, msg.from)
+        isSurvey = true
+    elseif zone.phase == "RESCAN" and zone.rescanSectors and #zone.rescanSectors > 0 then
+        -- A request during RESCAN used to pop the (empty) mine list and send
+        -- MINE_COMPLETE while rescans were still waiting to be done.
+        sector, blocked = popUnheld(zone.rescanSectors, zone, msg.from)
         isSurvey = true
     else
         if zone.phase == "SURVEY" then zone.phase = "MINE" end
-        sector   = nextSector(jobId)
+        sector, blocked = popUnheld(zone.pending, zone, msg.from)
         isSurvey = false
     end
 
-    if not sector then
+    if blocked then
+        completeBlocked(zone, jobId, msg.from)
+    elseif not sector then
         logInfo(string.format("Zone %s exhausted (%d/%d sectors) — sending MINE_COMPLETE to %s",
             jobId, zone.done, zone.total, msg.from))
-        sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = jobId })
+        mineComplete(zone, jobId, msg.from)
     else
         logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",
             sector.x, sector.z, isSurvey and " [SURVEY]" or "", msg.from, jobId))
         sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
             proto.payloadSectorAssign(jobId, sector.x, sector.z, nil, isSurvey))
-        zone.lastAssignments = zone.lastAssignments or {}
-        zone.lastAssignments[msg.from] = { x = sector.x, z = sector.z, isSurvey = isSurvey,
-                                          assignedAt = os.epoch("utc") }
+        recordAssignment(zone, msg.from, jobId, sector, isSurvey)
         saveMiningZones()
     end
 end
@@ -2715,12 +2782,24 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         end
     end
 
-    -- Fold this sector's duration into the current phase's mean BEFORE anything
-    -- below reassigns lastAssignments, which is where assignedAt lives.
-    do
-        local la = zone.lastAssignments and zone.lastAssignments[msg.from]
-        recordSectorTime(zone, zone.phase, la and la.assignedAt)
+    -- WHICH PHASE THIS COMPLETION BELONGS TO: the one the order was handed out
+    -- in. Jobs on one zone share the zone table, so one miner emptying a list
+    -- moves the phase for all of them, and the other miner's order still in
+    -- progress then finishes under the new phase. Read by zone.phase, a survey
+    -- finished after the switch counted as a mined sector with 0 ore, and a
+    -- mined sector finished after the switch counted as a rescan -- queued for
+    -- re-mining and never merged to the zone store (job_0058/0059, job_0061).
+    -- An order recorded before phases were stamped falls back to zone.phase.
+    local zonePhase = zone.phase or "MINE"
+    local doneLa    = zone.lastAssignments and zone.lastAssignments[msg.from]
+    local donePhase = zonePhase
+    if doneLa and doneLa.phase and doneLa.x == p.sectorX and doneLa.z == p.sectorZ then
+        donePhase = doneLa.phase
     end
+
+    -- Fold this sector's duration into its phase's mean BEFORE anything
+    -- below reassigns lastAssignments, which is where assignedAt lives.
+    recordSectorTime(zone, donePhase, doneLa and doneLa.assignedAt)
 
     -- Count DISTINCT sectors, not SECTOR_DONE messages. A sector that fails and
     -- is re-dispatched (loader_no_beacon, a timeout, a crash mid-sector) reports
@@ -2730,16 +2809,16 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     -- reported done once during SURVEY and again during MINE, and those are
     -- two different counters.
     zone.doneKeys = zone.doneKeys or {}
-    local sectorKey = (zone.phase or "MINE") .. ":" .. p.sectorX .. "," .. p.sectorZ
+    local sectorKey = donePhase .. ":" .. p.sectorX .. "," .. p.sectorZ
     local alreadyCounted = zone.doneKeys[sectorKey]
     zone.doneKeys[sectorKey] = true
 
-    if zone.phase == "SURVEY" then
+    if donePhase == "SURVEY" then
         if not alreadyCounted then zone.surveyDone = zone.surveyDone + 1 end
         logInfo(string.format("Survey (%d,%d) done by %s [%s: %d/%d surveyed]",
             p.sectorX, p.sectorZ, msg.from, p.jobId, zone.surveyDone, zone.surveyTotal))
 
-    elseif zone.phase == "RESCAN" then
+    elseif donePhase == "RESCAN" then
         -- Accumulate per-sector rescan results (foundOres is deduplicated in ore_turtle)
         zone.rescanFound = zone.rescanFound or {}
         if type(p.foundOres) == "table" then
@@ -2748,7 +2827,18 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             end
         end
         local hasOre = type(p.foundOres) == "table" and next(p.foundOres) ~= nil
-        if hasOre then
+        if hasOre and zonePhase == "MINE" and zone.postRescan then
+            -- The re-mine list was already built from rescanPending; a late
+            -- rescan result goes straight onto it or it is never mined.
+            local queued = false
+            for _, s in ipairs(zone.pending or {}) do
+                if s.x == p.sectorX and s.z == p.sectorZ then queued = true; break end
+            end
+            if not queued then
+                zone.pending = zone.pending or {}
+                table.insert(zone.pending, { x = p.sectorX, z = p.sectorZ })
+            end
+        elseif hasOre then
             zone.rescanPending = zone.rescanPending or {}
             table.insert(zone.rescanPending, { x = p.sectorX, z = p.sectorZ })
         end
@@ -2767,15 +2857,22 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             p.sectorX, p.sectorZ, msg.from, p.oreCount or 0,
             p.jobId, zone.done, zone.total))
     end
+    if donePhase ~= zonePhase then
+        -- Rare by construction and the evidence the fix is exercised at all:
+        -- a validating job counts only if this line appears.
+        logInfo(string.format(
+            "Late completion: %s finished (%d,%d) assigned in %s; zone is now %s — counted as %s [%s]",
+            msg.from, p.sectorX, p.sectorZ, donePhase, zonePhase, donePhase, p.jobId))
+    end
     jobQueue.progress(p.jobId, proto.STATUS.WORKING,
         string.format("sector (%d,%d) done — %d ore", p.sectorX, p.sectorZ, p.oreCount or 0))
 
     -- ── Dispatch next sector ──────────────────────────────────────────────────
-    local nextSect, isNextSurvey
+    local nextSect, isNextSurvey, blocked
 
     if zone.phase == "SURVEY" then
         if #zone.surveySectors > 0 then
-            nextSect     = table.remove(zone.surveySectors, 1)
+            nextSect, blocked = popUnheld(zone.surveySectors, zone, msg.from)
             isNextSurvey = true
         elseif zone.surveyOnly then
             -- Survey-only mode: persist surveyed status and complete
@@ -2785,7 +2882,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
                 savePersistentZones(zone.persistentKey)
             end
             logInfo(string.format("Zone %s survey complete (survey-only) — MINE_COMPLETE", p.jobId))
-            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            mineComplete(zone, p.jobId, msg.from)
             return
         else
             -- Normal: switch to mine phase
@@ -2793,13 +2890,13 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             zone.startTime = os.epoch("utc")
             logInfo(string.format("Zone %s survey complete (%d sectors) — starting mine phase",
                 p.jobId, zone.surveyTotal))
-            nextSect     = nextSector(p.jobId)
+            nextSect, blocked = popUnheld(zone.pending, zone, msg.from)
             isNextSurvey = false
         end
 
     elseif zone.phase == "RESCAN" then
         if #(zone.rescanSectors or {}) > 0 then
-            nextSect     = table.remove(zone.rescanSectors, 1)
+            nextSect, blocked = popUnheld(zone.rescanSectors, zone, msg.from)
             isNextSurvey = true
         else
             -- Rescan pass complete. The wholesale `zone.oreFound = mined +
@@ -2826,18 +2923,23 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
                 zone.postRescan    = true   -- one rescan pass max; mine exhaustion → complete
                 logInfo(string.format("Zone %s rescan found ore in %d sector(s) — re-mining",
                     p.jobId, #remaining))
-                nextSect     = nextSector(p.jobId)
+                nextSect, blocked = popUnheld(zone.pending, zone, msg.from)
                 isNextSurvey = false
             else
                 logInfo(string.format("Zone %s rescan clean — MINE_COMPLETE", p.jobId))
-                sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+                mineComplete(zone, p.jobId, msg.from)
                 return
             end
         end
 
     else  -- MINE phase
-        nextSect     = nextSector(p.jobId)
+        nextSect, blocked = popUnheld(zone.pending, zone, msg.from)
         isNextSurvey = false
+    end
+
+    if blocked then
+        completeBlocked(zone, p.jobId, msg.from)
+        return
     end
 
     if not nextSect then
@@ -2846,19 +2948,31 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             logInfo(string.format(
                 "Zone %s targeted mine exhausted (%d/%d) — MINE_COMPLETE to %s",
                 p.jobId, zone.done, zone.total, msg.from))
-            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            mineComplete(zone, p.jobId, msg.from)
             return
         end
         -- Already did one rescan pass — don't loop
         if zone.postRescan then
             logInfo(string.format("Zone %s re-mine exhausted — MINE_COMPLETE to %s", p.jobId, msg.from))
-            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            mineComplete(zone, p.jobId, msg.from)
             return
         end
-        -- Mine phase exhausted — build rescan list from the full sector grid
-        local rescanSectors = {}
+        -- Mine phase exhausted — build rescan list from the full sector grid,
+        -- LESS every sector another miner is still working. Rescanning a column
+        -- while it is being mined put two turtles two blocks apart (job_0058,
+        -- 00:41); the holder's own completion arrives later and is counted as
+        -- the MINE it was.
+        local rescanSectors, heldOut = {}, 0
         for _, s in ipairs(zone.allSectors or {}) do
-            table.insert(rescanSectors, { x = s.x, z = s.z })
+            if sectorHolder(zone, s.x, s.z, msg.from) then
+                heldOut = heldOut + 1
+            else
+                table.insert(rescanSectors, { x = s.x, z = s.z })
+            end
+        end
+        if heldOut > 0 then
+            logInfo(string.format("Zone %s rescan leaves out %d sector(s) still held by another miner",
+                p.jobId, heldOut))
         end
         -- Shuffle
         for i = #rescanSectors, 2, -1 do
@@ -2867,7 +2981,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
         end
         if #rescanSectors == 0 then
             logInfo(string.format("Zone %s exhausted — sending MINE_COMPLETE to %s", p.jobId, msg.from))
-            sendTo(msg.from, proto.MSG.MINE_COMPLETE, { jobId = p.jobId })
+            mineComplete(zone, p.jobId, msg.from)
         else
             zone.phase         = "RESCAN"
             zone.rescanSectors = rescanSectors
@@ -2880,9 +2994,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
             local first = table.remove(zone.rescanSectors, 1)
             sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
                 proto.payloadSectorAssign(p.jobId, first.x, first.z, nil, true))
-            zone.lastAssignments = zone.lastAssignments or {}
-            zone.lastAssignments[msg.from] = { x = first.x, z = first.z, isSurvey = true,
-                                               assignedAt = os.epoch("utc") }
+            recordAssignment(zone, msg.from, p.jobId, first, true)
             saveMiningZones()
         end
         return
@@ -2890,9 +3002,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
 
     sendTo(msg.from, proto.MSG.SECTOR_ASSIGN,
         proto.payloadSectorAssign(p.jobId, nextSect.x, nextSect.z, nil, isNextSurvey))
-    zone.lastAssignments = zone.lastAssignments or {}
-    zone.lastAssignments[msg.from] = { x = nextSect.x, z = nextSect.z, isSurvey = isNextSurvey,
-                                      assignedAt = os.epoch("utc") }
+    recordAssignment(zone, msg.from, p.jobId, nextSect, isNextSurvey)
     saveMiningZones()
 end
 
@@ -4999,6 +5109,7 @@ if _G.__CC_SERVER_TEST then
         -- fallback that keeps a mixed-version fleet from re-sending for ever.
         logSelect = logSelect,
         noteBridgeBoot = noteBridgeBoot,
+        sectorHolder   = sectorHolder,
     }
     return server
 end

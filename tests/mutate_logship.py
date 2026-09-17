@@ -119,6 +119,18 @@ T_RESTART = "a server restart that re-uses a sequence number does not trip the c
 T_BOUND   = "the recent-message list is bounded, and forgetting a message can only deliver it twice, never drop it"
 T_ENCODE  = "every send encodes a new message on the spot (SOURCE-ONLY, weaker)"
 T_OTHER   = "an order that arrives while the job waits for something else is filed once"
+# Two miners on one zone (1.9.110).
+Z_SURVEY  = "a survey finished after the zone moved to MINE is counted as a survey, and says so"
+Z_MINE    = "a mine sector finished after the zone moved to RESCAN is merged as MINE, not queued for re-mining"
+Z_RESCAN  = "the rescan list leaves out a sector another miner is still mining"
+Z_HELD    = "no phase hands out a sector another miner holds"
+Z_REQ     = "a request during RESCAN is served from the rescan list"
+Z_BLOCK   = "when every remaining sector is held, the miner is told it is finished and the phase stays"
+Z_FAILED  = "a hold ends with its job: a failed holder does not block the sector"
+Z_LATE_RS = "a late rescan result after the re-mine list was built is still re-mined"
+Z_CLEAR   = "being told it is finished clears the miner's hold"
+Z_OTHER   = "a hold on a different zone does not block this one"
+Z_OLD     = "an order recorded before phases were stamped is counted by the zone's phase"
 C_SHARED   = "step 1 keeps every shared channel open"
 C_FALLBACK = "a computer id with no valid channel stays on the shared one, and says so"
 C_RANGE    = "the private channel range is bounded and exact"
@@ -659,6 +671,54 @@ MUTANTS = [
     ("a server send re-transmits a stored message", "central_server.lua",
      [("    local msg = proto.encode(msgType, \"server\", turtleId, payload)\n",
        "    local msg = state.lastSent or {}\n    state.lastSent = msg\n")], T_ENCODE),
+
+    # -- Two miners on one zone -------------------------------------------------
+    ("completions are classified by the zone's current phase again", "central_server.lua",
+     [("        donePhase = doneLa.phase\n", "        donePhase = zonePhase\n")], Z_SURVEY),
+
+    ("the same, seen from a late MINE", "central_server.lua",
+     [("        donePhase = doneLa.phase\n", "        donePhase = zonePhase\n")], Z_MINE),
+
+    ("the late-completion line is never written", "central_server.lua",
+     [("    if donePhase ~= zonePhase then\n", "    if false then\n")], Z_SURVEY),
+
+    ("assignments stop recording their phase", "central_server.lua",
+     [('                                      phase = zone.phase or "MINE", jobId = jobId,\n',
+       '                                      jobId = jobId,\n')], Z_SURVEY),
+
+    ("an unstamped order is trusted anyway", "central_server.lua",
+     [("    if doneLa and doneLa.phase and doneLa.x == p.sectorX",
+       "    if doneLa and doneLa.x == p.sectorX")], Z_OLD),
+
+    ("the rescan list includes held sectors", "central_server.lua",
+     [("            if sectorHolder(zone, s.x, s.z, msg.from) then\n",
+       "            if false then\n")], Z_RESCAN),
+
+    ("sectors are handed out whoever holds them", "central_server.lua",
+     [("        if not sectorHolder(zone, list[i].x, list[i].z, minerId) then\n",
+       "        if true then\n")], Z_HELD),
+
+    ("a blocked list reads as an empty one", "central_server.lua",
+     [("    return nil, #list > 0\n", "    return nil, false\n")], Z_BLOCK),
+
+    ("a failed job keeps its hold", "central_server.lua",
+     [('    if not job or (job.status ~= "ASSIGNED" and job.status ~= "IN_PROGRESS") then\n',
+       "    if not job then\n")], Z_FAILED),
+
+    ("a hold on another zone counts", "central_server.lua",
+     [("    return state.miningZones[jobId] == zone\n", "    return true\n")], Z_OTHER),
+
+    ("finishing does not clear the hold", "central_server.lua",
+     [("    if zone and zone.lastAssignments then zone.lastAssignments[minerId] = nil end\n", "")],
+     Z_CLEAR),
+
+    ("a RESCAN request pops the mine list again", "central_server.lua",
+     [('    elseif zone.phase == "RESCAN" and zone.rescanSectors and #zone.rescanSectors > 0 then\n',
+       '    elseif false then\n')], Z_REQ),
+
+    ("a late rescan result goes to the list that was already used", "central_server.lua",
+     [('        if hasOre and zonePhase == "MINE" and zone.postRescan then\n',
+       "        if false then\n")], Z_LATE_RS),
 
     # -- Per-turtle channel, step 1 ----------------------------------------
     ("the turtle never adds its own channel", "turtle_base.lua",

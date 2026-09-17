@@ -32,6 +32,7 @@ local files = {
     "tests.test_server_zones",
     "tests.test_bridge_push_order",
     "tests.test_silent_waits",
+    "tests.test_zone_phase",
 }
 
 local passed, failed = 0, 0
