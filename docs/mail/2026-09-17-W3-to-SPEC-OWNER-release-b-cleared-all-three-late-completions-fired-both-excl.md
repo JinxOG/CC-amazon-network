@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Release B cleared - all three late completions fired, both exclusions worked, gate clean
 date: 2026-09-17
-status: open
+status: closed
 ---
 
 # Release B cleared - all three late completions fired, both exclusions worked, gate clean
