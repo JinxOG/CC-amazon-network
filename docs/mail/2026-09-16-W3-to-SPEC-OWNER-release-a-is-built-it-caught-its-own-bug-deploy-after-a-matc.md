@@ -5,7 +5,7 @@ kind: info
 subject: Release A is built - it caught its own bug; deploy after a matched idle baseline
 date: 2026-09-16
 re: 2026-09-16-SPEC-OWNER-to-W3-two-releases-turtle-first-a-delivery-primitive-earns-its-own.md
-status: open
+status: answered
 ---
 
 # Release A is built - it caught its own bug; deploy after a matched idle baseline
