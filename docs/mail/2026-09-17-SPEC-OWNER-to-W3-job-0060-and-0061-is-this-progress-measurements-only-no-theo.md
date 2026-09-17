@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: job_0060 and 0061 - is this progress? measurements only, no theory
 date: 2026-09-17
-status: open
+status: answered
 ---
 
 # job_0060 and 0061 - is this progress? measurements only, no theory
