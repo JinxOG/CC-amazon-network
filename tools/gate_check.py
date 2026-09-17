@@ -111,9 +111,9 @@ print("\n[2] REPEATED SECTORS")
 print("    A repeat only means a STALE REPLAY if that miner re-registered within")
 print("    about one sector's work before the FIRST completion -- the replay waits")
 print("    in the miner's inbox until its next SECTOR_DONE. Repeats with no recent")
-print("    re-link have some other, normal cause: job_0051 had one 746 minutes from")
-print("    any re-link, with zero disconnects for the whole job. Counting bare")
-print("    repeats as the bug is a false positive, and this gate did exactly that.")
+print("    re-link are a different fault, not a normal event: up to 1.9.108 a miner")
+print("    could hold two copies of one order (both turtle loops filed it), so it")
+print("    ran the sector twice back to back. That is section [2b], fixed in 1.9.109.")
 d = logs("node=server&contains=done%20by")
 done = collections.defaultdict(list)
 for l in d.get("lines", []):
@@ -144,7 +144,7 @@ if completions == 0:
 else:
     print("    short-gap repeats       : %d" % (len(short) + len(benign)))
     print("      with a recent re-link : %d  <- candidate stale replays" % len(short))
-    print("      no recent re-link     : %d  <- not the bug" % len(benign))
+    print("      no recent re-link     : %d  <- not a replay; see [2b]" % len(benign))
     for k, gap, node, mins in short:
         print("        %s (%s,%s) by %s, gap %.1fm, re-link %.0fm earlier  <-- FAULT"
               % (k[0], k[1], k[2], node, gap, mins))
@@ -154,6 +154,40 @@ else:
               % (k[0], k[1], k[2], node, gap, ago))
     if short:
         fails.append("stale-sector replays: %d" % len(short))
+
+print("\n[2b] FIRST ORDER DOUBLED  (release A, 1.9.109: must be 0)")
+print("    Up to 1.9.108 every miner held a spare copy of its first sector order,")
+print("    so its first sector was reported done twice in a row (21 of 22 jobs,")
+print("    job_0037..job_0059). Only jobs ACCEPTED inside the window are judged:")
+print("    for a job that started earlier, the window does not show its first order.")
+started = set()
+for l in logs("node=server&contains=accepted%20by").get("lines", []):
+    m = re.search(r"Job (job_\d+) accepted by (node_\d+)", l.get("msg") or "")
+    if m:
+        started.add((m.group(1), m.group(2)))
+firsts = collections.defaultdict(list)
+for l in d.get("lines", []):
+    m = re.search(r"(?:Survey|Sector|Rescan) \((\-?\d+),(\-?\d+)\) done by (node_\d+).*\[(job_\d+)",
+                  l.get("msg") or "")
+    if m and (m.group(4), m.group(3)) in started:
+        firsts[(m.group(4), m.group(3))].append((p_ts(l["ts"]), m.group(1) + "," + m.group(2)))
+judged = doubled = 0
+for k, v in sorted(firsts.items()):
+    v.sort()
+    if len(v) < 2:
+        continue
+    judged += 1
+    if v[0][1] == v[1][1]:
+        doubled += 1
+        print("        %s %s first sector (%s) done twice, %.1fm apart  <-- FAULT"
+              % (k[0], k[1], v[0][1], (v[1][0] - v[0][0]).total_seconds() / 60))
+print("    job/miner pairs judged  : %d" % judged)
+print("    first order doubled     : %d" % doubled)
+if judged == 0:
+    notes.append("no job started in window with two completions -- [2b] proved nothing")
+    print("    NO EVIDENCE: no job started in this window. Not a pass.")
+if doubled:
+    fails.append("first order doubled: %d of %d" % (doubled, judged))
 
 print("\n[3] DISCONNECTS  (known open fault -- recorded, not gating)")
 L = sorted(logs("contains=Server%20unreachable")["lines"], key=lambda l: p_ts(l["ts"]))

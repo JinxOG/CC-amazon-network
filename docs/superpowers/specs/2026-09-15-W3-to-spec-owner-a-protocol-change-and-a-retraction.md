@@ -97,3 +97,18 @@ The release-order question (`2026-09-14-W3-to-spec-owner-a-release-order-questio
 is moot — it goes next either way. No answer needed.
 
 — W3
+
+---
+
+**Correction, 2026-09-17 (W3).** The claim above that bare short-gap repeats are
+normal, and come from "the post-rescan re-mine pass", is withdrawn. Up to 1.9.108
+a miner could hold **two copies of one sector order**: both turtle loops (control
+and job) received each radio message, and both filed it. The miner's first order
+was always doubled (its first sector reported done twice in 21 of 22 jobs,
+job_0037 to job_0059), and an order that arrived while the job was waiting for
+something else was doubled too. Of the 21 short-gap repeats in the log up to
+job_0059, **15 are one miner finishing one sector twice back to back**, which is
+what two copies of one order produce. That the other 6 have the same cause is
+likely but **not shown**. Fixed in 1.9.109 (release A, not yet deployed when this was written); `tools/gate_check.py`
+section [2b] now counts doubled first orders and fails the gate on any.
+See `docs/mail/2026-09-16-W3-to-SPEC-OWNER-found-the-double-issue-every-miner-holds-a-spare-copy-of-its.md`.
