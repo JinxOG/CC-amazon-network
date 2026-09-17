@@ -43,9 +43,12 @@ if len(sys.argv) < 2:
     print("usage: ack_loss.py <since-ISO> [until-ISO]")
     sys.exit(2)
 since = sys.argv[1]
+# Accepts a trailing Z or not: a background run once died on "...Z+00:00" and
+# printed nothing, which read like an empty result.
+since = since.rstrip("Z")
 t0 = datetime.datetime.fromisoformat(since + "+00:00")
 now = datetime.datetime.fromtimestamp(get(f"{B}/state")["serverTime"] / 1000, datetime.UTC)
-t1 = datetime.datetime.fromisoformat(sys.argv[2] + "+00:00") if len(sys.argv) > 2 else now
+t1 = datetime.datetime.fromisoformat(sys.argv[2].rstrip("Z") + "+00:00") if len(sys.argv) > 2 else now
 
 days, d = [], t0.date()
 while d <= t1.date():
@@ -82,8 +85,11 @@ for l in acc:
     if m:
         job_node[m.group(1)] = m.group(2)
         job_start[m.group(1)] = ts(l["ts"])       # latest acceptance wins (retries)
-for l in comp:
-    m = re.search(r"Job complete: (job_\d+)", l.get("msg") or "")
+# A job that FAILED has ended too. Counting only "Job complete" once left
+# node_139 classed as working for hours after job_0058 failed.
+failed = logs("node=server&contains=Job%20permanently%20failed", lookback_hours=24)
+for l in comp + failed:
+    m = re.search(r"Job (?:complete|permanently failed): (job_\d+)", l.get("msg") or "")
     if m:
         job_end[m.group(1)] = ts(l["ts"])
 windows = collections.defaultdict(list)
