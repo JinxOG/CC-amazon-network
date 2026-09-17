@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: job_0058 FAILED - a zone-phase bug, not step 1 - step 2 is held
 date: 2026-09-17
-status: open
+status: answered
 ---
 
 # job_0058 failed — a zone-phase bug, not step 1
