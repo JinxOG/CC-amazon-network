@@ -5,7 +5,7 @@ kind: info
 subject: Release A live - first order no longer doubled; the late misread fired at 05:47 and is not rare
 date: 2026-09-16
 re: 2026-09-16-SPEC-OWNER-to-W3-two-releases-turtle-first-a-delivery-primitive-earns-its-own.md
-status: open
+status: closed
 ---
 
 # Release A live - first order no longer doubled; the late misread fired at 05:47 and is not rare
