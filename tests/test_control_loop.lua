@@ -2433,13 +2433,51 @@ function(assert_eq)
         for i, line in ipairs(lines) do
             if line:find("proto.send(", 1, true) and not line:find("function proto.send", 1, true) then
                 checked = checked + 1
-                local window = table.concat(lines, NL, math.max(1, i - 3), math.min(#lines, i + 1))
+                -- The enclosing function, back to its header: a comment between
+                -- the encode and the send must not hide either.
+                local from = i
+                while from > 1 and not lines[from]:find("function", 1, true) do from = from - 1 end
+                local window = table.concat(lines, NL, from, math.min(#lines, i + 1))
                 assert_eq(window:find("proto.encode(", 1, true) ~= nil, true,
                     file .. ":" .. i .. " sends a message it did not just encode")
             end
         end
     end
     assert_eq(checked >= 12, true, "found only " .. checked .. " send sites; the search is broken")
+end
+
+-- A lost JOB_COMPLETE (job_0052, job_0061) could not be told apart from one
+-- never sent: sendComplete logged nothing. It says so now, and says when the
+-- send itself failed.
+local function completeLine(withModem)
+    clearModules()
+    if withModem then
+        stub.install({ fuel = 100000, equipped = { left = require("equipment").ITEMS.MODEM } })
+    else
+        stub.install({ fuel = 100000 })
+    end
+    gps = { locate = function() return 0, 64, 0 end }
+    local base = require("turtle_base")
+    if withModem then base.recoverModem() end
+    local lines, saved = {}, print
+    print = function(...) lines[#lines + 1] = table.concat({ ... }, " ") end
+    local ok, err = pcall(base.sendComplete, { oreCount = 1 })
+    print = saved
+    assert(ok, err)
+    for _, l in ipairs(lines) do
+        if l:find("JOB_COMPLETE sent for", 1, true) then return l end
+    end
+end
+
+suite["sendComplete says it sent, and says when the send failed"] = function(assert_eq)
+    withFakeRuntime(function()
+        local good = completeLine(true)
+        local bad  = completeLine(false)
+        assert_eq(good ~= nil, true, "a sent JOB_COMPLETE must leave a line on the turtle")
+        assert_eq(good and good:find("FAILED", 1, true) == nil, true, "and not claim a failure")
+        assert_eq(bad ~= nil and bad:find("the send FAILED", 1, true) ~= nil, true,
+            "with no modem the line must say the send failed")
+    end)
 end
 
 return suite

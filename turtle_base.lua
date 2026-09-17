@@ -2501,7 +2501,13 @@ function base.sendProgress(detail)
 end
 
 function base.sendComplete(result)
-    comms.toServer(proto.MSG.JOB_COMPLETE, proto.payloadJobComplete(_self.jobId, result))
+    -- Logged because it is fire-and-forget: job_0052 and job_0061 docked with
+    -- no "Job complete" on the server, and without this line "never sent" and
+    -- "sent and lost" look identical. It rides the log outbox, so it can arrive
+    -- after the fact even when the message itself did not.
+    local sent = comms.toServer(proto.MSG.JOB_COMPLETE, proto.payloadJobComplete(_self.jobId, result))
+    logInfo(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),
+        sent and "" or " -- the send FAILED (no modem)"))
     _self.status    = proto.STATUS.IDLE
     _self.jobId     = nil
     _self.partnerId = nil

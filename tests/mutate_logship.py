@@ -131,6 +131,7 @@ Z_LATE_RS = "a late rescan result after the re-mine list was built is still re-m
 Z_CLEAR   = "being told it is finished clears the miner's hold"
 Z_OTHER   = "a hold on a different zone does not block this one"
 Z_OLD     = "an order recorded before phases were stamped is counted by the zone's phase"
+SC_LINE   = "sendComplete says it sent, and says when the send failed"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -752,6 +753,13 @@ MUTANTS = [
     ("the late-rescan fix leaves no trace", "central_server.lua",
      [('                logInfo(string.format(\n                    "Late rescan (%d,%d)',
        '                (function() end)(string.format(\n                    "Late rescan (%d,%d)')], Z_LATE_RS),
+
+    ("sendComplete logs nothing", "turtle_base.lua",
+     [('    logInfo(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),',
+       '    (function() end)(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),')], SC_LINE),
+
+    ("sendComplete never reports a failed send", "turtle_base.lua",
+     [('        sent and "" or " -- the send FAILED (no modem)"))', '        ""))')], SC_LINE),
 
     # -- Per-turtle channel, step 1 ----------------------------------------
     ("the turtle never adds its own channel", "turtle_base.lua",

@@ -170,11 +170,14 @@ local function sendTo(turtleId, msgType, payload)
     -- still served on CH_PRIVATE, which it still opens.
     --
     -- EXACTLY ONE transmission, never both. Until step 3 a turtle listens on
-    -- both channels, so a second copy would be delivered twice -- and a second
-    -- JOB_ASSIGN reaches a turtle already busy with that job, which answers
-    -- JOB_ACK(false, "busy"), and jobQueue.acknowledge then REASSIGNS the job
-    -- away from the turtle doing it. Anything that wants to observe this
-    -- traffic must not be served by mirroring it onto CH_PRIVATE.
+    -- both channels. Since 1.9.109 it drops a second copy of the SAME encoded
+    -- message (take-once keys on sender, seq and ts), but a turtle older than
+    -- that would act on both -- and a second JOB_ASSIGN reaches a turtle already
+    -- busy with that job, which answers JOB_ACK(false, "busy"), and
+    -- jobQueue.acknowledge then REASSIGNS the job away from the turtle doing it.
+    -- It also doubles the air traffic this change exists to cut. Anything that
+    -- wants to observe this traffic must not be served by mirroring it onto
+    -- CH_PRIVATE.
     local ch = state.registry[turtleId].privateChannel or proto.CH_PRIVATE
     proto.send(state.modem, ch, msg)
 end
