@@ -111,6 +111,13 @@ RR_CTRL    = "RE_REGISTER is a control type"
 RR_BUSY    = "RE_REGISTER keeps the turtle busy, or it tests nothing"
 RR_PAY     = "the register payload still reports midJob from busy"
 C_OWN      = "a turtle opens its own channel from its computer id"
+# One radio message is taken once (1.9.109).
+T_ONCE    = "a sector order that arrives while the job waits is taken once, not twice, and the job still finds the copy the control loop filed"
+T_CTRL    = "a control message that arrives while the job waits is handled once"
+T_RESEND  = "a genuine resend of the same order is delivered, not taken for a copy"
+T_RESTART = "a server restart that re-uses a sequence number does not trip the check"
+T_BOUND   = "the recent-message list is bounded, and forgetting a message can only deliver it twice, never drop it"
+T_ENCODE  = "every send encodes a new message on the spot (SOURCE-ONLY, weaker)"
 C_SHARED   = "step 1 keeps every shared channel open"
 C_FALLBACK = "a computer id with no valid channel stays on the shared one, and says so"
 C_RANGE    = "the private channel range is bounded and exact"
@@ -615,6 +622,36 @@ MUTANTS = [
     ("midJob stops coming from busy", "turtle_base.lua",
      [("            midJob   = _self.busy,",
        "            midJob   = false,")], RR_PAY),
+
+    # -- One radio message is taken once --------------------------------------
+    ("the job's wait takes a message the control loop already took", "turtle_base.lua",
+     [("                    if firstSight(msg) then\n", "                    if true then\n")], T_ONCE),
+
+    ("the control loop acts on a message the job already took", "turtle_base.lua",
+     [("                       and firstSight(msg) then\n", "                       then\n")], T_ONCE),
+
+    ("a waiting job does not look in its inbox for what the control loop filed", "turtle_base.lua",
+     [("                    local ready2 = inboxPop(q, wantType)\n",
+       "                    local ready2 = nil\n")], T_ONCE),
+
+    ("the key ignores the sequence number", "turtle_base.lua",
+     [('tostring(msg.from) .. "|" .. tostring(msg.seq) .. "|" .. tostring(msg.ts)',
+       'tostring(msg.from) .. "|" .. tostring(msg.ts)')], T_RESEND),
+
+    ("the key ignores the timestamp", "turtle_base.lua",
+     [('tostring(msg.from) .. "|" .. tostring(msg.seq) .. "|" .. tostring(msg.ts)',
+       'tostring(msg.from) .. "|" .. tostring(msg.seq)')], T_RESTART),
+
+    ("the list is never trimmed", "turtle_base.lua",
+     [("    while #_recentKeys > RECENT_MAX do\n", "    while false do\n")], T_BOUND),
+
+    ("a trimmed key stays marked seen, so eviction drops", "turtle_base.lua",
+     [("        _recentSet[table.remove(_recentKeys, 1)] = nil\n",
+       "        table.remove(_recentKeys, 1)\n")], T_BOUND),
+
+    ("a server send re-transmits a stored message", "central_server.lua",
+     [("    local msg = proto.encode(msgType, \"server\", turtleId, payload)\n",
+       "    local msg = state.lastSent or {}\n    state.lastSent = msg\n")], T_ENCODE),
 
     # -- Per-turtle channel, step 1 ----------------------------------------
     ("the turtle never adds its own channel", "turtle_base.lua",

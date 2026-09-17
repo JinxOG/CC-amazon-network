@@ -359,6 +359,56 @@ end
 -- comment at its call site for what happened when nothing called it.
 function base.drainCtrl() return inboxDrain(_ctrlInbox) end
 
+-- ONE RADIO MESSAGE IS TAKEN ONCE.
+--
+-- base.run puts the control loop and the job under parallel.waitForAny, and
+-- both wait with an unfiltered os.pullEvent -- so parallel hands EVERY
+-- modem_message to BOTH of them. Before 1.9.109 each one acted on its copy: a
+-- sector order arriving while the job waited in pumpFor was returned to the job
+-- AND filed in the job inbox by the control loop. Every miner held a spare copy
+-- of its first order and ran one order behind the server for the whole job
+-- (21 of 22 jobs, job_0037..job_0059); the server's record of what each miner
+-- held was one order ahead of the truth, and two miners were sent into one
+-- column (job_0058 failed on it). Control messages were likewise handled twice
+-- while a job waited.
+--
+-- So whichever coroutine sees a message first takes it; the other skips it,
+-- and a waiting pumpFor still checks its inbox, because the first may have
+-- filed the message there.
+--
+-- WHY NOT A SINGLE CONSUMER (the job reading only its inbox, never the radio).
+-- It needs no key list, but it drops messages: the control loop spends time
+-- inside FILTERED yields (sleep, the fuel path, turtle movement), and an event
+-- that arrives during a filtered yield is destroyed for that coroutine. Today
+-- the job's own wait still sees it and takes it. With a single consumer
+-- nothing would. Do not "simplify" this back.
+--
+-- THE KEY is sender, sequence number and timestamp. Every sender builds a new
+-- message for every send, retries included (protocol.lua stamps a fresh seq on
+-- each encode), so a genuine resend always has a new key and is delivered. The
+-- sequence restarts at zero when a computer boots; the millisecond timestamp
+-- keeps a post-restart message from matching a pre-restart one.
+--
+-- THE LIST is short on purpose. Both coroutines see an event in the same
+-- parallel round, before any later event, so the key only has to survive one
+-- round. A key that has been forgotten reads as NEW: running out of room can
+-- only ever deliver a message twice (today's behaviour), never drop one.
+local RECENT_MAX = 16
+local _recentKeys, _recentSet = {}, {}
+local function firstSight(msg)
+    local key = tostring(msg.from) .. "|" .. tostring(msg.seq) .. "|" .. tostring(msg.ts)
+    if _recentSet[key] then return false end
+    _recentSet[key] = true
+    _recentKeys[#_recentKeys + 1] = key
+    while #_recentKeys > RECENT_MAX do
+        _recentSet[table.remove(_recentKeys, 1)] = nil
+    end
+    return true
+end
+base._firstSight   = firstSight
+base._recentCount  = function() return #_recentKeys end
+base._RECENT_MAX   = RECENT_MAX
+
 -- Pull one event, decode it, and route anything that is not what the caller
 -- asked for. Returns the matching message, or nil on timeout.
 --
@@ -384,12 +434,16 @@ local function pumpFor(q, wantType, timeout)
             if parsed then
                 local valid, msg = proto.decode(parsed)
                 if valid and (msg.to == _self.id or msg.to == "broadcast") then
-                    if wantMatches(msg, wantType)
-                       and ((CTRL_TYPES[msg.type] and q == _ctrlInbox)
-                            or (not CTRL_TYPES[msg.type] and q == _jobInbox)) then
-                        return msg
+                    if firstSight(msg) then
+                        if wantMatches(msg, wantType)
+                           and ((CTRL_TYPES[msg.type] and q == _ctrlInbox)
+                                or (not CTRL_TYPES[msg.type] and q == _jobInbox)) then
+                            return msg
+                        end
+                        routeMessage(msg)
                     end
-                    routeMessage(msg)
+                    -- Also when the other coroutine took it first: it may have
+                    -- filed it in the very queue this wait is reading.
                     local ready2 = inboxPop(q, wantType)
                     if ready2 then return ready2 end
                 end
@@ -2830,7 +2884,8 @@ function base.run(jobHandler)
                 local parsed = type(p4) == "table" and p4 or textutils.unserialise(p4)
                 if parsed then
                     local valid, msg = proto.decode(parsed)
-                    if valid and (msg.to == _self.id or msg.to == "broadcast") then
+                    if valid and (msg.to == _self.id or msg.to == "broadcast")
+                       and firstSight(msg) then
                         dispatchControl(msg)
                     end
                 end

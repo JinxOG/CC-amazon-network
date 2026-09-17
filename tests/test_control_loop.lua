@@ -2195,4 +2195,223 @@ suite["REGISTER reports the private channel (SOURCE-ONLY, weaker)"] = function(a
         .. "and the server has nothing correct to send to")
 end
 
+-- ── One radio message is taken once ─────────────────────────────────────────
+--
+-- On a real turtle BOTH coroutines wait with an unfiltered os.pullEvent, and
+-- parallel.waitForAny hands every event to each of them. Every other test in
+-- this file replaces parallel with a stand-in that runs the control loop only,
+-- which is why nothing ever caught what follows: a sector order arriving while
+-- the job waited for it was returned to the job AND filed in the job inbox by
+-- the control loop. The miner then held a spare copy of its first order and ran
+-- one order behind the server for the whole job (21 of 22 jobs, job_0037 to
+-- job_0059). The server's idea of what each miner held was one order ahead of
+-- the truth, and two miners were sent into one column.
+
+-- Runs base.run with a stand-in for parallel.waitForAny that behaves like CC's:
+-- each event goes to every coroutine whose filter accepts it, control loop
+-- first. Events travel as serialised text, as on the air, so each coroutine
+-- decodes its own copy. `between(base)` runs after every delivered event.
+local function runBothLoops(events, jobHandler, between)
+    clearModules()
+    stub.install({ fuel = 100000, equipped = { left = require("equipment").ITEMS.MODEM } })
+
+    local clock, timerId = 1000000, 0
+    local base
+
+    os.epoch      = function() return clock end
+    os.startTimer = function() timerId = timerId + 1; return timerId end
+    os.pullEvent  = function(filter) return coroutine.yield(filter) end
+    sleep         = function() end
+    gps = { locate = function() return 0, 64, 0 end }
+
+    parallel = { waitForAny = function(...)
+        local cos, filters = {}, {}
+        for i, fn in ipairs({ ... }) do
+            cos[i] = coroutine.create(fn)
+            local ok, f = coroutine.resume(cos[i])
+            if not ok then error(f, 0) end
+            filters[i] = f
+        end
+        for _, ev in ipairs(events) do
+            clock = clock + HEARTBEAT_MS
+            for i, co in ipairs(cos) do
+                if filters[i] == nil or filters[i] == ev[1] then
+                    local ok, f = coroutine.resume(co, table.unpack(ev))
+                    if not ok then error(f, 0) end
+                    if coroutine.status(co) == "dead" then return end
+                    filters[i] = f
+                end
+            end
+            if between then between(base) end
+        end
+    end }
+
+    base = require("turtle_base")
+    base.recoverModem()
+    base.run(jobHandler)
+    return base
+end
+
+local function onAir(msgType, to, payload)
+    local msg = proto.encode(msgType, "server", to, payload)
+    return { "modem_message", "left", proto.CH_PRIVATE, proto.CH_SERVER,
+             textutils.serialise(msg) }
+end
+
+suite["a sector order that arrives while the job waits is taken once, not twice, and the job still finds the copy the control loop filed"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local got, spare
+        local function job()
+            local base = package.loaded["turtle_base"]
+            got   = base.receive(20, proto.MSG.SECTOR_ASSIGN)
+            spare = base.receive(0,  proto.MSG.SECTOR_ASSIGN)
+            base.receive(nil)                -- park until the events run out
+        end
+        -- Addressed to "broadcast", which both receive paths accept exactly as
+        -- they accept the turtle's own id; base.init (which sets the id) is not
+        -- run here.
+        runBothLoops({
+            onAir(proto.MSG.JOB_ASSIGN, "broadcast",
+                  { jobId = "job_7", jobType = "MINE", params = {} }),
+            onAir(proto.MSG.SECTOR_ASSIGN, "broadcast", { jobId = "job_7", x = 16, z = 32 }),
+            beaconEvent(), beaconEvent(),
+        }, job)
+        assert_eq(got ~= nil and got.payload.x, 16,
+            "the job must receive the order it was waiting for")
+        assert_eq(spare, nil,
+            "and no second copy of it may be waiting -- a spare order is what "
+            .. "left every miner one order behind the server")
+    end)
+end
+
+suite["a control message that arrives while the job waits is handled once"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local depths = {}
+        local function job()
+            package.loaded["turtle_base"].receive(nil, proto.MSG.SECTOR_ASSIGN)  -- as a miner waits
+        end
+        runBothLoops({
+            onAir(proto.MSG.JOB_ASSIGN, "broadcast",
+                  { jobId = "job_7", jobType = "MINE", params = {} }),
+            beaconEvent(),
+            onAir(proto.MSG.HEARTBEAT_ACK, "broadcast", { ts = 1 }),
+            beaconEvent(),
+        }, job, function(base) depths[#depths + 1] = (base.inboxSizes()) end)
+        assert_eq(depths[3], 0,
+            "the control loop already handled the ACK directly; the job's wait "
+            .. "must not file a second copy for it to handle again")
+    end)
+end
+
+-- A job that waits for two orders and records what it got.
+local function twoOrderJob(out)
+    return function()
+        local base = package.loaded["turtle_base"]
+        out[1] = base.receive(20, proto.MSG.SECTOR_ASSIGN)
+        out[2] = base.receive(20, proto.MSG.SECTOR_ASSIGN)
+        out[3] = base.receive(0,  proto.MSG.SECTOR_ASSIGN)
+        base.receive(nil, proto.MSG.SECTOR_ASSIGN)
+    end
+end
+
+local function assignEvent()
+    return onAir(proto.MSG.JOB_ASSIGN, "broadcast",
+                 { jobId = "job_7", jobType = "MINE", params = {} })
+end
+
+-- The server's retries (JOB_ASSIGN re-dispatch, the re-link SECTOR_ASSIGN
+-- replay, REGISTER_ACK per attempt) all go through sendTo/sendBroadcast, which
+-- encode on every call. A replay of the same order is a new message.
+suite["a genuine resend of the same order is delivered, not taken for a copy"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local got = {}
+        local payload = { jobId = "job_7", x = 16, z = 32 }
+        runBothLoops({
+            assignEvent(),
+            onAir(proto.MSG.SECTOR_ASSIGN, "broadcast", payload),
+            onAir(proto.MSG.SECTOR_ASSIGN, "broadcast", payload),   -- the replay
+            beaconEvent(),
+        }, twoOrderJob(got))
+        assert_eq(got[1] ~= nil and got[2] ~= nil, true,
+            "both sends must arrive: a replay re-encodes, so it has a new key")
+        assert_eq(got[3], nil, "and each exactly once")
+    end)
+end
+
+-- protocol.lua's sequence counter starts at zero on every boot. A server that
+-- restarts re-uses sequence numbers; the timestamp must keep them apart.
+suite["a server restart that re-uses a sequence number does not trip the check"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local got = {}
+        local before = proto.encode(proto.MSG.SECTOR_ASSIGN, "server", "broadcast",
+                                    { jobId = "job_7", x = 16, z = 32 })
+        -- A fresh protocol module is a rebooted server: its counter is back at 0.
+        local saved = package.loaded["protocol"]
+        package.loaded["protocol"] = nil
+        local rebooted = require("protocol")
+        package.loaded["protocol"] = saved
+        for _ = 1, before.seq - 1 do rebooted.encode(proto.MSG.HEARTBEAT_ACK, "server", "x", {}) end
+        local epoch = os.epoch
+        os.epoch = function(...) return epoch(...) + 60000 end    -- a minute later
+        local after = rebooted.encode(proto.MSG.SECTOR_ASSIGN, "server", "broadcast",
+                                      { jobId = "job_7", x = 48, z = 32 })
+        os.epoch = epoch
+        assert_eq(after.seq, before.seq, "harness: the restarted counter must collide")
+
+        local function air(m)
+            return { "modem_message", "left", proto.CH_PRIVATE, proto.CH_SERVER,
+                     textutils.serialise(m) }
+        end
+        runBothLoops({ assignEvent(), air(before), air(after), beaconEvent() },
+                     twoOrderJob(got))
+        assert_eq(got[1] ~= nil and got[1].payload.x, 16, "the order before the restart")
+        assert_eq(got[2] ~= nil and got[2].payload.x, 48,
+            "and the order after it, despite the same sequence number")
+    end)
+end
+
+suite["the recent-message list is bounded, and forgetting a message can only deliver it twice, never drop it"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local base = loadAs(138)
+        local first = { from = "server", seq = 1, ts = 1 }
+        assert_eq(base._firstSight(first), true, "a new message is taken")
+        assert_eq(base._firstSight(first), false, "the same message seen again is not")
+        for i = 2, 1000 do base._firstSight({ from = "server", seq = i, ts = i }) end
+        assert_eq(base._recentCount() <= base._RECENT_MAX, true,
+            "the list must stay bounded, got " .. base._recentCount())
+        assert_eq(base._firstSight(first), true,
+            "a forgotten message reads as new -- delivered again, never dropped")
+    end)
+end
+
+-- SOURCE-ONLY, weaker: the resend guarantee rests on every sender encoding a
+-- new message per send. A stored table re-transmitted would carry its old key
+-- and be taken for a copy. This fails if any send stops encoding on the spot.
+suite["every send encodes a new message on the spot (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local NL = string.char(10)
+    local checked = 0
+    for _, file in ipairs({ "central_server.lua", "turtle_base.lua", "warehouse.lua",
+                            "android_base.lua", "loader_turtle.lua" }) do
+        local f = assert(io.open(file, "r"))
+        local lines = {}
+        for line in f:lines() do lines[#lines + 1] = line end
+        f:close()
+        for i, line in ipairs(lines) do
+            if line:find("proto.send(", 1, true) and not line:find("function proto.send", 1, true) then
+                checked = checked + 1
+                local window = table.concat(lines, NL, math.max(1, i - 3), math.min(#lines, i + 1))
+                assert_eq(window:find("proto.encode(", 1, true) ~= nil, true,
+                    file .. ":" .. i .. " sends a message it did not just encode")
+            end
+        end
+    end
+    assert_eq(checked >= 12, true, "found only " .. checked .. " send sites; the search is broken")
+end
+
 return suite
