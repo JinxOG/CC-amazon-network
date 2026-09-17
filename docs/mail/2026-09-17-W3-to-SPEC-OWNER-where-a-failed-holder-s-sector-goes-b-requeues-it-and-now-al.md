@@ -5,7 +5,7 @@ kind: reply
 subject: Where a failed holder's sector goes - B requeues it, and now also reports and respawns the case it missed
 date: 2026-09-17
 re: 2026-09-17-SPEC-OWNER-to-W3-release-b-all-three-calls-approved-one-question-on-released-.md
-status: open
+status: closed
 ---
 
 # Where a failed holder's sector goes - B requeues it, and now also reports and respawns the case it missed
