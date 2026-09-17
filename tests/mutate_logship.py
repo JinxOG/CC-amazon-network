@@ -118,6 +118,7 @@ T_RESEND  = "a genuine resend of the same order is delivered, not taken for a co
 T_RESTART = "a server restart that re-uses a sequence number does not trip the check"
 T_BOUND   = "the recent-message list is bounded, and forgetting a message can only deliver it twice, never drop it"
 T_ENCODE  = "every send encodes a new message on the spot (SOURCE-ONLY, weaker)"
+T_OTHER   = "an order that arrives while the job waits for something else is filed once"
 C_SHARED   = "step 1 keeps every shared channel open"
 C_FALLBACK = "a computer id with no valid channel stays on the shared one, and says so"
 C_RANGE    = "the private channel range is bounded and exact"
@@ -633,6 +634,12 @@ MUTANTS = [
     ("a waiting job does not look in its inbox for what the control loop filed", "turtle_base.lua",
      [("                    local ready2 = inboxPop(q, wantType)\n",
        "                    local ready2 = nil\n")], T_ONCE),
+
+    ("a job waiting for something else files a second copy", "turtle_base.lua",
+     [("                    if firstSight(msg) then\n", "                    if true then\n")], T_OTHER),
+
+    ("beacons are claimed like any message, so the job's beacon wait starves", "turtle_base.lua",
+     [("    if TRANSIENT_TYPES[msg.type] then return true end\n", "")], T_OTHER),
 
     ("the key ignores the sequence number", "turtle_base.lua",
      [('tostring(msg.from) .. "|" .. tostring(msg.seq) .. "|" .. tostring(msg.ts)',

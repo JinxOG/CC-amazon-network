@@ -2324,6 +2324,34 @@ end
 -- The server's retries (JOB_ASSIGN re-dispatch, the re-link SECTOR_ASSIGN
 -- replay, REGISTER_ACK per attempt) all go through sendTo/sendBroadcast, which
 -- encode on every call. A replay of the same order is a new message.
+-- The miner also waits for other things -- its loader's beacon while placing
+-- the loader. An order that arrived during that wait was filed by BOTH loops:
+-- the control loop routes it, and the job's wait, not wanting it, routed it
+-- too. Two copies of one order is a sector mined twice back to back.
+suite["an order that arrives while the job waits for something else is filed once"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local jobs, got, spare
+        local function job()
+            local base = package.loaded["turtle_base"]
+            base.receive(nil, proto.MSG.LOADER_BEACON)     -- as mine_flow's pump does
+            jobs  = select(2, base.inboxSizes())
+            got   = base.receive(0, proto.MSG.SECTOR_ASSIGN)
+            spare = base.receive(0, proto.MSG.SECTOR_ASSIGN)
+            base.receive(nil, proto.MSG.SECTOR_ASSIGN)
+        end
+        runBothLoops({
+            assignEvent(),
+            onAir(proto.MSG.SECTOR_ASSIGN, "broadcast", { jobId = "job_7", x = 16, z = 32 }),
+            beaconEvent(),                                 -- ends the beacon wait
+            beaconEvent(),
+        }, job)
+        assert_eq(jobs, 1, "exactly one copy of the order may be queued")
+        assert_eq(got ~= nil, true, "and the job must still find it")
+        assert_eq(spare, nil, "and only once")
+    end)
+end
+
 suite["a genuine resend of the same order is delivered, not taken for a copy"] =
 function(assert_eq)
     withFakeRuntime(function()

@@ -396,6 +396,10 @@ function base.drainCtrl() return inboxDrain(_ctrlInbox) end
 local RECENT_MAX = 16
 local _recentKeys, _recentSet = {}, {}
 local function firstSight(msg)
+    -- Live-only types are never queued, so the control loop's copy is simply
+    -- dropped and the job's wait must still get its own. Claiming one here
+    -- starved mine_flow's beacon wait: the control loop saw every beacon first.
+    if TRANSIENT_TYPES[msg.type] then return true end
     local key = tostring(msg.from) .. "|" .. tostring(msg.seq) .. "|" .. tostring(msg.ts)
     if _recentSet[key] then return false end
     _recentSet[key] = true
