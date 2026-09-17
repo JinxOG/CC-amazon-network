@@ -88,6 +88,9 @@ for label, q, fatal in (
     ("job retry",          "node=server&contains=%20retry%20",  True),
     ("idle-stuck rescue",  "contains=Idle-stuck",             True),
     ("sector returned",    "contains=returned%20to%20pending", True),
+    # 1.9.110: a zone whose miners all ended with sectors still to do. A
+    # replacement is queued, but the zone did not finish on what it was given.
+    ("zone left unmined",  "node=server&contains=unmined%20sector", True),
     # Kept last and non-fatal ON PURPOSE: the server logs its crash-log summary
     # at every boot, so this matches old news by design. Anything it catches
     # that the fatal checks above did not is worth a human glance, nothing more.
@@ -188,6 +191,105 @@ if judged == 0:
     print("    NO EVIDENCE: no job started in this window. Not a pass.")
 if doubled:
     fails.append("first order doubled: %d of %d" % (doubled, judged))
+
+print("\n[2c] LATE COMPLETIONS  (release B, 1.9.110: its evidence)")
+print("    A completion whose order was handed out in another phase than the zone")
+print("    is in now. B counts it by the phase it was handed out in and logs it.")
+print("    A job validating B counts only if at least one appears.")
+late = sorted(logs("node=server&contains=Late%20completion").get("lines", []),
+              key=lambda l: l["ts"])
+for l in late[:10]:
+    print("        %s %s" % (l["ts"][11:19], (l.get("msg") or "")[:120]))
+print("    late completions        : %d" % len(late))
+if not late:
+    notes.append("[2c] no late completion in window -- release B's fix was not exercised")
+
+print("\n[2d] ONE SECTOR, TWO MINERS  (fatal, any phase)")
+print("    A miner holds a sector from the moment it takes the order until it")
+print("    reports that sector done, takes another order, or is sent MINE_COMPLETE.")
+print("    Two holds on one sector that overlap in time are a fault. Rebuilt twice:")
+print("      server view -- its 'Assigned sector' lines (every hand-out from 1.9.110)")
+print("      miner view  -- TRAVELLING to a sector, what the miner actually set out")
+print("                     to do (server phase lines + the miner's own; can undercount)")
+ends = []
+for l in d.get("lines", []):
+    m = re.search(r"\((\-?\d+),(\-?\d+)\) done by (node_\d+)", l.get("msg") or "")
+    if m:
+        ends.append((p_ts(l["ts"]), "done", m.group(3), m.group(1) + "," + m.group(2)))
+for l in logs("node=server&contains=MINE_COMPLETE%20to").get("lines", []):
+    m = re.search(r"MINE_COMPLETE to (node_\d+)", l.get("msg") or "")
+    if m:
+        ends.append((p_ts(l["ts"]), "end", m.group(1), ""))
+# A job that ends ends its miner's hold, however it ended.
+job_node = {}
+for l in logs("node=server&contains=accepted%20by").get("lines", []):
+    m = re.search(r"Job (job_\d+) accepted by (node_\d+)", l.get("msg") or "")
+    if m:
+        job_node[m.group(1)] = m.group(2)
+for l in logs("node=server&contains=job_").get("lines", []):
+    m = re.search(r"Job (?:complete|permanently failed): (job_\d+)", l.get("msg") or "")
+    if m and m.group(1) in job_node:
+        ends.append((p_ts(l["ts"]), "end", job_node[m.group(1)], ""))
+
+def overlapping(starts):
+    """starts: (ts, node, sector). Returns (holds, clashes)."""
+    ev = sorted([(t, "start", n, s) for t, n, s in starts] + ends,
+                key=lambda e: (e[0], 1 if e[1] == "start" else 0))
+    open_hold, holds = {}, []
+    for t, kind, node, sec in ev:
+        cur = open_hold.get(node)
+        if cur and (kind in ("start", "end") or sec == cur[1]):
+            holds.append((node, cur[1], cur[0], t))
+            del open_hold[node]
+        if kind == "start":
+            open_hold[node] = (t, sec)
+    last = max([e[0] for e in ev], default=None)
+    for node, (t, sec) in open_hold.items():
+        holds.append((node, sec, t, last))
+    clashes = [(a, b) for i, a in enumerate(holds) for b in holds[i + 1:]
+               if a[1] == b[1] and a[0] != b[0] and a[2] < b[3] and b[2] < a[3]]
+    return holds, clashes
+
+views = {}
+srv = []
+for l in logs("node=server&contains=Assigned%20sector").get("lines", []):
+    m = re.search(r"Assigned sector \((\-?\d+),(\-?\d+)\).* to (node_\d+)", l.get("msg") or "")
+    if m:
+        srv.append((p_ts(l["ts"]), m.group(3), m.group(1) + "," + m.group(2)))
+views["server view"] = srv
+# Two sources for the same moment: the server's phase line (only when the
+# phase CHANGES, so a TRAVELLING -> TRAVELLING order is missing) and the miner's
+# own shipped line (lost in comms gaps). Union, one start per node per sector
+# within 5 s.
+mnr, seen = [], {}
+for l in logs("contains=phase%20TRAVELLING").get("lines", []):
+    msg = l.get("msg") or ""
+    m = re.search(r"(node_\d+) phase: TRAVELLING \(sector (\-?\d+),(\-?\d+)\)", msg)
+    if m:
+        node, sec = m.group(1), m.group(2) + "," + m.group(3)
+    else:
+        m = re.search(r"\[MINER\] phase TRAVELLING \S+ sector (\-?\d+),(\-?\d+)", msg)
+        if not (m and re.match(r"node_\d+$", l.get("source") or "")):
+            continue
+        node, sec = l["source"], m.group(1) + "," + m.group(2)
+    t = p_ts(l["ts"])
+    prev = seen.get((node, sec))
+    if prev and any(abs((t - x).total_seconds()) <= 5 for x in prev):
+        continue
+    seen.setdefault((node, sec), []).append(t)
+    mnr.append((t, node, sec))
+views["miner view"] = mnr
+for name, starts in views.items():
+    holds, clashes = overlapping(starts)
+    print("    %-12s holds %3d   overlapping %d" % (name, len(holds), len(clashes)))
+    for a, b in clashes[:6]:
+        print("        (%s) %s %s-%s  and  %s %s-%s  <-- FAULT"
+              % (a[1], a[0], a[2].strftime("%H:%M"), a[3].strftime("%H:%M"),
+                 b[0], b[2].strftime("%H:%M"), b[3].strftime("%H:%M")))
+    if not holds:
+        notes.append("[2d] %s: no holds in window -- proved nothing" % name)
+    if clashes:
+        fails.append("sector held by two miners (%s): %d" % (name, len(clashes)))
 
 print("\n[3] DISCONNECTS  (known open fault -- recorded, not gating)")
 L = sorted(logs("contains=Server%20unreachable")["lines"], key=lambda l: p_ts(l["ts"]))
