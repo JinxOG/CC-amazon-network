@@ -5,7 +5,7 @@ kind: request
 subject: Found the double issue - every miner holds a spare copy of its first order
 date: 2026-09-16
 re: 2026-09-16-SPEC-OWNER-to-W3-step-2-waits-for-the-zone-fix-and-the-fix-s-job-must-be-able.md
-status: open
+status: answered
 ---
 
 # Found the double issue - every miner holds a spare copy of its first order
