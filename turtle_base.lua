@@ -179,21 +179,32 @@ local comms = {}
 -- The one definition of which channels this turtle listens on. comms.init and
 -- base.recoverModem both open exactly this list, so a re-acquired modem can
 -- never end up subscribed to a different set than the original.
-local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }
+local CHANNELS = { proto.CH_BROADCAST, proto.CH_LOCAL }
 
 -- This turtle's own private channel -- STEP 1 of the per-turtle rollout.
 --
--- Opened IN ADDITION to CH_PRIVATE, never instead of it. The server does not
--- send on it yet (that is step 2), so a turtle that dropped the shared channel
--- here would be deaf to every private reply and would fall off the fleet.
+-- Step 1 opened it IN ADDITION to CH_PRIVATE, because the server still sent
+-- every private reply there. Step 2 (1.9.111) moved the server's sends onto it.
 --
 -- Computed once at load from the COMPUTER ID and reported in REGISTER, so the
--- server can publish it and step 2 can be gated on every turtle having said so.
+-- server knows where to send.
 --
--- FOR STEP 3 (dropping the shared channel): only a turtle that HAS its own
--- channel may stop opening CH_PRIVATE. One with OWN_CHANNEL == nil -- an id
--- outside the valid range -- is served on the shared channel forever, and must
--- keep it open or it goes deaf. (Spec owner, 2026-09-16.)
+-- STEP 3, 1.9.112: a turtle that HAS its own channel no longer opens
+-- CH_PRIVATE at all, which is what finally takes the shared channel off the
+-- air. Measured on step 2 (1.9.111), idle fleet: loss fell from 17.29% to
+-- 0.16%, eleven of fifteen turtles losing nothing.
+--
+-- A turtle with OWN_CHANNEL == nil -- an id outside the valid range -- is
+-- served on the shared channel forever and must keep it open or it goes deaf.
+-- (Spec owner, 2026-09-16.)
+--
+-- THE ROLLBACK HAZARD, and the net under it. A server rolled back to before
+-- 1.9.111 sends every private reply on CH_PRIVATE. A step-3 turtle is not
+-- listening there, so it would never hear its REGISTER_ACK and would sit
+-- unregistered for ever -- the whole fleet, silently. So registration failing
+-- twice reopens the shared channel (reopenSharedChannel below). It costs one
+-- extra open on a turtle that was going deaf anyway, and it is the difference
+-- between a rollback being survivable and being a fleet outage.
 local OWN_CHANNEL = nil
 do
     local cid = nil
@@ -203,8 +214,34 @@ do
         CHANNELS[#CHANNELS + 1] = OWN_CHANNEL
     end
 end
+do
+    if OWN_CHANNEL == nil then
+        CHANNELS[#CHANNELS + 1] = proto.CH_PRIVATE
+    end
+end
 function base._channels() return CHANNELS end        -- test seam
 function base._ownChannel() return OWN_CHANNEL end   -- test seam
+
+-- The rollback net. Adds CH_PRIVATE back and opens it on the live modem, once.
+-- Called by register() after two attempts with no ACK: either the server is
+-- down (harmless, the channel sits idle) or it is older than 1.9.111 and is
+-- answering on the shared channel, which is the case this exists for.
+local _sharedReopened = false
+function base.reopenSharedChannel()
+    if _sharedReopened or OWN_CHANNEL == nil then return false end
+    _sharedReopened = true
+    CHANNELS[#CHANNELS + 1] = proto.CH_PRIVATE
+    local ok = pcall(function()
+        if _self.modem and not _self.modem.isOpen(proto.CH_PRIVATE) then
+            _self.modem.open(proto.CH_PRIVATE)
+        end
+    end)
+    logWarn(string.format(
+        "No ACK on channel %d after two attempts — reopening the shared channel %d. "
+        .. "A server older than 1.9.111 answers there.", OWN_CHANNEL, proto.CH_PRIVATE))
+    return ok
+end
+function base._sharedReopened() return _sharedReopened end   -- test seam
 
 -- ─── Shared inbox (Invariant G) ──────────────────────────────────────────────
 --
@@ -2130,6 +2167,11 @@ local function register(maxAttempts)
         -- stops the race from feeding itself. Fewer attempts per second means
         -- less traffic, which means a given attempt is more likely to survive,
         -- so the fleet converges instead of diverging.
+        -- Two attempts with no ACK: if this turtle dropped the shared channel
+        -- (step 3) and the server is older than 1.9.111, its reply went to a
+        -- channel nobody is listening on. Reopen it and keep retrying.
+        if attempt >= 2 then base.reopenSharedChannel() end
+
         local wait = math.min(REGISTER_BACKOFF_BASE * (2 ^ (attempt - 1)),
                               REGISTER_BACKOFF_MAX)
         logWarn(string.format(

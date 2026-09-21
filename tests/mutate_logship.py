@@ -132,10 +132,14 @@ Z_CLEAR   = "being told it is finished clears the miner's hold"
 Z_OTHER   = "a hold on a different zone does not block this one"
 Z_OLD     = "an order recorded before phases were stamped is counted by the zone's phase"
 SC_LINE   = "sendComplete says it sent, and says when the send failed"
+S3_DROP   = "step 3 drops the shared channel for a turtle that has its own"
+S3_NET    = "two registrations with no ACK reopen the shared channel"
+S3_ARM    = "register reopens the shared channel after two attempts (SOURCE-ONLY, weaker)"
+S3_KEEP   = "a computer id with no valid channel stays on the shared one, and says so"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
-C_SHARED   = "step 1 keeps every shared channel open"
+# C_SHARED retired at step 3: the shared channel is meant to be gone now.
 C_FALLBACK = "a computer id with no valid channel stays on the shared one, and says so"
 C_RANGE    = "the private channel range is bounded and exact"
 C_REPORT   = "REGISTER reports the private channel (SOURCE-ONLY, weaker)"
@@ -761,13 +765,29 @@ MUTANTS = [
     ("sendComplete never reports a failed send", "turtle_base.lua",
      [('        sent and "" or " -- the send FAILED (no modem)"))', '        ""))')], SC_LINE),
 
+    # -- Per-turtle channel, step 3 ----------------------------------------
+    ("the shared channel is opened again alongside the own one", "turtle_base.lua",
+     [("local CHANNELS = { proto.CH_BROADCAST, proto.CH_LOCAL }",
+       "local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }")], S3_DROP),
+
+    ("a turtle with no own channel loses the shared one too", "turtle_base.lua",
+     [("    if OWN_CHANNEL == nil then\n        CHANNELS[#CHANNELS + 1] = proto.CH_PRIVATE\n    end\n",
+       "")], S3_KEEP),
+
+    ("the rollback net never opens anything", "turtle_base.lua",
+     [("    CHANNELS[#CHANNELS + 1] = proto.CH_PRIVATE\n    local ok = pcall(function()",
+       "    local ok = pcall(function()")], S3_NET),
+
+    ("the rollback net fires on every retry", "turtle_base.lua",
+     [("    if _sharedReopened or OWN_CHANNEL == nil then return false end\n",
+       "    if OWN_CHANNEL == nil then return false end\n")], S3_NET),
+
+    ("the rollback net is never armed", "turtle_base.lua",
+     [("        if attempt >= 2 then base.reopenSharedChannel() end\n", "")], S3_ARM),
+
     # -- Per-turtle channel, step 1 ----------------------------------------
     ("the turtle never adds its own channel", "turtle_base.lua",
      [("        CHANNELS[#CHANNELS + 1] = OWN_CHANNEL\n", "")], C_OWN),
-
-    ("step 1 REPLACES the shared channel instead of adding to it", "turtle_base.lua",
-     [("local CHANNELS = { proto.CH_BROADCAST, proto.CH_PRIVATE, proto.CH_LOCAL }",
-       "local CHANNELS = { proto.CH_BROADCAST, proto.CH_LOCAL }")], C_SHARED),
 
     ("the base is wrong", "protocol.lua",
      [("proto.CH_PRIVATE_BASE = 1000", "proto.CH_PRIVATE_BASE = 100")], C_OWN),

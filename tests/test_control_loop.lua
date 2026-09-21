@@ -2143,17 +2143,49 @@ suite["a turtle opens its own channel from its computer id"] = function(assert_e
     end)
 end
 
-suite["step 1 keeps every shared channel open"] = function(assert_eq)
+-- Step 3, 1.9.112: the shared channel finally leaves the air. A turtle with its
+-- own channel stops opening CH_PRIVATE; one without keeps it (see below).
+suite["step 3 drops the shared channel for a turtle that has its own"] = function(assert_eq)
     withFakeRuntime(function()
         local base, proto = loadAs(138)
         local open = {}
         for _, ch in ipairs(base._channels()) do open[ch] = true end
-        assert_eq(open[proto.CH_PRIVATE], true,
-            "CH_PRIVATE must stay open in step 1 -- the server still sends every "
-            .. "private reply there, and a turtle that dropped it would be deaf")
+        assert_eq(open[proto.CH_PRIVATE], nil,
+            "the point of the whole rollout: a turtle with its own channel must "
+            .. "not listen on the shared one, or it still receives all 15 turtles' traffic")
+        assert_eq(open[1138], true, "its own channel is open")
         assert_eq(open[proto.CH_BROADCAST], true, "CH_BROADCAST is the recall path")
         assert_eq(open[proto.CH_LOCAL], true, "CH_LOCAL is untouched by this change")
+        assert_eq(#base._channels(), 3, "exactly three: broadcast, local, own")
     end)
+end
+
+-- The rollback net: a server older than 1.9.111 answers on CH_PRIVATE, where a
+-- step-3 turtle is not listening. Two silent attempts must reopen it.
+suite["two registrations with no ACK reopen the shared channel"] = function(assert_eq)
+    withFakeRuntime(function()
+        local base, proto = loadAs(138)
+        local before = base._sharedReopened()
+        local ok = base.reopenSharedChannel()
+        local open = {}
+        for _, ch in ipairs(base._channels()) do open[ch] = true end
+        local twice = base.reopenSharedChannel()
+        assert_eq(before, false, "it starts closed, as step 3 requires")
+        assert_eq(ok, true, "reopening must report success even with no modem bound")
+        assert_eq(open[proto.CH_PRIVATE], true,
+            "a rollback would otherwise leave every turtle deaf and unregistered")
+        assert_eq(twice, false, "it happens once, not on every retry")
+    end)
+end
+
+-- SOURCE-ONLY, weaker: register()'s retry path is not driven here, so this
+-- pins the call site rather than the behaviour.
+suite["register reopens the shared channel after two attempts (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("turtle_base.lua", "r"))
+    local src = f:read("*a"); f:close()
+    assert_eq(src:find("if attempt >= 2 then base.reopenSharedChannel() end", 1, true) ~= nil, true,
+        "the net has to be armed from the retry path, or it never fires")
 end
 
 suite["a computer id with no valid channel stays on the shared one, and says so"] =
