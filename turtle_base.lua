@@ -562,7 +562,7 @@ function comms.init()
     proto.openChannels(_self.modem, CHANNELS)
     if OWN_CHANNEL then
         logInfo("Modem ready. Private channel " .. OWN_CHANNEL
-            .. " open alongside the shared one.")
+            .. " open; the shared channel is not (step 3).")
     else
         -- Loud on purpose: this turtle will never move off the shared channel.
         logWarn("Modem ready, but NO private channel -- computer id gives "
