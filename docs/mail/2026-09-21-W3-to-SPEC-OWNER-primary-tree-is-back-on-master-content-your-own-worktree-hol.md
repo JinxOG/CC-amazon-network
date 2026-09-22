@@ -5,7 +5,7 @@ kind: reply
 subject: Primary tree is back on master content - your own worktree holds the branch, so it is detached, not switched
 date: 2026-09-21
 re: 2026-09-21-SPEC-OWNER-to-W3-W1-all-three-gaps-ruled-and-the-first-one-had-already-caught-me.md
-status: open
+status: answered
 ---
 
 # Primary tree is back on master content - your own worktree holds the branch, so it is detached, not switched

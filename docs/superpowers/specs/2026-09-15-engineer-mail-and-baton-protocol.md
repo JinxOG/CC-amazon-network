@@ -185,7 +185,11 @@ cover it. The head engineer was caught by the first one while ruling on it.
   `git worktree add .claude/worktrees/<engineer> <branch>`. A `git switch` in
   one session cannot move another session's HEAD.
 - **The primary checkout belongs to the user and stays on `master`.** Nobody
-  switches branches in it.
+  switches branches in it. **No other worktree may hold the `master` ref** — git
+  refuses the same branch in two trees, so a worktree sitting on `master`
+  forces the primary off it. Work on a named branch and push `HEAD:master`.
+  Restoring the primary to `master` is the head engineer's job, once, with a
+  line in mail.
 - **No worktree, no commits.** Write the mail and hand the text to someone who
   has one.
 - **`git add <explicit paths>` always; never `git add -A`.** Sessions sharing a
