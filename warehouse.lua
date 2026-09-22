@@ -565,16 +565,32 @@ local function storageProbe(now)
     local items = rsCall("listItems")
     local ms    = os.epoch("utc") - t0
     local n     = (type(items) == "table") and #items or -1
+
+    -- Sum every amount as a fingerprint of the network, not just its size.
+    --
+    -- W3 asked the one question only this computer can answer: does the
+    -- warehouse bridge see the SAME storage network the dispatch bridge sees?
+    -- If it does not, a panel sourced from here shows a different system and
+    -- nothing about it looks wrong. Item count alone is weak evidence -- two
+    -- networks can hold a similar number of kinds of thing -- but count AND
+    -- total quantity matching the dispatch server's own figures for the same
+    -- minute is hard to reach by coincidence.
+    local total = 0
+    if type(items) == "table" then
+        for _, it in ipairs(items) do
+            total = total + (tonumber(it.amount or it.count) or 0)
+        end
+    end
     local nextIn = probeRecord(os.epoch("utc"), ms)
 
     if ms >= PROBE_SLOW_MS then
         -- A real level, so ?level=WARN finds the slow readings on their own.
         if _log then _log.pendingLevel = "WARN" end
-        log(string.format("RS probe: listItems %dms for %d items - slow, next in %ds",
-            ms, n, nextIn / 1000))
+        log(string.format("RS probe: listItems %dms items=%d total=%d - slow, next in %ds",
+            ms, n, total, nextIn / 1000))
         if _log then _log.pendingLevel = nil end
     else
-        log(string.format("RS probe: listItems %dms for %d items", ms, n))
+        log(string.format("RS probe: listItems %dms items=%d total=%d", ms, n, total))
     end
     return ms
 end
