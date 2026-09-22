@@ -1,0 +1,219 @@
+DUMP_ZONE_ORE_MAP — taken 2026-09-22 08:03:56 UTC on 1.9.113, all zones
+(the server log strips leading spaces; sector lines follow their zone header)
+
+Ore map for zone 1744,-3056,1808,-2992: 4 sector(s) mapped, 4 marked done, total 4
+(1760,-3008) 82 type(s) 4123 ore [done]
+(1760,-3040) 13 type(s) 84 ore [done]
+(1792,-3008) 79 type(s) 4356 ore [done]
+(1792,-3040) 81 type(s) 4219 ore [done]
+Ore map for zone 1040,-2832,1200,-2736: 15 sector(s) mapped, 15 marked done, total 15
+(1056,-2752) 15 type(s) 73 ore [done]
+(1056,-2784) 18 type(s) 96 ore [done]
+(1056,-2816) 11 type(s) 86 ore [done]
+(1088,-2752) 16 type(s) 99 ore [done]
+(1088,-2784) 15 type(s) 95 ore [done]
+(1088,-2816) 16 type(s) 79 ore [done]
+(1120,-2752) 15 type(s) 88 ore [done]
+(1120,-2784) 14 type(s) 86 ore [done]
+(1120,-2816) 16 type(s) 132 ore [done]
+(1152,-2752) 79 type(s) 3140 ore [done]
+(1152,-2784) 79 type(s) 4414 ore [done]
+(1152,-2816) 81 type(s) 4859 ore [done]
+(1184,-2752) 79 type(s) 5038 ore [done]
+(1184,-2784) 80 type(s) 3800 ore [done]
+(1184,-2816) 79 type(s) 4439 ore [done]
+Ore map for zone 1936,-3216,2000,-3152: 4 sector(s) mapped, 4 marked done, total 4
+(1952,-3168) 80 type(s) 4183 ore [done]
+(1952,-3200) 83 type(s) 4855 ore [done]
+(1984,-3168) 81 type(s) 4123 ore [done]
+(1984,-3200) 82 type(s) 4959 ore [done]
+Ore map for zone 1936,-2960,2000,-2896: 4 sector(s) mapped, 4 marked done, total 4
+(1952,-2912) 81 type(s) 4771 ore [done]
+(1952,-2944) 80 type(s) 4714 ore [done]
+(1984,-2912) 79 type(s) 4712 ore [done]
+(1984,-2944) 15 type(s) 110 ore [done]
+Ore map for zone 1232,-3376,1328,-3312: 6 sector(s) mapped, 6 marked done, total 6
+(1248,-3328) 82 type(s) 4532 ore [done]
+(1248,-3360) 81 type(s) 4200 ore [done]
+(1280,-3328) 82 type(s) 4540 ore [done]
+(1280,-3360) 15 type(s) 123 ore [done]
+(1312,-3328) 12 type(s) 73 ore [done]
+(1312,-3360) 13 type(s) 78 ore [done]
+Ore map for zone 1424,-3152,1520,-3056: 0 sector(s) mapped, 0 marked done, total 9
+Ore map for zone 1264,-3504,1328,-3440: 0 sector(s) mapped, 0 marked done, total 4
+Ore map for zone 1040,-2992,1168,-2896: 8 sector(s) mapped, 8 marked done, total 12
+(1088,-2912) 81 type(s) 4462 ore [done]
+(1088,-2976) 84 type(s) 3880 ore [done]
+(1120,-2912) 16 type(s) 109 ore [done]
+(1120,-2944) 14 type(s) 114 ore [done]
+(1120,-2976) 15 type(s) 80 ore [done]
+(1152,-2912) 15 type(s) 71 ore [done]
+(1152,-2944) 17 type(s) 96 ore [done]
+(1152,-2976) 15 type(s) 106 ore [done]
+Ore map for zone 1840,-3152,1904,-3088: 0 sector(s) mapped, 0 marked done, total 4
+Ore map for zone 1296,-3728,1456,-3600: 11 sector(s) mapped, 11 marked done, total 20
+(1312,-3616) 79 type(s) 4662 ore [done]
+(1312,-3680) 79 type(s) 3835 ore [done]
+(1312,-3712) 78 type(s) 3076 ore [done]
+(1344,-3648) 83 type(s) 4550 ore [done]
+(1344,-3680) 81 type(s) 4502 ore [done]
+(1376,-3616) 82 type(s) 4454 ore [done]
+(1376,-3648) 79 type(s) 4333 ore [done]
+(1376,-3680) 79 type(s) 4586 ore [done]
+(1408,-3648) 82 type(s) 4825 ore [done]
+(1440,-3616) 82 type(s) 4588 ore [done]
+(1440,-3680) 79 type(s) 4014 ore [done]
+Ore map for zone 2032,-3120,2096,-3056: 4 sector(s) mapped, 4 marked done, total 4
+(2048,-3072) 16 type(s) 112 ore [done]
+(2048,-3104) 82 type(s) 4752 ore [done]
+(2080,-3072) 82 type(s) 4745 ore [done]
+(2080,-3104) 80 type(s) 4581 ore [done]
+Ore map for zone 1264,-3184,1392,-3120: 8 sector(s) mapped, 8 marked done, total 8
+(1280,-3136) 81 type(s) 4662 ore [done]
+(1280,-3168) 83 type(s) 5097 ore [done]
+(1344,-3136) 82 type(s) 5108 ore [done]
+(1344,-3168) 80 type(s) 4867 ore [done]
+(1376,-3136) 81 type(s) 4865 ore [done]
+(1376,-3168) 77 type(s) 4259 ore [done]
+(1312,-3136) 81 type(s) 5151 ore [done]
+(1312,-3168) 79 type(s) 4361 ore [done]
+Ore map for zone 1936,-3120,2000,-3056: 4 sector(s) mapped, 4 marked done, total 4
+(1952,-3072) 80 type(s) 4492 ore [done]
+(1952,-3104) 80 type(s) 4522 ore [done]
+(1984,-3072) 82 type(s) 4851 ore [done]
+(1984,-3104) 81 type(s) 4976 ore [done]
+Ore map for zone 1936,-2864,2000,-2800: 4 sector(s) mapped, 4 marked done, total 4
+(1952,-2816) 79 type(s) 4662 ore [done]
+(1952,-2848) 82 type(s) 4556 ore [done]
+(1984,-2816) 83 type(s) 4875 ore [done]
+(1984,-2848) 80 type(s) 4581 ore [done]
+Ore map for zone 1584,-3312,1712,-3216: 12 sector(s) mapped, 12 marked done, total 12
+(1600,-3232) 80 type(s) 3849 ore [done]
+(1600,-3264) 81 type(s) 4582 ore [done]
+(1600,-3296) 81 type(s) 4599 ore [done]
+(1632,-3232) 13 type(s) 111 ore [done]
+(1632,-3264) 78 type(s) 3988 ore [done]
+(1632,-3296) 81 type(s) 4545 ore [done]
+(1664,-3232) 80 type(s) 4566 ore [done]
+(1664,-3264) 80 type(s) 4179 ore [done]
+(1664,-3296) 81 type(s) 3621 ore [done]
+(1696,-3232) 80 type(s) 4302 ore [done]
+(1696,-3264) 75 type(s) 3088 ore [done]
+(1696,-3296) 68 type(s) 2280 ore [done]
+Ore map for zone 912,-3280,1136,-3120: 33 sector(s) mapped, 33 marked done, total 35
+(1024,-3136) 79 type(s) 4294 ore [done]
+(1024,-3168) 83 type(s) 4550 ore [done]
+(1024,-3200) 83 type(s) 4864 ore [done]
+(1024,-3232) 79 type(s) 4681 ore [done]
+(1056,-3136) 81 type(s) 4841 ore [done]
+(1056,-3168) 79 type(s) 4566 ore [done]
+(1056,-3200) 79 type(s) 4141 ore [done]
+(1056,-3232) 82 type(s) 4343 ore [done]
+(1056,-3264) 81 type(s) 5046 ore [done]
+(1088,-3168) 79 type(s) 4752 ore [done]
+(1088,-3200) 78 type(s) 4401 ore [done]
+(1088,-3232) 80 type(s) 4459 ore [done]
+(1088,-3264) 80 type(s) 4881 ore [done]
+(1120,-3136) 80 type(s) 4580 ore [done]
+(1120,-3168) 83 type(s) 4919 ore [done]
+(1120,-3200) 81 type(s) 4511 ore [done]
+(1120,-3232) 78 type(s) 4686 ore [done]
+(1120,-3264) 80 type(s) 4874 ore [done]
+(928,-3136) 81 type(s) 4860 ore [done]
+(928,-3168) 81 type(s) 4329 ore [done]
+(928,-3200) 77 type(s) 3081 ore [done]
+(928,-3232) 79 type(s) 3240 ore [done]
+(928,-3264) 78 type(s) 4480 ore [done]
+(960,-3136) 80 type(s) 4645 ore [done]
+(960,-3168) 82 type(s) 4867 ore [done]
+(960,-3200) 81 type(s) 3885 ore [done]
+(960,-3232) 69 type(s) 2579 ore [done]
+(960,-3264) 77 type(s) 3165 ore [done]
+(992,-3136) 80 type(s) 3698 ore [done]
+(992,-3168) 81 type(s) 4776 ore [done]
+(992,-3200) 15 type(s) 73 ore [done]
+(992,-3232) 83 type(s) 3344 ore [done]
+(992,-3264) 74 type(s) 3051 ore [done]
+Ore map for zone 1840,-3056,1904,-2992: 4 sector(s) mapped, 4 marked done, total 4
+(1856,-3008) 79 type(s) 3624 ore [done]
+(1856,-3040) 80 type(s) 3773 ore [done]
+(1888,-3008) 83 type(s) 3948 ore [done]
+(1888,-3040) 83 type(s) 4318 ore [done]
+Ore map for zone 1392,-3824,1456,-3760: 4 sector(s) mapped, 4 marked done, total 4
+(1408,-3776) 82 type(s) 3921 ore [done]
+(1408,-3808) 79 type(s) 3811 ore [done]
+(1440,-3776) 16 type(s) 128 ore [done]
+(1440,-3808) 81 type(s) 4344 ore [done]
+Ore map for zone 1552,-3472,1616,-3408: 4 sector(s) mapped, 4 marked done, total 4
+(1568,-3424) 14 type(s) 93 ore [done]
+(1568,-3456) 12 type(s) 92 ore [done]
+(1600,-3424) 80 type(s) 4249 ore [done]
+(1600,-3456) 79 type(s) 4675 ore [done]
+Ore map for zone 2032,-3024,2096,-2960: 4 sector(s) mapped, 4 marked done, total 4
+(2048,-2976) 81 type(s) 4872 ore [done]
+(2048,-3008) 82 type(s) 4919 ore [done]
+(2080,-2976) 80 type(s) 4917 ore [done]
+(2080,-3008) 80 type(s) 4913 ore [done]
+Ore map for zone 1008,-2608,1168,-2480: 11 sector(s) mapped, 11 marked done, total 20
+(1024,-2496) 51 type(s) 1483 ore [done]
+(1024,-2528) 55 type(s) 1343 ore [done]
+(1056,-2528) 79 type(s) 4409 ore [done]
+(1056,-2592) 79 type(s) 3446 ore [done]
+(1088,-2496) 18 type(s) 106 ore [done]
+(1088,-2528) 81 type(s) 5194 ore [done]
+(1088,-2560) 80 type(s) 4847 ore [done]
+(1088,-2592) 79 type(s) 4052 ore [done]
+(1120,-2560) 78 type(s) 5204 ore [done]
+(1152,-2560) 78 type(s) 4370 ore [done]
+(1152,-2592) 82 type(s) 4621 ore [done]
+Ore map for zone 1360,-3440,1424,-3376: 4 sector(s) mapped, 4 marked done, total 4
+(1376,-3392) 11 type(s) 84 ore [done]
+(1376,-3424) 15 type(s) 130 ore [done]
+(1408,-3392) 17 type(s) 117 ore [done]
+(1408,-3424) 15 type(s) 123 ore [done]
+Ore map for zone 1936,-3024,2000,-2992: 2 sector(s) mapped, 2 marked done, total 2
+(1952,-3008) 80 type(s) 4580 ore [done]
+(1984,-3008) 11 type(s) 86 ore [done]
+Ore map for zone 1840,-2960,1904,-2896: 4 sector(s) mapped, 4 marked done, total 4
+(1856,-2912) 81 type(s) 4622 ore [done]
+(1856,-2944) 81 type(s) 4375 ore [done]
+(1888,-2912) 81 type(s) 4714 ore [done]
+(1888,-2944) 13 type(s) 113 ore [done]
+Ore map for zone 2032,-2928,2096,-2864: 4 sector(s) mapped, 4 marked done, total 4
+(2048,-2880) 79 type(s) 4672 ore [done]
+(2048,-2912) 82 type(s) 4738 ore [done]
+(2080,-2880) 82 type(s) 4577 ore [done]
+(2080,-2912) 84 type(s) 4797 ore [done]
+Ore map for zone 1520,-2992,1584,-2960: 0 sector(s) mapped, 0 marked done, total 2
+
+--- sectors whose map total looks like residue (under 500 ore in a zone whose best is over 2000) ---
+1744,-3056,1808,-2992  (1760,-3040)  13 type(s)  84 ore   (zone best 4356)
+1040,-2832,1200,-2736  (1056,-2752)  15 type(s)  73 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1056,-2784)  18 type(s)  96 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1056,-2816)  11 type(s)  86 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1088,-2752)  16 type(s)  99 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1088,-2784)  15 type(s)  95 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1088,-2816)  16 type(s)  79 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1120,-2752)  15 type(s)  88 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1120,-2784)  14 type(s)  86 ore   (zone best 5038)
+1040,-2832,1200,-2736  (1120,-2816)  16 type(s)  132 ore   (zone best 5038)
+1936,-2960,2000,-2896  (1984,-2944)  15 type(s)  110 ore   (zone best 4771)
+1232,-3376,1328,-3312  (1280,-3360)  15 type(s)  123 ore   (zone best 4540)
+1232,-3376,1328,-3312  (1312,-3328)  12 type(s)  73 ore   (zone best 4540)
+1232,-3376,1328,-3312  (1312,-3360)  13 type(s)  78 ore   (zone best 4540)
+1040,-2992,1168,-2896  (1120,-2912)  16 type(s)  109 ore   (zone best 4462)
+1040,-2992,1168,-2896  (1120,-2944)  14 type(s)  114 ore   (zone best 4462)
+1040,-2992,1168,-2896  (1120,-2976)  15 type(s)  80 ore   (zone best 4462)
+1040,-2992,1168,-2896  (1152,-2912)  15 type(s)  71 ore   (zone best 4462)
+1040,-2992,1168,-2896  (1152,-2944)  17 type(s)  96 ore   (zone best 4462)
+1040,-2992,1168,-2896  (1152,-2976)  15 type(s)  106 ore   (zone best 4462)
+2032,-3120,2096,-3056  (2048,-3072)  16 type(s)  112 ore   (zone best 4752)
+1584,-3312,1712,-3216  (1632,-3232)  13 type(s)  111 ore   (zone best 4599)
+912,-3280,1136,-3120  (992,-3200)  15 type(s)  73 ore   (zone best 5046)
+1392,-3824,1456,-3760  (1440,-3776)  16 type(s)  128 ore   (zone best 4344)
+1552,-3472,1616,-3408  (1568,-3424)  14 type(s)  93 ore   (zone best 4675)
+1552,-3472,1616,-3408  (1568,-3456)  12 type(s)  92 ore   (zone best 4675)
+1008,-2608,1168,-2480  (1088,-2496)  18 type(s)  106 ore   (zone best 5204)
+1936,-3024,2000,-2992  (1984,-3008)  11 type(s)  86 ore   (zone best 4580)
+1840,-2960,1904,-2896  (1888,-2944)  13 type(s)  113 ore   (zone best 4714)
+29 such sector(s) of 158 mapped
