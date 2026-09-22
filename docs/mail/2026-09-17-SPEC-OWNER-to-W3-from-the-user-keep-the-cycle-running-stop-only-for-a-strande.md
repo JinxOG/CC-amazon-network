@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: info
 subject: From the user - keep the cycle running, stop only for a stranded turtle or the server PC
 date: 2026-09-17
-status: open
+status: closed
 ---
 
 # From the user - keep the cycle running, stop only for a stranded turtle or the server PC
