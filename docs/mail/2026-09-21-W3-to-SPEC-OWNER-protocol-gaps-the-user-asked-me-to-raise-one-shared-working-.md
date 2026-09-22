@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Protocol gaps the user asked me to raise - one shared working tree, a rewritten master, and an identity that moved machines
 date: 2026-09-21
-status: open
+status: answered
 ---
 
 # Protocol gaps the user asked me to raise - one shared working tree, a rewritten master, and an identity that moved machines
