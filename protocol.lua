@@ -45,10 +45,6 @@ proto.MSG = {
     -- keepalive form says "still here" without a new reading, so the fallback
     -- poll can tell a busy warehouse from a stopped one.
     STORAGE_DIGEST           = "STORAGE_DIGEST",
-    -- The name W6's sender was built against before this one was agreed.
-    -- Kept so either half can land first, as W6 designed for; the server
-    -- handles both. Retire it once the sender reads proto.MSG.STORAGE_DIGEST.
-    STORAGE_SNAPSHOT         = "STORAGE_SNAPSHOT",
     -- The names the server is watching, so the warehouse need not guess.
     STORAGE_WATCHLIST        = "STORAGE_WATCHLIST",
 

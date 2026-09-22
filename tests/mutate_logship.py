@@ -148,7 +148,6 @@ D_NEWEST  = "an older reading never overwrites a newer one"
 D_CAP     = "the digest is capped and says so when it trims"
 D_SENDER  = "a digest from anyone but the warehouse is refused"
 D_WATCH   = "the first digest gets the watchlist so the warehouse need not guess"
-D_ALIAS   = "the digest is accepted under the name the sender already uses"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -811,9 +810,6 @@ MUTANTS = [
     ("the watchlist is never sent", "central_server.lua",
      [("    if state.watchlistSentAt == nil or state.watchlistDirty == true then\n",
        "    if false then\n")], D_WATCH),
-
-    ("the legacy message name is dropped", "central_server.lua",
-     [("handlers[proto.MSG.STORAGE_SNAPSHOT] = handlers[proto.MSG.STORAGE_DIGEST]\n", "")], D_ALIAS),
 
     # -- Storage poll held off while mining (1.9.114) ------------------------
     ("the guard is deleted from refreshStorage", "central_server.lua",

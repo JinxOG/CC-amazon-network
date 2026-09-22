@@ -3312,12 +3312,6 @@ handlers[proto.MSG.STORAGE_DIGEST] = function(msg)
 
 end
 
--- Same handler under the name W6's sender already uses. A wire contract
--- policed by one name only fails silently: their message would arrive, match
--- nothing, and the digest would simply never appear. Retire when the sender
--- switches to STORAGE_DIGEST.
-handlers[proto.MSG.STORAGE_SNAPSHOT] = handlers[proto.MSG.STORAGE_DIGEST]
-
 handlers[proto.MSG.ITEM_REQUEST] = function(msg)
     logInfo(string.format("Item request from %s (job %s)", msg.from, msg.payload.jobId))
     -- Forward with the real turtle ID so the warehouse knows who to talk to

@@ -186,21 +186,6 @@ return {
     -- digest. The full 469-item list goes to the bridge instead - 49.6 KB on
     -- this loop every 30s would trade a peripheral stall for a deserialising
     -- one, and 96 KB already made this server deaf on 2026-08-30.
-    -- W6's sender was built against STORAGE_SNAPSHOT before the name
-    -- STORAGE_DIGEST was agreed, and it is already on master. One name policed
-    -- at one end fails silently: the message arrives, matches nothing, and the
-    -- digest simply never appears.
-    ["the digest is accepted under the name the sender already uses"] = function(assert_eq)
-        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
-        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = {
-            itemCount = 469, grandTotal = 24531758, storageTs = 7000,
-            ores = { { name = "minecraft:iron_ore", amount = 3 } } } })
-        local stock, ts = T.state.oreStock, T.state.oreStockTs
-        restore()
-        assert_eq(stock and stock["minecraft:iron_ore"], 3, "the legacy name must reach the same handler")
-        assert_eq(ts, 7000)
-    end,
-
     ["a storage digest feeds the ore watchdog and answers the network check"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
