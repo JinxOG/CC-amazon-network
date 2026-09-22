@@ -44,7 +44,14 @@ T_DIGEST_CAP = "the watchlist is capped, so the digest cannot grow into a 65 KB 
 T_DIGEST_TRIM = "an oversized digest drops the ore stock and still reports the counts"
 T_DIGEST_SENT = "the digest actually reaches the radio"
 
+T_MSGNAME = "a missing message constant falls back AND says it fell back"
+
 MUTANTS = [
+    ("make the fallback silent again",
+     "    return key, true",
+     "    return key, false",
+     T_MSGNAME),
+
     # -- The digest: cap, degradation, and whether it is sent at all ----------
     ("let the watchlist grow past its cap",
      "\n            if #out >= DIGEST_MAX_NAMES then break end",
@@ -57,7 +64,7 @@ MUTANTS = [
      T_DIGEST_TRIM),
 
     ("build the digest but never send it",
-     "\n    sendToServer(MSG_STORAGE_SNAPSHOT, nil, payload)",
+     "\n    sendToServer(MSG_STORAGE_DIGEST, nil, payload)",
      "",
      T_DIGEST_SENT),
 

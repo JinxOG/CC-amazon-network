@@ -242,8 +242,26 @@ end
 -- checkOreThresholds is its only consumer and reads nothing else. The full list
 -- goes to the bridge (W3 ruling 2026-09-22); that half waits on a scope ruling
 -- and is deliberately not built here.
-local MSG_STORAGE_SNAPSHOT  = (proto.MSG and proto.MSG.STORAGE_SNAPSHOT)  or "STORAGE_SNAPSHOT"
-local MSG_STORAGE_WATCHLIST = (proto.MSG and proto.MSG.STORAGE_WATCHLIST) or "STORAGE_WATCHLIST"
+-- Resolve a message name, tolerating the constant not existing yet -- and say
+-- so when it does not.
+--
+-- The fallback is needed because a new message type and the code that sends it
+-- cannot always ship in one release. But a SILENT fallback is how a renamed
+-- type becomes a message nobody handles and nobody notices: on 2026-09-22 this
+-- sender used STORAGE_SNAPSHOT while the server had been renamed to
+-- STORAGE_DIGEST, and the digest would simply never have appeared. The message
+-- would have been well-formed, delivered, and matched no handler.
+--
+-- That is the same shape as every other fault in this thread: a check whose
+-- failure looks exactly like its success. So it still falls back, and it warns.
+local function msgName(tbl, key)
+    local v = tbl and tbl[key]
+    if type(v) == "string" then return v, false end
+    return key, true
+end
+
+local MSG_STORAGE_DIGEST,    digestNameFellBack = msgName(proto.MSG, "STORAGE_DIGEST")
+local MSG_STORAGE_WATCHLIST, watchNameFellBack  = msgName(proto.MSG, "STORAGE_WATCHLIST")
 
 -- W3 enforces these on receive. They are enforced here too: a contract policed
 -- at only one end fails as a refusal log rather than as a message never sent.
@@ -624,7 +642,7 @@ local function storageProbe(now)
         -- deliberately quiet" from "stopped", and would resume polling itself
         -- at exactly the wrong moment.
         if now >= probeNextAt then
-            sendToServer(MSG_STORAGE_SNAPSHOT, nil, { keepalive = true })
+            sendToServer(MSG_STORAGE_DIGEST, nil, { keepalive = true })
             probeNextAt = now + probeInterval
         end
         return nil
@@ -684,7 +702,7 @@ local function storageProbe(now)
             oversize, DIGEST_MAX_BYTES))
         if _log then _log.pendingLevel = nil end
     end
-    sendToServer(MSG_STORAGE_SNAPSHOT, nil, payload)
+    sendToServer(MSG_STORAGE_DIGEST, nil, payload)
     return ms
 end
 
@@ -715,6 +733,15 @@ local function main()
             .. "computer's log is NOT reaching the fleet log. Run the updater.")
     end
     log(string.format("Warehouse online v%s (RS bridge / state-machine mode)", proto.VERSION))
+    -- Named out loud, because the alternative is a digest that never arrives
+    -- and a server that reports nothing wrong.
+    if digestNameFellBack or watchNameFellBack then
+        if _log then _log.pendingLevel = "WARN" end
+        log(string.format("Storage message names not in protocol.lua (digest=%s, watchlist=%s)"
+            .. " - using literals; the server may not handle them",
+            tostring(digestNameFellBack), tostring(watchNameFellBack)))
+        if _log then _log.pendingLevel = nil end
+    end
     -- Replay the last crash, same as central_server does. Without it the reason
     -- lives in a file nobody opens and the operator sees only that deliveries
     -- stopped.
@@ -794,6 +821,7 @@ if _G.__CC_WAREHOUSE_TEST then
         probeRecord     = probeRecord,
         storageProbe    = storageProbe,
         acceptWatchlist = acceptWatchlist,
+        msgName         = msgName,
         digestPayload   = digestPayload,
         DIGEST_MAX_NAMES = DIGEST_MAX_NAMES,
         DIGEST_MAX_BYTES = DIGEST_MAX_BYTES,

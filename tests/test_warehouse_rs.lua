@@ -394,15 +394,32 @@ return {
         assert_eq(r.ranOut, true, "the loop must run the whole script: " .. r.err)
         local found = false
         for _, m in ipairs(r.msgs) do
-            if m.type == "STORAGE_SNAPSHOT" and type(m.payload) == "table"
+            if m.type == "STORAGE_DIGEST" and type(m.payload) == "table"
                and m.payload.itemCount ~= nil and m.payload.grandTotal ~= nil then
                 found = true
             end
         end
         assert_eq(found, true,
-            "no STORAGE_SNAPSHOT carrying itemCount and grandTotal crossed the "
+            "no STORAGE_DIGEST carrying itemCount and grandTotal crossed the "
             .. "radio -- the digest is built but never sent, which looks "
             .. "identical to a warehouse with nothing to say")
+    end,
+
+
+    -- W3 renamed this type while writing the contract and told nobody. The
+    -- message would have been well-formed, delivered, and matched no handler:
+    -- the digest simply never appears, and nothing reports a fault. A silent
+    -- fallback is what turns a rename into that.
+    ["a missing message constant falls back AND says it fell back"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        local name, fellBack = W.msgName({ STORAGE_DIGEST = "STORAGE_DIGEST" }, "STORAGE_DIGEST")
+        assert_eq(name, "STORAGE_DIGEST")
+        assert_eq(fellBack, false, "a constant that exists is not a fallback")
+        local n2, fb2 = W.msgName({}, "STORAGE_DIGEST")
+        assert_eq(n2, "STORAGE_DIGEST", "it must still send something usable")
+        assert_eq(fb2, true,
+            "and it must report the fallback -- otherwise a renamed type looks "
+            .. "exactly like a working one")
     end,
 
 }
