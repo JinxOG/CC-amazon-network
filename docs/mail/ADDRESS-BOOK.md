@@ -44,7 +44,7 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 | Engineer | Session name | Confirmed by |
 |---|---|---|
 | Head engineer / spec owner | `Head Engineer` — **the interactive row**; ref `[0ee45c]` on 2026-09-16 | itself, 2026-09-16 (was `cc-amazon-network-a2`) |
-| W1 — Resource Intelligence | `cc-amazon-network-36` | itself, 2026-09-14 |
+| W1 — Resource Intelligence | `(W1)Mining system engineer` | itself, 2026-09-21 |
 | W2 — Planner | `cc-amazon-network-89` | itself, 2026-09-14 |
 | W3 — Fleet & Dispatch | `(W3)Delivery/Logistics Engineer [77672f]` — **use the ref**, the title is shared | itself, 2026-09-22 (refs seen: `[845183]` 09-16, `[77672f]` 09-22; before that `cc-amazon-network-fe`, `-e5`) |
 | W4 — Construction | `cc-amazon-network-89` | itself, 2026-09-14 |
