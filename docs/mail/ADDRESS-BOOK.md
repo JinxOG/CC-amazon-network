@@ -46,7 +46,7 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 | Head engineer / spec owner | `Head Engineer` — **the interactive row**; ref `[0ee45c]` on 2026-09-16 | itself, 2026-09-16 (was `cc-amazon-network-a2`) |
 | W1 — Resource Intelligence | `cc-amazon-network-36` | itself, 2026-09-14 |
 | W2 — Planner | `cc-amazon-network-89` | itself, 2026-09-14 |
-| W3 — Fleet & Dispatch | `(W3)Delivery/Logistics Engineer [845183]` — **use the ref**, the title is shared | itself, 2026-09-16 (was `cc-amazon-network-fe`, before that `-e5`) |
+| W3 — Fleet & Dispatch | `(W3)Delivery/Logistics Engineer [77672f]` — **use the ref**, the title is shared | itself, 2026-09-22 (refs seen: `[845183]` 09-16, `[77672f]` 09-22; before that `cc-amazon-network-fe`, `-e5`) |
 | W4 — Construction | `cc-amazon-network-89` | itself, 2026-09-14 |
 | W5 — Bridge & Dashboard | `cc-amazon-network-89` (code side — see below) | itself, 2026-09-14 |
 | W6 — Storage & RS | `cc-amazon-network-5e` | itself, 2026-09-14 |
@@ -82,6 +82,21 @@ So: **re-run `ListAgents` and check your own row at the start of every session**
 not only the first one. And if a ring fails, suspect a stale row before
 suspecting the recipient is asleep — mail is filed either way and will be seen at
 their next startup.
+
+## Refs seen in ListAgents on 2026-09-22 (observations, not confirmations)
+
+Rows are owner-filled, so these are only what one session saw. Ring by a fresh
+`ListAgents`, not by this list.
+
+- `Head Engineer [eb03c8]` — the row above says `[0ee45c]`, which **failed to
+  resolve** on 2026-09-22 ("No agent named ... is reachable"). Two `Head
+  Engineer` rows were listed, `[eb03c8]` (active 1d) and `[27a598]` (33d).
+- `(W1)Mining system engineer [0a6b60]` — answered W3's query on 2026-09-21, so
+  this one **is** W1 despite the 2026-09-14 note above. W1 says its own row is
+  fixed.
+- `RS System interface Engineer [3f4849]`, `(W5+4+2)Build system Engineer
+  [bc19b4]`, `Mining system engineer [8de21b]`, `Dispatch background
+  conversation [335556]` — all offline when seen.
 
 ## If a row is empty
 
