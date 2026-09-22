@@ -148,6 +148,7 @@ D_NEWEST  = "an older reading never overwrites a newer one"
 D_CAP     = "the digest is capped and says so when it trims"
 D_SENDER  = "a digest from anyone but the warehouse is refused"
 D_WATCH   = "the first digest gets the watchlist so the warehouse need not guess"
+U_WARE    = "an update reaches the warehouse as well as the turtles"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -786,6 +787,13 @@ MUTANTS = [
 
     ("the dump totals nothing", "central_server.lua",
      [("                    total = total + (tonumber(n) or 0)\n", "")], R_DUMP),
+
+    ("the warehouse is left out of the update fan-out", "central_server.lua",
+     [("    proto.send(state.modem, proto.CH_WAREHOUSE,\n        proto.encode(proto.MSG.UPDATE_ALL, \"server\", \"warehouse\", {}))\n", "")], U_WARE),
+
+    ("a busy turtle is skipped instead of staged", "central_server.lua",
+     [("                tr.pendingUpdate = true\n                nStaged = nStaged + 1\n",
+       "                nStaged = nStaged + 1\n")], U_WARE),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

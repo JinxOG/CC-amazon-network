@@ -186,6 +186,35 @@ return {
     -- digest. The full 469-item list goes to the bridge instead - 49.6 KB on
     -- this loop every 30s would trade a peripheral stall for a deserialising
     -- one, and 96 KB already made this server deaf on 2026-08-30.
+    -- Found 2026-09-22: the warehouse had never received a deploy. It is not in
+    -- state.registry, so the fan-out loop could not see it, and it sat on
+    -- pre-1.9.93 files - no log shipping - while fifteen turtles moved on.
+    ["an update reaches the warehouse as well as the turtles"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local sent = {}
+        T.state.modem.transmit = function(ch, reply, body) sent[#sent + 1] = { ch = ch, body = body } end
+        T.state.registry[A].status = proto.STATUS.IDLE
+        T.state.registry[B].status = proto.STATUS.WORKING
+        local nImmediate, nStaged = T.fanOutUpdateAll()
+        local toWarehouse, toIdle = nil, nil
+        for _, m in ipairs(sent) do
+            local d = textutils.unserialise(m.body)
+            if type(d) == "table" and d.type == proto.MSG.UPDATE_ALL then
+                if m.ch == proto.CH_WAREHOUSE then toWarehouse = d end
+                if d.to == A then toIdle = d end
+            end
+        end
+        local staged = T.state.registry[B].pendingUpdate
+        local line = logged(T, "and to the warehouse")
+        restore()
+        assert_eq(toWarehouse ~= nil, true,
+            "the warehouse listens on CH_WAREHOUSE and runs updater.lua on UPDATE_ALL; "
+            .. "it only ever needed asking")
+        assert_eq(toIdle ~= nil and nImmediate, 1, "an idle turtle still gets it immediately")
+        assert_eq(staged == true and nStaged, 1, "and a busy one is still staged, not skipped")
+        assert_eq(line ~= nil, true, "the line says the warehouse was included")
+    end,
+
     ["a storage digest feeds the ore watchdog and answers the network check"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

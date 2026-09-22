@@ -1164,6 +1164,35 @@ local function mineJobLive()
     return false
 end
 
+-- Who an UPDATE_ALL actually reaches, in one place so a test can drive it.
+--
+-- Idle turtles get it now; busy ones are flagged and take it when they next
+-- report idle. THE WAREHOUSE is sent it directly: it is not in state.registry
+-- -- it never registers, being a computer with an RS bridge rather than a
+-- turtle -- so every deploy since it was installed silently skipped it. Found
+-- 2026-09-22: it had no logship at all, which ships from 1.9.93, so it sat on
+-- pre-1.9.93 files while fifteen turtles moved on without it. It listens on
+-- CH_WAREHOUSE and runs updater.lua on UPDATE_ALL exactly as a turtle does.
+local function fanOutUpdateAll()
+    local nImmediate, nStaged = 0, 0
+    for _, tr in pairs(state.registry) do
+        if tr.online then
+            if tr.status == proto.STATUS.IDLE then
+                sendTo(tr.id, proto.MSG.UPDATE_ALL, {})
+                nImmediate = nImmediate + 1
+            else
+                tr.pendingUpdate = true
+                nStaged = nStaged + 1
+            end
+        end
+    end
+    proto.send(state.modem, proto.CH_WAREHOUSE,
+        proto.encode(proto.MSG.UPDATE_ALL, "server", "warehouse", {}))
+    logInfo(string.format("UPDATE_ALL: sent to %d idle, queued for %d busy turtle(s), and to the warehouse",
+        nImmediate, nStaged))
+    return nImmediate, nStaged
+end
+
 local function clearSectorFails(key, x, z)
     local cleared, scanned = 0, 0
     for zk, pz in pairs(state.persistentZones) do
@@ -3992,20 +4021,8 @@ function server.run()
             -- Staged update: send immediately to IDLE turtles only.
             -- Busy turtles (miners underground, mid-delivery) are flagged and
             -- will receive UPDATE_ALL the next time they heartbeat in as IDLE.
-            local nImmediate, nStaged = 0, 0
-            for _, tr in pairs(state.registry) do
-                if tr.online then
-                    if tr.status == proto.STATUS.IDLE then
-                        sendTo(tr.id, proto.MSG.UPDATE_ALL, {})
-                        nImmediate = nImmediate + 1
-                    else
-                        tr.pendingUpdate = true
-                        nStaged = nStaged + 1
-                    end
-                end
-            end
-            logInfo(string.format("UPDATE_ALL: sent to %d idle, queued for %d busy turtle(s)",
-                nImmediate, nStaged))
+            fanOutUpdateAll()
+
             -- Flag for self-update; acted on in the http_success handler
             -- after the bridge response is fully processed.
             logWarn("UPDATE_ALL — self-update queued...")
@@ -5445,6 +5462,7 @@ if _G.__CC_SERVER_TEST then
         noteBridgeBoot = noteBridgeBoot,
         sectorHolder   = sectorHolder,
         clearSectorFails = clearSectorFails,
+        fanOutUpdateAll  = fanOutUpdateAll,
         mineJobLive      = mineJobLive,
         dumpZoneOreMap   = dumpZoneOreMap,
     }
