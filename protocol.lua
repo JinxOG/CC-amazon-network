@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.114"
+proto.VERSION = "1.9.115"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -33,6 +33,14 @@ proto.MSG = {
 
     -- Warehouse
     ITEM_REQUEST   = "ITEM_REQUEST",    -- turtle → warehouse: periodic queue-ping while waiting (not a pickup handshake)
+    -- The warehouse's own view of RS storage, pushed to the server.
+    --
+    -- The server used to enumerate storage itself, and that call is what went
+    -- deaf for up to 39 s while mining (1.9.114 holds it off during a job, at
+    -- the cost of a stale dashboard panel). The warehouse computer already
+    -- talks to RS directly and is not on the dispatch loop, so it can do the
+    -- enumerating and send the result.
+    STORAGE_SNAPSHOT         = "STORAGE_SNAPSHOT",
 
     -- Position queries (used by support turtles to track their partner)
     TURTLE_QUERY   = "TURTLE_QUERY",    -- turtle → server: what is turtle X's position?

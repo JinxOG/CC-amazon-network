@@ -142,6 +142,9 @@ R_CLEAR   = "CLEAR_SECTOR_FAILS clears one sector's count and says so"
 R_DUMP    = "the ore-map dump names sectors that are done but never mapped"
 G_LIVE    = "a live MINE job holds off the storage poll, a finished one does not"
 G_WIRED   = "the storage poll is guarded before it enumerates (SOURCE-ONLY, weaker)"
+S_ADOPT   = "a warehouse storage snapshot is adopted as the one snapshot"
+S_SENDER  = "a storage snapshot from anyone but the warehouse is refused"
+S_BAD     = "an empty or malformed snapshot keeps the previous one"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -780,6 +783,24 @@ MUTANTS = [
 
     ("the dump totals nothing", "central_server.lua",
      [("                    total = total + (tonumber(n) or 0)\n", "")], R_DUMP),
+
+    # -- Storage comes from the warehouse (1.9.115) --------------------------
+    ("anyone may send a storage snapshot", "central_server.lua",
+     [('    if msg.from ~= "warehouse" then\n', "    if false then\n")], S_SENDER),
+
+    ("an empty snapshot replaces the good one", "central_server.lua",
+     [("    if #items == 0 then\n", "    if false then\n")], S_BAD),
+
+    ("a snapshot with no items table is adopted anyway", "central_server.lua",
+     [('    if type(p.items) ~= "table" then\n', "    if false then\n")], S_BAD),
+
+    ("the snapshot is never handed to the closure", "central_server.lua",
+     [("    if server._setStorageSnapshot then\n        server._setStorageSnapshot(items, state.storageSnapshotAt)\n    end\n",
+       "")], S_ADOPT),
+
+    ("the snapshot loses its amounts", "central_server.lua",
+     [("                amount      = tonumber(it.amount) or tonumber(it.count) or 0,\n",
+       "                amount      = 0,\n")], S_ADOPT),
 
     # -- Storage poll held off while mining (1.9.114) ------------------------
     ("the guard is deleted from refreshStorage", "central_server.lua",

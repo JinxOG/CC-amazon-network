@@ -182,6 +182,60 @@ return {
             "refreshCraftable enumerates too and needs the same guard")
     end,
 
+    -- 1.9.115: the warehouse enumerates RS and sends the result, so the
+    -- dispatch computer never makes the call that went deaf for 39s.
+    ["a warehouse storage snapshot is adopted as the one snapshot"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local got = nil
+        T.state.storageSnapshotAt = nil
+        -- server.run's closure is not running under the harness, so stand in
+        -- for its setter the way the real one behaves.
+        local server = require("central_server")
+        server._setStorageSnapshot = function(items, ts) got = { n = #items, ts = ts, first = items[1] } end
+        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = { items = {
+            { name = "minecraft:iron_ore", displayName = "Iron Ore", amount = 120, craftable = false },
+            { name = "minecraft:coal",     count = 64 },
+        } } })
+        local line = logged(T, "Storage snapshot from the warehouse: 2 items")
+        local at = T.state.storageSnapshotAt
+        server._setStorageSnapshot = nil
+        restore()
+        assert_eq(got ~= nil and got.n, 2, "both items must reach the snapshot")
+        assert_eq(got and got.first.amount, 120, "amount carried")
+        assert_eq(got and got.ts == at and at ~= nil, true, "and stamped with when it arrived")
+        assert_eq(line ~= nil, true, "the adoption is logged when the count changes")
+    end,
+
+    ["a storage snapshot from anyone but the warehouse is refused"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local called = false
+        local server = require("central_server")
+        server._setStorageSnapshot = function() called = true end
+        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = A, payload = { items = {
+            { name = "minecraft:diamond", amount = 999 } } } })
+        local line = logged(T, "only the warehouse may send one")
+        server._setStorageSnapshot = nil
+        restore()
+        assert_eq(called, false, "a turtle must not be able to rewrite what storage holds")
+        assert_eq(line ~= nil, true, "and the refusal is logged")
+    end,
+
+    ["an empty or malformed snapshot keeps the previous one"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local calls = 0
+        local server = require("central_server")
+        server._setStorageSnapshot = function() calls = calls + 1 end
+        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = {} })
+        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = { items = {} } })
+        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = { items = { { amount = 5 } } } })
+        local noItems = logged(T, "no items table")
+        local unusable = logged(T, "carried no usable items")
+        server._setStorageSnapshot = nil
+        restore()
+        assert_eq(calls, 0, "a bad snapshot must never replace a good one")
+        assert_eq(noItems ~= nil and unusable ~= nil, true, "and each refusal says which it was")
+    end,
+
     ["a refusal to depart does not count against the sector"] = function(assert_eq)
         local T, zone, restore = twoMiners({
             phase = "MINE", pending = {},

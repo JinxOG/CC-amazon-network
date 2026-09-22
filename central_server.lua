@@ -3218,6 +3218,54 @@ handlers[proto.MSG.MINE_PHASE] = handleMinePhase
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
 
+-- The warehouse's own RS enumeration, pushed here (1.9.115).
+--
+-- WHY IT COMES FROM THERE. rsBridge.listItems() is synchronous: whoever calls
+-- it processes no events until it returns, and CC drops what arrives meanwhile.
+-- On the dispatch computer that meant up to 39 s of deafness and a fleet that
+-- declared the server unreachable. The warehouse runs the same call off this
+-- loop, so the cost lands where nothing is listening for heartbeats.
+--
+-- Accepted only from the warehouse, and only in the shape the dashboard already
+-- serves, so /state, the ore watchdog and the craftable flag all read one
+-- snapshot whatever produced it.
+handlers[proto.MSG.STORAGE_SNAPSHOT] = function(msg)
+    if msg.from ~= "warehouse" then
+        logWarn("STORAGE_SNAPSHOT from " .. tostring(msg.from) .. " -- only the warehouse may send one; ignored")
+        return
+    end
+    local p = msg.payload or {}
+    if type(p.items) ~= "table" then
+        logWarn("STORAGE_SNAPSHOT with no items table; ignored")
+        return
+    end
+    local items = {}
+    for _, it in ipairs(p.items) do
+        if type(it) == "table" and it.name then
+            items[#items + 1] = {
+                name        = it.name,
+                displayName = it.displayName or it.name,
+                amount      = tonumber(it.amount) or tonumber(it.count) or 0,
+                craftable   = it.craftable == true,
+            }
+        end
+    end
+    if #items == 0 then
+        logWarn("STORAGE_SNAPSHOT carried no usable items; ignored (kept the previous snapshot)")
+        return
+    end
+    state.storageSnapshotAt = os.epoch("utc")
+    state.storageSnapshotN  = #items
+    if server._setStorageSnapshot then
+        server._setStorageSnapshot(items, state.storageSnapshotAt)
+    end
+    if state.storageSnapshotN ~= state.lastLoggedSnapshotN then
+        logInfo(string.format("Storage snapshot from the warehouse: %d items (was %s)",
+            #items, state.lastLoggedSnapshotN and tostring(state.lastLoggedSnapshotN) or "first"))
+        state.lastLoggedSnapshotN = #items
+    end
+end
+
 handlers[proto.MSG.ITEM_REQUEST] = function(msg)
     logInfo(string.format("Item request from %s (job %s)", msg.from, msg.payload.jobId))
     -- Forward with the real turtle ID so the warehouse knows who to talk to
@@ -3703,6 +3751,16 @@ function server.run()
         end
     end
 
+    -- Lets the STORAGE_SNAPSHOT handler, which lives outside this closure,
+    -- write the one snapshot every consumer here reads.
+    function server._setStorageSnapshot(items, ts)
+        storageItems = items
+        storageJSON  = textutils.serialiseJSON(items)
+        storageTs    = ts
+        local n = #items
+        if n ~= lastLoggedStorageCount then lastLoggedStorageCount = n end
+    end
+
     local function refreshStorage()
         if not rsBridge then
             rsBridge = peripheral.find("rsBridge")
@@ -3728,6 +3786,13 @@ function server.run()
         -- miner within a minute of them and still ran up to 11.9 s, including
         -- one with the fleet parked. A stall count that falls during mining
         -- measures this guard, not the storage network.
+        -- The warehouse is sending snapshots (1.9.115), so this computer has no
+        -- reason to enumerate at all. Fresh means within two minutes: longer
+        -- than that and the warehouse has stopped, in which case the local poll
+        -- is the fallback -- still held off during a job, which is 1.9.114.
+        local snapAt = state.storageSnapshotAt or 0
+        if os.epoch("utc") - snapAt < 120000 then return end
+
         if mineJobLive() then
             local now = os.epoch("utc")
             if now - (lastStorageHoldLog or 0) > 300000 then
