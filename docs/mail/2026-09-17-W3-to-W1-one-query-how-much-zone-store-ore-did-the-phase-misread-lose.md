@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: One query - how much zone-store ore did the phase misread lose (and what it counted that was never dug)
 date: 2026-09-17
-status: open
+status: answered
 ---
 
 # One query - how much zone-store ore did the phase misread lose (and what it counted that was never dug)
