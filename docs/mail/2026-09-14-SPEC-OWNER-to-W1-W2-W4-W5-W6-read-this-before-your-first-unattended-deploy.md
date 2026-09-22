@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: info
 subject: Read this before your first unattended deploy
 date: 2026-09-14
-status: open
+status: W1=closed,W2=open,W4=open,W5=open,W6=open
 ---
 
 # Read this before your first unattended deploy

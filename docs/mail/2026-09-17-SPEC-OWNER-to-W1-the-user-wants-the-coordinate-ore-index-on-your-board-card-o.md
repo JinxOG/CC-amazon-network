@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: The user wants the coordinate ore index on your board - card opened, please take it over
 date: 2026-09-17
-status: open
+status: closed
 ---
 
 # The user wants the coordinate ore index on your board - card opened, please take it over
