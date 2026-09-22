@@ -35,7 +35,24 @@ T_SHIP = "the warehouse's own log reaches the fleet log"
 T_CRASH = "a warehouse crash reaches the fleet log, at ERROR"
 T_MISSING = "a missing logship degrades the log, not the warehouse"
 
+T_PROBE_IDLE = "the probe never runs while a delivery is in flight"
+T_PROBE_BACKOFF = "a slow reading backs the probe off instead of paying again"
+
 MUTANTS = [
+    # -- The storage timing probe's two guards, promised to W3 2026-09-22 ---
+    # The probe is itself an enumeration, and an enumeration is the yield that
+    # destroys a delivery step. A promise with no failing test behind it is
+    # just a comment.
+    ("let the probe run mid-handshake (drop the idle guard)",
+     "    if not idle then return false end\n    return now >= probeNextAt",
+     "    return now >= probeNextAt",
+     T_PROBE_IDLE),
+
+    ("never back off after a slow reading",
+     "    probeInterval = (ms >= PROBE_SLOW_MS) and PROBE_BACKOFF_MS or PROBE_EVERY_MS",
+     "    probeInterval = PROBE_EVERY_MS",
+     T_PROBE_BACKOFF),
+
     ("re-arm only in the timer branch again (the 2026-09-04 shape)",
      "        os.cancelTimer(tickTimer)\n        tickTimer = os.startTimer(1)\n    end\n",
      "    end\n",

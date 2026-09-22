@@ -293,4 +293,40 @@ return {
         assert_eq(warned, true,
             "and it must say on its own console that it is not forwarding")
     end,
+
+    -- ─── The storage timing probe ────────────────────────────────────────────
+    --
+    -- The probe exists to time listItems on THIS computer, so it can be compared
+    -- against the dispatch server's 8-29 s stalls for the same minute. Every
+    -- number in that investigation was taken on the dispatch computer, which
+    -- measures how long that computer waited rather than how long the storage
+    -- network took.
+    --
+    -- Both tests below cover the same risk: the probe is itself an enumeration,
+    -- and an enumeration is exactly the yield that destroys a delivery step.
+    -- W3 warned about this on 2026-09-10 and W6 committed to the guard on
+    -- 2026-09-22. These are that promise, kept in code rather than in a memo.
+    ["the probe never runs while a delivery is in flight"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        assert_eq(W.probeDue(9e12, false), false,
+            "overdue by any measure, but the warehouse is mid-handshake: an "
+            .. "enumeration here destroys the step it lands on")
+        assert_eq(W.probeDue(9e12, true), true,
+            "and it must still run when idle, or the probe measures nothing at all")
+    end,
+
+    -- If the storage network turns out to be the slow party, a probe on a fixed
+    -- interval would keep buying seconds of deafness to re-learn that. It has to
+    -- notice and step back on its own.
+    ["a slow reading backs the probe off instead of paying again"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        local now = 1700000000000
+        assert_eq(W.probeRecord(now, W.PROBE_SLOW_MS), W.PROBE_BACKOFF_MS,
+            "a slow call must widen the interval")
+        assert_eq(W.probeDue(now + W.PROBE_EVERY_MS, true), false,
+            "and the normal interval must not make it due again after a back-off")
+        assert_eq(W.probeRecord(now, 5), W.PROBE_EVERY_MS,
+            "a fast call returns it to the normal interval")
+    end,
+
 }

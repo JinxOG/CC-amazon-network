@@ -515,6 +515,70 @@ local CRASH_LOG_FILE = "wh_crash.log"
 -- module-level so the crash handler at the bottom can flush it on the way down.
 local _log = nil
 
+-- ─── Temporary: storage-call timing probe ────────────────────────────────────
+--
+-- Times listItems on THIS computer so it can be compared against the dispatch
+-- server's stalls for the same minute.
+--
+-- Why it exists: every number in the 29-second deaf-window investigation was
+-- taken on the dispatch computer. Those measure how long *that computer waited*,
+-- which is not the same quantity as how long the storage network took, and only
+-- a second computer on the same network separates the two. If this reads ~40 ms
+-- while the dispatch server reads 8-29 s, the network is fine and the problem is
+-- that computer; if it reads seconds too, the network is the slow party and
+-- moving the poll anywhere is pointless.
+--
+-- An enumeration is exactly the yield that destroys a delivery step, so it is
+-- guarded three ways:
+--   * it runs only with the state machine IDLE, nothing being served and nothing
+--     queued -- the rule W6 committed to W3 on 2026-09-22;
+--   * it backs off hard the moment a call is slow, so if the network really is
+--     the slow party this probe cannot keep paying for the answer;
+--   * it is temporary, and comes out when the card is decided.
+local PROBE_EVERY_MS   = 60000
+local PROBE_SLOW_MS    = 2000
+local PROBE_BACKOFF_MS = 600000
+
+local probeNextAt   = 0
+local probeInterval = PROBE_EVERY_MS
+
+-- Split out and pure so the guard can be tested without standing up a state
+-- machine: the caller decides what "idle" means and passes it in.
+local function probeDue(now, idle)
+    if not idle then return false end
+    return now >= probeNextAt
+end
+
+-- Chooses the next interval from how long the call took, and returns it so a
+-- test can see the back-off rather than infer it.
+local function probeRecord(now, ms)
+    probeInterval = (ms >= PROBE_SLOW_MS) and PROBE_BACKOFF_MS or PROBE_EVERY_MS
+    probeNextAt   = now + probeInterval
+    return probeInterval
+end
+
+local function storageProbe(now)
+    local idle = (state == S.IDLE) and (current == nil) and (#queue == 0)
+    if not probeDue(now, idle) then return nil end
+
+    local t0    = os.epoch("utc")
+    local items = rsCall("listItems")
+    local ms    = os.epoch("utc") - t0
+    local n     = (type(items) == "table") and #items or -1
+    local nextIn = probeRecord(os.epoch("utc"), ms)
+
+    if ms >= PROBE_SLOW_MS then
+        -- A real level, so ?level=WARN finds the slow readings on their own.
+        if _log then _log.pendingLevel = "WARN" end
+        log(string.format("RS probe: listItems %dms for %d items - slow, next in %ds",
+            ms, n, nextIn / 1000))
+        if _log then _log.pendingLevel = nil end
+    else
+        log(string.format("RS probe: listItems %dms for %d items", ms, n))
+    end
+    return ms
+end
+
 local function main()
     -- Forward this computer's log to the fleet log. The shared half is W3's
     -- logship (1.9.93); until now nothing on this machine reported anything,
@@ -582,6 +646,7 @@ local function main()
         end
         -- Always tick after any event — state machine advances on messages AND time
         tick()
+        storageProbe(os.epoch("utc"))
         if _log then _log:tick() end
 
         -- Re-arm unconditionally, whatever woke us.
@@ -616,6 +681,12 @@ if _G.__CC_WAREHOUSE_TEST then
         CFG             = CFG,
         CRASH_LOG_FILE  = CRASH_LOG_FILE,
         main            = main,
+        probeDue        = probeDue,
+        probeRecord     = probeRecord,
+        storageProbe    = storageProbe,
+        PROBE_SLOW_MS   = PROBE_SLOW_MS,
+        PROBE_EVERY_MS  = PROBE_EVERY_MS,
+        PROBE_BACKOFF_MS = PROBE_BACKOFF_MS,
     }
 end
 
