@@ -1771,6 +1771,24 @@ end
 -- replacement did not finish on the miners it was given.
 local function respawnIfOrphaned(jobId, job, zone)
     if not (job and job.type == proto.JOB.MINE and zone and zone.persistentKey) then return end
+    -- NOT WHEN THE OPERATOR SAID STOP.
+    --
+    -- 2026-09-22: the user asked for the fleet to be cleared so a fix could be
+    -- deployed. Cancelling both jobs recalled both miners -- and the miner's own
+    -- JOB_FAILED reaches jobQueue.fail before the CANCELLED status lands, so
+    -- this function saw a zone with 7 sectors left and nobody on it and did
+    -- exactly what it was built for. A third miner flew 1,700 blocks out and had
+    -- to be cancelled and recalled in turn, costing another 25 minutes.
+    --
+    -- Respawning after a FAILURE is what keeps a zone from silently stopping and
+    -- stays. A cancel is not a failure: it is an instruction.
+    if job.cancelledByOperator then
+        logInfo(string.format("Zone %s has %d sector(s) left, but %s was cancelled -- no replacement queued",
+            zone.persistentKey,
+            #(zone.pending or {}) + #(zone.surveySectors or {}) + #(zone.rescanSectors or {}),
+            jobId))
+        return
+    end
     local remaining = #(zone.pending or {}) + #(zone.surveySectors or {})
                     + #(zone.rescanSectors or {})
     if remaining == 0 then return end
@@ -3431,6 +3449,11 @@ function server.cancelJob(jobId)
     if job.status == JOB_STATUS.COMPLETE or job.status == JOB_STATUS.FAILED then
         return false, "already finished"
     end
+    -- Marked BEFORE the recall goes out: the miner answers with JOB_FAILED, and
+    -- that reaches jobQueue.fail -- and respawnIfOrphaned -- before this
+    -- function sets CANCELLED below. The flag is what tells a deliberate stop
+    -- from a failure by the time it matters.
+    job.cancelledByOperator = true
     if job.assignedTo then
         sendTo(job.assignedTo, proto.MSG.RECALL, proto.payloadRecall("job_cancelled"))
         local t = state.registry[job.assignedTo]

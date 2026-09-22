@@ -215,6 +215,71 @@ return {
         assert_eq(line ~= nil, true, "the line says the warehouse was included")
     end,
 
+    -- 2026-09-22: the user asked for the fleet to be cleared for a deploy.
+    -- Cancelling the jobs sent a THIRD miner 1,700 blocks out, because the
+    -- miner's JOB_FAILED lands before the CANCELLED status and the respawn saw
+    -- a zone with sectors left and nobody on it.
+    --
+    -- Drives server.cancelJob rather than setting the flag by hand: the flag
+    -- and the check are two halves, and a test that sets it itself passes
+    -- happily with the setting deleted - the trap W6 walked into on 09-22 and
+    -- warned me about the same day.
+    ["a cancelled job gets no replacement, a failed one still does"] = function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S2), copy(S3) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        for _, j in ipairs({ JA, JB }) do
+            T.state.jobs[j].params = { x1 = 2052, z1 = -3080, x2 = 2052, z2 = -3080 }
+        end
+        T.state.jobs[JB].status = "COMPLETE"        -- only JA is live
+
+        -- Taken from package.loaded, not require'd: requiring it fresh here
+        -- would load it without __CC_SERVER_TEST and run the real boot loop.
+        local server = package.loaded["central_server"]
+        server.cancelJob(JA)                        -- the operator says stop
+        T.state.jobs[JA].status = "IN_PROGRESS"     -- the miner has not answered yet
+        T.state.miningZones[JA] = zone              -- cancelJob drops the zone ref
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "recalled", recoverable = false } })
+
+        local replacements = {}
+        for id, j in pairs(T.state.jobs) do
+            if id ~= JA and id ~= JB and j.params and j.params.sharedZoneKey == "zk" then
+                replacements[#replacements + 1] = id
+            end
+        end
+        local line = logged(T, "was cancelled -- no replacement queued")
+        restore()
+        assert_eq(#replacements, 0,
+            "a cancel is an instruction, not a failure: no third miner may be sent")
+        assert_eq(line ~= nil, true, "and the decision is logged with the sectors left")
+    end,
+
+    -- The other half: a genuine failure must STILL respawn, or a zone stops
+    -- silently the first time a miner dies on it.
+    ["a failed job still respawns its zone"] = function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S2), copy(S3) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        for _, j in ipairs({ JA, JB }) do
+            T.state.jobs[j].params = { x1 = 2052, z1 = -3080, x2 = 2052, z2 = -3080 }
+        end
+        T.state.jobs[JB].status = "COMPLETE"
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "loader_retrieve_failed", recoverable = false } })
+        local replacement = nil
+        for id, j in pairs(T.state.jobs) do
+            if id ~= JA and id ~= JB and j.params and j.params.sharedZoneKey == "zk" then
+                replacement = id
+            end
+        end
+        restore()
+        assert_eq(replacement ~= nil, true,
+            "respawning after a failure is what keeps a zone from stopping silently")
+    end,
+
     ["a storage digest feeds the ore watchdog and answers the network check"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
