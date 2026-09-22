@@ -139,6 +139,7 @@ S3_KEEP   = "a computer id with no valid channel stays on the shared one, and sa
 R_REFUSE  = "a refusal to depart does not count against the sector"
 R_REAL    = "a failure at the sector still counts against it"
 R_CLEAR   = "CLEAR_SECTOR_FAILS clears one sector's count and says so"
+R_DUMP    = "the ore-map dump names sectors that are done but never mapped"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -767,6 +768,16 @@ MUTANTS = [
 
     ("sendComplete never reports a failed send", "turtle_base.lua",
      [('        sent and "" or " -- the send FAILED (no modem)"))', '        ""))')], SC_LINE),
+
+    ("the dump never reports unmapped done sectors", "central_server.lua",
+     [("            if #unmapped > 0 then\n", "            if false then\n")], R_DUMP),
+
+    ("the dump counts a mapped sector as unmapped", "central_server.lua",
+     [("                if not (pz.sectorOreMap or {})[sKey] then unmapped[#unmapped + 1] = sKey end\n",
+       "                unmapped[#unmapped + 1] = sKey\n")], R_DUMP),
+
+    ("the dump totals nothing", "central_server.lua",
+     [("                    total = total + (tonumber(n) or 0)\n", "")], R_DUMP),
 
     # -- A refusal is not the sector's fault (1.9.113) -----------------------
     ("a refusal counts against the sector again", "central_server.lua",

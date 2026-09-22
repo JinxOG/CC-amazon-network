@@ -1093,6 +1093,61 @@ end
 --
 -- key nil means every zone; x/z nil means every counted sector in it. Returns
 -- how many counts it cleared, so a caller can tell "nothing to do" from "done".
+-- Read-only: write a zone's per-sector ore map to the log, where the bridge can
+-- read it. It is deliberately NOT in /state -- thousands of entries across
+-- historical zones block the event loop when serialised every few seconds
+-- (see the serialiser's own note) -- so without this there is no way to see it
+-- short of reading the store on the server machine.
+--
+-- Asked for by W1, 2026-09-21: the phase misread left 22 sectors with no map
+-- entry at all, and a targeted mine only ever considers sectors that HAVE one.
+--
+-- Bounded: at most `limit` sector lines per zone (default 40), then a count of
+-- the rest. A dump that floods the log loses the lines around it.
+local function dumpZoneOreMap(key, limit)
+    limit = tonumber(limit) or 40
+    local zones = 0
+    for zk, pz in pairs(state.persistentZones) do
+        if not key or zk == key then
+            zones = zones + 1
+            local done = {}
+            for _, sc in ipairs(pz.doneSectors or {}) do done[sc.x .. "," .. sc.z] = true end
+            local keys = {}
+            for sKey in pairs(pz.sectorOreMap or {}) do keys[#keys + 1] = sKey end
+            table.sort(keys)
+            logInfo(string.format("Ore map for zone %s: %d sector(s) mapped, %d marked done, total %d",
+                zk, #keys, #(pz.doneSectors or {}), pz.total or 0))
+            for i = 1, math.min(#keys, limit) do
+                local sKey = keys[i]
+                local types, total = 0, 0
+                for _, n in pairs(pz.sectorOreMap[sKey]) do
+                    types = types + 1
+                    total = total + (tonumber(n) or 0)
+                end
+                logInfo(string.format("  (%s) %d type(s) %d ore%s", sKey, types, total,
+                    done[sKey] and " [done]" or ""))
+            end
+            if #keys > limit then
+                logInfo(string.format("  ... and %d more mapped sector(s)", #keys - limit))
+            end
+            -- The gap W1 is asking about: done, but never mapped.
+            local unmapped = {}
+            for sKey in pairs(done) do
+                if not (pz.sectorOreMap or {})[sKey] then unmapped[#unmapped + 1] = sKey end
+            end
+            table.sort(unmapped)
+            if #unmapped > 0 then
+                logWarn(string.format("  zone %s: %d sector(s) done with NO ore map entry: %s",
+                    zk, #unmapped, table.concat(unmapped, " ")))
+            end
+        end
+    end
+    if zones == 0 then
+        logWarn("DUMP_ZONE_ORE_MAP: no zone matched " .. tostring(key))
+    end
+    return zones
+end
+
 local function clearSectorFails(key, x, z)
     local cleared, scanned = 0, 0
     for zk, pz in pairs(state.persistentZones) do
@@ -3796,6 +3851,9 @@ function server.run()
             logWarn("UPDATE_ALL — self-update queued...")
             pendingUpdate = true
 
+        elseif t == "DUMP_ZONE_ORE_MAP" then
+            dumpZoneOreMap(p.zoneKey, p.limit)
+
         elseif t == "CLEAR_SECTOR_FAILS" then
             clearSectorFails(p.zoneKey, tonumber(p.x), tonumber(p.z))
 
@@ -5225,6 +5283,7 @@ if _G.__CC_SERVER_TEST then
         noteBridgeBoot = noteBridgeBoot,
         sectorHolder   = sectorHolder,
         clearSectorFails = clearSectorFails,
+        dumpZoneOreMap   = dumpZoneOreMap,
     }
     return server
 end

@@ -118,6 +118,28 @@ return {
     -- 2026-09-18: all four GPS hosts went silent, node_138 refused three
     -- re-dispatches ("no_gps_fix: ... refusing to depart") and the refusals
     -- blacklisted a sector nothing had touched.
+    -- W1, 2026-09-21: the per-sector ore map is deliberately not in /state, so a
+    -- sector left unmapped by the phase misread cannot be seen from the bridge.
+    -- A targeted mine only ever considers sectors that HAVE a map entry.
+    ["the ore-map dump names sectors that are done but never mapped"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local pz = T.state.persistentZones["zk"]
+        pz.total = 3
+        pz.sectorOreMap = { ["2048,-3104"] = { ["minecraft:iron_ore"] = 12,
+                                               ["minecraft:copper_ore"] = 8 } }
+        pz.doneSectors  = { { x = 2048, z = -3104 }, { x = 2080, z = -3104 } }
+        local zones = T.dumpZoneOreMap("zk")
+        local header = logged(T, "Ore map for zone zk: 1 sector(s) mapped, 2 marked done, total 3")
+        local mapped = logged(T, "(2048,-3104) 2 type(s) 20 ore [done]")
+        local gap    = logged(T, "zone zk: 1 sector(s) done with NO ore map entry: 2080,-3104")
+        restore()
+        assert_eq(zones, 1, "the named zone is dumped")
+        assert_eq(header ~= nil, true, "with a header carrying the counts")
+        assert_eq(mapped ~= nil, true, "each mapped sector with its types and total")
+        assert_eq(gap ~= nil, true,
+            "and the gap named: done, but invisible to a targeted mine")
+    end,
+
     ["a refusal to depart does not count against the sector"] = function(assert_eq)
         local T, zone, restore = twoMiners({
             phase = "MINE", pending = {},
