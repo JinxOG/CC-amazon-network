@@ -159,7 +159,16 @@ local function driveWarehouse(opts)
             for _, l in ipairs(msg.payload.lines) do logLines[#logLines + 1] = l end
         end
     end
+    -- Every decoded message, not only the log batches: the digest has to be
+    -- visible here or a sender that never sends looks exactly like one that
+    -- works.
+    local msgs = {}
+    for _, payload in ipairs(sent) do
+        local m = textutils.unserialise(payload)
+        if type(m) == "table" then msgs[#msgs + 1] = m end
+    end
     return {
+        msgs     = msgs,
         ok       = ok,
         err      = tostring(err),
         ranOut   = tostring(err):find("no more queued events", 1, true) ~= nil,
@@ -345,6 +354,55 @@ return {
             "no probe reading crossed the radio -- the probe is not called from "
             .. "the loop, or its line is not forwarded, and either way the "
             .. "measurement does not exist where anyone can read it")
+    end,
+
+
+    -- ─── The storage digest ─────────────────────────────────────────────────
+    --
+    -- The dispatch computer never receives the item list: 469 items is 65 KB
+    -- serialised, against ~8 KB for the largest thing on the wire, and payload
+    -- deafness is on record from a 96 KB push. It gets counts, plus stock for
+    -- the names it asked about.
+    ["the watchlist is capped, so the digest cannot grow into a 65 KB message again"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        local many = {}
+        for i = 1, 500 do many[i] = "minecraft:ore_" .. i end
+        assert_eq(#W.acceptWatchlist(many), W.DIGEST_MAX_NAMES,
+            "an uncapped watchlist is how a 4 KB contract becomes 65 KB in six "
+            .. "months, by accident, with nobody left who remembers the reason")
+        assert_eq(W.acceptWatchlist("not a table"), nil)
+    end,
+
+    -- Degrade the watchdog, never the heartbeat: the counts are what carry
+    -- liveness and the same-network check.
+    ["an oversized digest drops the ore stock and still reports the counts"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        local big = {}
+        for i = 1, 400 do big["minecraft:a_very_long_ore_name_number_" .. i] = 123456 end
+        local payload, oversize = W.digestPayload(469, 24531758, big)
+        assert_eq(oversize ~= nil, true, "a payload past the cap must report its size")
+        assert_eq(payload.ores, nil, "the ore stock is what gets dropped")
+        assert_eq(payload.itemCount, 469, "and the counts must survive")
+        assert_eq(payload.grandTotal, 24531758)
+        local small = W.digestPayload(469, 24531758, { ["minecraft:iron_ore"] = 12 })
+        assert_eq(small.ores["minecraft:iron_ore"], 12, "a small one keeps its stock")
+    end,
+
+    -- Wiring, not logic. Both tests above pass with nothing ever sent.
+    ["the digest actually reaches the radio"] = function(assert_eq)
+        local r = driveWarehouse({ events = 4, stepMs = 16000 })
+        assert_eq(r.ranOut, true, "the loop must run the whole script: " .. r.err)
+        local found = false
+        for _, m in ipairs(r.msgs) do
+            if m.type == "STORAGE_SNAPSHOT" and type(m.payload) == "table"
+               and m.payload.itemCount ~= nil and m.payload.grandTotal ~= nil then
+                found = true
+            end
+        end
+        assert_eq(found, true,
+            "no STORAGE_SNAPSHOT carrying itemCount and grandTotal crossed the "
+            .. "radio -- the digest is built but never sent, which looks "
+            .. "identical to a warehouse with nothing to say")
     end,
 
 }

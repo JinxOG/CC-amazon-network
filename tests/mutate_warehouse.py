@@ -40,7 +40,27 @@ T_PROBE_BACKOFF = "a slow reading backs the probe off instead of paying again"
 
 T_PROBE_WIRED = "the probe actually runs in the loop and its reading reaches the fleet log"
 
+T_DIGEST_CAP = "the watchlist is capped, so the digest cannot grow into a 65 KB message again"
+T_DIGEST_TRIM = "an oversized digest drops the ore stock and still reports the counts"
+T_DIGEST_SENT = "the digest actually reaches the radio"
+
 MUTANTS = [
+    # -- The digest: cap, degradation, and whether it is sent at all ----------
+    ("let the watchlist grow past its cap",
+     "\n            if #out >= DIGEST_MAX_NAMES then break end",
+     "",
+     T_DIGEST_CAP),
+
+    ("send the oversized digest anyway",
+     "    if size <= DIGEST_MAX_BYTES then return full, nil end",
+     "    do return full, nil end",
+     T_DIGEST_TRIM),
+
+    ("build the digest but never send it",
+     "\n    sendToServer(MSG_STORAGE_SNAPSHOT, nil, payload)",
+     "",
+     T_DIGEST_SENT),
+
     # The wiring, as opposed to the logic. Deleting the call site leaves both
     # guard tests green, because a pure function does not care who calls it.
     ("never call the probe from the loop",

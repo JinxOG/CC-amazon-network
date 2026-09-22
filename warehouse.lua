@@ -229,6 +229,55 @@ end
 -- Handles urgent messages (UPDATE_ALL, JOB_ABORT, ITEM_REQUEST) immediately;
 -- everything else goes to the inbox for tick() to consume.
 
+-- ─── Storage digest for the dispatch server ──────────────────────────────────
+--
+-- The dispatch computer does NOT get the item list. Measured 2026-09-22: 469
+-- items is 65.2 KB serialised, against roughly 8 KB for the largest thing on
+-- the wire, and payload deafness is on record here from a 96 KB push that
+-- dropped heartbeats on 2026-08-30. Sending that every half minute would spare
+-- the server a peripheral call by handing it a recurring deserialise instead.
+--
+-- So it gets a digest: liveness, the two numbers that prove both computers see
+-- the same storage network, and stock for the ore names it actually watches.
+-- checkOreThresholds is its only consumer and reads nothing else. The full list
+-- goes to the bridge (W3 ruling 2026-09-22); that half waits on a scope ruling
+-- and is deliberately not built here.
+local MSG_STORAGE_SNAPSHOT  = (proto.MSG and proto.MSG.STORAGE_SNAPSHOT)  or "STORAGE_SNAPSHOT"
+local MSG_STORAGE_WATCHLIST = (proto.MSG and proto.MSG.STORAGE_WATCHLIST) or "STORAGE_WATCHLIST"
+
+-- W3 enforces these on receive. They are enforced here too: a contract policed
+-- at only one end fails as a refusal log rather than as a message never sent.
+local DIGEST_MAX_NAMES = 64
+local DIGEST_MAX_BYTES = 4096
+
+-- nil until the server sends one. Until then the digest carries the counts
+-- alone, which is enough for liveness and for the same-network check.
+local watchNames = nil
+
+local function acceptWatchlist(names)
+    if type(names) ~= "table" then return nil end
+    local out = {}
+    for _, n in ipairs(names) do
+        if type(n) == "string" then
+            out[#out + 1] = n
+            if #out >= DIGEST_MAX_NAMES then break end
+        end
+    end
+    return out
+end
+
+-- Returns the payload, and the oversize length if the full one was too big.
+-- Dropping `ores` rather than the whole message is deliberate: the counts still
+-- carry liveness and the same-network check, so an over-large watchlist
+-- degrades the ore watchdog rather than the heartbeat.
+local function digestPayload(itemCount, grandTotal, ores)
+    local full = { itemCount = itemCount, grandTotal = grandTotal }
+    if ores and next(ores) ~= nil then full.ores = ores end
+    local size = #textutils.serialise(full)
+    if size <= DIGEST_MAX_BYTES then return full, nil end
+    return { itemCount = itemCount, grandTotal = grandTotal }, size
+end
+
 local function routeMsg(raw)
     if not raw then return end
     local ok, msg = proto.decode(raw)
@@ -239,6 +288,16 @@ local function routeMsg(raw)
         log("UPDATE_ALL — rebooting...")
         sleep(1)
         if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
+        return
+    end
+
+    -- ── The ore names the server wants stock for ────────────────────────────
+    if msg.type == MSG_STORAGE_WATCHLIST then
+        local names = acceptWatchlist(msg.payload and msg.payload.names)
+        if names then
+            watchNames = names
+            log(string.format("Storage watchlist: %d name(s)", #names))
+        end
         return
     end
 
@@ -535,7 +594,7 @@ local _log = nil
 --   * it backs off hard the moment a call is slow, so if the network really is
 --     the slow party this probe cannot keep paying for the answer;
 --   * it is temporary, and comes out when the card is decided.
-local PROBE_EVERY_MS   = 60000
+local PROBE_EVERY_MS   = 30000   -- also the digest cadence (W3, provisional)
 local PROBE_SLOW_MS    = 2000
 local PROBE_BACKOFF_MS = 600000
 
@@ -559,7 +618,17 @@ end
 
 local function storageProbe(now)
     local idle = (state == S.IDLE) and (current == nil) and (#queue == 0)
-    if not probeDue(now, idle) then return nil end
+    if not probeDue(now, idle) then
+        -- Due, but a delivery is in flight, and an enumeration here destroys a
+        -- handshake step. Say so: the server cannot otherwise tell "busy and
+        -- deliberately quiet" from "stopped", and would resume polling itself
+        -- at exactly the wrong moment.
+        if now >= probeNextAt then
+            sendToServer(MSG_STORAGE_SNAPSHOT, nil, { keepalive = true })
+            probeNextAt = now + probeInterval
+        end
+        return nil
+    end
 
     local t0    = os.epoch("utc")
     local items = rsCall("listItems")
@@ -592,6 +661,30 @@ local function storageProbe(now)
     else
         log(string.format("RS probe: listItems %dms items=%d total=%d", ms, n, total))
     end
+
+    -- Stock for the watched names only. Summed by name, because one name can
+    -- appear more than once (NBT variants) and the server sums them the same
+    -- way when it builds its own lookup.
+    local ores = nil
+    if watchNames and type(items) == "table" then
+        local want = {}
+        for _, nm in ipairs(watchNames) do want[nm] = true end
+        ores = {}
+        for _, it in ipairs(items) do
+            if it.name and want[it.name] then
+                ores[it.name] = (ores[it.name] or 0) + (tonumber(it.amount or it.count) or 0)
+            end
+        end
+    end
+
+    local payload, oversize = digestPayload(n, total, ores)
+    if oversize then
+        if _log then _log.pendingLevel = "WARN" end
+        log(string.format("Storage digest %d bytes over the %d cap - sent counts only",
+            oversize, DIGEST_MAX_BYTES))
+        if _log then _log.pendingLevel = nil end
+    end
+    sendToServer(MSG_STORAGE_SNAPSHOT, nil, payload)
     return ms
 end
 
@@ -700,6 +793,10 @@ if _G.__CC_WAREHOUSE_TEST then
         probeDue        = probeDue,
         probeRecord     = probeRecord,
         storageProbe    = storageProbe,
+        acceptWatchlist = acceptWatchlist,
+        digestPayload   = digestPayload,
+        DIGEST_MAX_NAMES = DIGEST_MAX_NAMES,
+        DIGEST_MAX_BYTES = DIGEST_MAX_BYTES,
         PROBE_SLOW_MS   = PROBE_SLOW_MS,
         PROBE_EVERY_MS  = PROBE_EVERY_MS,
         PROBE_BACKOFF_MS = PROBE_BACKOFF_MS,
