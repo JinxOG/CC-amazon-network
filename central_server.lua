@@ -3218,53 +3218,105 @@ handlers[proto.MSG.MINE_PHASE] = handleMinePhase
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
 
--- The warehouse's own RS enumeration, pushed here (1.9.115).
+-- The warehouse's storage digest (1.9.115, approved 2026-09-22).
 --
--- WHY IT COMES FROM THERE. rsBridge.listItems() is synchronous: whoever calls
--- it processes no events until it returns, and CC drops what arrives meanwhile.
--- On the dispatch computer that meant up to 39 s of deafness and a fleet that
--- declared the server unreachable. The warehouse runs the same call off this
--- loop, so the cost lands where nothing is listening for heartbeats.
+-- WHY A DIGEST AND NOT THE LIST. rsBridge.listItems() is synchronous: whoever
+-- calls it processes no events until it returns, and this computer measured up
+-- to 39 s of that while mining. Moving the call to the warehouse fixes that --
+-- but shipping its 469-item result here every 30 s would just trade a
+-- peripheral stall for deserialising 49.6 KB on the same loop, and a 96 KB
+-- payload already made this server deaf on 2026-08-30. So the full list goes
+-- from the warehouse to the BRIDGE over HTTP, which is what serves the
+-- dashboard, and only these few hundred bytes come here.
 --
--- Accepted only from the warehouse, and only in the shape the dashboard already
--- serves, so /state, the ore watchdog and the craftable flag all read one
--- snapshot whatever produced it.
-handlers[proto.MSG.STORAGE_SNAPSHOT] = function(msg)
+-- W5's two rules (2026-09-10) hold on this path too: the newest reading wins
+-- whichever route delivered it, and the timestamp means WHEN RS WAS READ, never
+-- when the message was sent -- otherwise a warehouse still posting after RS
+-- died would look fresh.
+local DIGEST_MAX_NAMES = 64
+
+handlers[proto.MSG.STORAGE_DIGEST] = function(msg)
     if msg.from ~= "warehouse" then
-        logWarn("STORAGE_SNAPSHOT from " .. tostring(msg.from) .. " -- only the warehouse may send one; ignored")
+        logWarn("STORAGE_DIGEST from " .. tostring(msg.from) .. " -- only the warehouse may send one; ignored")
         return
     end
     local p = msg.payload or {}
-    if type(p.items) ~= "table" then
-        logWarn("STORAGE_SNAPSHOT with no items table; ignored")
+    local now = os.epoch("utc")
+
+    -- Liveness first, and it counts for the keepalive form too: that is the
+    -- whole point of the keepalive, so a warehouse busy with a delivery
+    -- handshake does not read as stopped and restart enumeration here.
+    state.storageSenderSeenAt = now
+
+    -- Tell it what to watch, once per sender boot and whenever the operator
+    -- changes a threshold. Without this the warehouse would have to guess, and
+    -- guessing means sending everything, which is what this design exists to
+    -- avoid. Sent on ANY contact including a keepalive: first contact is
+    -- exactly when it has no list.
+    --
+    -- Addressed straight to CH_WAREHOUSE, as ITEM_REQUEST forwarding is: the
+    -- warehouse is not a registered turtle, so sendTo would refuse it.
+    if state.watchlistSentAt == nil or state.watchlistDirty == true then
+        local names = {}
+        for name in pairs(oreThresholds) do names[#names + 1] = name end
+        table.sort(names)
+        proto.send(state.modem, proto.CH_WAREHOUSE,
+            proto.encode(proto.MSG.STORAGE_WATCHLIST, "server", "warehouse", { names = names }))
+        state.watchlistSentAt = now
+        state.watchlistDirty  = false
+        logInfo(string.format("Sent the warehouse a watchlist of %d ore name(s)", #names))
+    end
+
+    if p.keepalive == true and p.ores == nil then
         return
     end
-    local items = {}
-    for _, it in ipairs(p.items) do
-        if type(it) == "table" and it.name then
-            items[#items + 1] = {
-                name        = it.name,
-                displayName = it.displayName or it.name,
-                amount      = tonumber(it.amount) or tonumber(it.count) or 0,
-                craftable   = it.craftable == true,
-            }
+
+    if type(p.ores) ~= "table" then
+        logWarn("STORAGE_DIGEST with no ores array and no keepalive; ignored")
+        return
+    end
+
+    -- BOUNDED, and it says so when it trims. A contract without a limit becomes
+    -- 65 KB again by accident, and the log is what makes that visible.
+    local stock, n, seen = {}, 0, 0
+    for _, entry in ipairs(p.ores) do
+        seen = seen + 1
+        if n < DIGEST_MAX_NAMES and type(entry) == "table" and entry.name then
+            stock[entry.name] = tonumber(entry.amount) or tonumber(entry.count) or 0
+            n = n + 1
         end
     end
-    if #items == 0 then
-        logWarn("STORAGE_SNAPSHOT carried no usable items; ignored (kept the previous snapshot)")
+    if seen > DIGEST_MAX_NAMES then
+        logWarn(string.format(
+            "STORAGE_DIGEST carried %d names; kept the first %d (the cap exists so this payload cannot grow into the one that made the server deaf)",
+            seen, DIGEST_MAX_NAMES))
+    end
+
+    -- Newest reading wins, and the reading time is the warehouse's, not ours.
+    local readAt = tonumber(p.storageTs)
+    if readAt and readAt < (state.oreStockTs or 0) then
+        logWarn(string.format("STORAGE_DIGEST is older than the one held (%d < %d); ignored",
+            readAt, state.oreStockTs or 0))
         return
     end
-    state.storageSnapshotAt = os.epoch("utc")
-    state.storageSnapshotN  = #items
-    if server._setStorageSnapshot then
-        server._setStorageSnapshot(items, state.storageSnapshotAt)
+    state.oreStock     = stock
+    state.oreStockTs   = readAt or now
+    state.storageItemCount  = tonumber(p.itemCount)
+    state.storageGrandTotal = tonumber(p.grandTotal)
+
+    if state.storageItemCount ~= state.lastLoggedDigestN then
+        logInfo(string.format("Storage digest from the warehouse: %d watched name(s), %s items, total %s",
+            n, tostring(state.storageItemCount or "?"), tostring(state.storageGrandTotal or "?")))
+        state.lastLoggedDigestN = state.storageItemCount
     end
-    if state.storageSnapshotN ~= state.lastLoggedSnapshotN then
-        logInfo(string.format("Storage snapshot from the warehouse: %d items (was %s)",
-            #items, state.lastLoggedSnapshotN and tostring(state.lastLoggedSnapshotN) or "first"))
-        state.lastLoggedSnapshotN = #items
-    end
+
 end
+
+-- Same handler under the name W6's sender already uses. A wire contract
+-- policed by one name only fails silently: their message would arrive, match
+-- nothing, and the digest would simply never appear. Retire when the sender
+-- switches to STORAGE_DIGEST.
+handlers[proto.MSG.STORAGE_SNAPSHOT] = handlers[proto.MSG.STORAGE_DIGEST]
 
 handlers[proto.MSG.ITEM_REQUEST] = function(msg)
     logInfo(string.format("Item request from %s (job %s)", msg.from, msg.payload.jobId))
@@ -3678,9 +3730,16 @@ function server.run()
     local function checkOreThresholds()
         if not next(oreThresholds) then return end
         -- Build fast stock lookup from latest RS snapshot
+        -- The warehouse's digest is the better source while it is fresh: this
+        -- computer's own snapshot is held off during a job (1.9.114) and, in
+        -- the end state, is not taken at all.
         local stockMap = {}
-        for _, item in ipairs(storageItems) do
-            stockMap[item.name] = (stockMap[item.name] or 0) + item.amount
+        if state.oreStock and (os.epoch("utc") - (state.oreStockTs or 0) < 180000) then
+            for name, amount in pairs(state.oreStock) do stockMap[name] = amount end
+        else
+            for _, item in ipairs(storageItems) do
+                stockMap[item.name] = (stockMap[item.name] or 0) + item.amount
+            end
         end
         for oreName, minimum in pairs(oreThresholds) do
             -- Clear completed/failed auto-mines so we can re-dispatch
@@ -3751,16 +3810,6 @@ function server.run()
         end
     end
 
-    -- Lets the STORAGE_SNAPSHOT handler, which lives outside this closure,
-    -- write the one snapshot every consumer here reads.
-    function server._setStorageSnapshot(items, ts)
-        storageItems = items
-        storageJSON  = textutils.serialiseJSON(items)
-        storageTs    = ts
-        local n = #items
-        if n ~= lastLoggedStorageCount then lastLoggedStorageCount = n end
-    end
-
     local function refreshStorage()
         if not rsBridge then
             rsBridge = peripheral.find("rsBridge")
@@ -3790,8 +3839,16 @@ function server.run()
         -- reason to enumerate at all. Fresh means within two minutes: longer
         -- than that and the warehouse has stopped, in which case the local poll
         -- is the fallback -- still held off during a job, which is 1.9.114.
-        local snapAt = state.storageSnapshotAt or 0
-        if os.epoch("utc") - snapAt < 120000 then return end
+        -- STOOD DOWN WHILE THE WAREHOUSE IS ALIVE (1.9.115).
+        --
+        -- Keyed on liveness, not on the digest's age: W6's sender skips a poll
+        -- while a delivery handshake is in flight, and its step timeout is
+        -- 120 s. Keyed on age, a slow delivery would age the digest past the
+        -- threshold and restart enumeration HERE at exactly the moment the
+        -- warehouse is busy -- both halves correct, the pair worse than either.
+        -- 180 s clears that worst case with margin; the keepalive is what keeps
+        -- it refreshed.
+        if os.epoch("utc") - (state.storageSenderSeenAt or 0) < 180000 then return end
 
         if mineJobLive() then
             local now = os.epoch("utc")
@@ -4295,6 +4352,7 @@ function server.run()
                 logWarn("SET_ORE_THRESHOLD: invalid name or minimum"); return
             end
             oreThresholds[name] = minimum
+            state.watchlistDirty = true
             saveOreThresholds()
             logInfo(string.format("Ore threshold set: %s → %d", name, minimum))
 
@@ -4302,6 +4360,7 @@ function server.run()
             local name = p.name
             if not name then logWarn("REMOVE_ORE_THRESHOLD: missing name"); return end
             oreThresholds[name] = nil
+            state.watchlistDirty = true
             saveOreThresholds()
             logInfo("Ore threshold removed: " .. tostring(name))
 

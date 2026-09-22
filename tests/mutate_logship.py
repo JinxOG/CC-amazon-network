@@ -142,9 +142,13 @@ R_CLEAR   = "CLEAR_SECTOR_FAILS clears one sector's count and says so"
 R_DUMP    = "the ore-map dump names sectors that are done but never mapped"
 G_LIVE    = "a live MINE job holds off the storage poll, a finished one does not"
 G_WIRED   = "the storage poll is guarded before it enumerates (SOURCE-ONLY, weaker)"
-S_ADOPT   = "a warehouse storage snapshot is adopted as the one snapshot"
-S_SENDER  = "a storage snapshot from anyone but the warehouse is refused"
-S_BAD     = "an empty or malformed snapshot keeps the previous one"
+D_FEED    = "a storage digest feeds the ore watchdog and answers the network check"
+D_ALIVE   = "a keepalive refreshes liveness without touching the reading"
+D_NEWEST  = "an older reading never overwrites a newer one"
+D_CAP     = "the digest is capped and says so when it trims"
+D_SENDER  = "a digest from anyone but the warehouse is refused"
+D_WATCH   = "the first digest gets the watchlist so the warehouse need not guess"
+D_ALIAS   = "the digest is accepted under the name the sender already uses"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -784,23 +788,32 @@ MUTANTS = [
     ("the dump totals nothing", "central_server.lua",
      [("                    total = total + (tonumber(n) or 0)\n", "")], R_DUMP),
 
-    # -- Storage comes from the warehouse (1.9.115) --------------------------
-    ("anyone may send a storage snapshot", "central_server.lua",
-     [('    if msg.from ~= "warehouse" then\n', "    if false then\n")], S_SENDER),
+    # -- The warehouse digest (1.9.115) --------------------------------------
+    ("anyone may send a digest", "central_server.lua",
+     [('    if msg.from ~= "warehouse" then\n', "    if false then\n")], D_SENDER),
 
-    ("an empty snapshot replaces the good one", "central_server.lua",
-     [("    if #items == 0 then\n", "    if false then\n")], S_BAD),
+    ("the reading time becomes arrival time", "central_server.lua",
+     [("    state.oreStockTs   = readAt or now\n", "    state.oreStockTs   = now\n")], D_FEED),
 
-    ("a snapshot with no items table is adopted anyway", "central_server.lua",
-     [('    if type(p.items) ~= "table" then\n', "    if false then\n")], S_BAD),
+    ("an older reading overwrites a newer one", "central_server.lua",
+     [("    if readAt and readAt < (state.oreStockTs or 0) then\n", "    if false then\n")], D_NEWEST),
 
-    ("the snapshot is never handed to the closure", "central_server.lua",
-     [("    if server._setStorageSnapshot then\n        server._setStorageSnapshot(items, state.storageSnapshotAt)\n    end\n",
-       "")], S_ADOPT),
+    ("the cap is not enforced", "central_server.lua",
+     [("        if n < DIGEST_MAX_NAMES and type(entry) == \"table\" and entry.name then",
+       '        if type(entry) == "table" and entry.name then')], D_CAP),
 
-    ("the snapshot loses its amounts", "central_server.lua",
-     [("                amount      = tonumber(it.amount) or tonumber(it.count) or 0,\n",
-       "                amount      = 0,\n")], S_ADOPT),
+    ("trimming is silent", "central_server.lua",
+     [("    if seen > DIGEST_MAX_NAMES then\n", "    if false then\n")], D_CAP),
+
+    ("a keepalive is treated as malformed", "central_server.lua",
+     [("    if p.keepalive == true and p.ores == nil then\n        return\n    end\n", "")], D_ALIVE),
+
+    ("the watchlist is never sent", "central_server.lua",
+     [("    if state.watchlistSentAt == nil or state.watchlistDirty == true then\n",
+       "    if false then\n")], D_WATCH),
+
+    ("the legacy message name is dropped", "central_server.lua",
+     [("handlers[proto.MSG.STORAGE_SNAPSHOT] = handlers[proto.MSG.STORAGE_DIGEST]\n", "")], D_ALIAS),
 
     # -- Storage poll held off while mining (1.9.114) ------------------------
     ("the guard is deleted from refreshStorage", "central_server.lua",

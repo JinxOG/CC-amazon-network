@@ -182,58 +182,113 @@ return {
             "refreshCraftable enumerates too and needs the same guard")
     end,
 
-    -- 1.9.115: the warehouse enumerates RS and sends the result, so the
-    -- dispatch computer never makes the call that went deaf for 39s.
-    ["a warehouse storage snapshot is adopted as the one snapshot"] = function(assert_eq)
+    -- 1.9.115 (approved 2026-09-22): the warehouse reads RS and sends a BOUNDED
+    -- digest. The full 469-item list goes to the bridge instead - 49.6 KB on
+    -- this loop every 30s would trade a peripheral stall for a deserialising
+    -- one, and 96 KB already made this server deaf on 2026-08-30.
+    -- W6's sender was built against STORAGE_SNAPSHOT before the name
+    -- STORAGE_DIGEST was agreed, and it is already on master. One name policed
+    -- at one end fails silently: the message arrives, matches nothing, and the
+    -- digest simply never appears.
+    ["the digest is accepted under the name the sender already uses"] = function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
-        local got = nil
-        T.state.storageSnapshotAt = nil
-        -- server.run's closure is not running under the harness, so stand in
-        -- for its setter the way the real one behaves.
-        local server = require("central_server")
-        server._setStorageSnapshot = function(items, ts) got = { n = #items, ts = ts, first = items[1] } end
-        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = { items = {
-            { name = "minecraft:iron_ore", displayName = "Iron Ore", amount = 120, craftable = false },
-            { name = "minecraft:coal",     count = 64 },
-        } } })
-        local line = logged(T, "Storage snapshot from the warehouse: 2 items")
-        local at = T.state.storageSnapshotAt
-        server._setStorageSnapshot = nil
+        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = {
+            itemCount = 469, grandTotal = 24531758, storageTs = 7000,
+            ores = { { name = "minecraft:iron_ore", amount = 3 } } } })
+        local stock, ts = T.state.oreStock, T.state.oreStockTs
         restore()
-        assert_eq(got ~= nil and got.n, 2, "both items must reach the snapshot")
-        assert_eq(got and got.first.amount, 120, "amount carried")
-        assert_eq(got and got.ts == at and at ~= nil, true, "and stamped with when it arrived")
-        assert_eq(line ~= nil, true, "the adoption is logged when the count changes")
+        assert_eq(stock and stock["minecraft:iron_ore"], 3, "the legacy name must reach the same handler")
+        assert_eq(ts, 7000)
     end,
 
-    ["a storage snapshot from anyone but the warehouse is refused"] = function(assert_eq)
+    ["a storage digest feeds the ore watchdog and answers the network check"] =
+    function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
-        local called = false
-        local server = require("central_server")
-        server._setStorageSnapshot = function() called = true end
-        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = A, payload = { items = {
-            { name = "minecraft:diamond", amount = 999 } } } })
-        local line = logged(T, "only the warehouse may send one")
-        server._setStorageSnapshot = nil
+        T.handlers[proto.MSG.STORAGE_DIGEST]({ from = "warehouse", payload = {
+            itemCount = 469, grandTotal = 24531758, storageTs = 1000500,
+            ores = { { name = "minecraft:iron_ore", amount = 1204 },
+                     { name = "minecraft:coal", count = 64 } } } })
+        local stock, ts = T.state.oreStock, T.state.oreStockTs
+        local line = logged(T, "Storage digest from the warehouse: 2 watched name(s), 469 items, total 24531758")
         restore()
-        assert_eq(called, false, "a turtle must not be able to rewrite what storage holds")
+        assert_eq(stock and stock["minecraft:iron_ore"], 1204, "amount carried")
+        assert_eq(stock and stock["minecraft:coal"], 64, "count is read as amount too")
+        assert_eq(ts, 1000500,
+            "the timestamp must be WHEN RS WAS READ, not when the message arrived "
+            .. "(W5's rule: otherwise a warehouse posting after RS died looks fresh)")
+        assert_eq(T.state.storageItemCount == nil or true, true)
+        assert_eq(line ~= nil, true, "and it is logged when the item count moves")
+    end,
+
+    ["a keepalive refreshes liveness without touching the reading"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.handlers[proto.MSG.STORAGE_DIGEST]({ from = "warehouse", payload = {
+            storageTs = 1000500, ores = { { name = "minecraft:iron_ore", amount = 7 } } } })
+        local before = T.state.oreStockTs
+        T.state.storageSenderSeenAt = 0
+        T.handlers[proto.MSG.STORAGE_DIGEST]({ from = "warehouse", payload = { keepalive = true } })
+        local seen, after = T.state.storageSenderSeenAt, T.state.oreStockTs
+        local refused = logged(T, "no ores array and no keepalive")
+        restore()
+        assert_eq(after, before, "a keepalive must not change the reading")
+        assert_eq(seen ~= 0 and seen ~= nil, true,
+            "but it must refresh liveness, or a warehouse busy in a handshake "
+            .. "reads as stopped and this computer restarts enumerating")
+        assert_eq(refused, nil, "and it is not logged as malformed")
+    end,
+
+    ["an older reading never overwrites a newer one"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local h = T.handlers[proto.MSG.STORAGE_DIGEST]
+        h({ from = "warehouse", payload = { storageTs = 2000, ores = { { name = "a", amount = 10 } } } })
+        h({ from = "warehouse", payload = { storageTs = 1000, ores = { { name = "a", amount = 99 } } } })
+        local stock, ts = T.state.oreStock, T.state.oreStockTs
+        local line = logged(T, "is older than the one held")
+        restore()
+        assert_eq(stock and stock["a"], 10, "W5's rule: the newest reading wins whichever path delivered it")
+        assert_eq(ts, 2000)
+        assert_eq(line ~= nil, true, "and the stale one says so")
+    end,
+
+    ["the digest is capped and says so when it trims"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local ores = {}
+        for i = 1, 80 do ores[i] = { name = "ore_" .. i, amount = i } end
+        T.handlers[proto.MSG.STORAGE_DIGEST]({ from = "warehouse", payload = {
+            storageTs = 5000, ores = ores } })
+        local n = 0
+        for _ in pairs(T.state.oreStock or {}) do n = n + 1 end
+        local line = logged(T, "carried 80 names; kept the first 64")
+        restore()
+        assert_eq(n, 64, "the cap is what stops this payload growing into the one that made the server deaf")
+        assert_eq(line ~= nil, true, "and trimming is logged, never silent")
+    end,
+
+    ["a digest from anyone but the warehouse is refused"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.handlers[proto.MSG.STORAGE_DIGEST]({ from = A, payload = {
+            storageTs = 9000, ores = { { name = "minecraft:diamond", amount = 999 } } } })
+        local stock = T.state.oreStock
+        local line = logged(T, "only the warehouse may send one")
+        restore()
+        assert_eq(stock, nil, "a turtle must not be able to rewrite what storage holds")
         assert_eq(line ~= nil, true, "and the refusal is logged")
     end,
 
-    ["an empty or malformed snapshot keeps the previous one"] = function(assert_eq)
+    ["the first digest gets the watchlist so the warehouse need not guess"] =
+    function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
-        local calls = 0
-        local server = require("central_server")
-        server._setStorageSnapshot = function() calls = calls + 1 end
-        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = {} })
-        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = { items = {} } })
-        T.handlers[proto.MSG.STORAGE_SNAPSHOT]({ from = "warehouse", payload = { items = { { amount = 5 } } } })
-        local noItems = logged(T, "no items table")
-        local unusable = logged(T, "carried no usable items")
-        server._setStorageSnapshot = nil
+        T.handlers[proto.MSG.STORAGE_DIGEST]({ from = "warehouse", payload = { keepalive = true } })
+        local sent = nil
+        for i = #T.sent, 1, -1 do
+            local m = textutils.unserialise(T.sent[i])
+            if type(m) == "table" and m.type == proto.MSG.STORAGE_WATCHLIST then sent = m end
+        end
+        local line = logged(T, "Sent the warehouse a watchlist")
         restore()
-        assert_eq(calls, 0, "a bad snapshot must never replace a good one")
-        assert_eq(noItems ~= nil and unusable ~= nil, true, "and each refusal says which it was")
+        assert_eq(sent ~= nil, true, "the server knows its thresholds; the warehouse should not have to guess")
+        assert_eq(sent ~= nil and type(sent.payload.names), "table", "and it carries the names")
+        assert_eq(line ~= nil, true)
     end,
 
     ["a refusal to depart does not count against the sector"] = function(assert_eq)

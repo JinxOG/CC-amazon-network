@@ -33,14 +33,24 @@ proto.MSG = {
 
     -- Warehouse
     ITEM_REQUEST   = "ITEM_REQUEST",    -- turtle → warehouse: periodic queue-ping while waiting (not a pickup handshake)
-    -- The warehouse's own view of RS storage, pushed to the server.
+    -- The warehouse's RS reading, in two parts (approved 2026-09-22).
     --
-    -- The server used to enumerate storage itself, and that call is what went
-    -- deaf for up to 39 s while mining (1.9.114 holds it off during a job, at
-    -- the cost of a stale dashboard panel). The warehouse computer already
-    -- talks to RS directly and is not on the dispatch loop, so it can do the
-    -- enumerating and send the result.
+    -- The FULL item list does not come here at all: 469 items is 49.6 KB of
+    -- JSON, 5-8x the largest thing on the wire, and a 96 KB payload made this
+    -- server deaf on 2026-08-30. The warehouse posts that straight to the
+    -- bridge, which is what serves the dashboard.
+    --
+    -- What reaches the dispatch server is a bounded digest: the counts the ore
+    -- watchdog actually reads, plus two totals for the same-network check. A
+    -- keepalive form says "still here" without a new reading, so the fallback
+    -- poll can tell a busy warehouse from a stopped one.
+    STORAGE_DIGEST           = "STORAGE_DIGEST",
+    -- The name W6's sender was built against before this one was agreed.
+    -- Kept so either half can land first, as W6 designed for; the server
+    -- handles both. Retire it once the sender reads proto.MSG.STORAGE_DIGEST.
     STORAGE_SNAPSHOT         = "STORAGE_SNAPSHOT",
+    -- The names the server is watching, so the warehouse need not guess.
+    STORAGE_WATCHLIST        = "STORAGE_WATCHLIST",
 
     -- Position queries (used by support turtles to track their partner)
     TURTLE_QUERY   = "TURTLE_QUERY",    -- turtle → server: what is turtle X's position?
