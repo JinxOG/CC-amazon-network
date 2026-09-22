@@ -329,4 +329,22 @@ return {
             "a fast call returns it to the normal interval")
     end,
 
+
+    -- The two tests above exercise the guard directly. NEITHER of them proves
+    -- the probe is wired into the loop at all: delete the call site and both
+    -- still pass, because a pure function does not care whether anyone calls
+    -- it. That is the shape this project keeps getting caught by -- a check
+    -- whose pass state is indistinguishable from the thing never running.
+    --
+    -- This one drives the real loop and requires the reading to reach the
+    -- fleet log, which is the only place the measurement is of any use.
+    ["the probe actually runs in the loop and its reading reaches the fleet log"] = function(assert_eq)
+        local r = driveWarehouse({ events = 4, stepMs = 16000 })
+        assert_eq(r.ranOut, true, "the loop must run the whole script: " .. r.err)
+        assert_eq(anyLine(r.logLines, "RS probe: listItems"), true,
+            "no probe reading crossed the radio -- the probe is not called from "
+            .. "the loop, or its line is not forwarded, and either way the "
+            .. "measurement does not exist where anyone can read it")
+    end,
+
 }

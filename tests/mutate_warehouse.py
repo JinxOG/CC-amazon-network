@@ -38,7 +38,16 @@ T_MISSING = "a missing logship degrades the log, not the warehouse"
 T_PROBE_IDLE = "the probe never runs while a delivery is in flight"
 T_PROBE_BACKOFF = "a slow reading backs the probe off instead of paying again"
 
+T_PROBE_WIRED = "the probe actually runs in the loop and its reading reaches the fleet log"
+
 MUTANTS = [
+    # The wiring, as opposed to the logic. Deleting the call site leaves both
+    # guard tests green, because a pure function does not care who calls it.
+    ("never call the probe from the loop",
+     "\n        storageProbe(os.epoch(\"utc\"))",
+     "",
+     T_PROBE_WIRED),
+
     # -- The storage timing probe's two guards, promised to W3 2026-09-22 ---
     # The probe is itself an enumeration, and an enumeration is the yield that
     # destroys a delivery step. A promise with no failing test behind it is
