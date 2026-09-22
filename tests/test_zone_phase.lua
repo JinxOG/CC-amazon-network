@@ -140,6 +140,48 @@ return {
             "and the gap named: done, but invisible to a targeted mine")
     end,
 
+    -- 1.9.114, W6's proposal: the storage enumeration is what goes deaf, and a
+    -- mining fleet is what it goes deaf on.
+    ["a live MINE job holds off the storage poll, a finished one does not"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.state.jobs[JA].status = "IN_PROGRESS"
+        T.state.jobs[JB].status = "COMPLETE"
+        local during = T.mineJobLive()
+        T.state.jobs[JA].status = "ASSIGNED"
+        local assigned = T.mineJobLive()
+        T.state.jobs[JA].status = "FAILED"
+        local after = T.mineJobLive()
+        T.state.jobs[JA].status = "IN_PROGRESS"
+        T.state.jobs[JA].type = proto.JOB.DELIVER
+        local other = T.mineJobLive()
+        restore()
+        assert_eq(during, true, "a job in progress holds the poll off")
+        assert_eq(assigned, true, "so does one dispatched but not yet acknowledged")
+        assert_eq(after, false, "a finished or failed job must not hold it off for ever")
+        assert_eq(other, false, "a delivery job is not a mining fleet")
+    end,
+
+    -- SOURCE-ONLY, weaker, and W6 just proved why that matters: their guard
+    -- tests called the probe directly, so deleting the call site left them
+    -- green. refreshStorage is a local inside server.run's closure and cannot
+    -- be driven from here, so this pins the wiring by reading the file: the
+    -- guard must stand BEFORE the peripheral call it protects.
+    ["the storage poll is guarded before it enumerates (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("central_server.lua", "r"))
+        local src = f:read("*a"); f:close()
+        local at = src:find("local function refreshStorage()", 1, true)
+        assert_eq(at ~= nil, true, "refreshStorage moved or vanished")
+        local body = src:sub(at, src:find("rsBridge.listItems()", at, true) or #src)
+        assert_eq(body:find("if mineJobLive() then", 1, true) ~= nil, true,
+            "the guard must run before listItems, or the deaf window stays")
+        local at2 = src:find("local function refreshCraftable()", 1, true)
+        local body2 = src:sub(at2, src:find("listCraftableItems()", at2, true) or #src)
+        assert_eq(body2:find("if mineJobLive() then return end", 1, true) ~= nil, true,
+            "refreshCraftable enumerates too and needs the same guard")
+    end,
+
     ["a refusal to depart does not count against the sector"] = function(assert_eq)
         local T, zone, restore = twoMiners({
             phase = "MINE", pending = {},
