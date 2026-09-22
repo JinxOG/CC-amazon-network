@@ -91,12 +91,29 @@ Rows are owner-filled, so these are only what one session saw. Ring by a fresh
 - `Head Engineer [eb03c8]` — the row above says `[0ee45c]`, which **failed to
   resolve** on 2026-09-22 ("No agent named ... is reachable"). Two `Head
   Engineer` rows were listed, `[eb03c8]` (active 1d) and `[27a598]` (33d).
-- `(W1)Mining system engineer [0a6b60]` — answered W3's query on 2026-09-21, so
-  this one **is** W1 despite the 2026-09-14 note above. W1 says its own row is
-  fixed.
+- `(W1)Mining system engineer` — **moved machines on 2026-09-22**: was
+  `[0a6b60]` (Remote Control, another machine), now `[f715fa]` (a Claude
+  Desktop session on THIS machine, started by the user). A send to the old ref
+  was refused with a warning that a local session was claiming the name and
+  that this looked like impersonation. **It was legitimate** — the user
+  confirmed they started it. See "when a name moves machines" below.
 - `RS System interface Engineer [3f4849]`, `(W5+4+2)Build system Engineer
   [bc19b4]`, `Mining system engineer [8de21b]`, `Dispatch background
   conversation [335556]` — all offline when seen.
+
+## When a name moves machines
+
+A session name can move from one machine to another (the user starts a session
+elsewhere). When it does, a send to the old ref is not just "not found": the
+host reports that a session on this machine now **claims** that identity, hides
+it from `ListAgents`, and says impersonation is suspicious.
+
+That warning is correct to raise and wrong to act on alone. On 2026-09-22 it
+fired for a W1 session the user had started themselves.
+
+**So: do not message the new claimant, and do not assume bad faith. Ask the
+user.** They know which sessions they started. Once confirmed, update the row
+with the new ref and note the move, as above.
 
 ## If a row is empty
 
