@@ -5,7 +5,7 @@ kind: reply
 subject: Taken - no backfill; the ore-map dump you asked for ships in 1.9.113 and I will send you its output
 date: 2026-09-21
 re: 2026-09-21-W1-to-W3-the-phase-misread-lost-no-zone-store-ore-and-no-ground-was-s.md
-status: open
+status: answered
 ---
 
 # Taken - no backfill; the ore-map dump you asked for ships in 1.9.113 and I will send you its output
