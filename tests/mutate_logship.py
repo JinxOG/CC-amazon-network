@@ -136,6 +136,9 @@ S3_DROP   = "step 3 drops the shared channel for a turtle that has its own"
 S3_NET    = "two registrations with no ACK reopen the shared channel"
 S3_ARM    = "register reopens the shared channel after two attempts (SOURCE-ONLY, weaker)"
 S3_KEEP   = "a computer id with no valid channel stays on the shared one, and says so"
+R_REFUSE  = "a refusal to depart does not count against the sector"
+R_REAL    = "a failure at the sector still counts against it"
+R_CLEAR   = "CLEAR_SECTOR_FAILS clears one sector's count and says so"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -764,6 +767,30 @@ MUTANTS = [
 
     ("sendComplete never reports a failed send", "turtle_base.lua",
      [('        sent and "" or " -- the send FAILED (no modem)"))', '        ""))')], SC_LINE),
+
+    # -- A refusal is not the sector's fault (1.9.113) -----------------------
+    ("a refusal counts against the sector again", "central_server.lua",
+     [('        neverDeparted = r:find("no_gps_fix", 1, true) ~= nil\n                     or r:find("refusing to depart", 1, true) ~= nil\n',
+       "        neverDeparted = false\n")], R_REFUSE),
+
+    ("every failure is treated as a refusal", "central_server.lua",
+     [("    if zone and zone.persistentKey and job.assignedTo and not neverDeparted then\n",
+       "    if false then\n")], R_REAL),
+
+    ("the refusal is not logged", "central_server.lua",
+     [('            logInfo(string.format(\n                "Sector (%d,%d) not counted against %s: the turtle never departed (%s)",',
+       '            (function() end)(string.format(\n                "Sector (%d,%d) not counted against %s: the turtle never departed (%s)",')],
+     R_REFUSE),
+
+    ("clearing a sector matches every sector", "central_server.lua",
+     [("                local match = (x == nil and z == nil)\n                           or (sx and tonumber(sx) == x and tonumber(sz) == z)",
+       "                local match = true")], R_CLEAR),
+
+    ("clearing does not actually clear", "central_server.lua",
+     [("                    pz.sectorFailCount[sKey] = nil\n", "")], R_CLEAR),
+
+    ("clearing is not persisted", "central_server.lua",
+     [("            if hit > 0 then savePersistentZones(zk) end\n", "")], R_CLEAR),
 
     # -- Per-turtle channel, step 3 ----------------------------------------
     ("the shared channel is opened again alongside the own one", "turtle_base.lua",

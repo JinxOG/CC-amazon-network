@@ -115,6 +115,67 @@ end
 local ORE = { foundOres = { ["minecraft:iron_ore"] = 40 }, oreCount = 40 }
 
 return {
+    -- 2026-09-18: all four GPS hosts went silent, node_138 refused three
+    -- re-dispatches ("no_gps_fix: ... refusing to depart") and the refusals
+    -- blacklisted a sector nothing had touched.
+    ["a refusal to depart does not count against the sector"] = function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = {},
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        T.state.persistentZones["zk"].sectorFailCount = {}
+        for i = 1, 3 do
+            T.state.jobs[JA].status = "IN_PROGRESS"
+            T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+                jobId = JA, reason = "no_gps_fix: cannot confirm position, refusing to depart",
+                recoverable = false } })
+            T.state.miningZones[JA] = zone       -- fail() drops the zone reference
+        end
+        local counts = T.state.persistentZones["zk"].sectorFailCount
+        local line = logged(T, "not counted against job_0060: the turtle never departed")
+        restore()
+        assert_eq(next(counts), nil,
+            "a turtle that never left the dock cannot have failed a sector")
+        assert_eq(line ~= nil, true, "and the decision is logged")
+    end,
+
+    ["a failure at the sector still counts against it"] = function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = {},
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        T.state.persistentZones["zk"].sectorFailCount = {}
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "loader_retrieve_failed: approach_failed", recoverable = false } })
+        local counts = T.state.persistentZones["zk"].sectorFailCount
+        restore()
+        assert_eq(counts[S1.x .. "," .. S1.z], 1,
+            "the blacklist exists for sectors that really do fail; this must not be weakened")
+    end,
+
+    ["CLEAR_SECTOR_FAILS clears one sector's count and says so"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.state.persistentZones["zk"].sectorFailCount =
+            { ["1856,-3136"] = 3, ["1888,-3136"] = 1 }
+        local ok, n = pcall(T.clearSectorFails, nil, 1856, -3136)
+        local counts = T.state.persistentZones["zk"].sectorFailCount
+        local line = logged(T, "Sector (1856,-3136) fail count cleared in zone zk (was 3)")
+        -- Reloaded from the store, not just from memory: ensureMineZone reads
+        -- the count off disk on the next dispatch, so an unsaved clear is no
+        -- clear at all.
+        T.state.persistentZones = {}
+        T.loadPersistentZones()
+        local reloaded = T.state.persistentZones["zk"]
+        restore()
+        assert_eq(reloaded ~= nil, true, "precondition: the zone must come back from the store")
+        assert_eq(reloaded and (reloaded.sectorFailCount or {})["1856,-3136"], nil,
+            "the clear must survive a reload")
+        assert_eq(ok and n, 1, "one count cleared")
+        assert_eq(counts["1856,-3136"], nil, "the named sector is cleared")
+        assert_eq(counts["1888,-3136"], 1, "and nothing else is touched")
+        assert_eq(line ~= nil, true, "with a line naming the sector and the old count")
+    end,
+
     ["a survey finished after the zone moved to MINE is counted as a survey, and says so"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({

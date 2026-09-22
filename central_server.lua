@@ -1087,6 +1087,40 @@ end
 
 -- Called after SECTOR_DONE: snapshot the runtime zone's accumulated ore totals
 -- and record which sector just finished, then save to disk.
+-- The cleanup half of the refusal fix (1.9.113): a sector struck off by
+-- refusals -- or by failures since repaired -- has to be reachable again, and
+-- ensureMineZone reads the count straight from the zone store.
+--
+-- key nil means every zone; x/z nil means every counted sector in it. Returns
+-- how many counts it cleared, so a caller can tell "nothing to do" from "done".
+local function clearSectorFails(key, x, z)
+    local cleared, scanned = 0, 0
+    for zk, pz in pairs(state.persistentZones) do
+        if (not key or zk == key) and pz.sectorFailCount then
+            local hit = 0
+            for sKey, n in pairs(pz.sectorFailCount) do
+                scanned = scanned + 1
+                local sx, sz = sKey:match("^(-?%d+),(-?%d+)$")
+                local match = (x == nil and z == nil)
+                           or (sx and tonumber(sx) == x and tonumber(sz) == z)
+                if match then
+                    pz.sectorFailCount[sKey] = nil
+                    cleared, hit = cleared + 1, hit + 1
+                    logInfo(string.format(
+                        "Sector (%s) fail count cleared in zone %s (was %d)", sKey, zk, n))
+                end
+            end
+            if hit > 0 then savePersistentZones(zk) end
+        end
+    end
+    if cleared == 0 then
+        logWarn(string.format(
+            "CLEAR_SECTOR_FAILS: nothing matched (zoneKey=%s x=%s z=%s, %d counted sector(s) seen)",
+            tostring(key), tostring(x), tostring(z), scanned))
+    end
+    return cleared
+end
+
 local function mergeToPersistentZone(jobId, sx, sz, foundOres)
     local zone = state.miningZones[jobId]
     if not zone or not zone.persistentKey then return end
@@ -1735,10 +1769,36 @@ function jobQueue.fail(jobId, reason, recoverable)
         end
     end
 
+    -- A REFUSAL IS NOT THE SECTOR'S FAULT.
+    --
+    -- 2026-09-18, the GPS outage: node_138 refused three re-dispatches with
+    -- "no_gps_fix: cannot confirm position, refusing to depart" -- correct
+    -- behaviour, it will not move without a position -- and the three refusals
+    -- blacklisted sector (1856,-3136), which nothing had touched. A fleet-wide
+    -- outage can strike a zone's sectors off one job at a time.
+    --
+    -- Narrow on purpose: only reasons that mean the turtle NEVER LEFT. A failure
+    -- at the sector (a loader that will not place, a column it cannot dig) is
+    -- the sector's business and still counts.
+    local neverDeparted = false
+    do
+        local r = tostring(reason or ""):lower()
+        neverDeparted = r:find("no_gps_fix", 1, true) ~= nil
+                     or r:find("refusing to depart", 1, true) ~= nil
+    end
+
     -- Track sector fail count before clearing the zone.
     -- After 3 failures the sector is blacklisted in ensureMineZone.
     local zone = state.miningZones[jobId]
-    if zone and zone.persistentKey and job.assignedTo then
+    if zone and zone.persistentKey and job.assignedTo and neverDeparted then
+        local la = zone.lastAssignments and zone.lastAssignments[job.assignedTo]
+        if la then
+            logInfo(string.format(
+                "Sector (%d,%d) not counted against %s: the turtle never departed (%s)",
+                la.x, la.z, jobId, reason or "?"))
+        end
+    end
+    if zone and zone.persistentKey and job.assignedTo and not neverDeparted then
         local la = zone.lastAssignments and zone.lastAssignments[job.assignedTo]
         if la then
             local pz   = state.persistentZones[zone.persistentKey]
@@ -3736,6 +3796,9 @@ function server.run()
             logWarn("UPDATE_ALL — self-update queued...")
             pendingUpdate = true
 
+        elseif t == "CLEAR_SECTOR_FAILS" then
+            clearSectorFails(p.zoneKey, tonumber(p.x), tonumber(p.z))
+
         elseif t == "CANCEL_JOB" then
             local jobId = p.jobId
             if jobId then
@@ -5161,6 +5224,7 @@ if _G.__CC_SERVER_TEST then
         logSelect = logSelect,
         noteBridgeBoot = noteBridgeBoot,
         sectorHolder   = sectorHolder,
+        clearSectorFails = clearSectorFails,
     }
     return server
 end
