@@ -140,6 +140,8 @@ R_REFUSE  = "a refusal to depart does not count against the sector"
 R_REAL    = "a failure at the sector still counts against it"
 R_CLEAR   = "CLEAR_SECTOR_FAILS clears one sector's count and says so"
 R_DUMP    = "the ore-map dump names sectors that are done but never mapped"
+G_LIVE    = "a live MINE job holds off the storage poll, a finished one does not"
+G_WIRED   = "the storage poll is guarded before it enumerates (SOURCE-ONLY, weaker)"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -778,6 +780,22 @@ MUTANTS = [
 
     ("the dump totals nothing", "central_server.lua",
      [("                    total = total + (tonumber(n) or 0)\n", "")], R_DUMP),
+
+    # -- Storage poll held off while mining (1.9.114) ------------------------
+    ("the guard is deleted from refreshStorage", "central_server.lua",
+     [("        if mineJobLive() then\n            local now = os.epoch",
+       "        if false then\n            local now = os.epoch")], G_WIRED),
+
+    ("the guard is deleted from refreshCraftable", "central_server.lua",
+     [("        if mineJobLive() then return end   -- see refreshStorage below\n", "")], G_WIRED),
+
+    ("an assigned job no longer counts as live", "central_server.lua",
+     [('           and (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then',
+       '           and job.status == "IN_PROGRESS" then')], G_LIVE),
+
+    ("every job type holds the poll off", "central_server.lua",
+     [("local function mineJobLive()\n    for _, job in pairs(state.jobs) do\n        if job.type == proto.JOB.MINE\n",\
+       "local function mineJobLive()\n    for _, job in pairs(state.jobs) do\n        if true\n")], G_LIVE),
 
     # -- A refusal is not the sector's fault (1.9.113) -----------------------
     ("a refusal counts against the sector again", "central_server.lua",

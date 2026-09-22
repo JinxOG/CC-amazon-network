@@ -1148,6 +1148,22 @@ local function dumpZoneOreMap(key, limit)
     return zones
 end
 
+-- A MINE job is live. Used to hold off the storage enumeration: listItems is a
+-- synchronous peripheral call, the server processes nothing while it runs, and
+-- CC drops whatever arrives. Measured at up to 29.2 s on 2026-09-21, which is
+-- long past the ~15 s a turtle waits before declaring the server unreachable --
+-- 13 of 14 fleet-wide disconnect episodes followed a stall within seconds.
+local lastStorageHoldLog = 0
+local function mineJobLive()
+    for _, job in pairs(state.jobs) do
+        if job.type == proto.JOB.MINE
+           and (job.status == "ASSIGNED" or job.status == "IN_PROGRESS") then
+            return true
+        end
+    end
+    return false
+end
+
 local function clearSectorFails(key, x, z)
     local cleared, scanned = 0, 0
     for zk, pz in pairs(state.persistentZones) do
@@ -3677,6 +3693,7 @@ function server.run()
 
     local function refreshCraftable()
         if not rsBridge then return end
+        if mineJobLive() then return end   -- see refreshStorage below
         local ok, craft = pcall(function() return rsBridge.listCraftableItems() end)
         if ok and type(craft) == "table" then
             craftableMap = {}
@@ -3691,6 +3708,33 @@ function server.run()
             rsBridge = peripheral.find("rsBridge")
             if not rsBridge then return end
             logInfo("RS Bridge re-acquired")
+        end
+
+        -- NOT WHILE THE FLEET IS MINING (1.9.114, W6's proposal).
+        --
+        -- The enumeration below is what goes deaf, and a mining fleet is what
+        -- it goes deaf ON: every long stall in the record is this call, and the
+        -- worst of them land in the middle of a job. Skipping it during a job
+        -- costs freshness, not correctness -- /state publishes storageTs, so the
+        -- dashboard shows the snapshot's age rather than a wrong number, and
+        -- craftItem is a command, not a read.
+        --
+        -- THE COST, ACCEPTED KNOWINGLY: checkOreThresholds stops seeing stock
+        -- move during a job, so a threshold crossed mid-job is acted on when
+        -- the job ends. Its decision is "dispatch more mining", which is the one
+        -- moment it is least needed (W6, 2026-09-22; W3 agreed).
+        --
+        -- IT IS A STOPGAP AND DOES NOT CLOSE THE CARD. 15 of 144 stalls had no
+        -- miner within a minute of them and still ran up to 11.9 s, including
+        -- one with the fleet parked. A stall count that falls during mining
+        -- measures this guard, not the storage network.
+        if mineJobLive() then
+            local now = os.epoch("utc")
+            if now - (lastStorageHoldLog or 0) > 300000 then
+                lastStorageHoldLog = now
+                logInfo("Storage poll held off while a MINE job runs — snapshot ages, storageTs shows it")
+            end
+            return
         end
         -- listItems is a peripheral call and therefore synchronous: the server
         -- processes no events while it runs, and CC drops what arrives. Timed
@@ -5283,6 +5327,7 @@ if _G.__CC_SERVER_TEST then
         noteBridgeBoot = noteBridgeBoot,
         sectorHolder   = sectorHolder,
         clearSectorFails = clearSectorFails,
+        mineJobLive      = mineJobLive,
         dumpZoneOreMap   = dumpZoneOreMap,
     }
     return server
