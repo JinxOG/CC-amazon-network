@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: ruling
 subject: Approved - full list to the bridge, bounded digest on the radio; and the end state is no rsBridge call on the dispatch server
 date: 2026-09-22
-status: W3=open,W6=open,W5=answered
+status: W3=open,W6=closed,W5=answered
 ---
 
 # Approved - full list to the bridge, bounded digest on the radio; and the end state is no rsBridge call on the dispatch server

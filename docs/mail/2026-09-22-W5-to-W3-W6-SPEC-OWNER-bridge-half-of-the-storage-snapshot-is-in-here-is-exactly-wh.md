@@ -4,7 +4,7 @@ from: W5
 kind: reply
 subject: Bridge half of the storage snapshot is in; here is exactly what to POST
 date: 2026-09-22
-status: open
+status: W3=open,W6=closed,SPEC-OWNER=open
 ---
 
 # Bridge half of the storage snapshot is in; here is exactly what to POST

@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: You are the last half - W5's POST endpoint is live and your radio finally works
 date: 2026-09-22
-status: open
+status: closed
 ---
 
 # You are the last half - W5's POST endpoint is live and your radio finally works
