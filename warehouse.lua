@@ -625,6 +625,75 @@ local CRASH_LOG_FILE = "wh_crash.log"
 -- module-level so the crash handler at the bottom can flush it on the way down.
 local _log = nil
 
+-- ─── The full list, posted to the bridge ─────────────────────────────────────
+--
+-- The dashboard is the only consumer that needs 470 items with display names,
+-- and the bridge serves the dashboard. Routing it through the dispatch server
+-- would put 45 KB on its event loop to hand straight back out (spec owner,
+-- 2026-09-22). So it goes here instead, and the dispatch server gets a digest.
+--
+-- ASYNC on purpose. http.request returns at once and the reply arrives as an
+-- event; a blocking post of 45 KB would freeze this loop exactly the way the
+-- storage poll froze the dispatch computer, and this machine is the one
+-- running the delivery handshake.
+local POST_URL           = "http://127.0.0.1:3000/storage"
+local POST_STUCK_MS      = 30000
+local CRAFTABLE_EVERY_MS = 600000
+
+local craftableMap     = {}
+local craftableNextAt  = 0
+local postPending      = false
+local postPendingSince = 0
+
+-- storageTs is the moment RS was last read SUCCESSFULLY, never send time.
+-- W5 arbitrates the two sources on newest read-time, so a stale reading
+-- labelled with a fresh clock would win and show old stock as live.
+local function buildPostBody(items, readTs, craftable)
+    craftable = craftable or {}
+    local out = {}
+    for _, it in ipairs(items or {}) do
+        if it.name then
+            out[#out + 1] = {
+                name        = it.name,
+                displayName = it.displayName or it.name,
+                amount      = tonumber(it.amount or it.count) or 0,
+                craftable   = craftable[it.name] or false,
+            }
+        end
+    end
+    return textutils.serialiseJSON({ storage = out, storageTs = readTs, source = "warehouse" })
+end
+
+-- W5 asks that the reply be read rather than discarded: a 400 names its reason
+-- and all four are worth logging. Matched rather than JSON-decoded because the
+-- shape is two fixed fields and unserialiseJSON is not on every CC build.
+local function readPostReply(body)
+    if type(body) ~= "string" or body == "" then return false, "empty reply" end
+    if body:find('"ok"%s*:%s*true') then return true, nil end
+    return false, body:match('"error"%s*:%s*"([^"]*)"') or body:sub(1, 120)
+end
+
+local function postStorage(body, now)
+    -- A lost reply event would otherwise wedge this flag forever and the panel
+    -- would quietly stop updating with nothing reporting a fault.
+    if postPending and (now - postPendingSince) > POST_STUCK_MS then
+        postPending = false
+        if _log then _log.pendingLevel = "WARN" end
+        log("Storage post stuck >30s - clearing (reply event lost)")
+        if _log then _log.pendingLevel = nil end
+    end
+    if postPending then return false end
+    if type(http) ~= "table" or type(http.request) ~= "function" then return false end
+    local ok = pcall(http.request, POST_URL, body, { ["Content-Type"] = "application/json" })
+    if not ok then
+        if _log then _log.pendingLevel = "WARN" end
+        log("Storage post could not start - is HTTP enabled on this computer?")
+        if _log then _log.pendingLevel = nil end
+        return false
+    end
+    postPending, postPendingSince = true, now
+    return true
+end
 -- ─── Temporary: storage-call timing probe ────────────────────────────────────
 --
 -- Times listItems on THIS computer so it can be compared against the dispatch
@@ -683,8 +752,9 @@ local function storageProbe(now)
 
     local t0    = os.epoch("utc")
     local items = rsCall("listItems")
-    local ms    = os.epoch("utc") - t0
-    local n     = (type(items) == "table") and #items or -1
+    local ms     = os.epoch("utc") - t0
+    local readTs = t0 + ms   -- when RS was read, not when we send
+    local n      = (type(items) == "table") and #items or -1
 
     -- Sum every amount as a fingerprint of the network, not just its size.
     --
@@ -736,6 +806,25 @@ local function storageProbe(now)
         if _log then _log.pendingLevel = nil end
     end
     sendToServer(MSG_STORAGE_DIGEST, nil, payload)
+
+    -- Craftability on its own long interval: listCraftableItems is the same
+    -- class of call, and the answer only moves when someone adds a recipe or a
+    -- machine -- minutes to days, not seconds.
+    if now >= craftableNextAt then
+        local craft = rsCall("listCraftableItems")
+        craftableNextAt = os.epoch("utc") + CRAFTABLE_EVERY_MS
+        if type(craft) == "table" then
+            local m = {}
+            for _, it in ipairs(craft) do if it.name then m[it.name] = true end end
+            craftableMap = m
+        end
+    end
+
+    -- The dashboard copy. Only on a read that actually succeeded: a body built
+    -- from nil would post an empty network as though the storage were empty.
+    if type(items) == "table" then
+        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch("utc"))
+    end
     return ms
 end
 
@@ -808,10 +897,30 @@ local function main()
     local tickTimer = os.startTimer(1)
 
     while true do
-        local ev, _, _, _, p4 = os.pullEvent()
+        local ev, p1, p2, p3, p4 = os.pullEvent()
         if ev == "modem_message" then
             local raw = type(p4) == "table" and p4 or textutils.unserialise(p4)
             routeMsg(raw)
+
+        -- The bridge reply. W5 asks that it be read rather than discarded: a
+        -- 400 names its reason, and a post that is being refused every cycle
+        -- would otherwise look exactly like one that is working.
+        elseif (ev == "http_success" or ev == "http_failure") and p1 == POST_URL then
+            postPending = false
+            -- CC delivers a non-2xx as http_failure, with the response handle
+            -- when there is one, so the stated reason survives either path.
+            local handle = (ev == "http_success") and p2 or p3
+            local body
+            if handle then
+                pcall(function() body = handle.readAll() end)
+                pcall(function() handle.close() end)
+            end
+            local ok, why = readPostReply(body)
+            if not ok then
+                if _log then _log.pendingLevel = "WARN" end
+                log("Storage post refused: " .. tostring(why or p2))
+                if _log then _log.pendingLevel = nil end
+            end
         end
         -- Always tick after any event — state machine advances on messages AND time
         tick()
@@ -854,6 +963,9 @@ if _G.__CC_WAREHOUSE_TEST then
         probeRecord     = probeRecord,
         storageProbe    = storageProbe,
         acceptWatchlist = acceptWatchlist,
+        buildPostBody   = buildPostBody,
+        readPostReply   = readPostReply,
+        POST_URL        = POST_URL,
         msgName         = msgName,
         digestPayload   = digestPayload,
         DIGEST_MAX_NAMES = DIGEST_MAX_NAMES,

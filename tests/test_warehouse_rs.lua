@@ -31,6 +31,15 @@ local function fakeRS(throwOn)
         importItem = guard("importItem", 3),
         exportItem = guard("exportItem", 5),
         getItem    = guard("getItem", { amount = 64 }),
+        -- Without these the probe reads nothing, the poster never fires, and a
+        -- test asserting it posts would be asserting against a dead branch.
+        listItems  = guard("listItems", {
+            { name = "minecraft:iron_ore", displayName = "[Iron Ore]", amount = 1204 },
+            { name = "minecraft:coal",     displayName = "[Coal]",     amount = 64 },
+        }),
+        listCraftableItems = guard("listCraftableItems", {
+            { name = "minecraft:iron_ingot" },
+        }),
     }
 end
 
@@ -94,6 +103,7 @@ local function driveWarehouse(opts)
     for i = 1, (opts.events or 5) do c.events[i] = NO_MSG end
 
     local saved = {
+        http    = _G.http,
         epoch   = os.epoch,
         print   = print,
         raw     = _G.__LOGSHIP_RAW_PRINT,
@@ -115,6 +125,12 @@ local function driveWarehouse(opts)
         for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
         printed[#printed + 1] = table.concat(parts, " ")
     end
+    -- The stub has no http at all, so the poster would silently do nothing and
+    -- every test would still pass. Record what it tries to send.
+    local posts = {}
+    _G.http = opts.noHttp and nil or {
+        request = function(url, body) posts[#posts + 1] = { url = url, body = body } end,
+    }
     _G.__LOGSHIP_RAW_PRINT = nil
     sleep = function() end
     os.reboot = function() error("__rebooted__", 0) end
@@ -129,6 +145,19 @@ local function driveWarehouse(opts)
         transmit = function(_, _, payload) sent[#sent + 1] = payload end,
     }
     local rs, chest = fakeRS(nil), fakeChest({})
+    -- Make time pass BETWEEN the storage read and the post, so "stamped with
+    -- the read time" and "stamped with send time" stop being the same number.
+    -- Without this the clock never moves in between and a mutant that swaps
+    -- one for the other is invisible.
+    local afterCraft = nil
+    if opts.craftDelayMs then
+        local inner = rs.listCraftableItems
+        rs.listCraftableItems = function(...)
+            clock = clock + opts.craftDelayMs
+            afterCraft = clock
+            return inner(...)
+        end
+    end
     peripheral.find = function(n, filter)
         if n == "rsBridge" then return rs end
         if n == "modem" then
@@ -158,6 +187,7 @@ local function driveWarehouse(opts)
     package.loaded["logship"]   = nil
 
     os.epoch, print, os.reboot  = saved.epoch, saved.print, saved.reboot
+    _G.http                     = saved.http
     _G.__LOGSHIP_RAW_PRINT      = saved.raw
     package.preload["logship"]  = saved.preload
     os.pullEvent                = stubPull
@@ -180,6 +210,8 @@ local function driveWarehouse(opts)
         if type(m) == "table" then msgs[#msgs + 1] = m end
     end
     return {
+        afterCraft = afterCraft,
+        posts    = posts,
         msgs     = msgs,
         ok       = ok,
         err      = tostring(err),
@@ -451,6 +483,64 @@ return {
             .. "from the inside and is deaf to the entire fleet")
         assert_eq(r.err:find("WIRELESS", 1, true) ~= nil, true,
             "and the error has to name the problem -- got: " .. r.err)
+    end,
+
+
+    -- ─── The bridge poster ──────────────────────────────────────────────────
+    --
+    -- storageTs is the moment RS was last read SUCCESSFULLY, never send time.
+    -- W5 arbitrates the dispatch copy against this one on newest read-time, so
+    -- a stale reading stamped with a fresh clock would win and show old stock
+    -- as live -- the exact failure this project keeps paying for.
+    ["the post body carries the read time, the source, and the craftable flag"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        local items = { { name = "minecraft:iron_ore", amount = 7 },
+                        { name = "minecraft:coal", displayName = "[Coal]", count = 3 } }
+        local body = W.buildPostBody(items, 1700000000123, { ["minecraft:iron_ore"] = true })
+        assert_eq(body:find("1700000000123", 1, true) ~= nil, true, "read time must be sent")
+        assert_eq(body:find('"source"', 1, true) ~= nil, true)
+        assert_eq(body:find("warehouse", 1, true) ~= nil, true)
+        assert_eq(body:find("iron_ore", 1, true) ~= nil, true)
+        assert_eq(body:find("[Coal]", 1, true) ~= nil, true, "displayName is kept for the panel")
+        assert_eq(body:find("true", 1, true) ~= nil, true, "the craftable flag is stamped")
+    end,
+
+    -- W5 asks that the reply be read rather than discarded. A post refused every
+    -- cycle otherwise looks exactly like one that is working.
+    ["a refusal is read back and reported, not discarded"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        assert_eq(W.readPostReply('{"ok":true}'), true)
+        local ok, why = W.readPostReply('{"ok":false,"error":"storage must be an array"}')
+        assert_eq(ok, false)
+        assert_eq(why, "storage must be an array", "the stated reason must survive")
+        assert_eq(W.readPostReply(nil), false, "no reply at all is not success")
+        assert_eq(W.readPostReply(""), false)
+    end,
+
+    -- Wiring, not logic: both tests above pass with nothing ever posted.
+    ["the full list is actually posted to the bridge"] = function(assert_eq)
+        local r = driveWarehouse({ events = 4, stepMs = 16000 })
+        assert_eq(r.ranOut, true, "the loop must run the whole script: " .. r.err)
+        assert_eq(#r.posts > 0, true,
+            "nothing was posted -- the dashboard would show the dispatch copy, "
+            .. "which stands its poll down during mining and goes stale")
+        assert_eq(r.posts[1].url:find("/storage", 1, true) ~= nil, true)
+        assert_eq(r.posts[1].body:find("iron_ore", 1, true) ~= nil, true)
+    end,
+
+    -- The stamp has to be the READ time, and the only way to tell is to make
+    -- time pass between the read and the send.
+    ["the post is stamped when RS was read, not when it was sent"] = function(assert_eq)
+        local r = driveWarehouse({ events = 4, stepMs = 16000, craftDelayMs = 5000 })
+        assert_eq(r.ranOut, true, "the loop must run the whole script: " .. r.err)
+        assert_eq(#r.posts > 0, true, "nothing was posted")
+        assert_eq(r.afterCraft ~= nil, true, "the craft delay must have been applied")
+        local ts = tonumber(r.posts[1].body:match('"storageTs"%s*:%s*(%d+)'))
+        assert_eq(ts ~= nil, true, "the body must carry a storageTs")
+        assert_eq(ts < r.afterCraft, true,
+            "storageTs must predate the work done after the read. W5 arbitrates "
+            .. "on newest read-time, so a send-time stamp would let a stale "
+            .. "reading win and show old stock as live")
     end,
 
 }

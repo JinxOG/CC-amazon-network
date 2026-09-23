@@ -48,7 +48,27 @@ T_MSGNAME = "a missing message constant falls back AND says it fell back"
 
 T_MODEM = "a wired-only machine refuses to start, and says why"
 
+T_POST_BODY = "the post is stamped when RS was read, not when it was sent"
+T_POST_REPLY = "a refusal is read back and reported, not discarded"
+T_POST_SENT = "the full list is actually posted to the bridge"
+
 MUTANTS = [
+    # -- The bridge poster ----------------------------------------------------
+    ("stamp the post with send time instead of the read time",
+     "        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch(\"utc\"))",
+     "        postStorage(buildPostBody(items, os.epoch(\"utc\"), craftableMap), os.epoch(\"utc\"))",
+     T_POST_BODY),
+
+    ("treat any reply as success",
+     "    if body:find(\'\"ok\"%s*:%s*true\') then return true, nil end",
+     "    do return true, nil end",
+     T_POST_REPLY),
+
+    ("build the post but never send it",
+     "\n        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch(\"utc\"))",
+     "",
+     T_POST_SENT),
+
     ("accept a wired modem again (the nine-day silence)",
      "local modem    = peripheral.find(\"modem\", function(_, m)\n    return type(m.isWireless) == \"function\" and m.isWireless()\nend)",
      "local modem    = peripheral.find(\"modem\")",
