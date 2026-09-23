@@ -10,10 +10,10 @@ last two reversed. W6 spotted it; it is the worst failure mode this book has,
 because ringing the wrong one looks exactly like a delivered message nobody
 answers. Copy the name, never type it.
 
-**`cc-amazon-network-89` holds three workstreams** -- W2, W4 and W5 (code side)
--- confirmed by itself, 2026-09-14. Ringing any of the three reaches the same
-session, so **name the workstream in your first line**: it decides which files
-are in scope.
+**`(W5+4+2)Build system Engineer [15934f]` holds three workstreams** -- W2, W4
+and W5 (code side) -- confirmed by itself, 2026-09-22. Ringing any of the three
+reaches the same session, so **name the workstream in your first line**: it
+decides which files are in scope. (Was `cc-amazon-network-89`; that name is dead.)
 
 **W5 is two people.** That session is the code side and writes `server.js` and
 `public/`. The server PC engineer writes no code, is **not a session here**, and
@@ -45,16 +45,18 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 |---|---|---|
 | Head engineer / spec owner | `Head Engineer` — ref `[62be51]` on 2026-09-22 (was `[0ee45c]`, before that `cc-amazon-network-a2`). An offline `Head Engineer [27a598]` also exists | itself, 2026-09-22 |
 | W1 — Resource Intelligence | `(W1)Mining system engineer` | itself, 2026-09-21 |
-| W2 — Planner | `cc-amazon-network-89` | itself, 2026-09-14 |
+| W2 — Planner | `(W5+4+2)Build system Engineer [15934f]` | itself, 2026-09-22 |
 | W3 — Fleet & Dispatch | `(W3)Delivery/Logistics Engineer [77672f]` — **use the ref**, the title is shared | itself, 2026-09-22 (refs seen: `[845183]` 09-16, `[77672f]` 09-22; before that `cc-amazon-network-fe`, `-e5`) |
-| W4 — Construction | `cc-amazon-network-89` | itself, 2026-09-14 |
-| W5 — Bridge & Dashboard | `cc-amazon-network-89` (code side — see below) | itself, 2026-09-14 |
+| W4 — Construction | `(W5+4+2)Build system Engineer [15934f]` | itself, 2026-09-22 |
+| W5 — Bridge & Dashboard | `(W5+4+2)Build system Engineer [15934f]` (code side — see below) | itself, 2026-09-22 |
 | W6 — Storage & RS | `cc-amazon-network-5e` | itself, 2026-09-14 |
 
-**One session holds W2, W4 and W5.** `cc-amazon-network-89` answers to all three,
-so ringing any of them reaches the same place. Say which workstream you mean in
-your first line: it decides which files are in scope, and being woken for the
-wrong one is a reply rather than a job.
+**One session holds W2, W4 and W5.** `(W5+4+2)Build system Engineer` answers to
+all three, so ringing any of them reaches the same place. Say which workstream you
+mean in your first line: it decides which files are in scope, and being woken for
+the wrong one is a reply rather than a job. (Was `cc-amazon-network-89` until
+2026-09-22; an offline `(W5+4+2)Build system Engineer [bc19b4]` is an earlier
+instance of the same name, so **use the ref**.)
 
 **W5 is two people** (user ruling 2026-09-10). The session above is the **code
 side** — it writes and commits the bridge and dashboard. The **server PC
@@ -100,6 +102,25 @@ Rows are owner-filled, so these are only what one session saw. Ring by a fresh
 - `RS System interface Engineer [3f4849]`, `(W5+4+2)Build system Engineer
   [bc19b4]`, `Mining system engineer [8de21b]`, `Dispatch background
   conversation [335556]` — all offline when seen.
+
+### Later on 2026-09-22, seen by W5+4+2
+
+The churn continued within the same day, which is the argument for rule 1 above
+rather than for a better-maintained table:
+
+- **`cc-amazon-network-a2` is dead.** A ring to it was refused outright. That was
+  the name the head engineer gave for itself in a message the same day, so a name
+  handed over in conversation can be stale by the time it is used.
+- **The head engineer was not in the listing at all** — only an offline
+  `Head Engineer [27a598]`. Neither `[62be51]` from the row above nor `[eb03c8]`
+  appeared. Mail to them therefore waits for their next startup; nothing is lost,
+  but do not read silence as disagreement.
+- **W3 is `[068af7]`** — interactive and idle, started minutes earlier. The row
+  above says `[77672f]`, so W3's ref moved again. Only one row carried that title
+  in the listing, so there was no ambiguity to resolve.
+- **This session became `(W5+4+2)Build system Engineer [15934f]`**, replacing
+  `cc-amazon-network-89` in three rows. Nobody could have rung W2, W4 or W5
+  between the rename and this edit, and there would have been no sign of it.
 
 ## When a name moves machines
 
