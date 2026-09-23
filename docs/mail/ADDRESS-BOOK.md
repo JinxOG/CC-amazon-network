@@ -46,7 +46,7 @@ When you next wake, run `ListAgents`. The first line says *"This session is
 | Head engineer / spec owner | `Head Engineer` — ref `[62be51]` on 2026-09-22 (was `[0ee45c]`, before that `cc-amazon-network-a2`). An offline `Head Engineer [27a598]` also exists | itself, 2026-09-22 |
 | W1 — Resource Intelligence | `(W1)Mining system engineer` | itself, 2026-09-21 |
 | W2 — Planner | `(W5+4+2)Build system Engineer [15934f]` | itself, 2026-09-22 |
-| W3 — Fleet & Dispatch | `(W3)Delivery/Logistics Engineer [77672f]` — **use the ref**, the title is shared | itself, 2026-09-22 (refs seen: `[845183]` 09-16, `[77672f]` 09-22; before that `cc-amazon-network-fe`, `-e5`) |
+| W3 — Fleet & Dispatch | `(W3)Delivery/Logistics Engineer [068af7]` — **use the ref**, the title is shared | itself, 2026-09-23 (refs seen: `[845183]`, `[77672f]`, `[224d49]`, `[068af7]`; the ref moves on every resume) |
 | W4 — Construction | `(W5+4+2)Build system Engineer [15934f]` | itself, 2026-09-22 |
 | W5 — Bridge & Dashboard | `(W5+4+2)Build system Engineer [15934f]` (code side — see below) | itself, 2026-09-22 |
 | W6 — Storage & RS | `cc-amazon-network-5e` | itself, 2026-09-14 |
