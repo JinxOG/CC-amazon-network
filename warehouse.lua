@@ -36,10 +36,43 @@ local CFG = {
 
 -- ─── Peripherals ─────────────────────────────────────────────────────────────
 
-local modem    = peripheral.find("modem")
+-- Wireless only, and loudly if there is none.
+--
+-- peripheral.find("modem") answers with a WIRED modem as happily as an ender
+-- one, and an RS Bridge is normally attached over a wired modem. Wrapping the
+-- wired one looks entirely healthy: modem.open succeeds on every channel,
+-- nothing errors, RS works, the screen keeps printing -- and every transmit
+-- goes onto the cable while the air is never heard.
+--
+-- This computer ran exactly that way for nine days: no log lines, no digests,
+-- and UPDATE_ALL never arrived, so the operator had to run the updater by hand.
+-- Found by W3 from a photograph of the screen, 2026-09-22.
+--
+-- Failing loudly matters more than the filter does. A silent wrong modem is
+-- what cost the nine days; an error on the screen would have cost minutes.
+local modem    = peripheral.find("modem", function(_, m)
+    return type(m.isWireless) == "function" and m.isWireless()
+end)
 local rsBridge = peripheral.find("rsBridge")
 
-if not modem    then error("Warehouse: no modem found") end
+if not modem then
+    -- Name what IS attached, so nobody has to guess which modem is which.
+    local seen = {}
+    pcall(function()
+        for _, nm in ipairs(peripheral.getNames()) do
+            if peripheral.getType(nm) == "modem" then
+                local w = peripheral.wrap(nm)
+                local wireless = w and type(w.isWireless) == "function" and w.isWireless()
+                seen[#seen + 1] = nm .. (wireless and " (wireless)" or " (wired)")
+            end
+        end
+    end)
+    error("Warehouse: no WIRELESS modem attached. Found: "
+        .. (#seen > 0 and table.concat(seen, ", ") or "no modems at all")
+        .. ". An ender modem is required -- a wired modem carries RS fine but "
+        .. "cannot reach the fleet, and this computer was deaf for nine days "
+        .. "that way.")
+end
 if not rsBridge then error("Warehouse: no rsBridge found — attach an Advanced Peripherals RS Bridge") end
 
 modem.open(proto.CH_SERVER)

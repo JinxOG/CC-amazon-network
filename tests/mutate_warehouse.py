@@ -46,7 +46,14 @@ T_DIGEST_SENT = "the digest actually reaches the radio"
 
 T_MSGNAME = "a missing message constant falls back AND says it fell back"
 
+T_MODEM = "a wired-only machine refuses to start, and says why"
+
 MUTANTS = [
+    ("accept a wired modem again (the nine-day silence)",
+     "local modem    = peripheral.find(\"modem\", function(_, m)\n    return type(m.isWireless) == \"function\" and m.isWireless()\nend)",
+     "local modem    = peripheral.find(\"modem\")",
+     T_MODEM),
+
     ("make the fallback silent again",
      "    return key, true",
      "    return key, false",

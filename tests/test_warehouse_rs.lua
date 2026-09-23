@@ -49,9 +49,17 @@ local function fresh(rs, chest)
     -- point is the retry behaviour, not the delay.
     sleep = function() end
     peripheral = peripheral or {}
-    peripheral.find    = function(n)
+    -- Honours the filter argument. The real peripheral.find does, and
+    -- warehouse.lua now passes one to reject a WIRED modem -- a harness that
+    -- ignored it would let that filter be deleted with every test still green.
+    peripheral.find    = function(n, filter)
         if n == "rsBridge" then return rs end
-        if n == "modem" then return { open = function() end, transmit = function() end } end
+        if n == "modem" then
+            local m = { open = function() end, transmit = function() end,
+                        isWireless = function() return true end }
+            if filter and not filter("back", m) then return nil end
+            return m
+        end
         return nil
     end
     peripheral.wrap    = function() return chest end
@@ -116,13 +124,17 @@ local function driveWarehouse(opts)
 
     local sent = {}
     local modem = {
+        isWireless = function() return not opts.wiredOnly end,
         open     = function() end,
         transmit = function(_, _, payload) sent[#sent + 1] = payload end,
     }
     local rs, chest = fakeRS(nil), fakeChest({})
-    peripheral.find = function(n)
+    peripheral.find = function(n, filter)
         if n == "rsBridge" then return rs end
-        if n == "modem" then return modem end
+        if n == "modem" then
+            if filter and not filter("back", modem) then return nil end
+            return modem
+        end
         return nil
     end
     peripheral.wrap    = function() return chest end
@@ -420,6 +432,25 @@ return {
         assert_eq(fb2, true,
             "and it must report the fallback -- otherwise a renamed type looks "
             .. "exactly like a working one")
+    end,
+
+
+    -- An RS Bridge is normally attached over a WIRED modem, and
+    -- peripheral.find("modem") answers with it just as happily as an ender one.
+    -- Wrapping the wired one looks entirely healthy -- open succeeds, RS works,
+    -- the screen prints -- while every transmit goes onto the cable and the air
+    -- is never heard. This computer ran that way for nine days: no logs, no
+    -- digests, and UPDATE_ALL never arrived.
+    --
+    -- The filter matters, but failing LOUDLY matters more: a silent wrong modem
+    -- is what cost the nine days.
+    ["a wired-only machine refuses to start, and says why"] = function(assert_eq)
+        local r = driveWarehouse({ wiredOnly = true, wholeFile = true, events = 2 })
+        assert_eq(r.ok, false,
+            "a warehouse with no wireless modem must not run: it looks healthy "
+            .. "from the inside and is deaf to the entire fleet")
+        assert_eq(r.err:find("WIRELESS", 1, true) ~= nil, true,
+            "and the error has to name the problem -- got: " .. r.err)
     end,
 
 }
