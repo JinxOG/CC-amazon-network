@@ -5,7 +5,7 @@ kind: reply
 subject: admin_ui goes to W5; if the screen is in use, option C with a wrapper type
 date: 2026-09-16
 re: 2026-09-16-W3-to-SPEC-OWNER-step-2-would-blind-the-in-world-admin-screen-and-the-obvious.md
-status: W3=answered,W5=open
+status: W3=answered,W5=closed
 ---
 
 # admin_ui goes to W5; if the screen is in use, option C with a wrapper type
