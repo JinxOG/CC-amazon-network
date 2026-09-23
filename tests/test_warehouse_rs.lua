@@ -543,4 +543,18 @@ return {
             .. "reading win and show old stock as live")
     end,
 
+
+    -- W5: "older than the snapshot already held" is not an error during the
+    -- cutover -- it is what newest-wins looks like while the dispatch server is
+    -- still pushing. Warning on it every cycle is how a real warning stops
+    -- being read.
+    ["the one expected refusal is not reported as a fault"] = function(assert_eq)
+        local W = fresh(fakeRS(nil), fakeChest({}))
+        assert_eq(W.refusalIsExpected("older than the snapshot already held"), true)
+        assert_eq(W.refusalIsExpected("storage is not an array"), false,
+            "a real refusal must still be a warning")
+        assert_eq(W.refusalIsExpected("missing or unusable storageTs"), false)
+        assert_eq(W.refusalIsExpected(nil), false)
+    end,
+
 }

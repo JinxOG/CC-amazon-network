@@ -673,6 +673,15 @@ local function readPostReply(body)
     return false, body:match('"error"%s*:%s*"([^"]*)"') or body:sub(1, 120)
 end
 
+-- One of W5's four refusals is not a fault. "older than the snapshot already
+-- held" is what "newest read-time wins" looks like while the dispatch server
+-- is still pushing its own copy, and it stops the moment that path is switched
+-- off. Logging it at WARN would cry wolf for the whole cutover, which is how a
+-- real warning stops being read.
+local function refusalIsExpected(why)
+    return type(why) == "string" and why:find("older than", 1, true) ~= nil
+end
+
 local function postStorage(body, now)
     -- A lost reply event would otherwise wedge this flag forever and the panel
     -- would quietly stop updating with nothing reporting a fault.
@@ -917,8 +926,10 @@ local function main()
             end
             local ok, why = readPostReply(body)
             if not ok then
-                if _log then _log.pendingLevel = "WARN" end
-                log("Storage post refused: " .. tostring(why or p2))
+                local expected = refusalIsExpected(why)
+                if _log and not expected then _log.pendingLevel = "WARN" end
+                log("Storage post refused: " .. tostring(why or p2)
+                    .. (expected and " (expected while the dispatch push is still running)" or ""))
                 if _log then _log.pendingLevel = nil end
             end
         end
@@ -965,6 +976,7 @@ if _G.__CC_WAREHOUSE_TEST then
         acceptWatchlist = acceptWatchlist,
         buildPostBody   = buildPostBody,
         readPostReply   = readPostReply,
+        refusalIsExpected = refusalIsExpected,
         POST_URL        = POST_URL,
         msgName         = msgName,
         digestPayload   = digestPayload,

@@ -52,7 +52,14 @@ T_POST_BODY = "the post is stamped when RS was read, not when it was sent"
 T_POST_REPLY = "a refusal is read back and reported, not discarded"
 T_POST_SENT = "the full list is actually posted to the bridge"
 
+T_REFUSAL = "the one expected refusal is not reported as a fault"
+
 MUTANTS = [
+    ("treat every refusal as expected, including real ones",
+     "    return type(why) == \"string\" and why:find(\"older than\", 1, true) ~= nil",
+     "    return true",
+     T_REFUSAL),
+
     # -- The bridge poster ----------------------------------------------------
     ("stamp the post with send time instead of the read time",
      "        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch(\"utc\"))",
