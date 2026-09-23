@@ -1556,7 +1556,7 @@ function renderAll(d){
     if(window._refreshMinePanel)window._refreshMinePanel();
     renderFleet(turtles);
     renderJobs(jobs,turtles);
-    renderStorage(d.storage||[],d.storageTs||0);
+    renderStorage(d.storage||[],d.storageTs||0,d.storageSource||'');
     refreshTurtleSel(turtles);
     if(document.getElementById('threshold-panel').style.display!=='none') renderThresholdList();
 }
@@ -2302,9 +2302,10 @@ function renderLogLoss(loss,busy){
     el.title=t;
 }
 
-function renderStorage(items,storageTs){
+function renderStorage(items,storageTs,storageSource){
     storageData=items;
     if(storageTs)_lastStorageTs=storageTs;
+    if(storageSource)_lastStorageSource=storageSource;
     // Storage age indicator
     const ageEl=document.getElementById('storage-age');
     const banner=document.getElementById('storage-stale');
@@ -2322,8 +2323,8 @@ function renderStorage(items,storageTs){
             if(banner){
                 banner.hidden=false;
                 banner.innerHTML='<b>⚠ RS NEVER SYNCED</b><br>'
-                    +'<span>The server has not returned a storage snapshot since it started. '
-                    +'Nothing below is live.</span>';
+                    +'<span>Nothing has posted a storage snapshot since this dashboard '
+                    +'started. Nothing below is live.</span>';
             }
         }else{
             const ageSec=Math.round((Date.now()-storageTs)/1000);
@@ -2335,10 +2336,20 @@ function renderStorage(items,storageTs){
             if(banner){
                 banner.hidden=!stale;
                 if(stale){
+                    // Name the machine that actually went quiet. Since the
+                    // 2026-09-22 ruling the snapshot comes from the warehouse
+                    // computer, not the dispatch server's poll — sending an
+                    // operator to restart the wrong machine is worse than saying
+                    // nothing, and this banner outlived its original source once
+                    // already.
+                    const who=_lastStorageSource==='warehouse'
+                        ?'the warehouse computer has stopped posting its storage snapshot'
+                        :_lastStorageSource==='dispatch'
+                        ?'the dispatch server\'s storage poll has stopped'
+                        :'whatever was reporting storage has stopped';
                     banner.innerHTML='<b>⚠ RS DATA STALE — FROZEN '+ageStr.toUpperCase()+'</b><br>'
                         +'<span>Amounts below are not live and orders may be planned against stock '
-                        +'that no longer exists. If this persists, the server\'s storage poll has '
-                        +'stopped and it needs a restart.</span>';
+                        +'that no longer exists. If this persists, '+who+'.</span>';
                 }
             }
         }
@@ -2368,7 +2379,8 @@ function renderStorage(items,storageTs){
 }
 
 let _lastStorageTs=0;
-function filterStorage(){renderStorage(storageData,_lastStorageTs);}
+let _lastStorageSource='';
+function filterStorage(){renderStorage(storageData,_lastStorageTs,_lastStorageSource);}
 
 function cartAdd(name){
     const item=storageData.find(i=>i.name===name);if(!item)return;

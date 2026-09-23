@@ -211,7 +211,11 @@ let state = {
 //   locations — bridge-owned and persisted to disk here; no server-side counterpart
 //   players   — sourced from Dynmap, not from CC
 //   updatedAt — stamped by this handler
-const BRIDGE_OWNED = new Set(['locations', 'players', 'updatedAt']);
+//   storageSource / storageAt — stamped by acceptStorage from which route the
+//     snapshot arrived on; the CC server has no counterpart and must not be able
+//     to claim the warehouse posted something
+const BRIDGE_OWNED = new Set(['locations', 'players', 'updatedAt',
+                              'storageSource', 'storageAt']);
 
 // Keys with their own handling in /update below (marker diffing, type checks).
 // Listed so the generic merge skips them rather than assigning twice.
@@ -841,6 +845,71 @@ app.get('/dynmap-frame', (req, res) => {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
+// ─── Storage snapshot (spec owner's ruling, 2026-09-22) ──────────────────────
+//
+// The warehouse computer posts the full RS item list here over the LAN; the
+// dispatch server gets only a bounded digest over the radio. 469 items is 45.9 KB
+// of JSON, and putting that on the radio every 30s trades a peripheral stall for
+// a deserialisation stall on the same loop that must answer turtles.
+//
+// TWO RULES FROM THE CONTRACT, both load-bearing:
+//
+// 1. NEWEST storageTs WINS, whichever path delivered it. That is what removes
+//    the flag day: the dispatch push may keep sending storage until someone
+//    switches it off, and neither order of deployment can have a stale copy
+//    overwrite a fresher one. Both paths therefore go through this one function
+//    rather than assigning to state directly.
+//
+// 2. storageTs MEANS "WHEN RS WAS LAST READ SUCCESSFULLY", never send time. The
+//    dashboard's staleness banner is keyed on it, so a warehouse still posting
+//    after RS has died must read as stale, not fresh. This end cannot enforce
+//    that — it can only refuse to invent one, which is why a snapshot with no
+//    usable timestamp is rejected rather than stamped with Date.now().
+function acceptStorage(state, payload, source) {
+    const list = payload && payload.storage;
+    const ts   = payload && payload.storageTs;
+
+    if (!Array.isArray(list)) return { ok: false, reason: 'storage is not an array' };
+
+    // Rejected, not stamped. Stamping it here would make every snapshot look
+    // freshly read at the moment it arrived, which is precisely the lie rule 2
+    // exists to prevent — and it would do so most convincingly when RS is dead.
+    if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) {
+        return { ok: false, reason: 'missing or unusable storageTs' };
+    }
+
+    if (typeof state.storageTs === 'number' && state.storageTs > 0 && ts < state.storageTs) {
+        return { ok: false, reason: 'older than the snapshot already held',
+                 held: state.storageTs, offered: ts };
+    }
+
+    state.storage       = list;
+    state.storageTs     = ts;
+    state.storageSource = source;   // which machine last supplied it
+    state.storageAt     = Date.now();
+    return { ok: true, items: list.length, source };
+}
+
+// The warehouse's own route. Auth is handled by the middleware above: a LAN
+// request is trusted, so no credential is involved and none may be — a token in
+// a public repository is not a trade this project makes.
+app.post('/storage', (req, res) => {
+    const result = acceptStorage(state, req.body || {}, String((req.body || {}).source || 'warehouse'));
+
+    if (!result.ok) {
+        console.warn(`[STORAGE] rejected from ${req.socket.remoteAddress}: ${result.reason}`);
+        return res.status(400).json({ ok: false, error: result.reason });
+    }
+
+    // An empty list is accepted — the timestamp says RS was read successfully,
+    // and an empty network is legitimate, if unlikely. Logged because it is far
+    // more often a symptom than a fact, and a silently blanked panel is the kind
+    // of thing nobody notices until they plan against it.
+    if (result.items === 0) console.warn('[STORAGE] accepted an EMPTY item list — is the RS network attached?');
+
+    res.json({ ok: true });
+});
+
 // CC central_server.lua pushes state here every 2s
 const CC_RESTART_GAP_MS = 20 * 1000;  // >20s between updates → CC server restarted
 
@@ -896,8 +965,19 @@ app.post('/update', async (req, res) => {
 
     if (jobs)                        state.jobs      = jobs;
     if (version)                     state.version   = version;
-    if (Array.isArray(storage))      state.storage   = storage;
-    if (typeof storageTs === 'number' && storageTs > 0) state.storageTs = storageTs;
+    // Through the same arbiter as POST /storage, so neither path can overwrite a
+    // fresher snapshot with a staler one. This used to assign unconditionally,
+    // which is safe only while one sender exists.
+    if (storage !== undefined || storageTs !== undefined) {
+        const r = acceptStorage(state, { storage, storageTs }, 'dispatch');
+        // Logged rather than silent: the dispatch server going on sending a
+        // snapshot nobody accepts is exactly the state we want visible during
+        // the cutover, and "older than held" is the normal, expected rejection
+        // once the warehouse is posting.
+        if (!r.ok && Array.isArray(storage)) {
+            console.log(`[STORAGE] ignored dispatch snapshot: ${r.reason}`);
+        }
+    }
     if (mineZones)                   state.mineZones = mineZones;
     // ACCUMULATE, do not replace. W3's Phase 2 (1.9.85) changed what these two
     // fields mean: they were "the last N lines", a window safe to overwrite with,
