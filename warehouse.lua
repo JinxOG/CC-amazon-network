@@ -682,8 +682,13 @@ local function refusalIsExpected(why)
     return type(why) == "string" and why:find("older than", 1, true) ~= nil
 end
 
-local function postStorage(body, now)
-    -- A lost reply event would otherwise wedge this flag forever and the panel
+-- Whether a post can start, checked BEFORE the body is built.
+--
+-- Building it serialises every item. At a 10s cadence a bridge slower than
+-- that would have this computer build 45 KB every cycle and throw it away.
+-- Cheap at 30s, wasteful at 10.
+local function postReady(now)
+    -- A lost reply event would otherwise wedge this forever and the panel
     -- would quietly stop updating with nothing reporting a fault.
     if postPending and (now - postPendingSince) > POST_STUCK_MS then
         postPending = false
@@ -691,7 +696,11 @@ local function postStorage(body, now)
         log("Storage post stuck >30s - clearing (reply event lost)")
         if _log then _log.pendingLevel = nil end
     end
-    if postPending then return false end
+    return not postPending
+end
+
+local function postStorage(body, now)
+    if not postReady(now) then return false end
     if type(http) ~= "table" or type(http.request) ~= "function" then return false end
     local ok = pcall(http.request, POST_URL, body, { ["Content-Type"] = "application/json" })
     if not ok then
@@ -723,7 +732,18 @@ end
 --   * it backs off hard the moment a call is slow, so if the network really is
 --     the slow party this probe cannot keep paying for the answer;
 --   * it is temporary, and comes out when the card is decided.
-local PROBE_EVERY_MS   = 30000   -- also the digest cadence (W3, provisional)
+-- The storage cycle: read RS, send the digest, post the full list.
+--
+-- 10s at the user's request (2026-09-23). The panel was sawtoothing 1->30s and
+-- they asked why; 30 was provisional from when the whole list went over the
+-- radio, and no longer reflects what the work costs.
+--
+-- ONE constant on purpose, not two. The digest and the post are built from the
+-- SAME read, so splitting them would either read RS twice or save one small
+-- radio message. It also keeps the server's 180s liveness window well fed.
+--
+-- Below about 5s pays for a redraw nobody can perceive.
+local PROBE_EVERY_MS   = 10000
 local PROBE_SLOW_MS    = 2000
 local PROBE_BACKOFF_MS = 600000
 
@@ -831,8 +851,9 @@ local function storageProbe(now)
 
     -- The dashboard copy. Only on a read that actually succeeded: a body built
     -- from nil would post an empty network as though the storage were empty.
-    if type(items) == "table" then
-        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch("utc"))
+    local postNow = os.epoch("utc")
+    if type(items) == "table" and postReady(postNow) then
+        postStorage(buildPostBody(items, readTs, craftableMap), postNow)
     end
     return ms
 end
@@ -976,6 +997,7 @@ if _G.__CC_WAREHOUSE_TEST then
         acceptWatchlist = acceptWatchlist,
         buildPostBody   = buildPostBody,
         readPostReply   = readPostReply,
+        postReady       = postReady,
         refusalIsExpected = refusalIsExpected,
         POST_URL        = POST_URL,
         msgName         = msgName,

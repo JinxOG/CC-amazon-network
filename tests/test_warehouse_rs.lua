@@ -557,4 +557,24 @@ return {
         assert_eq(W.refusalIsExpected(nil), false)
     end,
 
+
+    -- The reply never arrives in this harness, so the first post stays in
+    -- flight. Every later cycle must therefore skip -- both the send AND the
+    -- 45 KB body build, which is the whole point of checking before building.
+    -- At 30s this was cheap; at the 10s cadence the user asked for, a bridge
+    -- slower than one cycle would have this computer serialise every item over
+    -- and over and throw the result away.
+    ["a post already in flight stops the next cycle rebuilding the body"] = function(assert_eq)
+        -- Deliberately inside the 30s stuck-clear window. Past it the poster is
+        -- SUPPOSED to try again -- a lost reply event must not wedge it forever
+        -- -- so a longer run would be testing against the escape hatch rather
+        -- than against the guard. 8 steps of 3s is 24s: three cycles, one post.
+        local r = driveWarehouse({ events = 8, stepMs = 3000 })
+        assert_eq(r.ranOut, true, "the loop must run the whole script: " .. r.err)
+        assert_eq(#r.posts, 1,
+            "three cycles with no reply, inside the stuck window, must post "
+            .. "exactly once -- got " .. #r.posts
+            .. "; without the guard each cycle rebuilds 45 KB and retries")
+    end,
+
 }

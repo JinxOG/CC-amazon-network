@@ -54,7 +54,14 @@ T_POST_SENT = "the full list is actually posted to the bridge"
 
 T_REFUSAL = "the one expected refusal is not reported as a fault"
 
+T_POST_INFLIGHT = "a post already in flight stops the next cycle rebuilding the body"
+
 MUTANTS = [
+    ("let a second post start while one is in flight",
+     "    return not postPending",
+     "    return true",
+     T_POST_INFLIGHT),
+
     ("treat every refusal as expected, including real ones",
      "    return type(why) == \"string\" and why:find(\"older than\", 1, true) ~= nil",
      "    return true",
@@ -62,8 +69,8 @@ MUTANTS = [
 
     # -- The bridge poster ----------------------------------------------------
     ("stamp the post with send time instead of the read time",
-     "        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch(\"utc\"))",
-     "        postStorage(buildPostBody(items, os.epoch(\"utc\"), craftableMap), os.epoch(\"utc\"))",
+     "        postStorage(buildPostBody(items, readTs, craftableMap), postNow)",
+     "        postStorage(buildPostBody(items, postNow, craftableMap), postNow)",
      T_POST_BODY),
 
     ("treat any reply as success",
@@ -72,7 +79,7 @@ MUTANTS = [
      T_POST_REPLY),
 
     ("build the post but never send it",
-     "\n        postStorage(buildPostBody(items, readTs, craftableMap), os.epoch(\"utc\"))",
+     "\n        postStorage(buildPostBody(items, readTs, craftableMap), postNow)",
      "",
      T_POST_SENT),
 
