@@ -152,6 +152,7 @@ U_WARE    = "an update reaches the warehouse as well as the turtles"
 C_CANCEL  = "a cancelled job gets no replacement, a failed one still does"
 P_TOSRV   = "a message with no named recipient is addressed to the server"
 P_KEEP    = "an explicit recipient is left alone"
+R_FLIGHT  = "a recall is checked before departing and before the loader goes down (SOURCE-ONLY, weaker)"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -809,6 +810,12 @@ MUTANTS = [
 
     ("every message is addressed to the server", "protocol.lua",
      [("        to      = to or \"server\",", "        to      = \"server\",")], P_KEEP),
+
+    ("the pre-departure recall check is removed", "ore_turtle.lua",
+     [("        if base.isRecalled() then\n            base.sendProgress(\"recalled before departing for the sector\")\n", "        if false then\n            base.sendProgress(\"recalled before departing for the sector\")\n")], R_FLIGHT),
+
+    ("the loader-placement recall check is removed", "ore_turtle.lua",
+     [("        if base.isRecalled() then\n            base.sendProgress(\"recalled on arrival — not placing the loader\")\n", "        if false then\n            base.sendProgress(\"recalled on arrival — not placing the loader\")\n")], R_FLIGHT),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

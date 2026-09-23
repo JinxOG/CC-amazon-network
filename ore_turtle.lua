@@ -1996,6 +1996,20 @@ local function mineJob(job)
         local orphanSaid = false   -- report an orphan once per sector, not per level
         local modeTag    = surveyMode and "[SURVEY] " or ""
 
+        -- RECALLED BEFORE WE EVEN SET OFF.
+        --
+        -- 2026-09-22: node_119 logged "RECALL: job_cancelled" at 08:59 and flew
+        -- 1,700 blocks anyway, placed its loader at 09:08 and began scanning --
+        -- nine minutes after being told to come home, with no job on the server.
+        -- The control loop sets isRecalled() the moment RECALL arrives; nothing
+        -- between here and the mining loop asked.
+        if base.isRecalled() then
+            base.sendProgress("recalled before departing for the sector")
+            recallReturn()
+            _jobId = nil
+            return
+        end
+
         base.setStatus(proto.STATUS.TRAVELLING, jobId)
         base.sendProgress(string.format("%sTravelling to sector %d,%d", modeTag, sx, sz))
         reportPhase(proto.PHASE.TRAVELLING, string.format("sector %d,%d", sx, sz))
@@ -2060,6 +2074,17 @@ local function mineJob(job)
                   facing = base.getFacing() }
         _beaconLost     = false
         _lastBeaconPoll = os.epoch("utc") / 1000
+
+        -- THE POINT OF NO RETURN, and the second place the 09-22 recall was
+        -- ignored. A recall that arrives during the flight lands here: putting
+        -- the loader down commits this turtle to a sector the server no longer
+        -- has a job for, and leaves a chunk loader standing that nobody expects.
+        if base.isRecalled() then
+            base.sendProgress("recalled on arrival — not placing the loader")
+            recallReturn()
+            _jobId = nil
+            return
+        end
 
         local placed, placeErr =
             mine_flow.placeLoader(FENCE_CHUNK_RADIUS, { cx = acx, cz = acz })
