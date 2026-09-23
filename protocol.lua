@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.115"
+proto.VERSION = "1.9.116"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -190,11 +190,22 @@ end
 
 -- ─── Core Encode / Decode ────────────────────────────────────────────────────
 
+-- `to` defaults to "server" when the caller names no recipient.
+--
+-- decode REQUIRES every field, so a message encoded with to = nil is rejected
+-- at the far end -- and rejected silently, because an undecodable message has
+-- no type to log against. The warehouse sent its logs, its keepalives and its
+-- storage digests that way for nine days: running perfectly, heard by nobody,
+-- with an ender modem that worked in both directions the whole time. Found
+-- 2026-09-23 after the receive direction was proven live by an UPDATE_ALL.
+--
+-- Defaulting here rather than at each call site fixes every existing sender at
+-- once, including ones nobody has looked at yet.
 function proto.encode(msgType, from, to, payload)
     return {
         type    = msgType,
         from    = from,
-        to      = to,
+        to      = to or "server",
         seq     = nextSeq(),
         ts      = os.epoch("utc"),
         payload = payload or {},

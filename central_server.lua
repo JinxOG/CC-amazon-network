@@ -5034,6 +5034,26 @@ function server.run()
             local parsed = textutils.unserialise(p4)
             if parsed then
                 local valid, msg = proto.decode(parsed)
+                -- SAY WHEN A MESSAGE IS THROWN AWAY.
+                --
+                -- An undecodable message has no type to log against, so this
+                -- branch used to drop it in silence. The warehouse encoded with
+                -- to = nil, decode rejected every one, and nine days of logs,
+                -- keepalives and digests vanished at the door while both ends
+                -- looked healthy. Rate-limited: a broken sender repeats.
+                if not valid then
+                    local nowD = os.epoch("utc")
+                    if nowD - (state.lastDecodeWarnAt or 0) > 30000 then
+                        state.lastDecodeWarnAt = nowD
+                        state.decodeDropped = (state.decodeDropped or 0) + 1
+                        logWarn(string.format(
+                            "Dropped an undecodable message from %s: %s (%d since boot)",
+                            tostring(type(parsed) == "table" and parsed.from or "?"),
+                            tostring(msg), state.decodeDropped))
+                    else
+                        state.decodeDropped = (state.decodeDropped or 0) + 1
+                    end
+                end
                 if valid then
                     local handler = handlers[msg.type]
                     if handler then

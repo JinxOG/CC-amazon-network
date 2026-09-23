@@ -280,6 +280,23 @@ return {
             "respawning after a failure is what keeps a zone from stopping silently")
     end,
 
+    -- 2026-09-23: the warehouse ran perfectly for nine days and was heard by
+    -- nobody. It encoded with to = nil, decode requires every field, and an
+    -- undecodable message has no type to log against - so its logs, keepalives
+    -- and storage digests were discarded at the door in silence.
+    ["a message with no named recipient is addressed to the server"] = function(assert_eq)
+        local m = proto.encode(proto.MSG.STORAGE_DIGEST, "warehouse", nil, { keepalive = true })
+        local ok, decoded = proto.decode(m)
+        assert_eq(m.to, "server", "no recipient named means the server")
+        assert_eq(ok, true, "and it must survive decode, or it never arrives")
+        assert_eq(decoded ~= nil and decoded.payload.keepalive, true)
+    end,
+
+    ["an explicit recipient is left alone"] = function(assert_eq)
+        local m = proto.encode(proto.MSG.SECTOR_ASSIGN, "server", "node_138", {})
+        assert_eq(m.to, "node_138", "defaulting must not overwrite a real address")
+    end,
+
     ["a storage digest feeds the ore watchdog and answers the network check"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

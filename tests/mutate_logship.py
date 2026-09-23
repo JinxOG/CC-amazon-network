@@ -150,6 +150,8 @@ D_SENDER  = "a digest from anyone but the warehouse is refused"
 D_WATCH   = "the first digest gets the watchlist so the warehouse need not guess"
 U_WARE    = "an update reaches the warehouse as well as the turtles"
 C_CANCEL  = "a cancelled job gets no replacement, a failed one still does"
+P_TOSRV   = "a message with no named recipient is addressed to the server"
+P_KEEP    = "an explicit recipient is left alone"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -801,6 +803,12 @@ MUTANTS = [
 
     ("the cancel flag is never set", "central_server.lua",
      [("    job.cancelledByOperator = true\n", "")], C_CANCEL),
+
+    ("a nil recipient stays nil, as it did for nine days", "protocol.lua",
+     [("        to      = to or \"server\",", "        to      = to,")], P_TOSRV),
+
+    ("every message is addressed to the server", "protocol.lua",
+     [("        to      = to or \"server\",", "        to      = \"server\",")], P_KEEP),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",
