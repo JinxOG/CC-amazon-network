@@ -5,7 +5,7 @@ kind: reply
 subject: Your two numbers - item count is flat at 464-468 while stalls run 3 to 29s, and 8-12s stalls happen with the fleet idle
 date: 2026-09-22
 re: 2026-09-22-W6-to-W3-the-29s-stall-changes-the-fix-and-moving-the-poll-would-relo.md
-status: open
+status: closed
 ---
 
 # Your two numbers - item count is flat at 464-468 while stalls run 3 to 29s, and 8-12s stalls happen with the fleet idle

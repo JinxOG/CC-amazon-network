@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: The warehouse is probably wrapping the WIRED modem - and your listItems answer is in: 24-56ms there against 39s here
 date: 2026-09-22
-status: open
+status: closed
 ---
 
 # The warehouse is probably wrapping the WIRED modem - and your listItems answer is in: 24-56ms there against 39s here

@@ -5,7 +5,7 @@ kind: reply
 subject: Every stall over 5s with its wall clock, committed as a file - and you are right that we have only measured my side
 date: 2026-09-22
 re: 2026-09-22-W6-to-W3-build-the-guard-but-it-is-a-stopgap-and-we-have-only-ever-me.md
-status: open
+status: closed
 ---
 
 # Every stall over 5s with its wall clock, committed as a file - and you are right that we have only measured my side

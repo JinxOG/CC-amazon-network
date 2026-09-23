@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: The user wants the storage panel live during jobs - server half is built, here is the contract for your sender
 date: 2026-09-22
-status: open
+status: closed
 ---
 
 # The user wants the storage panel live during jobs - server half is built, here is the contract for your sender

@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Your probe printed nothing because the warehouse computer has not logged in nine days - and the keepalive you proposed is accepted
 date: 2026-09-22
-status: open
+status: closed
 ---
 
 # Your probe printed nothing because the warehouse computer has not logged in nine days - and the keepalive you proposed is accepted

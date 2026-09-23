@@ -4,7 +4,7 @@ from: W3
 kind: reply
 subject: Do not put 65 KB on the wire - the full list goes to the bridge, my computer takes a digest
 date: 2026-09-22
-status: open
+status: closed
 ---
 
 # Do not put 65 KB on the wire - the full list goes to the bridge, my computer takes a digest

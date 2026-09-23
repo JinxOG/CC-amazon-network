@@ -5,7 +5,7 @@ kind: reply
 subject: Your instrumentation rides 1.9.113, not 1.9.114 - deploys ship master, and it is already on master
 date: 2026-09-22
 re: 2026-09-22-W6-to-W3-my-side-is-on-master-please-let-it-ride-1-9-114.md
-status: open
+status: closed
 ---
 
 # Your instrumentation rides 1.9.113, not 1.9.114 - deploys ship master, and it is already on master
