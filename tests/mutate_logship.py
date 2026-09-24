@@ -152,6 +152,9 @@ U_WARE    = "an update reaches the warehouse as well as the turtles"
 C_CANCEL  = "a cancelled job gets no replacement, a failed one still does"
 P_TOSRV   = "a message with no named recipient is addressed to the server"
 P_KEEP    = "an explicit recipient is left alone"
+E_ORE     = "a sector's estimate is driven by the ore the survey found in it"
+E_UNKNOWN = "a sector the survey has not reported is priced as empty, not as average"
+E_PASSES  = "the estimate covers the passes still to come, not just this one"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -809,6 +812,24 @@ MUTANTS = [
 
     ("every message is addressed to the server", "protocol.lua",
      [("        to      = to or \"server\",", "        to      = \"server\",")], P_KEEP),
+
+    # -- Ore-priced job ETA (1.9.117) ----------------------------------------
+    ("the ore term is dropped, so every sector costs the same", "central_server.lua",
+     [("            secs = secs + ETA_SECTOR_OVERHEAD_S + ore * ETA_S_PER_ORE\n",
+       "            secs = secs + ETA_SECTOR_OVERHEAD_S\n")], E_ORE),
+
+    ("the work is not divided between the miners", "central_server.lua",
+     [("    return math.floor(secs / miners)\n", "    return math.floor(secs)\n")], E_ORE),
+
+    ("a sector's depth levels are not summed", "central_server.lua",
+     [("            for _, n in pairs(seen) do total = total + (tonumber(n) or 0) end\n",
+       "            for _, n in pairs(seen) do total = tonumber(n) or 0 end\n")], E_ORE),
+
+    ("an unpriced sector costs nothing at all", "central_server.lua",
+     [("            secs = secs + ETA_EMPTY_S\n        end\n", "        end\n")], E_UNKNOWN),
+
+    ("the passes still to come are ignored", "central_server.lua",
+     [("        secs = secs + all * ETA_RESCAN_S + all * ETA_EMPTY_S\n", "")], E_PASSES),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

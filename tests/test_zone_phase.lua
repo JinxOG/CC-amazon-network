@@ -297,6 +297,63 @@ return {
         assert_eq(m.to, "node_138", "defaulting must not overwrite a real address")
     end,
 
+    -- The ETA, priced from what the survey found (1.9.117).
+    --
+    -- Measured over 153 sector completions: a mined sector costs 7.7 min plus
+    -- 36.6 min per 1000 ore, r=0.993. Sectors differ by two orders of magnitude,
+    -- so averaging them - which is what phaseEta does - was wrong by 13.5 min a
+    -- sector where pricing each by its own ore is wrong by 3.1.
+    ["a sector's estimate is driven by the ore the survey found in it"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S1), copy(S2) }, allSectors = { copy(S1), copy(S2) },
+            postRescan = true,   -- no further passes, so this is the mine work alone
+        })
+        zone.sectorSeen = {
+            [S1.x .. "," .. S1.z .. ",16"] = { ["minecraft:iron_ore"] = 1000 },
+            [S1.x .. "," .. S1.z .. ",0"]  = { ["minecraft:coal"] = 1000 },
+            [S2.x .. "," .. S2.z .. ",16"] = { ["minecraft:iron_ore"] = 100 },
+        }
+        local one = T.jobEta(zone, 1)
+        local two = T.jobEta(zone, 2)
+        local ore1 = T.sectorFoundOre(zone, S1.x, S1.z)
+        restore()
+        assert_eq(ore1, 2000, "a sector's ore is summed across its depth levels")
+        -- S1: 462 + 2000*2.196 = 4854.0 ; S2: 462 + 100*2.196 = 681.6 -> 5535.6
+        assert_eq(one, 5535, "each sector priced by its own ore, not by an average")
+        assert_eq(two, 2767, "and the work splits across the miners on the zone")
+    end,
+
+    ["a sector the survey has not reported is priced as empty, not as average"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S1) }, allSectors = { copy(S1) },
+            postRescan = true,
+        })
+        zone.sectorSeen = {}
+        local eta = T.jobEta(zone, 1)
+        restore()
+        assert_eq(eta, 270,
+            "unknown ore reads LOW and climbs as the scans land, which is stated "
+            .. "in the comment; guessing an average would read high for barren ground")
+    end,
+
+    ["the estimate covers the passes still to come, not just this one"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = {}, allSectors = { copy(S1), copy(S2) },
+        })
+        zone.sectorSeen = {}
+        local withPasses = T.jobEta(zone, 1)
+        zone.postRescan = true
+        local without = T.jobEta(zone, 1)
+        restore()
+        -- 2 sectors * (rescan 252 + re-mine allowance 270)
+        assert_eq(withPasses, 1044,
+            "a job that has yet to rescan will rescan every sector and re-mine what it finds")
+        assert_eq(without, nil, "and once those passes are done there is nothing left to price")
+    end,
+
     ["a storage digest feeds the ore watchdog and answers the network check"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

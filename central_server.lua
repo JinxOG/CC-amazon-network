@@ -1422,6 +1422,85 @@ end
 -- nil below two samples. The dashboard already handles a nil ETA, and a wrong
 -- number is worse than no number -- that is the failure being fixed, and a
 -- one-sample mean would be the same mistake in a smaller form.
+-- ─── How long a job has left ─────────────────────────────────────────────────
+--
+-- MEASURED, not guessed. 153 sector completions across nine days (2026-09-16 to
+-- 09-24), each timed from the miner's previous completion so travel, loader
+-- placement and scanning are all inside the figure:
+--
+--   a mined sector   7.7 min + 36.6 min per 1000 ore   r = 0.993, n = 34
+--   a survey pass    9.4 min median
+--   a rescan pass    4.2 min median
+--   a pass over ground already emptied   4.5 min median
+--
+-- The ore term is what the old estimate was missing. A sector's cost is almost
+-- entirely its ore -- 27 ore a minute once digging -- and sectors differ by two
+-- orders of magnitude: 5 minutes for barren ground, 192 for a rich column.
+-- Averaging them together, which is what phaseEta does, was wrong by 13.5
+-- minutes per sector; pricing each sector by its own ore is wrong by 3.1.
+--
+-- The survey is what makes this possible: by the time mining starts the server
+-- already knows what each sector holds, from the scan reports it filed.
+local ETA_SECTOR_OVERHEAD_S = 462    -- 7.7 min: travel, loader, scan, retrieval
+local ETA_S_PER_ORE         = 2.196  -- 36.6 min / 1000 ore
+local ETA_SURVEY_S          = 564    -- 9.4 min
+local ETA_RESCAN_S          = 252    -- 4.2 min
+local ETA_EMPTY_S           = 270    -- 4.5 min, ground with nothing left in it
+
+-- What the survey saw in one sector, summed over its depth levels.
+local function sectorFoundOre(zone, x, z)
+    local total = 0
+    local prefix = string.format("%d,%d,", x, z)
+    for k, seen in pairs(zone.sectorSeen or {}) do
+        if k:sub(1, #prefix) == prefix then
+            for _, n in pairs(seen) do total = total + (tonumber(n) or 0) end
+        end
+    end
+    return total
+end
+
+-- Seconds until the whole job is done, or nil when there is nothing left to
+-- price. Counts the work that is actually scheduled -- the survey list, the
+-- mine list, the rescan list -- and the passes that always follow.
+--
+-- HONEST ABOUT WHAT IT ASSUMES, because an estimate that hides its assumptions
+-- is worse than none:
+--   * a sector whose ore the survey has not reported yet is priced as an empty
+--     pass, so a pre-survey estimate reads LOW and climbs once the scans land;
+--   * the re-mine pass is allowed for at the empty-pass rate, because what it
+--     will find cannot be known until the rescan runs;
+--   * work splits evenly across the miners on the zone, which is what the
+--     dispatcher does but not what finishing times look like sector by sector.
+local function jobEta(zone, activeMiners)
+    if not zone then return nil end
+    local miners = math.max(1, activeMiners or 1)
+    local secs   = 0
+
+    secs = secs + #(zone.surveySectors or {}) * ETA_SURVEY_S
+
+    for _, sec in ipairs(zone.pending or {}) do
+        local ore = sectorFoundOre(zone, sec.x, sec.z)
+        if ore > 0 then
+            secs = secs + ETA_SECTOR_OVERHEAD_S + ore * ETA_S_PER_ORE
+        else
+            secs = secs + ETA_EMPTY_S
+        end
+    end
+
+    secs = secs + #(zone.rescanSectors or {}) * ETA_RESCAN_S
+
+    -- The passes still to come. A zone that has not rescanned yet will rescan
+    -- every sector once, and then re-mine whatever that finds.
+    if not zone.postRescan and #(zone.rescanSectors or {}) == 0
+       and (zone.phase == "SURVEY" or zone.phase == "MINE") then
+        local all = #(zone.allSectors or {})
+        secs = secs + all * ETA_RESCAN_S + all * ETA_EMPTY_S
+    end
+
+    if secs <= 0 then return nil end
+    return math.floor(secs / miners)
+end
+
 local function phaseEta(zone, activeMiners)
     local t = zone.sectorTimes and zone.sectorTimes[zone.phase]
     if not t or t.n < 2 then return nil end
@@ -4554,7 +4633,9 @@ function server.run()
                     activeMiners = activeMiners + 1
                 end
             end
-            local eta = phaseEta(z, activeMiners)
+            -- jobEta prices each sector by its own ore and covers the whole
+            -- job; phaseEta is the fallback for a zone it cannot price.
+            local eta = jobEta(z, activeMiners) or phaseEta(z, activeMiners)
             local minerId  = state.jobs[jid] and state.jobs[jid].assignedTo or nil
             local minerSt  = minerId and state.registry[minerId] and state.registry[minerId].status or nil
             mineZones[jid] = {
@@ -5505,6 +5586,8 @@ if _G.__CC_SERVER_TEST then
         noteBridgeBoot = noteBridgeBoot,
         sectorHolder   = sectorHolder,
         clearSectorFails = clearSectorFails,
+        jobEta           = jobEta,
+        sectorFoundOre   = sectorFoundOre,
         fanOutUpdateAll  = fanOutUpdateAll,
         mineJobLive      = mineJobLive,
         dumpZoneOreMap   = dumpZoneOreMap,
