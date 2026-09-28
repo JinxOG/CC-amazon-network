@@ -319,23 +319,105 @@ return {
         local ore1 = T.sectorFoundOre(zone, S1.x, S1.z)
         restore()
         assert_eq(ore1, 2000, "a sector's ore is summed across its depth levels")
-        -- S1: 462 + 2000*2.196 = 4854.0 ; S2: 462 + 100*2.196 = 681.6 -> 5535.6
-        assert_eq(one, 5535, "each sector priced by its own ore, not by an average")
-        assert_eq(two, 2767, "and the work splits across the miners on the zone")
+        -- S1: 462 + 2000*2.196 = 4854.0 ; S2: 462 + 100*2.196 = 681.6 -> 5535.6,
+        -- and every job pays the 840s trip home on top.
+        assert_eq(one, 6375, "each sector priced by its own ore, not by an average")
+        assert_eq(two, 3607, "and the work splits across the miners on the zone")
     end,
 
-    ["a sector the survey has not reported is priced as empty, not as average"] =
+    -- 1.9.117 priced a sector the survey had not reached as an empty pass. That
+    -- was honest and useless: at 17:42 on job_0088 the dashboard read 45 minutes
+    -- for a job that ran 6 hours 44, and climbed 45 -> 89 -> 208 -> 380 over its
+    -- first twenty-five minutes as the scans landed. 1.9.119 prices it from what
+    -- this zone's scanned sectors turned out to hold instead.
+    ["a sector the survey has not reached yet is priced, not treated as empty"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "SURVEY", pending = { copy(S1) }, allSectors = { copy(S1) },
+            postRescan = true,
+        })
+        zone.sectorSeen = {}                      -- nothing scanned anywhere yet
+        zone.surveyDone, zone.surveyTotal = 0, 3  -- and the survey is still out
+        local eta = T.jobEta(zone, 1)
+        restore()
+        -- 462 + 4600 * 2.196 = 10563.6, + 840 home
+        assert_eq(eta, 11403,
+            "before any scan lands the fleet figure is the only estimate there is; "
+            .. "1110 -- an empty pass plus the trip home -- is the reading that "
+            .. "made a seven hour job look like forty-five minutes")
+    end,
+
+    ["a sector the survey HAS finished with and found nothing in is empty"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({
             phase = "MINE", pending = { copy(S1) }, allSectors = { copy(S1) },
             postRescan = true,
         })
         zone.sectorSeen = {}
+        zone.surveyDone, zone.surveyTotal = 3, 3   -- the survey is done: 0 means 0
         local eta = T.jobEta(zone, 1)
         restore()
-        assert_eq(eta, 270,
-            "unknown ore reads LOW and climbs as the scans land, which is stated "
-            .. "in the comment; guessing an average would read high for barren ground")
+        assert_eq(eta, 1110,
+            "once the survey has been everywhere, no ore reported means no ore, "
+            .. "and the prior must not keep charging for a barren sector")
+    end,
+
+    ["the prior gives way to this zone's own scans as they land"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "SURVEY", pending = { copy(S1), copy(S2) },
+            allSectors = { copy(S1), copy(S2) }, postRescan = true,
+        })
+        zone.sectorSeen = { [S1.x .. "," .. S1.z .. ",16"] = { ["minecraft:iron_ore"] = 2000 } }
+        zone.surveyDone, zone.surveyTotal = 1, 2
+        local eta = T.jobEta(zone, 1)
+        restore()
+        -- S1 is known: 462 + 2000*2.196 = 4854. S2 is not, and this zone's only
+        -- scan says 2000, so it is priced the same -- not at the 4600 fleet figure.
+        assert_eq(eta, 10548,
+            "a zone that scans rich prices its unscanned ground rich, and one "
+            .. "that scans barren prices it barren; 16257 is the fleet prior")
+    end,
+
+    -- job_0088, 00:02: the estimate jumped from 11 minutes to 96 with 22 left to
+    -- run. The rescan had queued sectors for re-mining, and sectorSeen keeps the
+    -- LARGEST view a sector ever had -- deliberately -- so each was priced at its
+    -- full original ore although nearly all of it was already out of the ground.
+    ["a sector queued for re-mining is priced by what is left, not by the survey"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S1) }, allSectors = { copy(S1) },
+            postRescan = true,
+        })
+        local k = S1.x .. "," .. S1.z .. ",16"
+        zone.sectorSeen  = { [k] = { ["minecraft:iron_ore"] = 1000 } }
+        zone.sectorMined = { [k] = { ["minecraft:iron_ore"] = 980 } }
+        zone.surveyDone, zone.surveyTotal = 3, 3
+        local eta = T.jobEta(zone, 1)
+        restore()
+        -- 20 ore left: 462 + 20*2.196 = 505.9, + 840 home
+        assert_eq(eta, 1345,
+            "THE SPIKE: charging the original 1000 ore gives 3498 -- 96 minutes "
+            .. "of work on ground that has 20 ore left in it")
+    end,
+
+    ["every job pays for the trip home once, and a second miner does not halve it"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S1) }, allSectors = { copy(S1) },
+            postRescan = true,
+        })
+        zone.sectorSeen = { [S1.x .. "," .. S1.z .. ",16"] = { ["minecraft:iron_ore"] = 1000 } }
+        zone.surveyDone, zone.surveyTotal = 3, 3
+        local one = T.jobEta(zone, 1)
+        local two = T.jobEta(zone, 2)
+        restore()
+        -- work 2658; home 840 on top of both, never split
+        assert_eq(one, 3498, "one miner: 2658 of digging and 840 flying home")
+        assert_eq(two, 2169,
+            "two miners halve the digging and not the flight; 1749 is what "
+            .. "dividing the trip home would give, and both turtles still have "
+            .. "to fly the whole way")
     end,
 
     ["the estimate covers the passes still to come, not just this one"] =
@@ -349,7 +431,7 @@ return {
         local without = T.jobEta(zone, 1)
         restore()
         -- 2 sectors * (rescan 252 + re-mine allowance 270)
-        assert_eq(withPasses, 1044,
+        assert_eq(withPasses, 1884,
             "a job that has yet to rescan will rescan every sector and re-mine what it finds")
         assert_eq(without, nil, "and once those passes are done there is nothing left to price")
     end,
@@ -372,8 +454,8 @@ return {
         zone.lastAssignments[A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA }
         local eta = T.jobEta(zone, 1)
         restore()
-        -- 462 overhead + 1000 * 2.196
-        assert_eq(eta, 2658, "the sector in a miner's hands is the work that is left")
+        -- 462 overhead + 1000 * 2.196, + 840 home
+        assert_eq(eta, 3498, "the sector in a miner's hands is the work that is left")
     end,
 
     ["the estimate falls as the ore comes out of the sector in hand"] =
@@ -391,8 +473,9 @@ return {
         assert_eq(after < before, true,
             "THE REGRESSION: an estimate that does not fall while a miner digs is "
             .. "what read 191 minutes for two and a half hours")
-        -- 600 ore left * 2.196, and no overhead: reporting ore means it is there
-        assert_eq(after, 1317, "only the ore still in the ground is charged")
+        -- 600 ore left * 2.196 + 840 home, and no overhead: reporting ore
+        -- means the miner is there and set up
+        assert_eq(after, 2157, "only the ore still in the ground is charged")
     end,
 
     ["a job cannot finish sooner than the longest sector one miner holds"] =
@@ -411,7 +494,7 @@ return {
         restore()
         -- A holds 4854s, B holds 681.6s. Spread over two miners that averages to
         -- 2767, but nobody can take a share of the column already in A's hands.
-        assert_eq(eta, 4854, "the deepest hold sets the floor, not the average")
+        assert_eq(eta, 5694, "the deepest hold sets the floor, not the average")
     end,
 
     ["a survey pass in a miner's hands is charged in full"] =
@@ -423,7 +506,7 @@ return {
         zone.lastAssignments[A] = { x = S1.x, z = S1.z, isSurvey = true, jobId = JA }
         local eta = T.jobEta(zone, 1)
         restore()
-        assert_eq(eta, 564,
+        assert_eq(eta, 1404,
             "a survey cannot be priced by ore: the scans that would price it are "
             .. "the thing it is out there producing")
     end,
