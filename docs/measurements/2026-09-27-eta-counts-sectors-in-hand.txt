@@ -1,0 +1,95 @@
+ETA: THE SECTORS BEING MINED WERE INVISIBLE TO IT           W3, 2026-09-27
+================================================================================
+
+WHAT WAS MEASURED, AND WHY IT COUNTS AS A FAILURE
+
+1.9.117 replaced an averaged per-sector ETA with one priced from the ore the
+survey found. The per-sector formula fitted well (r=0.993, n=34) and I said at
+the time that the honest test was not whether the number looked plausible but
+whether it matched the clock. A recorder sampled the dashboard's own figure every
+ten minutes through job_0086/0087 on 2026-09-24. It did not match the clock.
+
+  when     phase     ETA said   ore out of the zone
+  14:34    SURVEY      35.8 min      0
+  14:54    SURVEY     273.8 min      0
+  15:04    MINE       191.1 min    375
+  15:14    MINE       191.1 min   1025
+    ... unchanged, every sample, for two and a half hours ...
+  17:34    MINE       191.1 min   8719
+  17:44    MINE 1/4   105.7 min   9104
+
+The jobs completed at 21:26:15 and 21:28:22. So at 15:04 it said 191 minutes
+with 382 to go; at 17:34 it still said 191 with 232 to go; and at 17:44, as a
+sector finished, the estimate FELL to 106 with 222 still to go.
+
+The number never moved while 8,344 ore came out of the ground. That is the
+finding: not that it was inaccurate, but that it was not watching the work.
+
+THE CAUSE
+
+jobEta priced zone.pending. Handing a sector to a miner pops it off pending.
+So the sectors actually being mined -- the ones that decide when the job ends --
+were priced at nothing, and the one list the estimate did watch could not change
+while the miners dug. On a four-sector zone with two miners that is half the
+remaining work, invisible.
+
+REPLAY AGAINST THE REAL SECTOR DATA
+
+The server's own completion lines give the zone exactly: four sectors, two
+miners, one shared zone across job_0086 and job_0087.
+
+  (1760,-3104)  4420 ore   done 17:43:45  node_119
+  (1792,-3136)  5110 ore   done 18:06:38  node_138
+  (1760,-3136)  4512 ore   done 20:59:26  node_138
+  (1792,-3104)  3775 ore   done 21:00:58  node_119
+  then a rescan and re-mine pass, 0 ore, and complete at 21:26:15.
+
+Both models replayed over that zone, in minutes remaining:
+
+     clock |  1.9.117 |  1.9.118 |  actual |  .117 err |  .118 err
+  ---------+----------+----------+---------+-----------+----------
+     15:04 |      177 |      344 |     382 |      -205 |      -38
+     17:14 |      177 |      209 |     252 |       -75 |      -43
+     17:44 |       90 |      185 |     222 |      -132 |      -37
+
+(The replay's 1.9.117 column reads 177 where the live server read 191, because
+the replay prices a sector by the ore actually recovered from it rather than by
+the survey's own slightly larger view. That bias is in the same direction as the
+error being measured, so it does not flatter the new model.)
+
+WHAT 1.9.118 DOES
+
+Prices the sectors in the miners' hands from zone.lastAssignments -- the holder
+data popUnheld already trusts -- charging:
+  * only the ore still in the ground, found minus mined, both of which the scan
+    reports already file per sector, so the figure falls while a miner digs;
+  * the setup overhead only while nothing has been reported out of the sector
+    yet, which is exactly when the miner is still travelling, placing its loader
+    and scanning;
+  * a survey pass in hand at the full pass cost, because the scans that would
+    price it are the thing it is out there producing.
+The estimate is then the greater of the work spread over the miners and the
+deepest single hold, which no other miner can take a share of.
+
+Four tests, nine mutants. The one that matters is "the estimate falls as the ore
+comes out of the sector in hand" -- the direct regression for the frozen 191.
+
+WHAT IS STILL WRONG, STATED BEFORE ANYONE ELSE FINDS IT
+
+The new model still reads LOW, by 38, 43 and 37 minutes at the three sample
+points. A residual that is near-constant across two and a half hours is a fixed
+cost that is not priced, not a rate that is wrong.
+
+The visible candidate accounts for under half of it: the tail. The last ore
+sector finished at 21:00:58 and the jobs completed at 21:26 and 21:28, so the
+closing rescan and re-mine pass cost 25-27 minutes against an allowance of 17,
+and the return to dock and the completion handshake are priced nowhere at all.
+
+NOT TUNED, DELIBERATELY. This is one job. Adding a constant that makes n=1 fit
+is how the averaged estimate got its authority in the first place. The
+prediction instead: the residual will show up again, roughly constant, on the
+next recorded job. If it does, it is a fixed tail cost and can be measured and
+priced. If it scales with the job instead, the per-ore rate is low and the
+constant would have been the wrong fix.
+
+The recorder runs on the next job either way.
