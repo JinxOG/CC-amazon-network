@@ -1441,18 +1441,29 @@ end
 --
 -- The survey is what makes this possible: by the time mining starts the server
 -- already knows what each sector holds, from the scan reports it filed.
--- ONE TABLE, NOT FIFTEEN LOCALS, AND THIS IS NOT A STYLE CHOICE.
+-- ONE TABLE, NOT FIFTEEN LOCALS -- AND THE REASON IS NOT FULLY ESTABLISHED.
 --
--- The server is deployed as /startup.lua, which is a BUNDLE: every module is
--- inlined into a single function scope, so every top-level `local` in every
--- module competes for one budget. Lua allows 200 per function. 1.9.119 added
--- five and crossed it, and the server would not compile at all -- the whole
--- fleet went headless until it was rolled back. The file compiles standalone,
--- which is why luac never saw it; only the bundle is over.
+-- 2026-09-28: 1.9.119 deployed and the server computer refused to compile it:
 --
--- So this block spends ONE local where it used to spend fifteen. Anything added
--- here must be a field of ETA, not a new local. See
--- docs/measurements/2026-09-28-the-bundle-has-200-local-slots.txt
+--   /startup.lua:5392: function at line 3839 has more than 200 local variables
+--
+-- The fleet sat headless for forty minutes. Recovery was a fresh install on the
+-- server computer (see the runbook in docs/measurements).
+--
+-- WHAT IS ESTABLISHED: the error happened, and only 1.9.119's five new
+-- top-level locals separated it from 1.9.118, which had run for hours.
+--
+-- WHAT IS NOT: that collapsing them fixed it. Lua 5.4 reports IDENTICAL counts
+-- for 1.9.119 and 1.9.120 -- 139 locals and 51 upvalues in the largest function,
+-- unchanged -- so by every measure available here this collapse changed nothing
+-- the compiler counts. The server was also freshly reinstalled at the same time,
+-- and that alone may be what fixed it. The two cannot be told apart without
+-- deliberately redeploying the broken version to a working fleet.
+--
+-- So: keep this a table, because it costs nothing and the one hypothesis left
+-- standing is that CC's Lua counts something our toolchain does not. But do not
+-- treat it as a proven fix, and do not trust `luac -p` here -- it passed the
+-- version that bricked the fleet.
 local ETA = {}
 ETA.OVERHEAD_S  = 462    -- 7.7 min: travel, loader, scan, retrieval
 ETA.S_PER_ORE   = 2.196  -- 36.6 min / 1000 ore

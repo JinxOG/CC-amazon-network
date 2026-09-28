@@ -822,8 +822,8 @@ MUTANTS = [
 
     # -- Ore-priced job ETA (1.9.117, re-anchored for 1.9.118) ----------------
     ("the ore term is dropped, so every sector costs the same", "central_server.lua",
-     [("    if left > 0 then return ETA_SECTOR_OVERHEAD_S + left * ETA_S_PER_ORE end\n",
-       "    if left > 0 then return ETA_SECTOR_OVERHEAD_S end\n")], E_ORE),
+     [("    if left > 0 then return ETA.OVERHEAD_S + left * ETA.S_PER_ORE end\n",
+       "    if left > 0 then return ETA.OVERHEAD_S end\n")], E_ORE),
 
     ("the work is not divided between the miners", "central_server.lua",
      [("    local secs = math.max(total / math.max(miners, holders), longest)\n",
@@ -834,27 +834,27 @@ MUTANTS = [
        "            for _, n in pairs(seen) do total = tonumber(n) or 0 end\n")], E_ORE),
 
     ("an unpriced sector costs nothing at all", "central_server.lua",
-     [("    return ETA_EMPTY_S\nend\n", "    return 0\nend\n")], E_EMPTY),
+     [("    return ETA.EMPTY_S\nend\n", "    return 0\nend\n")], E_EMPTY),
 
     ("the passes still to come are ignored", "central_server.lua",
-     [("        queued = queued + all * ETA_RESCAN_S + all * ETA_EMPTY_S\n", "")], E_PASSES),
+     [("        queued = queued + all * ETA.RESCAN_S + all * ETA.EMPTY_S\n", "")], E_PASSES),
 
     # -- The sectors being mined right now (1.9.118) --------------------------
     #
     # This is the regression that read 191 minutes for two and a half hours of
     # digging. Each of these mutants is a way of not seeing the work in hand.
     ("the sectors in the miners' hands are not priced at all", "central_server.lua",
-     [("        local secs = la.isSurvey and ETA_SURVEY_S or heldSectorSecs(zone, la.x, la.z)\n",
+     [("        local secs = la.isSurvey and ETA.SURVEY_S or ETA.heldSecs(zone, la.x, la.z)\n",
        "        local secs = 0\n")], E_HELD),
 
     ("a sector is charged for ore that has already come out of it",
      "central_server.lua",
-     [("    return math.max(0, sectorFoundOre(zone, x, z) - sectorMinedOre(zone, x, z))\n",
-       "    return sectorFoundOre(zone, x, z)\n")], E_FALL),
+     [("    return math.max(0, ETA.foundOre(zone, x, z) - ETA.minedOre(zone, x, z))\n",
+       "    return ETA.foundOre(zone, x, z)\n")], E_FALL),
 
     ("the setup overhead is charged again after the sector has started reporting",
      "central_server.lua",
-     [("    if sectorMinedOre(zone, x, z) <= 0 then\n", "    if true then\n")], E_FALL),
+     [("    if ETA.minedOre(zone, x, z) <= 0 then\n", "    if true then\n")], E_FALL),
 
     ("the deepest sector in one miner's hands is not a floor", "central_server.lua",
      [("    local secs = math.max(total / math.max(miners, holders), longest)\n",
@@ -867,32 +867,32 @@ MUTANTS = [
     # rescan queued re-mine work, and sat 11-16 minutes short at all 68 samples
     # in between.
     ("an unscanned sector is priced as empty again", "central_server.lua",
-     [("    if not hasScan(zone, x, z) and (zone.surveyDone or 0) < (zone.surveyTotal or 0) then\n"
-       "        return ETA_SECTOR_OVERHEAD_S + meanScannedOre(zone) * ETA_S_PER_ORE\n"
+     [("    if not ETA.hasScan(zone, x, z) and (zone.surveyDone or 0) < (zone.surveyTotal or 0) then\n"
+       "        return ETA.OVERHEAD_S + ETA.meanOre(zone) * ETA.S_PER_ORE\n"
        "    end\n", "")], E_UNSCAN),
 
     ("the prior keeps charging after the survey has been everywhere",
      "central_server.lua",
-     [("    if not hasScan(zone, x, z) and (zone.surveyDone or 0) < (zone.surveyTotal or 0) then\n",
-       "    if not hasScan(zone, x, z) then\n")], E_EMPTY),
+     [("    if not ETA.hasScan(zone, x, z) and (zone.surveyDone or 0) < (zone.surveyTotal or 0) then\n",
+       "    if not ETA.hasScan(zone, x, z) then\n")], E_EMPTY),
 
     ("this zone's own scans are ignored in favour of the fleet figure",
      "central_server.lua",
-     [("    if n == 0 then return ETA_UNKNOWN_ORE end\n    return total / n\n",
-       "    return ETA_UNKNOWN_ORE\n")], E_ZONEPR),
+     [("    if n == 0 then return ETA.UNKNOWN_ORE end\n    return total / n\n",
+       "    return ETA.UNKNOWN_ORE\n")], E_ZONEPR),
 
     ("a re-mine sector is charged for the survey's original view",
      "central_server.lua",
-     [("    local left = sectorOreLeft(zone, x, z)\n",
-       "    local left = sectorFoundOre(zone, x, z)\n")], E_REMINE),
+     [("    local left = ETA.oreLeft(zone, x, z)\n",
+       "    local left = ETA.foundOre(zone, x, z)\n")], E_REMINE),
 
     ("the trip home is not priced at all", "central_server.lua",
-     [("    return math.floor(secs + ETA_RETURN_S)\n",
+     [("    return math.floor(secs + ETA.RETURN_S)\n",
        "    return math.floor(secs)\n")], E_HOME),
 
     ("the trip home is divided between the miners", "central_server.lua",
-     [("    return math.floor(secs + ETA_RETURN_S)\n",
-       "    return math.floor(secs + ETA_RETURN_S / miners)\n")], E_HOME),
+     [("    return math.floor(secs + ETA.RETURN_S)\n",
+       "    return math.floor(secs + ETA.RETURN_S / miners)\n")], E_HOME),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

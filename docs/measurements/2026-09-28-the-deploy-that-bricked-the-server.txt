@@ -1,0 +1,77 @@
+THE DEPLOY THAT BRICKED THE SERVER, AND WHAT IS STILL UNKNOWN   W3, 2026-09-28
+================================================================================
+
+1.9.119 went out to an idle fleet at 15:24 UTC. The server computer could not
+compile it and never started. Every turtle sat headless for roughly forty
+minutes until a human went in-world and read the screen.
+
+  /startup.lua:5392: function at line 3839 has more than 200 local variables
+
+RECOVERY (this worked; keep it)
+
+On the SERVER computer, at the `>` prompt:
+
+    wget run https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/install.lua server
+    reboot
+
+If it asks for a role instead of taking it from the line, type `server`. This
+re-downloads every server file from GitHub master. It replaces PROGRAM files
+only -- the zone store and mining history are separate data files and survive.
+
+This needs a person in the world. The server cannot be fixed over the air once
+it will not compile, because the thing that receives an update is the program
+that is not running.
+
+HOW IT WAS DIAGNOSED FROM OUTSIDE, BEFORE ANYONE WENT IN
+
+Useful because it cost one query and pointed at the right computer:
+
+  * the bridge was healthy and answering (/ping fine, uptime = time since deploy)
+  * it logged `pushes=0` every minute since the restart -- nothing from the
+    dispatch server at all, not even its own loop rollup, so the server was not
+    running rather than running-but-deaf
+  * BUT storage readings were 6 seconds fresh, and those come from the WAREHOUSE
+    posting over HTTP directly. So the warehouse was alive.
+
+One computer silent, another alive on the same network, is what isolates it to
+the dispatch server rather than the network, the bridge, or the mod.
+
+WHAT IS ESTABLISHED
+
+  * 1.9.118 ran for hours. 1.9.119 would not compile. The only difference was
+    five new top-level locals in central_server.lua.
+  * `luac -p` passed the version that bricked the fleet. Our toolchain cannot
+    see whatever limit CC's Lua enforced.
+
+WHAT IS NOT ESTABLISHED, AND WAS WRONGLY WRITTEN DOWN FIRST
+
+The first explanation committed here -- that /startup.lua is a BUNDLE of every
+module sharing one 200-local budget -- IS WRONG. /startup.lua is
+startup_server.lua, 122 lines, and install.lua downloads each module as its own
+file. That was asserted as fact in a code comment and a commit message before it
+was checked.
+
+The fix shipped as 1.9.120 collapsed fifteen ETA locals into one table. Lua 5.4
+reports IDENTICAL counts for 1.9.119 and 1.9.120 -- 139 locals, 51 upvalues in
+the largest function, main chunk 109 -- so by every measure available here that
+change altered nothing the compiler counts.
+
+THE SERVER WAS ALSO FRESHLY REINSTALLED AT THE SAME MOMENT. That alone may be
+what fixed it: a partial or corrupted OTA write would explain a compile error
+that the same bytes do not produce anywhere else. The two cannot be separated
+without redeploying the broken version to a working fleet, which is not worth
+an outage to satisfy curiosity.
+
+So 1.9.120 is kept because a table costs nothing, not because it is a proven
+fix. If this returns, suspect the OTA write first, not the local count.
+
+THE REAL DEFECT
+
+Not the locals. The deploy had no check that the server came back. A fleet-wide
+deploy can brick the one computer that receives deploys, and nothing noticed for
+forty minutes except that a human happened to ask.
+
+The cheap version of this exists already and should be standard: after every
+deploy, poll /state until the server reports its new version, and if it does not
+within two minutes, say so loudly and produce the recovery command above rather
+than waiting. That is what turned this from a mystery into a ten-minute fix.
