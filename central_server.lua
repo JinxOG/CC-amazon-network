@@ -1441,20 +1441,33 @@ end
 --
 -- The survey is what makes this possible: by the time mining starts the server
 -- already knows what each sector holds, from the scan reports it filed.
-local ETA_SECTOR_OVERHEAD_S = 462    -- 7.7 min: travel, loader, scan, retrieval
-local ETA_S_PER_ORE         = 2.196  -- 36.6 min / 1000 ore
-local ETA_SURVEY_S          = 564    -- 9.4 min
-local ETA_RESCAN_S          = 252    -- 4.2 min
-local ETA_EMPTY_S           = 270    -- 4.5 min, ground with nothing left in it
-local ETA_RETURN_S          = 840    -- 14 min, the trip home (see jobEta)
+-- ONE TABLE, NOT FIFTEEN LOCALS, AND THIS IS NOT A STYLE CHOICE.
+--
+-- The server is deployed as /startup.lua, which is a BUNDLE: every module is
+-- inlined into a single function scope, so every top-level `local` in every
+-- module competes for one budget. Lua allows 200 per function. 1.9.119 added
+-- five and crossed it, and the server would not compile at all -- the whole
+-- fleet went headless until it was rolled back. The file compiles standalone,
+-- which is why luac never saw it; only the bundle is over.
+--
+-- So this block spends ONE local where it used to spend fifteen. Anything added
+-- here must be a field of ETA, not a new local. See
+-- docs/measurements/2026-09-28-the-bundle-has-200-local-slots.txt
+local ETA = {}
+ETA.OVERHEAD_S  = 462    -- 7.7 min: travel, loader, scan, retrieval
+ETA.S_PER_ORE   = 2.196  -- 36.6 min / 1000 ore
+ETA.SURVEY_S    = 564    -- 9.4 min
+ETA.RESCAN_S    = 252    -- 4.2 min
+ETA.EMPTY_S     = 270    -- 4.5 min, ground with nothing left in it
+ETA.RETURN_S    = 840    -- 14 min, the trip home (see ETA.forJob)
 -- What to assume a sector holds before the survey has scanned it. Measured over
 -- the last two zones: 4,454 and 4,743 ore a sector. This is a prior on ORE and
 -- nothing else -- the cost of a sector whose ore IS known is never averaged,
 -- because averaging that was the 1.9.116 failure.
-local ETA_UNKNOWN_ORE       = 4600
+ETA.UNKNOWN_ORE = 4600
 
 -- What the survey saw in one sector, summed over its depth levels.
-local function sectorFoundOre(zone, x, z)
+function ETA.foundOre(zone, x, z)
     local total = 0
     local prefix = string.format("%d,%d,", x, z)
     for k, seen in pairs(zone.sectorSeen or {}) do
@@ -1468,7 +1481,7 @@ end
 -- What has already come OUT of one sector, summed over its depth levels. The
 -- miners report mined ore in batches as they dig, so for the sector a miner is
 -- holding right now this number grows while it works.
-local function sectorMinedOre(zone, x, z)
+function ETA.minedOre(zone, x, z)
     local total = 0
     local prefix = string.format("%d,%d,", x, z)
     for k, mined in pairs(zone.sectorMined or {}) do
@@ -1481,14 +1494,14 @@ end
 
 -- The ore still in the ground in one sector: what the survey saw, less what has
 -- been reported out. Never negative.
-local function sectorOreLeft(zone, x, z)
-    return math.max(0, sectorFoundOre(zone, x, z) - sectorMinedOre(zone, x, z))
+function ETA.oreLeft(zone, x, z)
+    return math.max(0, ETA.foundOre(zone, x, z) - ETA.minedOre(zone, x, z))
 end
 
 -- Has the survey filed ANY reading for this sector yet? A sector it has not
 -- reached looks identical to an empty one in sectorSeen -- both have no entry --
 -- so the caller must also know whether the survey has finished.
-local function hasScan(zone, x, z)
+function ETA.hasScan(zone, x, z)
     local prefix = string.format("%d,%d,", x, z)
     for k in pairs(zone.sectorSeen or {}) do
         if k:sub(1, #prefix) == prefix then return true end
@@ -1499,43 +1512,43 @@ end
 -- The mean ore that the scanned sectors of THIS zone turned out to hold, or the
 -- fleet figure while no scan has landed. A prior, replaced by measurement within
 -- minutes of the survey starting.
-local function meanScannedOre(zone)
+function ETA.meanOre(zone)
     local total, n = 0, 0
     for _, sec in ipairs(zone.allSectors or {}) do
-        local ore = sectorFoundOre(zone, sec.x, sec.z)
+        local ore = ETA.foundOre(zone, sec.x, sec.z)
         if ore > 0 then total, n = total + ore, n + 1 end
     end
-    if n == 0 then return ETA_UNKNOWN_ORE end
+    if n == 0 then return ETA.UNKNOWN_ORE end
     return total / n
 end
 
 -- Seconds a sector still in the queue will cost.
-local function queuedSectorSecs(zone, x, z)
+function ETA.queuedSecs(zone, x, z)
     -- The ore LEFT, not the ore originally found. A sector queued for re-mining
     -- has already given up nearly all of it, and charging the survey's original
     -- view is what made the estimate jump to 96 minutes with 22 left to run
     -- (job_0088, 00:02).
-    local left = sectorOreLeft(zone, x, z)
-    if left > 0 then return ETA_SECTOR_OVERHEAD_S + left * ETA_S_PER_ORE end
+    local left = ETA.oreLeft(zone, x, z)
+    if left > 0 then return ETA.OVERHEAD_S + left * ETA.S_PER_ORE end
 
     -- Nothing is known about it. While the survey is still out, that means it has
     -- not been scanned yet -- not that it is empty. Pricing those at nothing is
     -- why a 6h44m job read as 45 minutes for its first twenty (job_0088, 17:42).
-    if not hasScan(zone, x, z) and (zone.surveyDone or 0) < (zone.surveyTotal or 0) then
-        return ETA_SECTOR_OVERHEAD_S + meanScannedOre(zone) * ETA_S_PER_ORE
+    if not ETA.hasScan(zone, x, z) and (zone.surveyDone or 0) < (zone.surveyTotal or 0) then
+        return ETA.OVERHEAD_S + ETA.meanOre(zone) * ETA.S_PER_ORE
     end
-    return ETA_EMPTY_S
+    return ETA.EMPTY_S
 end
 
 -- Seconds a sector ALREADY IN A MINER'S HANDS has left. Only the ore still in
 -- the ground is charged, and the overhead only while nothing has been reported
 -- out of it yet -- which is exactly when the miner is still travelling, placing
 -- its loader and scanning.
-local function heldSectorSecs(zone, x, z)
-    local remaining = sectorOreLeft(zone, x, z)
-    local secs = remaining * ETA_S_PER_ORE
-    if sectorMinedOre(zone, x, z) <= 0 then
-        secs = secs + (sectorFoundOre(zone, x, z) > 0 and ETA_SECTOR_OVERHEAD_S or ETA_EMPTY_S)
+function ETA.heldSecs(zone, x, z)
+    local remaining = ETA.oreLeft(zone, x, z)
+    local secs = remaining * ETA.S_PER_ORE
+    if ETA.minedOre(zone, x, z) <= 0 then
+        secs = secs + (ETA.foundOre(zone, x, z) > 0 and ETA.OVERHEAD_S or ETA.EMPTY_S)
     end
     return secs
 end
@@ -1555,25 +1568,25 @@ end
 --     will find cannot be known until the rescan runs;
 --   * work splits evenly across the miners on the zone, which is what the
 --     dispatcher does but not what finishing times look like sector by sector.
-local function jobEta(zone, activeMiners)
+function ETA.forJob(zone, activeMiners)
     if not zone then return nil end
     local miners = math.max(1, activeMiners or 1)
     local queued = 0
 
-    queued = queued + #(zone.surveySectors or {}) * ETA_SURVEY_S
+    queued = queued + #(zone.surveySectors or {}) * ETA.SURVEY_S
 
     for _, sec in ipairs(zone.pending or {}) do
-        queued = queued + queuedSectorSecs(zone, sec.x, sec.z)
+        queued = queued + ETA.queuedSecs(zone, sec.x, sec.z)
     end
 
-    queued = queued + #(zone.rescanSectors or {}) * ETA_RESCAN_S
+    queued = queued + #(zone.rescanSectors or {}) * ETA.RESCAN_S
 
     -- The passes still to come. A zone that has not rescanned yet will rescan
     -- every sector once, and then re-mine whatever that finds.
     if not zone.postRescan and #(zone.rescanSectors or {}) == 0
        and (zone.phase == "SURVEY" or zone.phase == "MINE") then
         local all = #(zone.allSectors or {})
-        queued = queued + all * ETA_RESCAN_S + all * ETA_EMPTY_S
+        queued = queued + all * ETA.RESCAN_S + all * ETA.EMPTY_S
     end
 
     -- THE SECTORS BEING MINED RIGHT NOW. Handing a sector to a miner pops it
@@ -1585,7 +1598,7 @@ local function jobEta(zone, activeMiners)
     for _, la in pairs(zone.lastAssignments or {}) do
         -- A survey pass in hand is charged in full: its cost is the walking,
         -- and the scans that would price it are the thing it is producing.
-        local secs = la.isSurvey and ETA_SURVEY_S or heldSectorSecs(zone, la.x, la.z)
+        local secs = la.isSurvey and ETA.SURVEY_S or ETA.heldSecs(zone, la.x, la.z)
         held    = held + secs
         holders = holders + 1
         if secs > longest then longest = secs end
@@ -1605,7 +1618,7 @@ local function jobEta(zone, activeMiners)
     -- jobs: 12.4, 13.9, 14.4 and 16.4 minutes. Leaving it out is what made the
     -- estimate read 11 to 16 minutes short at every one of 68 samples through
     -- job_0088 -- a flat offset, which is how a missing fixed cost shows up.
-    return math.floor(secs + ETA_RETURN_S)
+    return math.floor(secs + ETA.RETURN_S)
 end
 
 local function phaseEta(zone, activeMiners)
@@ -4740,9 +4753,9 @@ function server.run()
                     activeMiners = activeMiners + 1
                 end
             end
-            -- jobEta prices each sector by its own ore and covers the whole
+            -- ETA.forJob prices each sector by its own ore and covers the whole
             -- job; phaseEta is the fallback for a zone it cannot price.
-            local eta = jobEta(z, activeMiners) or phaseEta(z, activeMiners)
+            local eta = ETA.forJob(z, activeMiners) or phaseEta(z, activeMiners)
             local minerId  = state.jobs[jid] and state.jobs[jid].assignedTo or nil
             local minerSt  = minerId and state.registry[minerId] and state.registry[minerId].status or nil
             mineZones[jid] = {
@@ -5693,12 +5706,12 @@ if _G.__CC_SERVER_TEST then
         noteBridgeBoot = noteBridgeBoot,
         sectorHolder   = sectorHolder,
         clearSectorFails = clearSectorFails,
-        jobEta           = jobEta,
-        sectorFoundOre   = sectorFoundOre,
-        sectorMinedOre   = sectorMinedOre,
-        heldSectorSecs   = heldSectorSecs,
-        queuedSectorSecs = queuedSectorSecs,
-        meanScannedOre   = meanScannedOre,
+        jobEta           = ETA.forJob,
+        sectorFoundOre   = ETA.foundOre,
+        sectorMinedOre   = ETA.minedOre,
+        heldSectorSecs   = ETA.heldSecs,
+        queuedSectorSecs = ETA.queuedSecs,
+        meanScannedOre   = ETA.meanOre,
         fanOutUpdateAll  = fanOutUpdateAll,
         mineJobLive      = mineJobLive,
         dumpZoneOreMap   = dumpZoneOreMap,
