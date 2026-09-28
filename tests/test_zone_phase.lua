@@ -354,6 +354,80 @@ return {
         assert_eq(without, nil, "and once those passes are done there is nothing left to price")
     end,
 
+    -- The sectors being mined RIGHT NOW (1.9.118).
+    --
+    -- MEASURED FAILURE, job_0086 on 2026-09-24: the estimate read 191 minutes at
+    -- 15:04 and 191 minutes at 17:34, through two and a half hours and 8,344 ore
+    -- of digging, when the job in fact had 381 and 141 minutes left. Handing a
+    -- sector to a miner pops it off pending, so the only thing 1.9.117 priced was
+    -- the queue -- and on a four-sector zone with two miners, half the remaining
+    -- work was invisible and the number could not move.
+    ["a sector being mined right now still counts toward the estimate"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = {}, allSectors = { copy(S1) },
+            postRescan = true,   -- nothing queued and no passes left: the hold alone
+        })
+        zone.sectorSeen = { [S1.x .. "," .. S1.z .. ",16"] = { ["minecraft:iron_ore"] = 1000 } }
+        zone.lastAssignments[A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA }
+        local eta = T.jobEta(zone, 1)
+        restore()
+        -- 462 overhead + 1000 * 2.196
+        assert_eq(eta, 2658, "the sector in a miner's hands is the work that is left")
+    end,
+
+    ["the estimate falls as the ore comes out of the sector in hand"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = {}, allSectors = { copy(S1) }, postRescan = true,
+        })
+        local k = S1.x .. "," .. S1.z .. ",16"
+        zone.sectorSeen = { [k] = { ["minecraft:iron_ore"] = 1000 } }
+        zone.lastAssignments[A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA }
+        local before = T.jobEta(zone, 1)
+        zone.sectorMined = { [k] = { ["minecraft:iron_ore"] = 400 } }
+        local after = T.jobEta(zone, 1)
+        restore()
+        assert_eq(after < before, true,
+            "THE REGRESSION: an estimate that does not fall while a miner digs is "
+            .. "what read 191 minutes for two and a half hours")
+        -- 600 ore left * 2.196, and no overhead: reporting ore means it is there
+        assert_eq(after, 1317, "only the ore still in the ground is charged")
+    end,
+
+    ["a job cannot finish sooner than the longest sector one miner holds"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = {}, allSectors = { copy(S1), copy(S2) },
+            postRescan = true,
+        })
+        zone.sectorSeen = {
+            [S1.x .. "," .. S1.z .. ",16"] = { ["minecraft:iron_ore"] = 2000 },
+            [S2.x .. "," .. S2.z .. ",16"] = { ["minecraft:iron_ore"] = 100 },
+        }
+        zone.lastAssignments[A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA }
+        zone.lastAssignments[B] = { x = S2.x, z = S2.z, phase = "MINE", jobId = JB }
+        local eta = T.jobEta(zone, 2)
+        restore()
+        -- A holds 4854s, B holds 681.6s. Spread over two miners that averages to
+        -- 2767, but nobody can take a share of the column already in A's hands.
+        assert_eq(eta, 4854, "the deepest hold sets the floor, not the average")
+    end,
+
+    ["a survey pass in a miner's hands is charged in full"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "SURVEY", pending = {}, allSectors = { copy(S1) },
+            postRescan = true,
+        })
+        zone.lastAssignments[A] = { x = S1.x, z = S1.z, isSurvey = true, jobId = JA }
+        local eta = T.jobEta(zone, 1)
+        restore()
+        assert_eq(eta, 564,
+            "a survey cannot be priced by ore: the scans that would price it are "
+            .. "the thing it is out there producing")
+    end,
+
     ["a storage digest feeds the ore watchdog and answers the network check"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

@@ -1459,6 +1459,41 @@ local function sectorFoundOre(zone, x, z)
     return total
 end
 
+-- What has already come OUT of one sector, summed over its depth levels. The
+-- miners report mined ore in batches as they dig, so for the sector a miner is
+-- holding right now this number grows while it works.
+local function sectorMinedOre(zone, x, z)
+    local total = 0
+    local prefix = string.format("%d,%d,", x, z)
+    for k, mined in pairs(zone.sectorMined or {}) do
+        if k:sub(1, #prefix) == prefix then
+            for _, n in pairs(mined) do total = total + (tonumber(n) or 0) end
+        end
+    end
+    return total
+end
+
+-- Seconds a sector still in the queue will cost: all of its ore, plus the
+-- overhead of getting there and setting up.
+local function queuedSectorSecs(zone, x, z)
+    local ore = sectorFoundOre(zone, x, z)
+    if ore <= 0 then return ETA_EMPTY_S end
+    return ETA_SECTOR_OVERHEAD_S + ore * ETA_S_PER_ORE
+end
+
+-- Seconds a sector ALREADY IN A MINER'S HANDS has left. Only the ore still in
+-- the ground is charged, and the overhead only while nothing has been reported
+-- out of it yet -- which is exactly when the miner is still travelling, placing
+-- its loader and scanning.
+local function heldSectorSecs(zone, x, z)
+    local left = sectorFoundOre(zone, x, z) - sectorMinedOre(zone, x, z)
+    local secs = math.max(0, left) * ETA_S_PER_ORE
+    if sectorMinedOre(zone, x, z) <= 0 then
+        secs = secs + (sectorFoundOre(zone, x, z) > 0 and ETA_SECTOR_OVERHEAD_S or ETA_EMPTY_S)
+    end
+    return secs
+end
+
 -- Seconds until the whole job is done, or nil when there is nothing left to
 -- price. Counts the work that is actually scheduled -- the survey list, the
 -- mine list, the rescan list -- and the passes that always follow.
@@ -1474,31 +1509,46 @@ end
 local function jobEta(zone, activeMiners)
     if not zone then return nil end
     local miners = math.max(1, activeMiners or 1)
-    local secs   = 0
+    local queued = 0
 
-    secs = secs + #(zone.surveySectors or {}) * ETA_SURVEY_S
+    queued = queued + #(zone.surveySectors or {}) * ETA_SURVEY_S
 
     for _, sec in ipairs(zone.pending or {}) do
-        local ore = sectorFoundOre(zone, sec.x, sec.z)
-        if ore > 0 then
-            secs = secs + ETA_SECTOR_OVERHEAD_S + ore * ETA_S_PER_ORE
-        else
-            secs = secs + ETA_EMPTY_S
-        end
+        queued = queued + queuedSectorSecs(zone, sec.x, sec.z)
     end
 
-    secs = secs + #(zone.rescanSectors or {}) * ETA_RESCAN_S
+    queued = queued + #(zone.rescanSectors or {}) * ETA_RESCAN_S
 
     -- The passes still to come. A zone that has not rescanned yet will rescan
     -- every sector once, and then re-mine whatever that finds.
     if not zone.postRescan and #(zone.rescanSectors or {}) == 0
        and (zone.phase == "SURVEY" or zone.phase == "MINE") then
         local all = #(zone.allSectors or {})
-        secs = secs + all * ETA_RESCAN_S + all * ETA_EMPTY_S
+        queued = queued + all * ETA_RESCAN_S + all * ETA_EMPTY_S
     end
 
-    if secs <= 0 then return nil end
-    return math.floor(secs / miners)
+    -- THE SECTORS BEING MINED RIGHT NOW. Handing a sector to a miner pops it
+    -- off pending, so the loop above cannot see it -- and on a four-sector zone
+    -- with two miners that is half the remaining work, invisible. Measured over
+    -- job_0086: the estimate sat frozen at 191 minutes for two and a half hours
+    -- of digging, because the only thing it was watching never changed.
+    local held, longest, holders = 0, 0, 0
+    for _, la in pairs(zone.lastAssignments or {}) do
+        -- A survey pass in hand is charged in full: its cost is the walking,
+        -- and the scans that would price it are the thing it is producing.
+        local secs = la.isSurvey and ETA_SURVEY_S or heldSectorSecs(zone, la.x, la.z)
+        held    = held + secs
+        holders = holders + 1
+        if secs > longest then longest = secs end
+    end
+
+    local total = queued + held
+    if total <= 0 then return nil end
+
+    -- Two floors, and a job can beat neither: all the work spread evenly over
+    -- the miners, and the longest sector already in one miner's hands, which no
+    -- other miner can take a share of.
+    return math.floor(math.max(total / math.max(miners, holders), longest))
 end
 
 local function phaseEta(zone, activeMiners)
@@ -5588,6 +5638,8 @@ if _G.__CC_SERVER_TEST then
         clearSectorFails = clearSectorFails,
         jobEta           = jobEta,
         sectorFoundOre   = sectorFoundOre,
+        sectorMinedOre   = sectorMinedOre,
+        heldSectorSecs   = heldSectorSecs,
         fanOutUpdateAll  = fanOutUpdateAll,
         mineJobLive      = mineJobLive,
         dumpZoneOreMap   = dumpZoneOreMap,

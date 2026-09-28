@@ -155,6 +155,9 @@ P_KEEP    = "an explicit recipient is left alone"
 E_ORE     = "a sector's estimate is driven by the ore the survey found in it"
 E_UNKNOWN = "a sector the survey has not reported is priced as empty, not as average"
 E_PASSES  = "the estimate covers the passes still to come, not just this one"
+E_HELD    = "a sector being mined right now still counts toward the estimate"
+E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
+E_LONG    = "a job cannot finish sooner than the longest sector one miner holds"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -813,23 +816,46 @@ MUTANTS = [
     ("every message is addressed to the server", "protocol.lua",
      [("        to      = to or \"server\",", "        to      = \"server\",")], P_KEEP),
 
-    # -- Ore-priced job ETA (1.9.117) ----------------------------------------
+    # -- Ore-priced job ETA (1.9.117, re-anchored for 1.9.118) ----------------
     ("the ore term is dropped, so every sector costs the same", "central_server.lua",
-     [("            secs = secs + ETA_SECTOR_OVERHEAD_S + ore * ETA_S_PER_ORE\n",
-       "            secs = secs + ETA_SECTOR_OVERHEAD_S\n")], E_ORE),
+     [("    return ETA_SECTOR_OVERHEAD_S + ore * ETA_S_PER_ORE\n",
+       "    return ETA_SECTOR_OVERHEAD_S\n")], E_ORE),
 
     ("the work is not divided between the miners", "central_server.lua",
-     [("    return math.floor(secs / miners)\n", "    return math.floor(secs)\n")], E_ORE),
+     [("    return math.floor(math.max(total / math.max(miners, holders), longest))\n",
+       "    return math.floor(math.max(total, longest))\n")], E_ORE),
 
     ("a sector's depth levels are not summed", "central_server.lua",
      [("            for _, n in pairs(seen) do total = total + (tonumber(n) or 0) end\n",
        "            for _, n in pairs(seen) do total = tonumber(n) or 0 end\n")], E_ORE),
 
     ("an unpriced sector costs nothing at all", "central_server.lua",
-     [("            secs = secs + ETA_EMPTY_S\n        end\n", "        end\n")], E_UNKNOWN),
+     [("    if ore <= 0 then return ETA_EMPTY_S end\n",
+       "    if ore <= 0 then return 0 end\n")], E_UNKNOWN),
 
     ("the passes still to come are ignored", "central_server.lua",
-     [("        secs = secs + all * ETA_RESCAN_S + all * ETA_EMPTY_S\n", "")], E_PASSES),
+     [("        queued = queued + all * ETA_RESCAN_S + all * ETA_EMPTY_S\n", "")], E_PASSES),
+
+    # -- The sectors being mined right now (1.9.118) --------------------------
+    #
+    # This is the regression that read 191 minutes for two and a half hours of
+    # digging. Each of these mutants is a way of not seeing the work in hand.
+    ("the sectors in the miners' hands are not priced at all", "central_server.lua",
+     [("        local secs = la.isSurvey and ETA_SURVEY_S or heldSectorSecs(zone, la.x, la.z)\n",
+       "        local secs = 0\n")], E_HELD),
+
+    ("a held sector is charged for ore that has already come out of it",
+     "central_server.lua",
+     [("    local left = sectorFoundOre(zone, x, z) - sectorMinedOre(zone, x, z)\n",
+       "    local left = sectorFoundOre(zone, x, z)\n")], E_FALL),
+
+    ("the setup overhead is charged again after the sector has started reporting",
+     "central_server.lua",
+     [("    if sectorMinedOre(zone, x, z) <= 0 then\n", "    if true then\n")], E_FALL),
+
+    ("the deepest sector in one miner's hands is not a floor", "central_server.lua",
+     [("    return math.floor(math.max(total / math.max(miners, holders), longest))\n",
+       "    return math.floor(total / math.max(miners, holders))\n")], E_LONG),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",
