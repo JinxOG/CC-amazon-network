@@ -1,0 +1,126 @@
+THE ETA, MEASURED OVER A WHOLE JOB, START TO FINISH         W3, 2026-09-28
+================================================================================
+
+job_0088 / job_0089, one zone of four sectors, two miners, 18,972 ore found and
+18,566 recovered. Queued 17:39:59. Mining began 18:05:25. job_0089 complete
+07:21:17 UTC, job_0088 complete 07:23:56 UTC -- 6 hours 44 minutes. The recorder
+sampled the dashboard's own ETA every five minutes throughout: 81 samples, none
+missing, written to disk as they were taken.
+
+This is the test 1.9.118 was shipped to face. The result, and the three things it
+found still wrong, are below. The gate over the same window is clean: every fault
+line zero, no duplicate orders, no overlapping sector holds in either view, no
+disconnects.
+
+1. DOES THE ESTIMATE FOLLOW THE WORK? YES.
+
+   The failure 1.9.118 was written for is gone. Through the mine phase the number
+   fell monotonically with the ore, 380 minutes down to 22, never sticking:
+
+     18:07  MINE  380.0 min      0 ore out
+     19:07  MINE  303.6 min   3,750
+     20:07  MINE  250.9 min   6,631
+     21:07  MINE  187.4 min   9,477
+     22:07  MINE  117.9 min  13,277
+     23:07  MINE   62.4 min  16,311
+     23:52  MINE   22.2 min  18,505
+
+   1.9.117, for comparison, sat frozen at 191.1 minutes for two and a half hours
+   through 8,344 ore. That behaviour -- not the version string -- is what proves
+   the new code is the code running.
+
+2. HOW WRONG IS IT? 11 MINUTES, IN ONE DIRECTION, EVERY TIME.
+
+   Scored against the known finish, over the 68 mine-phase samples with more than
+   40 minutes left to run:
+
+     mean error      -11.2 min
+     worst error     -19.0 min
+     mean |error|     11.3 min
+
+   Every single one of the 68 was NEGATIVE. A one-sided flat offset is not a rate
+   error -- a wrong rate compounds with the length of the job, and this does not.
+   It is a fixed cost that is not being charged for.
+
+3. THE MISSING COST HAS A NAME: THE TRIP HOME.
+
+   From the last sector completion to JOB_COMPLETE, over four jobs:
+
+     job_0086   21:13:53 -> 21:26:15    12.4 min
+     job_0087   21:11:56 -> 21:28:22    16.4 min
+     job_0088   07:10:03 -> 07:23:56    13.9 min
+     job_0089   07:06:54 -> 07:21:17    14.4 min
+
+   Mean 14.3, spread 4 minutes, n=4. Priced at nothing until now. Charged once per
+   job in 1.9.119 and NOT divided between the miners, because they fly back at the
+   same time and a second miner does not halve the flight.
+
+   Re-scoring the same 68 samples with 14 minutes added:
+
+     mean error       +1.8 min     (was -11.2)
+     worst error     +16.1 min     (was -19.0)
+     mean |error|      4.0 min     (was  11.3)
+
+   Four minutes out, on a job of 404. The worst case is now at the very start of
+   mining and shrinks from there.
+
+   THE PREDICTION MADE ON 09-27 WAS RIGHT IN KIND AND WRONG IN SIZE. It said the
+   residual would reappear roughly flat, and that flatness would mean a fixed tail
+   cost rather than a bad rate. It did, and it does. But it also said the residual
+   was about 38 minutes, which came from a replay using recovered ore as a stand-in
+   for surveyed ore and guessed in-flight splits. The live figure is 11. My own
+   reconstruction was pessimistic about the fix by a factor of three, which is a
+   reason to trust the recorder over the replay and to keep both.
+
+4. TWO PLACES WHERE THE NUMBER IS STILL NONSENSE, BOTH NOW FIXED.
+
+   THE SURVEY PHASE READ 45 MINUTES FOR A 6h44m JOB.
+
+     17:42  SURVEY   45.2 min      (402 min remained)
+     17:57  SURVEY   89.3 min
+     18:02  SURVEY  208.3 min
+     18:07  MINE    380.0 min
+
+   1.9.117 priced a sector the survey had not reached as an empty pass, and
+   documented that as the honest choice because the ore was unknown. It is honest
+   and it is useless: it told the operator forty-five minutes when the answer was
+   nearly seven hours, and it climbed eightfold over twenty-five minutes. 1.9.119
+   reverses it. An unscanned sector is priced from what THIS zone's scanned sectors
+   turned out to hold, falling back to 4,600 ore -- the mean of the last two zones,
+   4,454 and 4,743 -- until the first scan lands.
+
+   This is not the averaging that the 1.9.116 failure warned about. That was
+   averaging per-sector COST where each sector's ore was known, and it was wrong by
+   13.5 minutes a sector. This is a prior on ORE where nothing whatever is known,
+   and the survey replaces it with measurement within minutes.
+
+   THE RESCAN SPIKED IT TO 96 MINUTES WITH 22 LEFT TO RUN.
+
+     23:57  RESCAN   10.7 min
+     00:02  MINE     95.8 min      (22 min remained)
+     00:07  MINE      3.6 min
+
+   When the rescan queues sectors for re-mining, they go back on the mine list --
+   and sectorSeen deliberately keeps the LARGEST view a sector ever had, so a later
+   partial scan cannot shrink it. So each re-mine sector was priced at its full
+   original ore: 4,835 ore of digging on ground with a few dozen blocks left.
+   Queued sectors are now priced by ore remaining, exactly as sectors in hand
+   already were, through one shared helper.
+
+5. WHAT IS NOT CLAIMED
+
+   * One job, one zone, two miners, four sectors. The 14 minute flight home rests
+     on four observations from two zones that are 300 blocks apart; a zone much
+     further from the docks will pay more, and nothing here measures that.
+   * The 4,600 ore prior is two zones wide. A barren or a much deeper zone will
+     make the survey-phase estimate wrong again, in whichever direction it differs.
+     It will still beat pricing that ground at zero.
+   * The +16 minute worst case sits at the start of the mine phase, where the
+     re-mine allowance is a guess about ore nobody has seen yet. That is the next
+     thing worth measuring, and it needs several jobs, not one.
+   * Log loss over this window was 0.2% (36 lines of 17,096), where the last three
+     measurements read 0%. Not gating and not investigated. Recorded so that a
+     later reading has something to compare against.
+
+   The recorder is tools/eta_record.py and the scoring is reproducible from the
+   JSONL it writes. Next job runs it again.
