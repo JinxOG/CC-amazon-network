@@ -1,0 +1,72 @@
+THE THIRD ZONE: THE 26-MINUTE GAP DID NOT REPEAT          W3, 2026-09-29
+================================================================================
+
+job_0098 / job_0099, x 2144..2176 z -3200..-3168, four sectors, two miners,
+18,504 ore found and 18,108 recovered. Complete 16:15:10Z, about 6h40m. 77 ETA
+samples. First zone run on 1.9.121.
+
+THE SCORE, AND THE RETRACTION IT FORCES
+
+  zone       mean err   mean |err|   n (mine phase, >40 min left)
+  job_0088     +1.8        4.0        68
+  job_0092    -26.1       26.1        65
+  job_0098     -0.7        3.8        67
+
+Yesterday the middle row looked like a fixed cost the model was not charging
+for, flat across six hours, and the hypothesis recorded was that the travel
+constants carry a DISTANCE term -- fitted on nearer zones, short on far ones.
+
+THAT HYPOTHESIS IS NOT SUPPORTED. job_0098 ran on the same constants and scored
+-0.7 minutes mean over 67 samples. If distance were the driver, the error would
+track how far the zone sits from the docks; it does not.
+
+What is left is simpler and less satisfying: zone 2 was slower than its ore
+predicted. Per-zone variance, not a missing constant.
+
+WHY THIS MATTERS MORE THAN THE GOOD NUMBER
+
+Fitting a distance term to job_0092 was the obvious move yesterday and it would
+have been wrong. It would have improved one zone and broken the two that were
+already inside four minutes. The rule that saved it is the one already written
+down after the averaged estimate: one job is not a basis for a constant. Two
+zones now agree at |err| under 4 minutes on jobs of about 400; one sits 26 out.
+Three zones is still not many, and the next zone that misses will be judged the
+same way -- recorded, not tuned.
+
+FIRST-READING ACCURACY, WITH THE SAME CAVEAT AS BEFORE
+
+  said 402 at 02:37, actual 397 -> +5 minutes, before a single sector was scanned.
+
+That is the unscanned-ground prior doing its job, and it is the second zone in a
+row to land close. It is still a prior of 4,600 ore a sector: this zone held
+4,626, which is almost exactly it. A zone well away from that figure will read
+wrong at the start and correct itself as the scans land, by design.
+
+THE GATE OVER THE SAME WINDOW
+
+  every fault line                0
+  zone left unmined               0
+  one sector two miners           0 overlapping of 14 holds, both views
+  first order doubled             0   (re-mines counted separately, see below)
+  miners that left a zone early   0 of 2 mine jobs judged
+  log loss                        0% (4 of 9,647)
+  versions                        15/15 on 1.9.121
+  VERDICT                         no gating fault found
+
+A GATE FALSE ALARM, FIXED
+
+[2b] flagged job_0096 for mining one sector twice, 148 minutes apart. That was a
+re-mine after a rescan -- the design working. The fault [2b] exists for was a
+miner running its FIRST sector twice back to back off a spare copy of one order.
+Time alone cannot separate them, because a rich sector legitimately takes three
+hours. A rescan beginning between the two completions can, and now does. The
+original fault is still caught, and re-mines are printed and counted rather than
+silently dropped.
+
+THE CREW TOP-UP: ONE CLEAN JOB, NOT A CONFIRMATION
+
+1.9.121 tops up a zone left below the crew its order dispatched. Section [2e]
+reads 0 miners left early over 2 mine jobs judged. The fault did not occur, so
+the top-up has not been exercised. That is not evidence it works.
+
+Clean jobs since the fix went live: 1.
