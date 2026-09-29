@@ -1,0 +1,67 @@
+THE ETA ON A SECOND ZONE: TWO FIXES HOLD, A NEW GAP OPENS    W3, 2026-09-29
+================================================================================
+
+job_0092 / job_0093, x 1856..1888 z -3232..-3200, four sectors, two miners,
+17,194 ore found and 16,692 recovered. Survey began 10:48. job_0092 complete
+17:12:09, job_0093 complete 17:32:25 -- 6 hours 44 minutes. 78 ETA samples,
+every five minutes, none missing.
+
+This is the first zone run on 1.9.120, which added three things: a prior for
+ground the survey has not reached, pricing re-mine sectors by ore remaining, and
+a 14-minute charge for the trip home.
+
+1. THE SURVEY-PHASE PRIOR WORKS.
+
+   First reading of the job: 402 minutes, against 404 actually remaining. Two
+   minutes out.
+
+   The same moment under 1.9.117 read 45 minutes for a job of comparable length.
+   That bug is gone.
+
+   BUT THE TWO-MINUTE FIGURE IS PARTLY LUCK, and it would be dishonest to bank
+   it. The prior assumes 4,600 ore a sector; this zone held 4,298. That
+   overestimate happened to cancel the underestimate described in (3). Two errors
+   in opposite directions is not accuracy, and on a richer zone they will add
+   instead of cancel.
+
+2. THE RESCAN SPIKE IS GONE.
+
+   Through the rescan and re-mine passes the estimate read 44, 41, 40, then 35,
+   32, 29, 25, 21 -- monotone to the end. Under 1.9.119 the same transition
+   jumped from 11 minutes to 96 with 22 minutes left to run, because re-mine
+   sectors were charged for ore already out of the ground. Fixed and confirmed.
+
+3. A NEW GAP: THE MINE PHASE NOW READS 26 MINUTES LOW.
+
+   65 mine-phase samples with over 40 minutes to run:
+
+     mean error      -26.1 min
+     worst error     -32.0 min
+     mean |error|     26.1 min
+
+   On the PREVIOUS zone, the same model with the trip home priced in scored
+   +1.8 mean and 4.0 mean absolute. Same code, same constants, different ground.
+
+   The error is flat across six hours, which is the signature of a fixed cost
+   rather than a wrong rate -- the same signature that led to the trip home last
+   time, and the trip home is already priced here.
+
+   THE HYPOTHESIS, NOT YET TESTED: the overhead constants are distance-dependent.
+   ETA_OVERHEAD_S (7.7 min of travel, loader placement and retrieval per sector)
+   and ETA_RETURN_S (14 min home) were both fitted on zones around x 1760-2080,
+   z -3136 to -2784. This zone sits further out. If travel dominates those
+   constants, a zone twice as far pays roughly twice the travel on every sector
+   and on the flight home, and the estimate reads low by a fixed amount -- which
+   is exactly what 26 flat minutes looks like.
+
+   NOT TUNED. Two zones is not a basis for a distance term, and adding one now
+   would fit a line to two points. What is needed is the distance from the dock
+   recorded alongside each job's error, over several more zones. The recorder
+   already captures everything else; that is the next change to it.
+
+WHAT THIS RUN COST TO GET
+
+  * a stale zone choice: the first dispatch went at ground job_0088 had already
+    cleared, because a zone picked before that job ran was reused after it. The
+    server's own "done 4/4" on a supposedly new zone caught it inside a minute.
+    Re-pick immediately before dispatching, never from an earlier turn.
