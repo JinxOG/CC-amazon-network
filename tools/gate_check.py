@@ -174,18 +174,43 @@ for l in d.get("lines", []):
                   l.get("msg") or "")
     if m and (m.group(4), m.group(3)) in started:
         firsts[(m.group(4), m.group(3))].append((p_ts(l["ts"]), m.group(1) + "," + m.group(2)))
-judged = doubled = 0
+# A RE-MINE IS NOT A DOUBLED ORDER.
+#
+# 2026-09-29: this flagged job_0096 for doing (1792,-2816) twice, 148 minutes
+# apart. That sector was re-queued and mined again in the re-mine pass, which is
+# the design working. The 1.9.108 fault was a miner running its FIRST sector
+# twice back to back off a spare copy of one order -- nothing in between.
+#
+# Time alone cannot separate them: a rich sector legitimately takes three hours,
+# so a long gap proves nothing on its own. What does separate them is a RESCAN
+# beginning between the two completions, because re-mining only ever follows a
+# rescan. Both conditions are required, so the original back-to-back fault -- no
+# rescan, minutes apart -- is still caught.
+rescan_starts = []
+for l in logs("contains=starting%20rescan").get("lines", []):
+    rescan_starts.append(p_ts(l["ts"]))
+
+judged = doubled = remined = 0
 for k, v in sorted(firsts.items()):
     v.sort()
     if len(v) < 2:
         continue
     judged += 1
-    if v[0][1] == v[1][1]:
-        doubled += 1
-        print("        %s %s first sector (%s) done twice, %.1fm apart  <-- FAULT"
-              % (k[0], k[1], v[0][1], (v[1][0] - v[0][0]).total_seconds() / 60))
+    if v[0][1] != v[1][1]:
+        continue
+    gap = (v[1][0] - v[0][0]).total_seconds() / 60
+    between = any(v[0][0] < r < v[1][0] for r in rescan_starts)
+    if between and gap > 30:
+        remined += 1
+        print("        (re-mine) %s %s did (%s) again %.1fm later, after a rescan"
+              % (k[0], k[1], v[0][1], gap))
+        continue
+    doubled += 1
+    print("        %s %s first sector (%s) done twice, %.1fm apart  <-- FAULT"
+          % (k[0], k[1], v[0][1], gap))
 print("    job/miner pairs judged  : %d" % judged)
 print("    first order doubled     : %d" % doubled)
+print("    re-mines (not a fault)  : %d" % remined)
 if judged == 0:
     notes.append("no job started in window with two completions -- [2b] proved nothing")
     print("    NO EVIDENCE: no job started in this window. Not a pass.")
