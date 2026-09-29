@@ -1979,6 +1979,12 @@ end
 --
 -- The WARN line is a gate finding (tools/gate_check.py): a zone that needed a
 -- replacement did not finish on the miners it was given.
+-- Miners dispatched per mine order: one turtle per this many sectors, rounded
+-- UP, so a 5-sector zone gets 2 and nothing is left with no one assigned to it.
+-- Mirrored in public/index.html as SECTORS_PER_MINER so the dashboard's preview
+-- matches what actually gets dispatched -- change both together.
+local SECTORS_PER_MINER = 3
+
 local function respawnIfOrphaned(jobId, job, zone)
     if not (job and job.type == proto.JOB.MINE and zone and zone.persistentKey) then return end
     -- NOT WHEN THE OPERATOR SAID STOP.
@@ -2002,6 +2008,19 @@ local function respawnIfOrphaned(jobId, job, zone)
     local remaining = #(zone.pending or {}) + #(zone.surveySectors or {})
                     + #(zone.rescanSectors or {})
     if remaining == 0 then return end
+    -- HOW MANY MINERS THE ZONE SHOULD HAVE, not merely whether it has any.
+    --
+    -- 2026-09-29: job_0095 joined a four-sector zone, worked for two and a half
+    -- minutes and reported itself complete. The zone carried on with ONE miner
+    -- where it was dispatched two, which roughly doubles it. This function saw a
+    -- miner still on the zone and returned -- it was built to stop a zone going
+    -- SILENT, and a zone at half crew is not silent.
+    --
+    -- Counting covers every way a miner can leave early, which matters because
+    -- the log never explained this one: the turtle reported complete and the
+    -- server recorded no instruction telling it to. A fix that depends on
+    -- knowing the trigger would not have caught it.
+    local onZone = 0
     for jid2, j2 in pairs(state.jobs) do
         if jid2 ~= jobId and j2.type == proto.JOB.MINE then
             local st = j2.status
@@ -2009,18 +2028,29 @@ local function respawnIfOrphaned(jobId, job, zone)
                 local j2zone = state.miningZones[jid2]
                 local j2key  = (j2.params and j2.params.sharedZoneKey)
                             or (j2zone and j2zone.persistentKey)
-                if j2key == zone.persistentKey then return end
+                if j2key == zone.persistentKey then onZone = onZone + 1 end
             end
         end
     end
+
+    local fleetMiners = 0
+    for _, t in pairs(state.registry) do
+        if t.role == proto.ROLE.MINER then fleetMiners = fleetMiners + 1 end
+    end
+    -- The same rule the order used, so a top-up never asks for a crew the
+    -- dispatcher would not have sent in the first place.
+    local wanted = math.max(1, math.min(
+        math.ceil((zone.total or 1) / SECTORS_PER_MINER), math.max(fleetMiners, 1)))
+    if onZone >= wanted then return end
     local p = job.params or {}
     local newId = server.submitJob(proto.JOB.MINE, {
         x1 = p.x1, z1 = p.z1, x2 = p.x2, z2 = p.z2,
         sharedZoneKey = zone.persistentKey,
     }, job.priority or 5)
     logWarn(string.format(
-        "Zone %s left with %d unmined sector(s) after %s %s and no miner left on it",
-        zone.persistentKey, remaining, jobId, string.lower(job.status or "?")))
+        "Zone %s left with %d unmined sector(s) after %s %s and %d of %d miner(s) on it",
+        zone.persistentKey, remaining, jobId, string.lower(job.status or "?"),
+        onZone, wanted))
     logInfo(string.format(
         "Auto-respawn: %s → zone %s (%d sectors remain, replaced %s)",
         newId, zone.persistentKey, remaining, jobId))
@@ -2294,11 +2324,6 @@ local SECTOR_STEP = 32   -- geo scanner radius=16, step=32 → adjacent sectors 
 
 local SCAN_RADIUS = 16  -- must match ore_turtle.lua SCAN_RADIUS
 
--- Miners dispatched per mine order: one turtle per this many sectors, rounded
--- UP, so a 5-sector zone gets 2 and nothing is left with no one assigned to it.
--- Mirrored in public/index.html as SECTORS_PER_MINER so the dashboard's preview
--- matches what actually gets dispatched -- change both together.
-local SECTORS_PER_MINER = 3
 
 -- ─── Mine trip fuel estimate ─────────────────────────────────────────────────
 -- CFG.MIN_DISPATCH_FUEL (500) and turtle_base's CFG.FUEL_RESERVE (500) are flat

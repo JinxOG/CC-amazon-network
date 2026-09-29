@@ -256,6 +256,68 @@ return {
         assert_eq(line ~= nil, true, "and the decision is logged with the sectors left")
     end,
 
+    -- 2026-09-29: job_0095 joined a four-sector zone, worked two and a half
+    -- minutes and reported itself complete. The zone carried on with ONE miner
+    -- where it had been dispatched two, which roughly doubles the job. The
+    -- respawn saw a miner still on the zone and returned: it was written to stop
+    -- a zone going SILENT, and half a crew is not silence.
+    ["a zone left at half crew is topped up, not only a zone left at none"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", total = 4, pending = { copy(S2), copy(S3) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        for _, j in ipairs({ JA, JB }) do
+            T.state.jobs[j].params = { x1 = 2052, z1 = -3080, x2 = 2052, z2 = -3080 }
+        end
+        -- JB is STILL LIVE on this zone. That is the whole point: the old code
+        -- returned here, leaving the zone on one miner of the two it wants.
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "loader_retrieve_failed", recoverable = false } })
+        local replacement = nil
+        for id, j in pairs(T.state.jobs) do
+            if id ~= JA and id ~= JB and j.params and j.params.sharedZoneKey == "zk" then
+                replacement = id
+            end
+        end
+        restore()
+        assert_eq(replacement ~= nil, true,
+            "four sectors want two miners; one left means one short, and a zone "
+            .. "running at half crew takes twice as long for no reason")
+    end,
+
+    -- And the guard on the other side, or the zone breeds miners: every
+    -- completion would queue another job, which would complete, which would
+    -- queue another.
+    ["a zone already at full crew is left alone"] = function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", total = 4, pending = { copy(S2), copy(S3) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        for _, j in ipairs({ JA, JB }) do
+            T.state.jobs[j].params = { x1 = 2052, z1 = -3080, x2 = 2052, z2 = -3080 }
+        end
+        -- A third live job on the same zone: with JB that is the full crew of 2.
+        T.state.jobs["job_0062"] = {
+            id = "job_0062", type = proto.JOB.MINE, status = "IN_PROGRESS",
+            assignedTo = "node_140", params = { sharedZoneKey = "zk" },
+            priority = 5, history = {}, createdAt = 1000000, retries = 0,
+        }
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "loader_retrieve_failed", recoverable = false } })
+        local extra = 0
+        for id, j in pairs(T.state.jobs) do
+            if id ~= JA and id ~= JB and id ~= "job_0062"
+               and j.params and j.params.sharedZoneKey == "zk" then
+                extra = extra + 1
+            end
+        end
+        restore()
+        assert_eq(extra, 0,
+            "the crew is already the size the order would have dispatched; "
+            .. "topping it up again is how a top-up becomes a breeding programme")
+    end,
+
     -- The other half: a genuine failure must STILL respawn, or a zone stops
     -- silently the first time a miner dies on it.
     ["a failed job still respawns its zone"] = function(assert_eq)

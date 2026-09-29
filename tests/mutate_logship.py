@@ -158,6 +158,8 @@ E_EMPTY   = "a sector the survey HAS finished with and found nothing in is empty
 E_ZONEPR  = "the prior gives way to this zone's own scans as they land"
 E_REMINE  = "a sector queued for re-mining is priced by what is left, not by the survey"
 E_HOME    = "every job pays for the trip home once, and a second miner does not halve it"
+E_HALF    = "a zone left at half crew is topped up, not only a zone left at none"
+E_FULL    = "a zone already at full crew is left alone"
 E_PASSES  = "the estimate covers the passes still to come, not just this one"
 E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
@@ -762,11 +764,11 @@ MUTANTS = [
        "    state.miningZones[jobId] = nil\n    saveJobs()\nend\n\nfunction jobQueue.fail")], Z_ORPHAN),
 
     ("an orphaned zone is respawned silently", "central_server.lua",
-     [('        "Zone %s left with %d unmined sector(s) after %s %s and no miner left on it",',
+     [('        "Zone %s left with %d unmined sector(s) after %s %s and %d of %d miner(s) on it",',
        '        "Zone %s respawned (%d) after %s %s",')], Z_ORPHAN),
 
     ("the orphan check counts a live job on the zone as nobody", "central_server.lua",
-     [("                if j2key == zone.persistentKey then return end\n", "")], Z_ORPHAN),
+     [("                if j2key == zone.persistentKey then onZone = onZone + 1 end\n", "")], E_FULL),
 
     ("a failed job no longer respawns", "central_server.lua",
      [("    if job.status == JOB_STATUS.FAILED then\n        respawnIfOrphaned(jobId, job, zone)\n",
@@ -893,6 +895,23 @@ MUTANTS = [
     ("the trip home is divided between the miners", "central_server.lua",
      [("    return math.floor(secs + ETA.RETURN_S)\n",
        "    return math.floor(secs + ETA.RETURN_S / miners)\n")], E_HOME),
+
+    # -- A zone left short of miners (1.9.121) --------------------------------
+    #
+    # job_0095 joined a four-sector zone, worked two and a half minutes and
+    # reported itself complete. The zone then ran on one miner instead of two,
+    # because the respawn was written to notice a zone going SILENT and half a
+    # crew is not silence.
+    ("a zone at half crew counts as fully crewed", "central_server.lua",
+     [("    if onZone >= wanted then return end\n",
+       "    if onZone >= 1 then return end\n")], E_HALF),
+
+    ("the crew size ignores how many sectors the zone has", "central_server.lua",
+     [("    local wanted = math.max(1, math.min(\n        math.ceil((zone.total or 1) / SECTORS_PER_MINER), math.max(fleetMiners, 1)))\n",
+       "    local wanted = 1\n")], E_HALF),
+
+    ("a zone already at full crew is topped up anyway", "central_server.lua",
+     [("    if onZone >= wanted then return end\n", "")], E_FULL),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

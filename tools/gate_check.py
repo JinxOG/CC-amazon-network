@@ -291,6 +291,58 @@ for name, starts in views.items():
     if clashes:
         fails.append("sector held by two miners (%s): %d" % (name, len(clashes)))
 
+print("\n[2e] A MINER THAT LEFT A ZONE EARLY  (1.9.121: must be topped up)")
+print("    2026-09-29: job_0095 joined a four-sector zone, was handed one survey")
+print("    sector, and reported the whole job complete two and a half minutes")
+print("    later. The zone then ran on one miner instead of two. Nothing in the")
+print("    log explained it -- the server recorded no instruction to finish.")
+print("    1.9.121 does not try to stop it. It notices a zone left below the crew")
+print("    the order dispatched and queues a replacement.")
+
+mine_start, mine_end, did = {}, {}, {}
+for l in logs("contains=Dispatched")["lines"]:
+    m = re.search(r"Dispatched (job_\d+) \[MINE\]", l["msg"])
+    if m:
+        mine_start[m.group(1)] = p_ts(l["ts"])
+for l in logs("contains=Job%20complete")["lines"]:
+    m = re.search(r"Job complete: (job_\d+)", l["msg"])
+    if m:
+        mine_end[m.group(1)] = p_ts(l["ts"])
+for q in ("contains=ore%20mined", "contains=surveyed"):
+    for l in logs(q)["lines"]:
+        m = re.search(r"\[(job_\d+):", l["msg"])
+        if m:
+            did[m.group(1)] = did.get(m.group(1), 0) + 1
+
+judged, early = 0, []
+for jid, t0 in sorted(mine_start.items()):
+    t1 = mine_end.get(jid)
+    if not t1:
+        continue
+    judged += 1
+    mins = (t1 - t0).total_seconds() / 60.0
+    if mins < 15 and did.get(jid, 0) <= 1:
+        early.append((jid, mins, did.get(jid, 0)))
+
+print("    mine jobs judged       : %d" % judged)
+print("    left early             : %d" % len(early))
+for jid, mins, n in early:
+    print("        %s finished in %.1f min having done %d sector(s)" % (jid, mins, n))
+
+tops = [l for l in logs("contains=miner(s)%20on%20it")["lines"]]
+resp = [l for l in logs("contains=Auto-respawn")["lines"]]
+print("    top-ups queued         : %d" % len(resp))
+for l in sorted(resp, key=lambda x: p_ts(x["ts"]))[:5]:
+    print("        %s %s" % (l["ts"][11:19], l["msg"][:88]))
+
+if judged == 0:
+    notes.append("[2e] no mine job started AND finished in window -- proved nothing")
+elif not early:
+    notes.append("[2e] no miner left a zone early in %d mine job(s) -- the top-up "
+                 "was not exercised, which is not the same as it working" % judged)
+elif early and not resp:
+    fails.append("miner(s) left a zone early with no top-up queued: %d" % len(early))
+
 print("\n[3] DISCONNECTS  (known open fault -- recorded, not gating)")
 L = sorted(logs("contains=Server%20unreachable")["lines"], key=lambda l: p_ts(l["ts"]))
 if not L:
