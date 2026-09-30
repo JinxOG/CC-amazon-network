@@ -1,0 +1,134 @@
+A WHOLE-HOST OUTAGE IN THE MIDDLE OF A JOB                 W3, 2026-09-30
+================================================================================
+
+Unplanned. The Minecraft host went down at 16:48 UTC with job_0106/0107 half
+done - two miners underground on a four-sector zone at x 1952..1984,
+z -3296..-3264, 2 of 4 sectors mined, 4 of 4 surveyed. Nothing was dispatched
+to cause it and nothing in our code failed. It was observed live on the way back
+up, which is the part that cannot be reconstructed later.
+
+THE TIMELINE (UTC)
+
+  16:48:07  last line before the outage: a routine warehouse storage probe. The
+            server's own health rollup seconds earlier was normal (busy avg
+            4.6 ms, nothing slow). Both miners were scanning at Y=16.
+  16:48 - 18:04   76 minutes of total silence. The bridge itself did not
+            answer - the recorder logged connection timeouts every 5 min.
+  18:04:17  bridge up. It restarted a second time around 18:11 (its 60 s
+            rollups shift phase, and its uptime agrees).
+  18:04 - 18:16   bridge up, pushes=0: Minecraft still loading the world.
+  18:16:00  dispatch server boots, v1.9.121.
+  18:16:07  all 17 machines re-registered and online within 20 seconds.
+  18:16:08  last status from the two miners: RETRIEVING (boot recovery).
+  18:16 - 18:33   the two miners fly home, reporting NOTHING.
+  18:24:02  server declares both miners offline and gives their jobs to
+            node_138 and node_139.
+  18:33:32  both reappear at the bay approach point; then dock.
+
+WHAT WORKED
+
+  * NOTHING WAS LOST THAT WAS SAVED. 41 persistent zones reloaded from the cloud
+    copy, both live jobs restored, and both zones came back at exactly 2/4
+    mined, 4/4 surveyed - the last state before the outage.
+  * The fleet was all back within 20 seconds of the server booting.
+  * The server noticed both miners had rebooted mid-job and re-sent their jobs,
+    held off new dispatch for 60 s so the fleet did not stampede, and when the
+    jobs stalled it requeued them to idle miners, which resumed at "2 already
+    done" - their finished sectors intact.
+  * Both miners collected their chunk loaders and came home on their own.
+    Nothing was stranded, and the operator confirmed it in the world.
+
+WHAT FAILED, IN ORDER OF HOW MUCH IT MATTERS
+
+1. A RECOVERING MINER GOES SILENT UNTIL IT REACHES THE BAYS.
+
+   After the reboot each miner sent one status - RETRIEVING - and then nothing
+   for 17 minutes while it climbed to its loader, collected it and flew about
+   1,800 blocks home. Position, phase and fuel all froze on the dashboard at
+   the loader, then jumped to the bay approach point on arrival. The operator
+   has seen this after previous outages; it is a pattern, not a one-off.
+
+   Proof it was a real, unreported flight and not a teleport or a stale map:
+   fuel dropped ~2,700 on each turtle between the frozen reading and the first
+   one after arrival (99,579 -> 96,884 and 85,269 -> 82,585), and the operator
+   saw them docked. While the fuel field was frozen it read as "zero fuel
+   burned over 1,770 blocks", which briefly suggested a bogus position. It was
+   a frozen field, not a frozen turtle.
+
+   THE CONSEQUENCE IS NOT COSMETIC. At 18:24, midway home, the server timed
+   both out as offline and gave their jobs to node_138 and node_139. They were
+   alive. They docked still holding job_0106 and job_0107 - jobs another turtle
+   now owns. After every outage the server and the recovering turtles disagree
+   about who is doing what.
+
+   Checked, not assumed: the idle-stuck watchdog, which requeues a job whose
+   turtle is IDLE, looks the turtle up by job.assignedTo - so it inspects
+   node_138 for job_0106, never the stale node_118. The stale IDs cannot make it
+   yank a live job. They are untidy, not dangerous, as far as that path goes.
+
+   Note the server's first move at 18:16:08 was to re-send each miner its job;
+   the miner's boot recovery did something else (retrieve and go home). Two
+   state machines, two answers - the deferred Problem B in the architecture
+   notes, seen live.
+
+2. BOOT RECOVERY LEAVES NO LOG AT ALL.
+
+   Thirteen turtles logged normally after the reboot - including the two IDLE
+   miners, each opening with "=== node_138 [MINER] v1.9.121 booting ===". The
+   ONLY two that shipped nothing were the two in boot recovery; the bridge never
+   saw them as log sources. Radio was fine - the server heard their status. So
+   the one path you most want a record of after a crash is the one with no
+   record. Same shape as the updater being invisible to the log.
+
+3. THE BOOT CRASH REPORT QUOTES A CRASH FROM 24 DAYS AGO.
+
+   On boot: "Restarted after a crash - last: [2026-09-06 01:39:16]
+   server.run crashed: Terminated". Today's outage recorded no crash - the host
+   was stopped from outside, the server never got to write one - so the line
+   quoted the newest entry in crash.log, from September 6th. The identical line
+   appeared after the 1.9.121 deploy on 09-29, which was not a crash either.
+   It fires on every restart and names the same month-old event whether it was
+   a deploy, a power cut or a real crash.
+
+   What was needed - "stopped abruptly around 16:48, down 88 min, nothing
+   recorded" - had to be rebuilt by hand from the log. A periodic "still alive"
+   timestamp on disk, compared at boot against the newest crash entry, would
+   say it directly.
+
+4. MID-SECTOR ORE PROGRESS IS NOT SAVED.
+
+   Mined ore read 14,528 before the outage and 10,953 after: 3,575 of the
+   server's accounting did not survive. The blocks were dug; the record is
+   short. Cause, in code: the SECTOR_SCAN handler accumulates each sector's
+   mined ore in memory, and the zone store is saved only at sector boundaries
+   (assignment, completion). A stop partway through a two-hour sector loses the
+   whole sector's progress. The estimate then read 219 min instead of ~150,
+   because the model believes that ore is still in the ground, and the zone's
+   final ore total will read short.
+
+WHAT THIS COST, AND WHAT IT DID NOT
+
+  Cost: 88 minutes of downtime, a second 1,800-block trip for each of two
+  replacement miners, a dashboard blind for 17 minutes, 3,575 ore of
+  accounting, and an ETA wrong by about an hour.
+  Not lost: no turtle, no loader, no finished sector, no zone, no job.
+
+INSTRUMENTS, AND WHAT THEY TAUGHT ABOUT THEMSELVES
+
+  * The ETA recorder survived the outage, logging timeouts throughout, then
+    died when the engineer's session ended - one minute before the bridge came
+    back. Instruments tied to a session's lifetime miss exactly the recoveries
+    that happen while nobody is watching.
+  * The first attempt to restart it ran from the operator's own checkout, which
+    is days behind and has no recorder. Run tools from the engineer's worktree.
+  * /state has no "position" field; coordinates are top-level x/y/z, and the
+    "locations" map is empty. A query against the wrong field reads as "every
+    turtle has no position" - an idle turtle used as a control caught it.
+  * /state is ~340 KB now; one read came back truncated mid-string.
+
+WHAT THIS MEANS FOR THE SCHEDULED DOWNTIME (~5 h after this was written)
+
+  Park the fleet before it. The server, its records and idle turtles come back
+  cleanly; a miner caught mid-job abandons its job, flies home unreported, and
+  is reassigned while alive. That is survivable - today proved it - but it
+  costs a round trip and leaves the registry wrong until something clears it.
