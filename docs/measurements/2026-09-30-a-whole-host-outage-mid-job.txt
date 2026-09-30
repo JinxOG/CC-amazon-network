@@ -42,6 +42,16 @@ WHAT FAILED, IN ORDER OF HOW MUCH IT MATTERS
 
 1. A RECOVERING MINER GOES SILENT UNTIL IT REACHES THE BAYS.
 
+   ROOT CAUSE, found in the code after this was first written: BY DESIGN. A
+   turtle has two upgrade slots. After a crash nothing else is loading its
+   chunks, so for the flight home it fits pickaxe + chunk loader and gives up
+   the modem ("Chunk loading first, comms later"). Flying with the modem would
+   risk freezing in an unloaded chunk - actually stranded. The silence is the
+   price of that, and is NOT changed. The server's handling of it is: 1.9.122
+   requeues the job the moment boot recovery is reported, keeps the turtle out
+   of dispatch until it docks, and gives the silence the length of a flight
+   rather than a 60 s loader swap.
+
    After the reboot each miner sent one status - RETRIEVING - and then nothing
    for 17 minutes while it climbed to its loader, collected it and flew about
    1,800 blocks home. Position, phase and fuel all froze on the dashboard at
@@ -71,14 +81,20 @@ WHAT FAILED, IN ORDER OF HOW MUCH IT MATTERS
    state machines, two answers - the deferred Problem B in the architecture
    notes, seen live.
 
-2. BOOT RECOVERY LEAVES NO LOG AT ALL.
+2. CORRECTED - THE RECOVERY LOGS WERE NOT LOST. THE FLIGHT HAD NONE.
 
-   Thirteen turtles logged normally after the reboot - including the two IDLE
-   miners, each opening with "=== node_138 [MINER] v1.9.121 booting ===". The
-   ONLY two that shipped nothing were the two in boot recovery; the bridge never
-   saw them as log sources. Radio was fine - the server heard their status. So
-   the one path you most want a record of after a crash is the one with no
-   record. Same shape as the updater being invisible to the log.
+   First written here as "boot recovery ships no log at all". WRONG, and
+   corrected the same evening. node_118 shipped 45 lines and node_119 44, zero
+   missing: held on the turtle while its modem was off and delivered on docking,
+   stamped with their original times. They were simply not there yet when the
+   bridge was first checked mid-flight.
+
+   What IS missing is narrower: the FLIGHT ITSELF. node_118's own log reads
+   "Loader retrieved; self-loading restored" at 18:18:10 and then nothing until
+   18:33:06 at the arrivals hole. The boot-recovery code already had a legReport
+   for each leg of that flight, but it reported only by radio, on a flight flown
+   with the radio off, so it never fired on the path it was written for.
+   Fixed in 1.9.122: legReport now also writes to the turtle's own log.
 
 3. THE BOOT CRASH REPORT QUOTES A CRASH FROM 24 DAYS AGO.
 
@@ -95,7 +111,7 @@ WHAT FAILED, IN ORDER OF HOW MUCH IT MATTERS
    timestamp on disk, compared at boot against the newest crash entry, would
    say it directly.
 
-4. MID-SECTOR ORE PROGRESS IS NOT SAVED.
+4. MID-SECTOR ORE PROGRESS IS NOT SAVED (NOT fixed in 1.9.122 - see its card).
 
    Mined ore read 14,528 before the outage and 10,953 after: 3,575 of the
    server's accounting did not survive. The blocks were dug; the record is
