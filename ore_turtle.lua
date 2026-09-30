@@ -1692,6 +1692,15 @@ local function recoverPlacedLoader()
     -- is the question actually being asked. A no-op if the retrieval left comms
     -- down; that case is reported as loader_recovered_comms_down above.
     local function legReport(what)
+        -- ALSO INTO THE TURTLE'S OWN LOG. This flight is flown with the chunk
+        -- loader fitted and the modem off, so the radio report below is dropped
+        -- every time on the path it was written for. The local log is kept and
+        -- delivered after docking, so it is the only record the flight will ever
+        -- have. 2026-09-30: node_118's log had a 15-minute hole here, 18:18 to
+        -- 18:33 UTC -- 'Loader recovered', then nothing until the arrivals hole.
+        local at = base.getPos() or {}
+        print(string.format("[MINER] boot recovery: %s (at %s,%s,%s)", what,
+            tostring(at.x), tostring(at.y), tostring(at.z)))
         base.sendProgress("boot recovery: " .. what)
     end
 

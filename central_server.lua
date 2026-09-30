@@ -47,6 +47,20 @@ local CFG = {
     -- fully offline first, which this window (60s) rarely reaches before the
     -- gap itself ends -- it's defence-in-depth for if those get tuned down.
     COMMS_GAP_GRACE_SEC = 60,
+    -- A miner recovering from a reboot flies HOME with its chunk loader fitted
+    -- and its modem off -- two upgrade slots, and after a crash nothing else is
+    -- loading its chunks, so it trades radio for staying loaded. That silence
+    -- lasts the whole flight: 15 minutes over ~1,800 blocks on 2026-09-30. The
+    -- 60 s swap grace above was never meant for it, and the server declared two
+    -- healthy miners dead halfway home. Generous on purpose: the job is
+    -- requeued the moment boot recovery is reported, so all this window guards
+    -- is whether a turtle that is simply flying gets called offline.
+    BOOT_RECOVERY_GRACE_SEC = 1800,
+    -- The server writes "<epoch ms> <version>" here once a minute. At boot the
+    -- previous run's last entry says when it was last alive, and so whether a
+    -- crash.log entry belongs to THIS restart or to some earlier one.
+    ALIVE_FILE        = "alive.stamp",
+    ALIVE_INTERVAL    = 60,
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -413,6 +427,23 @@ function registry.update(id, status, fuel, position, jobId, version)
         if status == proto.STATUS.IDLE then status = nil end  -- keep server status
         if jobId  == nil              then jobId  = t.jobId end  -- keep server jobId
     end
+    -- A TURTLE MAY ONLY CLAIM A JOB THE SERVER GAVE IT.
+    --
+    -- 2026-09-30: after an outage the server requeued job_0106 and gave it to
+    -- node_138. node_118, which had it before the outage, docked and reported
+    -- job_0106 as its own, and this line adopted the claim -- two turtles
+    -- owning one job. Adopt a reported job only if it is assigned to THIS
+    -- turtle; anything else is a belief the server has already overruled.
+    -- A rejected claim falls back to the server's OWN view, not to nothing:
+    -- clearing it outright would also wipe a job the server did give this
+    -- turtle, making it look free and orphaning that job.
+    if jobId ~= nil then
+        local claimed = state.jobs[jobId]
+        if not (claimed and claimed.assignedTo == id) then
+            local own = t.jobId and state.jobs[t.jobId]
+            jobId = (own and own.assignedTo == id) and t.jobId or nil
+        end
+    end
     t.status   = status   or t.status
     t.fuel     = fuel     or t.fuel
     t.position = position or t.position
@@ -569,7 +600,7 @@ function registry.checkTimeouts()
         -- commsGap/phaseAt are nil for every non-miner role, so this never
         -- applies to them.
         local inPlannedCommsGap = t.commsGap and t.phaseAt
-            and (now - t.phaseAt) < (CFG.COMMS_GAP_GRACE_SEC * 1000)
+            and (now - t.phaseAt) < ((t.commsGapGraceSec or CFG.COMMS_GAP_GRACE_SEC) * 1000)
         if inPlannedCommsGap then
             -- skip: expected gap, don't count it as a timeout or prune it
         elseif t.online and (now - t.lastSeen) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
@@ -1731,7 +1762,7 @@ function jobQueue.checkGhosts()
             -- commsGap/phaseAt are nil for every non-miner role, so this never
             -- applies to them.
             local inPlannedCommsGap = t and t.commsGap and t.phaseAt
-                and (nowSec - (t.phaseAt / 1000)) < CFG.COMMS_GAP_GRACE_SEC
+                and (nowSec - (t.phaseAt / 1000)) < (t.commsGapGraceSec or CFG.COMMS_GAP_GRACE_SEC)
 
             if inPlannedCommsGap then
                 job.ghostSince   = nil
@@ -3495,6 +3526,36 @@ local function handleMinePhase(msg)
         string.format("phase %s%s", p.phase, p.detail and (" — " .. p.detail) or ""))
     logInfo(string.format("%s phase: %s%s", msg.from, p.phase,
         p.detail and (" (" .. p.detail .. ")") or ""))
+
+    -- BOOT RECOVERY MEANS THE JOB IS OVER, AND THE SILENCE IS BY DESIGN.
+    --
+    -- A miner rebooted mid-job collects its loader and flies home; it never
+    -- resumes. It flies with the chunk loader fitted and the modem off, so it
+    -- is unreachable for the whole trip. On 2026-09-30 the server re-sent each
+    -- miner its job anyway, waited eight minutes, declared both dead
+    -- halfway home, THEN requeued their jobs -- and never cleared their claims,
+    -- so both docked still owning jobs other turtles were working.
+    --
+    -- So act on the report itself: requeue now, through the same call the
+    -- timeout path uses, and mark the turtle RETURNING -- requeueing sets it
+    -- IDLE, and an IDLE turtle gets dispatched, which would hand the job back
+    -- to the one turtle that cannot hear it. It reports IDLE itself on docking.
+    local bootRecovery = p.phase == proto.PHASE.RETRIEVING
+        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil
+    t.commsGapGraceSec = bootRecovery and CFG.BOOT_RECOVERY_GRACE_SEC or nil
+    if bootRecovery then
+        local jid = t.jobId
+        local job = jid and state.jobs[jid]
+        if job and job.assignedTo == msg.from
+           and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
+            logInfo(string.format(
+                "%s is recovering from a reboot and flying home with its radio off "
+                .. "by design -- %s requeued now rather than after a timeout",
+                msg.from, jid))
+            jobQueue.reassign(jid, msg.from, "boot_recovery")
+            t.status = proto.STATUS.RETURNING
+        end
+    end
 end
 handlers[proto.MSG.MINE_PHASE] = handleMinePhase
 
@@ -3883,6 +3944,95 @@ end
 -- server.run's closure and cannot be exported.
 local function isDue(now, lastRun, intervalSec)
     return (now - lastRun) >= (intervalSec * 1000)
+end
+
+-- WHY DID THE LAST RUN END? Said once at boot, into the live log.
+--
+-- This used to replay the newest crash.log line as "Restarted after a crash"
+-- on EVERY boot. After the whole-host outage of 2026-09-30 it announced a crash
+-- from 2026-09-06 -- 24 days stale -- and it said the same after the 1.9.121
+-- deploy, which was no crash at all. A report that reads identically for a
+-- crash, an update and a power cut tells the operator nothing.
+--
+-- The alive stamp (CFG.ALIVE_FILE, rewritten once a minute) is what separates
+-- them: a crash entry newer than the last sign of life is this restart's crash;
+-- a new version is an update; anything else is a stop from outside, which our
+-- code cannot record because it is not running when it happens.
+function server.bootReport(nowMs)
+    local now = nowMs or os.epoch("utc")
+    local function hhmm(ms)
+        local ok, str = pcall(os.date, "!%Y-%m-%d %H:%M", math.floor(ms / 1000))
+        return ok and str or tostring(ms)
+    end
+
+    local alive, prevVer
+    if fs.exists(CFG.ALIVE_FILE) then
+        local f = fs.open(CFG.ALIVE_FILE, "r")
+        if f then
+            local a, v = (f.readAll() or ""):match("^(%d+)%s*(%S*)")
+            f.close()
+            alive, prevVer = tonumber(a), (v ~= "" and v or nil)
+        end
+    end
+
+    -- readAll, not readLine: identical on real CC, and the only one the test
+    -- stub has -- which is why the old version of this was never exercised.
+    local lines = {}
+    if fs.exists(CRASH_LOG_FILE) then
+        local f = fs.open(CRASH_LOG_FILE, "r")
+        if f then
+            for line in ((f.readAll() or "") .. "\n"):gmatch("([^\n]*)\n") do
+                if line ~= "" then lines[#lines + 1] = line end
+            end
+            f.close()
+        end
+    end
+    local last    = lines[#lines]
+    local crashAt = last and tonumber(last:match("^%[(%d+)"))
+
+    local verdict
+    if crashAt and (not alive or crashAt >= alive - 1000) then
+        verdict = "crash"
+        logWarn("Restarted after a crash — " .. last)
+        if #lines > 1 then
+            logWarn(string.format("%d crashes recorded in %s so far", #lines, CRASH_LOG_FILE))
+        end
+    elseif alive and prevVer and prevVer ~= proto.VERSION then
+        verdict = "update"
+        logInfo(string.format("Restarted into v%s (was v%s) — an update, down %.1f min",
+            proto.VERSION, prevVer, (now - alive) / 60000))
+    elseif alive then
+        verdict = "external"
+        logWarn(string.format(
+            "The previous run stopped without recording why — last alive %s UTC, "
+            .. "down %.1f min. Nothing in the server crashed: the host, the world "
+            .. "or this computer was stopped from outside.",
+            hhmm(alive), (now - alive) / 60000))
+    else
+        verdict = "unknown"
+        logInfo("Restarted — no record of the previous run's last moment "
+            .. "(first start with the alive stamp), so its end cannot be named")
+    end
+
+    -- Keep the file bounded; the disk is shared with zones.dat and jobs.dat.
+    if #lines > CRASH_LOG_MAX_LINES then
+        local w = fs.open(CRASH_LOG_FILE, "w")
+        if w then
+            for i = #lines - CRASH_LOG_MAX_LINES + 1, #lines do w.writeLine(lines[i]) end
+            w.close()
+        end
+    end
+    return verdict
+end
+
+-- The alive stamp itself. Its own function for the same reason as bootReport:
+-- a field on `server`, so the main loop gains no locals.
+function server.writeAliveStamp(nowMs)
+    local f = fs.open(CFG.ALIVE_FILE, "w")
+    if f then
+        f.write(string.format("%d %s", nowMs or os.epoch("utc"), proto.VERSION))
+        f.close()
+    end
 end
 
 function server.run()
@@ -4987,30 +5137,8 @@ function server.run()
         logError("Free disk now: " .. tostring(fs.getFreeSpace(".")) .. "B. Re-run 'updater' after freeing space.")
     end)
 
-    -- Replay the last crash into the live log so it reaches /state and the
-    -- dashboard. Without this the reason exists only in a file nobody opens,
-    -- and the operator sees turtles re-registering with no explanation.
-    pcall(function()
-        if not fs.exists(CRASH_LOG_FILE) then return end
-        local f = fs.open(CRASH_LOG_FILE, "r")
-        if not f then return end
-        local lines = {}
-        for line in f.readLine do table.insert(lines, line) end
-        f.close()
-        if #lines == 0 then return end
-        logWarn("Restarted after a crash — last: " .. lines[#lines])
-        if #lines > 1 then
-            logWarn(string.format("%d crashes recorded in %s so far", #lines, CRASH_LOG_FILE))
-        end
-        -- Keep the file bounded; the disk is shared with zones.dat and jobs.dat.
-        if #lines > CRASH_LOG_MAX_LINES then
-            local w = fs.open(CRASH_LOG_FILE, "w")
-            if w then
-                for i = #lines - CRASH_LOG_MAX_LINES + 1, #lines do w.writeLine(lines[i]) end
-                w.close()
-            end
-        end
-    end)
+    -- Say why the previous run ended. See server.bootReport.
+    pcall(server.bootReport)
     W.loadDockAssignments()
     loadJobs()
     loadPersistentZones()
@@ -5543,6 +5671,11 @@ function server.run()
                 end)
                 if not ok_h then logError("Health WC: " .. tostring(err_h)) end
                 lastHealthWC = wc
+            end
+            -- The alive stamp. state, not a local: see server.bootReport.
+            if isDue(wc, state.lastAliveWC or 0, CFG.ALIVE_INTERVAL) then
+                pcall(server.writeAliveStamp, wc)
+                state.lastAliveWC = wc
             end
 
             -- RS storage — this is the one that actually bit us. storageTimer

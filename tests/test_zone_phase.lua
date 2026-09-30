@@ -318,6 +318,155 @@ return {
             .. "topping it up again is how a top-up becomes a breeding programme")
     end,
 
+    -- The whole-host outage of 2026-09-30 (1.9.122). -------------------------
+
+    -- A miner rebooted mid-job reported "RETRIEVING (boot recovery ...)" and
+    -- then flew home with its modem off. The server re-sent it the job, waited
+    -- eight minutes, declared it dead halfway home, and only then requeued.
+    ["a boot-recovering miner's job is requeued at once, not after a timeout"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            jobId = JA, phase = proto.PHASE.RETRIEVING,
+            detail = "boot recovery — loader at 1992,200,-3255" } })
+        local job, t = T.state.jobs[JA], T.state.registry[A]
+        local status, owner, tStatus, tJob, grace =
+            job.status, job.assignedTo, t.status, t.jobId, t.commsGapGraceSec
+        restore()
+        assert_eq(status, "PENDING", "the job goes back to the queue the moment recovery is reported")
+        assert_eq(owner, nil, "and nobody holds it")
+        assert_eq(tJob, nil, "the recovering turtle's claim is cleared")
+        assert_eq(tStatus, proto.STATUS.RETURNING,
+            "RETURNING, not IDLE: an IDLE turtle is dispatchable, and this one "
+            .. "cannot hear a JOB_ASSIGN until it docks")
+        assert_eq(grace, T.CFG.BOOT_RECOVERY_GRACE_SEC,
+            "its radio silence is given the length of a flight home, not a 60 s swap")
+    end,
+
+    ["an ordinary loader swap mid-job is NOT treated as boot recovery"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            jobId = JA, phase = proto.PHASE.RETRIEVING, detail = "comms gap expected" } })
+        local job, t = T.state.jobs[JA], T.state.registry[A]
+        local status, owner, grace = job.status, job.assignedTo, t.commsGapGraceSec
+        restore()
+        assert_eq(status, "IN_PROGRESS", "every sector ends in a loader swap; it must not end the job")
+        assert_eq(owner, A)
+        assert_eq(grace, nil, "and it keeps the short swap grace")
+    end,
+
+    -- node_118 docked reporting job_0106, which the server had given node_138.
+    -- The heartbeat adopted the claim: two turtles owning one job.
+    ["a turtle cannot claim a job the server gave to someone else"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.state.registry[A].jobId = nil               -- the server holds nothing for A
+        T.state.jobs[JA].assignedTo = B               -- JA now belongs to B
+        T.registry.update(A, proto.STATUS.IDLE, 100000, nil, JA)
+        local claimA = T.state.registry[A].jobId
+        T.registry.update(B, proto.STATUS.WORKING, 100000, nil, JB)
+        local claimB = T.state.registry[B].jobId
+        restore()
+        assert_eq(claimA, nil, "A's stale claim to B's job is refused")
+        assert_eq(claimB, JB, "a turtle's claim to its OWN job still stands")
+    end,
+
+    ["a refused claim keeps the job the server did give that turtle"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        -- A is legitimately on JA. It reports JB, which is B's.
+        T.registry.update(A, proto.STATUS.WORKING, 100000, nil, JB)
+        local claimA = T.state.registry[A].jobId
+        restore()
+        assert_eq(claimA, JA,
+            "refusing the foreign claim must not wipe A's real job -- that would "
+            .. "make A look free and orphan JA")
+    end,
+
+    -- The boot report quoted a crash from 2026-09-06 after the 2026-09-30
+    -- outage, and after the 09-29 deploy. It could not tell them apart.
+    ["the restart report names a stop from outside, not a month-old crash"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local w = fs.open("crash.log", "w")
+        w.write("[1788683956366 2026-09-06 01:39:16] server.run crashed: Terminated\n")
+        w.close()
+        local a = fs.open(T.CFG.ALIVE_FILE, "w")
+        a.write("1790700000000 " .. proto.VERSION)     -- alive long after that crash
+        a.close()
+        local verdict = server.bootReport(1790700000000 + 88 * 60000)
+        local said = logged(T, "stopped without recording why")
+        local blamedCrash = logged(T, "Restarted after a crash")
+        restore()
+        assert_eq(verdict, "external", "the crash on record is older than the last sign of life")
+        assert_eq(said ~= nil, true, "so it says the run was stopped from outside")
+        assert_eq(blamedCrash, nil, "and does not blame the September crash")
+    end,
+
+    ["a crash after the last sign of life is still reported as a crash"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local a = fs.open(T.CFG.ALIVE_FILE, "w")
+        a.write("1790700000000 " .. proto.VERSION)
+        a.close()
+        local w = fs.open("crash.log", "w")
+        w.write("[1790700030000 2026-09-30 16:48:37] server.run crashed: attempt to index nil\n")
+        w.close()
+        local verdict = server.bootReport(1790700090000)
+        local said = logged(T, "Restarted after a crash")
+        restore()
+        assert_eq(verdict, "crash", "a crash written after the last alive stamp belongs to this restart")
+        assert_eq(said ~= nil, true)
+    end,
+
+    ["a restart into a new version is reported as an update"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local a = fs.open(T.CFG.ALIVE_FILE, "w")
+        a.write("1790700000000 1.9.0")                   -- the previous run was older code
+        a.close()
+        local verdict = server.bootReport(1790700030000)
+        local said = logged(T, "an update")
+        restore()
+        assert_eq(verdict, "update")
+        assert_eq(said ~= nil, true, "a deploy is named as a deploy, not as a crash or an outage")
+    end,
+
+    -- Giving a turtle the long grace proves nothing unless the timeout path
+    -- reads it. Ten minutes of silence: a flight home survives it, a plain
+    -- loader swap that has gone quiet for that long does not.
+    ["a turtle flying home after a reboot is not called offline mid-flight"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local now = os.epoch("utc")
+        for _, id in ipairs({ A, B }) do
+            local t = T.state.registry[id]
+            t.commsGap, t.phaseAt, t.lastSeen, t.online = true, now - 600000, now - 600000, true
+        end
+        T.state.registry[A].commsGapGraceSec = T.CFG.BOOT_RECOVERY_GRACE_SEC
+        T.registry.checkTimeouts()
+        local aOnline, bOnline = T.state.registry[A].online, T.state.registry[B].online
+        restore()
+        assert_eq(aOnline, true, "ten silent minutes is an ordinary flight home after a reboot")
+        assert_eq(bOnline, false, "but for a plain loader swap it is a turtle that has stopped")
+    end,
+
+    ["the alive stamp records the time and the running version"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        server.writeAliveStamp(1790700000000)
+        local f = fs.open(T.CFG.ALIVE_FILE, "r")
+        local body = f and f.readAll()
+        restore()
+        assert_eq(body, "1790700000000 " .. proto.VERSION,
+            "both halves are needed: the time dates a crash, the version names an update")
+    end,
+
     -- The other half: a genuine failure must STILL respawn, or a zone stops
     -- silently the first time a miner dies on it.
     ["a failed job still respawns its zone"] = function(assert_eq)

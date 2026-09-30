@@ -160,6 +160,15 @@ E_REMINE  = "a sector queued for re-mining is priced by what is left, not by the
 E_HOME    = "every job pays for the trip home once, and a second miner does not halve it"
 E_HALF    = "a zone left at half crew is topped up, not only a zone left at none"
 E_FULL    = "a zone already at full crew is left alone"
+O_REQUEUE = "a boot-recovering miner's job is requeued at once, not after a timeout"
+O_SWAP    = "an ordinary loader swap mid-job is NOT treated as boot recovery"
+O_GRACE   = "a turtle flying home after a reboot is not called offline mid-flight"
+O_CLAIM   = "a turtle cannot claim a job the server gave to someone else"
+O_KEEP    = "a refused claim keeps the job the server did give that turtle"
+O_EXT     = "the restart report names a stop from outside, not a month-old crash"
+O_CRASH   = "a crash after the last sign of life is still reported as a crash"
+O_UPDATE  = "a restart into a new version is reported as an update"
+O_STAMP   = "the alive stamp records the time and the running version"
 E_PASSES  = "the estimate covers the passes still to come, not just this one"
 E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
@@ -912,6 +921,40 @@ MUTANTS = [
 
     ("a zone already at full crew is topped up anyway", "central_server.lua",
      [("    if onZone >= wanted then return end\n", "")], E_FULL),
+
+    # -- A whole-host outage mid-job (1.9.122) ---------------------------------
+    ('boot recovery is never recognised', "central_server.lua",
+     [('        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil\n', '        and false\n')], O_REQUEUE),
+
+    ('every loader swap is treated as boot recovery', "central_server.lua",
+     [('        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil\n', '        and true\n')], O_SWAP),
+
+    ('the recovering turtle is left dispatchable', "central_server.lua",
+     [('            t.status = proto.STATUS.RETURNING\n', '')], O_REQUEUE),
+
+    ('boot recovery gets only the short swap grace', "central_server.lua",
+     [('    t.commsGapGraceSec = bootRecovery and CFG.BOOT_RECOVERY_GRACE_SEC or nil\n', '    t.commsGapGraceSec = nil\n')], O_REQUEUE),
+
+    ('the offline timer ignores the per-turtle grace', "central_server.lua",
+     [('            and (now - t.phaseAt) < ((t.commsGapGraceSec or CFG.COMMS_GAP_GRACE_SEC) * 1000)\n', '            and (now - t.phaseAt) < (CFG.COMMS_GAP_GRACE_SEC * 1000)\n')], O_GRACE),
+
+    ('a turtle may claim any job it names', "central_server.lua",
+     [('        if not (claimed and claimed.assignedTo == id) then\n', '        if false then\n')], O_CLAIM),
+
+    ("a refused claim wipes the turtle's real job", "central_server.lua",
+     [('            jobId = (own and own.assignedTo == id) and t.jobId or nil\n', '            jobId = nil\n')], O_KEEP),
+
+    ('any crash on record is blamed for the restart', "central_server.lua",
+     [('    if crashAt and (not alive or crashAt >= alive - 1000) then\n', '    if crashAt then\n')], O_EXT),
+
+    ('a fresh crash is not recognised as one', "central_server.lua",
+     [('    if crashAt and (not alive or crashAt >= alive - 1000) then\n', '    if false then\n')], O_CRASH),
+
+    ('an update is not recognised as one', "central_server.lua",
+     [('    elseif alive and prevVer and prevVer ~= proto.VERSION then\n', '    elseif false then\n')], O_UPDATE),
+
+    ('the alive stamp drops the version', "central_server.lua",
+     [('        f.write(string.format("%d %s", nowMs or os.epoch("utc"), proto.VERSION))\n', '        f.write(string.format("%d", nowMs or os.epoch("utc")))\n')], O_STAMP),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",
