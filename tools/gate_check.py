@@ -170,10 +170,11 @@ for l in logs("node=server&contains=accepted%20by").get("lines", []):
         started.add((m.group(1), m.group(2)))
 firsts = collections.defaultdict(list)
 for l in d.get("lines", []):
-    m = re.search(r"(?:Survey|Sector|Rescan) \((\-?\d+),(\-?\d+)\) done by (node_\d+).*\[(job_\d+)",
+    m = re.search(r"(Survey|Sector|Rescan) \((\-?\d+),(\-?\d+)\) done by (node_\d+).*\[(job_\d+)",
                   l.get("msg") or "")
-    if m and (m.group(4), m.group(3)) in started:
-        firsts[(m.group(4), m.group(3))].append((p_ts(l["ts"]), m.group(1) + "," + m.group(2)))
+    if m and (m.group(5), m.group(4)) in started:
+        firsts[(m.group(5), m.group(4))].append(
+            (p_ts(l["ts"]), m.group(2) + "," + m.group(3), m.group(1)))
 # A RE-MINE IS NOT A DOUBLED ORDER.
 #
 # 2026-09-29: this flagged job_0096 for doing (1792,-2816) twice, 148 minutes
@@ -190,13 +191,28 @@ rescan_starts = []
 for l in logs("contains=starting%20rescan").get("lines", []):
     rescan_starts.append(p_ts(l["ts"]))
 
-judged = doubled = remined = 0
+# A SURVEY THEN A MINE OF ONE SECTOR IS NOT A DOUBLED ORDER EITHER.
+#
+# 2026-09-30: flagged job_0104 for doing (1888,-2720) twice, 175 minutes apart.
+# The first was "Survey ... done" and the second "Sector ... done" -- the turtle
+# surveyed the sector and later mined it, which is what happens to EVERY sector.
+# It surfaced only because a retry made that sector this turtle's first mine
+# order. The pattern captured Survey|Sector|Rescan and then discarded which one,
+# so it could not tell the normal lifecycle from a duplicate. The 1.9.108 fault
+# was the SAME completion twice: same sector AND same kind.
+judged = doubled = remined = lifecycle = 0
 for k, v in sorted(firsts.items()):
     v.sort()
     if len(v) < 2:
         continue
     judged += 1
     if v[0][1] != v[1][1]:
+        continue
+    if v[0][2] != v[1][2]:
+        lifecycle += 1
+        print("        (lifecycle) %s %s: %s then %s of (%s), %.1fm apart"
+              % (k[0], k[1], v[0][2].lower(), v[1][2].lower(), v[0][1],
+                 (v[1][0] - v[0][0]).total_seconds() / 60))
         continue
     gap = (v[1][0] - v[0][0]).total_seconds() / 60
     between = any(v[0][0] < r < v[1][0] for r in rescan_starts)
@@ -211,6 +227,7 @@ for k, v in sorted(firsts.items()):
 print("    job/miner pairs judged  : %d" % judged)
 print("    first order doubled     : %d" % doubled)
 print("    re-mines (not a fault)  : %d" % remined)
+print("    survey-then-mine (normal): %d" % lifecycle)
 if judged == 0:
     notes.append("no job started in window with two completions -- [2b] proved nothing")
     print("    NO EVIDENCE: no job started in this window. Not a pass.")
