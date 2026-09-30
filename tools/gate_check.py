@@ -395,7 +395,31 @@ else:
 print("\n[4] SERVER AND FLEET HEALTH")
 st = get(f"{B}/state")
 ll = st.get("logLoss") or {}
-print(f"    log loss     : {ll.get('lossPct')}%  ({ll.get('missing')} of {ll.get('expected')})")
+# THIS FIGURE IGNORES THE WINDOW. It is the bridge's own counter, and it counts
+# from the bridge's last restart -- in practice the last deploy -- not from the
+# `since` this gate was given. Every other section respects the window.
+#
+# 2026-09-30: a gate over one job read 0.9% (246 lines). All 246 were one turtle,
+# and 237 of them were a geofence retry burst from the PREVIOUS day, still in the
+# counter. Read as "this job lost 0.9%" it was simply false, and nothing on the
+# line said so. So say what it covers, and name the source when the loss is
+# concentrated -- a single turtle's burst and a fleet-wide deafness are different
+# faults, and the total cannot tell them apart.
+_since = ll.get("since")
+_since_s = (datetime.datetime.utcfromtimestamp(_since / 1000).strftime("%Y-%m-%d %H:%M UTC")
+            if _since else "unknown")
+print(f"    log loss     : {ll.get('lossPct')}%  ({ll.get('missing')} of {ll.get('expected')})"
+      f"  -- since bridge restart {_since_s}, NOT this window")
+_lossy = sorted(((v.get("missing") or 0, src) for src, v in (ll.get("sources") or {}).items()
+                 if (v.get("missing") or 0) > 0), reverse=True)
+if _lossy:
+    _tot = sum(m for m, _ in _lossy) or 1
+    for _m, _src in _lossy[:4]:
+        print(f"        {_src:<10} {_m:5d} missing  ({100.0 * _m / _tot:.0f}% of the loss)")
+    if _lossy[0][0] / _tot >= 0.9:
+        notes.append("[4] log loss is %d%% one source (%s): a local burst, not the "
+                     "fleet going deaf -- check that source's lines, not the radio"
+                     % (round(100.0 * _lossy[0][0] / _tot), _lossy[0][1]))
 print(f"    disk free    : {st.get('diskFree')} bytes")
 print(f"    persistence  : {st.get('persistenceHealthy')}   zone store: {st.get('zoneStoreHealthy')}")
 print(f"    versionMismatch: {st.get('versionMismatch')}   recentFailures: {len(st.get('recentFailures') or {})}")
