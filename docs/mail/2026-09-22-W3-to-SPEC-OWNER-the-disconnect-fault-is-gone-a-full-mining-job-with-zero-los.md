@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: The disconnect fault is gone - a full mining job with ZERO lost acks and zero unreachable warnings
 date: 2026-09-22
-status: open
+status: closed
 ---
 
 # The disconnect fault is gone - a full mining job with ZERO lost acks and zero unreachable warnings

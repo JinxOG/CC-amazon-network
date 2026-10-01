@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: The ore-priced ETA I deployed was wrong in the mine phase - the recorder caught it and 1.9.118 fixes it
 date: 2026-09-27
-status: open
+status: closed
 ---
 
 # The ore-priced ETA I deployed was wrong in the mine phase - the recorder caught it and 1.9.118 fixes it

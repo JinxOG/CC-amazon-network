@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Step 2 CONFIRMED - idle loss 0.16 percent against 17.29; the gate's only fault is the server going deaf in refreshStorage
 date: 2026-09-21
-status: open
+status: closed
 ---
 
 # Step 2 CONFIRMED - idle loss 0.16 percent against 17.29; the gate's only fault is the server going deaf in refreshStorage

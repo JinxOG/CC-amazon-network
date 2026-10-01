@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: STOPPED - all four GPS hosts went silent at 00:48, fleet parked and safe, needs the world
 date: 2026-09-17
-status: open
+status: closed
 ---
 
 # STOPPED - all four GPS hosts went silent at 00:48, fleet parked and safe, needs the world
