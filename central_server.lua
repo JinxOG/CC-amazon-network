@@ -3990,28 +3990,33 @@ function server.bootReport(nowMs)
     local last    = lines[#lines]
     local crashAt = last and tonumber(last:match("^%[(%d+)"))
 
+    -- NO ALIVE STAMP MEANS NOTHING ON RECORD CAN BE DATED, so check it first.
+    -- 1.9.122's first boot (2026-09-30 22:09:57) had no stamp yet and still
+    -- announced the 2026-09-06 crash: it read "never stamped" as "any crash may
+    -- be ours", which is the very report this function was written to retire.
     local verdict
-    if crashAt and (not alive or crashAt >= alive - 1000) then
+    if not alive then
+        verdict = "unknown"
+        logInfo("Restarted — no record of the previous run's last moment "
+            .. "(first start with the alive stamp), so its end cannot be named"
+            .. (last and ("; newest crash on record, undated against this restart: " .. last) or ""))
+    elseif crashAt and crashAt >= alive - 1000 then
         verdict = "crash"
         logWarn("Restarted after a crash — " .. last)
         if #lines > 1 then
             logWarn(string.format("%d crashes recorded in %s so far", #lines, CRASH_LOG_FILE))
         end
-    elseif alive and prevVer and prevVer ~= proto.VERSION then
+    elseif prevVer and prevVer ~= proto.VERSION then
         verdict = "update"
         logInfo(string.format("Restarted into v%s (was v%s) — an update, down %.1f min",
             proto.VERSION, prevVer, (now - alive) / 60000))
-    elseif alive then
+    else
         verdict = "external"
         logWarn(string.format(
             "The previous run stopped without recording why — last alive %s UTC, "
             .. "down %.1f min. Nothing in the server crashed: the host, the world "
             .. "or this computer was stopped from outside.",
             hhmm(alive), (now - alive) / 60000))
-    else
-        verdict = "unknown"
-        logInfo("Restarted — no record of the previous run's last moment "
-            .. "(first start with the alive stamp), so its end cannot be named")
     end
 
     -- Keep the file bounded; the disk is shared with zones.dat and jobs.dat.

@@ -169,6 +169,7 @@ O_EXT     = "the restart report names a stop from outside, not a month-old crash
 O_CRASH   = "a crash after the last sign of life is still reported as a crash"
 O_UPDATE  = "a restart into a new version is reported as an update"
 O_STAMP   = "the alive stamp records the time and the running version"
+O_FIRST   = "with no alive stamp yet, an old crash is not blamed for the restart"
 E_PASSES  = "the estimate covers the passes still to come, not just this one"
 E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
@@ -945,16 +946,19 @@ MUTANTS = [
      [('            jobId = (own and own.assignedTo == id) and t.jobId or nil\n', '            jobId = nil\n')], O_KEEP),
 
     ('any crash on record is blamed for the restart', "central_server.lua",
-     [('    if crashAt and (not alive or crashAt >= alive - 1000) then\n', '    if crashAt then\n')], O_EXT),
+     [('    elseif crashAt and crashAt >= alive - 1000 then\n', '    elseif crashAt then\n')], O_EXT),
 
     ('a fresh crash is not recognised as one', "central_server.lua",
-     [('    if crashAt and (not alive or crashAt >= alive - 1000) then\n', '    if false then\n')], O_CRASH),
+     [('    elseif crashAt and crashAt >= alive - 1000 then\n', '    elseif false then\n')], O_CRASH),
 
     ('an update is not recognised as one', "central_server.lua",
-     [('    elseif alive and prevVer and prevVer ~= proto.VERSION then\n', '    elseif false then\n')], O_UPDATE),
+     [('    elseif prevVer and prevVer ~= proto.VERSION then\n', '    elseif false then\n')], O_UPDATE),
 
     ('the alive stamp drops the version', "central_server.lua",
      [('        f.write(string.format("%d %s", nowMs or os.epoch("utc"), proto.VERSION))\n', '        f.write(string.format("%d", nowMs or os.epoch("utc")))\n')], O_STAMP),
+
+    ("a restart with no alive stamp blames any crash on record", "central_server.lua",
+     [('    if not alive then\n', '    if false then\n')], O_FIRST),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

@@ -455,6 +455,24 @@ return {
         assert_eq(bOnline, false, "but for a plain loader swap it is a turtle that has stopped")
     end,
 
+    -- The case every other report test skipped: they all wrote an alive stamp
+    -- first. 1.9.122's own first boot had none and blamed the September crash.
+    ["with no alive stamp yet, an old crash is not blamed for the restart"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local w = fs.open("crash.log", "w")
+        w.write("[1788683956366 2026-09-06 01:39:16] server.run crashed: Terminated\n")
+        w.close()
+        local verdict = server.bootReport(1790700000000)
+        local blamed = logged(T, "Restarted after a crash")
+        local said = logged(T, "undated against this restart")
+        restore()
+        assert_eq(verdict, "unknown", "without a stamp no crash on record can be dated")
+        assert_eq(blamed, nil, "so none may be blamed")
+        assert_eq(said ~= nil, true, "the newest one is still shown, labelled as undated")
+    end,
+
     ["the alive stamp records the time and the running version"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
