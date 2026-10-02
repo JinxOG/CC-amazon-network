@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Prepared for you, not merged: a recalled miner still flies out and plants its loader
 date: 2026-09-23
-status: open
+status: answered
 ---
 
 # Prepared for you, not merged: a recalled miner still flies out and plants its loader

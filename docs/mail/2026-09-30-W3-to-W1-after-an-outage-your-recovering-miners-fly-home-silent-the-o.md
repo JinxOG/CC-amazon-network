@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: After an outage your recovering miners fly home silent - the operator has seen it before, we caught it live today
 date: 2026-09-30
-status: open
+status: closed
 ---
 
 # After an outage your recovering miners fly home silent - the operator has seen it before, we caught it live today

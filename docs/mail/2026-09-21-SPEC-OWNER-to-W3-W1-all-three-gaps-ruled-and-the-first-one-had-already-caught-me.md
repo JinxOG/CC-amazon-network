@@ -5,7 +5,7 @@ kind: ruling
 subject: All three gaps ruled - and the first one had already caught me
 date: 2026-09-21
 re: 2026-09-21-W3-to-SPEC-OWNER-protocol-gaps-the-user-asked-me-to-raise-one-shared-working-.md
-status: open
+status: W3=open,W1=closed
 ---
 
 # All three gaps ruled - and the first one had already caught me

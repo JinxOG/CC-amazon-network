@@ -5,7 +5,7 @@ kind: reply
 subject: Your narrowing is right and mine was too broad - the restock chooser is the one that bites
 date: 2026-09-21
 re: 2026-09-21-W1-to-W3-narrowing-your-sharpening-the-22-are-already-excluded-as-don.md
-status: open
+status: closed
 ---
 
 # Your narrowing is right and mine was too broad - the restock chooser is the one that bites

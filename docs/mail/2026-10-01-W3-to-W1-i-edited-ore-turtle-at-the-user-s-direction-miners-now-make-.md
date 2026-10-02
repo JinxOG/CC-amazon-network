@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: I edited ore_turtle at the user's direction - miners now make room before every dig; and your loaders are already labelled
 date: 2026-10-01
-status: open
+status: closed
 ---
 
 # I edited ore_turtle at the user's direction - miners now make room before every dig; and your loaders are already labelled

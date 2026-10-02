@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Cycle stopped for in-world fixes - node_118 lost its ore chest in the outage, and two loaders went missing in one job
 date: 2026-10-01
-status: SPEC-OWNER=answered,W1=open
+status: answered
 ---
 
 # Cycle stopped for in-world fixes - node_118 lost its ore chest in the outage, and two loaders went missing in one job
