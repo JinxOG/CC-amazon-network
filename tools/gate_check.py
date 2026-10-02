@@ -13,6 +13,16 @@ failure this project keeps repeating.
 """
 import json, urllib.request, re, sys, collections, datetime, math
 
+# NO CHARACTER MAY CRASH THE GATE. The server's lines carry arrows and dashes;
+# the Windows console is cp1252. Until 2026-10-01 the first "Auto-respawn: x →"
+# line in a window raised UnicodeEncodeError inside [2e], and the run died there
+# -- [3], [4], [5] and the VERDICT never ran, the output simply stopped, and
+# exit 1 looked exactly like an honest NOT CLEAN. job_0109's gate was one.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 B = "http://192.168.86.35:3000"
 
 def get(u):
@@ -26,7 +36,25 @@ since = sys.argv[1] if len(sys.argv) > 1 else None
 if not since:
     print("need a since timestamp, e.g. 2026-09-14T19:47:00")
     sys.exit(2)
-jobs_of_interest = sys.argv[2:]
+
+# AN END BOUND THAT IS REAL. Until 2026-10-01 every argument after the first
+# was taken as a job id to filter on, so an end timestamp matched no job, was
+# dropped in silence, and the window ran from `since` to NOW. The spec owner
+# found it: a gate over 09:26-16:34 reported "over 201.9h" and counted
+# disconnects from later days. A window that widens without saying so can make
+# a clean job dirty, or a dirty one clean.
+#
+# Now a second argument that parses as a timestamp IS the end, and every log
+# query is clipped to it. Anything after it is still a job id.
+def _is_ts(a):
+    try:
+        datetime.datetime.fromisoformat(a.replace("Z", "+00:00"))
+        return True
+    except ValueError:
+        return False
+
+until = sys.argv[2] if len(sys.argv) > 2 and _is_ts(sys.argv[2]) else None
+jobs_of_interest = sys.argv[3:] if until else sys.argv[2:]
 
 # EVERY day from `since` to today, not just the day `since` falls on.
 # A job that crosses midnight lands its completion -- and its last sectors -- in
@@ -36,7 +64,7 @@ jobs_of_interest = sys.argv[2:]
 # order=head trap: it looked in the wrong place and said nothing was there.
 def days_from(iso):
     d0 = datetime.date.fromisoformat(iso[:10])
-    d1 = datetime.date.fromisoformat(
+    d1 = datetime.date.fromisoformat(until[:10]) if until else datetime.date.fromisoformat(
         get(f"{B}/state")["serverTime"] and
         datetime.datetime.fromtimestamp(
             get(f"{B}/state")["serverTime"] / 1000, datetime.UTC).date().isoformat())
@@ -60,12 +88,21 @@ def logs(query):
             r = get(q)
         except Exception:
             continue
-        lines.extend(r.get("lines", []))
-        matched += r.get("matched", 0)
+        got = r.get("lines", [])
+        if until:
+            # Clip to the end bound. "matched" is the server's count before the
+            # clip, so recount from what is kept or every count reads wide.
+            cut = p_ts(until if ("Z" in until or "+" in until[10:]) else until + "Z")
+            kept = [l for l in got if p_ts(l["ts"]) <= cut]
+            matched += len(kept) if len(got) < 5000 else r.get("matched", 0) - (len(got) - len(kept))
+            lines.extend(kept)
+        else:
+            lines.extend(got)
+            matched += r.get("matched", 0)
     return {"matched": matched, "lines": lines}
 
 print("=" * 72)
-print(f"RELEASE GATE CHECK   since {since}")
+print(f"RELEASE GATE CHECK   since {since}" + (f"   until {until}" if until else "   (to now)"))
 print("=" * 72)
 
 fails, notes = [], []
@@ -88,9 +125,15 @@ for label, q, fatal in (
     ("job retry",          "node=server&contains=%20retry%20",  True),
     ("idle-stuck rescue",  "contains=Idle-stuck",             True),
     ("sector returned",    "contains=returned%20to%20pending", True),
-    # 1.9.110: a zone whose miners all ended with sectors still to do. A
-    # replacement is queued, but the zone did not finish on what it was given.
-    ("zone left unmined",  "node=server&contains=unmined%20sector", True),
+    # 1.9.110: a zone whose miners all ended with sectors still to do. Counted
+    # separately below: since 1.9.121 the same warning is logged for every
+    # crew top-up, and a top-up that queued a replacement is the system working.
+    # PROTECTED HARDWARE MISSING AT BOOT. node_118 printed "slot 16 is empty"
+    # on its first boot after the 2026-09-30 outage and was then offered three
+    # jobs it could only refuse. Fatal, and cheap. It catches an EMPTY slot only;
+    # a slot holding the wrong thing is caught by the NEEDS HANDS line, which is
+    # an ERROR and so already counted above.
+    ("protected slot empty", "contains=expected%20protected%20item", True),
     # Kept last and non-fatal ON PURPOSE: the server logs its crash-log summary
     # at every boot, so this matches old news by design. Anything it catches
     # that the fatal checks above did not is worth a human glance, nothing more.
@@ -108,6 +151,35 @@ for label, q, fatal in (
     if n and n <= 5:
         for l in d["lines"][:5]:
             print(f"        {l['ts'][11:19]} {l['source']} {(l.get('msg') or '')[:100]}")
+
+# A ZONE LEFT UNMINED -- BUT ONLY IF NOTHING REPLACED THE MINER.
+#
+# respawnIfOrphaned logs "Zone ... left with N unmined sector(s)" and then, in
+# the same breath, "Auto-respawn: <new job> ... replaced <old job>". Since
+# 1.9.121 it does so for every crew top-up too, so job_0109's gate counted six
+# of these as fatal when each was followed by a replacement. Fatal only when no
+# Auto-respawn names the job that left the zone short.
+_um = logs("node=server&contains=unmined%20sector")["lines"]
+_rs = logs("node=server&contains=Auto-respawn")["lines"]
+_replaced = set()
+for l in _rs:
+    m = re.search(r"replaced (job_\d+)", l.get("msg") or "")
+    if m:
+        _replaced.add(m.group(1))
+_orphaned, _topped = [], 0
+for l in _um:
+    m = re.search(r"after (job_\d+)", l.get("msg") or "")
+    if m and m.group(1) in _replaced:
+        _topped += 1
+    else:
+        _orphaned.append(l)
+_flag = "  <-- FAULT" if _orphaned else ""
+print(f"    {'zone left unmined':<22}{len(_orphaned)}{_flag}"
+      f"   (replaced: {_topped} -- not a fault)")
+for l in _orphaned[:5]:
+    print(f"        {l['ts'][11:19]} {(l.get('msg') or '')[:100]}")
+if _orphaned:
+    fails.append(f"zone left unmined: {len(_orphaned)}")
 
 # ---- 2. repeated sectors ---------------------------------------------------
 print("\n[2] REPEATED SECTORS")
@@ -379,6 +451,13 @@ for l in sorted(resp, key=lambda x: p_ts(x["ts"]))[:5]:
 
 if judged == 0:
     notes.append("[2e] no mine job started AND finished in window -- proved nothing")
+elif not early and resp:
+    # job_0109, 2026-10-01: six top-ups after six failed jobs, under a note that
+    # said "the top-up was not exercised". It was -- on failures, not on early
+    # leaves. A note contradicting the number printed above it is worse than none.
+    notes.append("[2e] the top-up fired %d time(s) in %d mine job(s), after failed jobs "
+                 "rather than early leaves -- exercised, but not on the case this "
+                 "section exists for" % (len(resp), judged))
 elif not early:
     notes.append("[2e] no miner left a zone early in %d mine job(s) -- the top-up "
                  "was not exercised, which is not the same as it working" % judged)
