@@ -188,6 +188,7 @@ E_PASSES  = "the estimate covers the passes still to come, not just this one"
 E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
 E_LONG    = "a job cannot finish sooner than the longest sector one miner holds"
+R_FLIGHT  = "a recall is checked before departing and before the loader goes down (SOURCE-ONLY, weaker)"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -1035,6 +1036,11 @@ MUTANTS = [
 
     ('the stand-down is never set', 'ore_turtle.lua',
      [('            standDownUntil = os.clock() + 60\n', '')], D_MINER),
+    ("the pre-departure recall check is removed", "ore_turtle.lua",
+     [("        if base.isRecalled() then\n            base.sendProgress(\"recalled before departing for the sector\")\n", "        if false then\n            base.sendProgress(\"recalled before departing for the sector\")\n")], R_FLIGHT),
+
+    ("the loader-placement recall check is removed", "ore_turtle.lua",
+     [("        if base.isRecalled() then\n            base.sendProgress(\"recalled on arrival — not placing the loader\")\n", "        if false then\n            base.sendProgress(\"recalled on arrival — not placing the loader\")\n")], R_FLIGHT),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

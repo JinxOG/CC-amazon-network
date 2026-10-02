@@ -300,4 +300,38 @@ suite["a send with no modem at all is still lost, not fatal"] = function(assert_
     assert_eq(ok, true, "sendProgress raised: " .. tostring(err))
 end
 
+-- A recall must stop the miner BEFORE it commits to a sector.
+--
+-- 2026-09-22: node_119 logged "RECALL: job_cancelled" at 08:59, flew 1,700
+-- blocks anyway, placed its loader at 09:08 and began scanning -- nine minutes
+-- after being told to come home, with no job on the server. Between the two it
+-- was orphaned: nothing tracked it, and it deployed a chunk loader nobody
+-- expected. A second recall, sent once it was at work, was obeyed in a minute.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle.lua self-executes base.init at
+-- load and pcall(base.run)/os.reboot at the bottom, so its sector loop cannot
+-- be driven from this harness (see the note at the top of test_control_loop).
+-- This pins the two call sites by reading the file.
+suite["a recall is checked before departing and before the loader goes down (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+
+    -- Anchored on the sector loop's own progress line: setStatus(TRAVELLING)
+    -- appears more than once in this file, and the first one is not this path.
+    local travelAt = src:find("%sTravelling to sector %d,%d", 1, true)
+    assert_eq(travelAt ~= nil, true, "the sector travel call site moved or vanished")
+    local beforeTravel = src:sub(math.max(1, travelAt - 700), travelAt)
+    assert_eq(beforeTravel:find("if base.isRecalled() then", 1, true) ~= nil, true,
+        "a recalled miner must not set off for the sector at all")
+
+    local placeAt = src:find("mine_flow.placeLoader(FENCE_CHUNK_RADIUS", 1, true)
+    assert_eq(placeAt ~= nil, true, "the loader placement call site moved or vanished")
+    local beforePlace = src:sub(math.max(1, placeAt - 700), placeAt)
+    assert_eq(beforePlace:find("if base.isRecalled() then", 1, true) ~= nil, true,
+        "placing the loader is the point of no return: a recall that arrived "
+        .. "during the flight must be caught here, or the turtle is orphaned "
+        .. "with a chunk loader standing")
+end
+
 return suite
