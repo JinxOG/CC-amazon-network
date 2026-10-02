@@ -1004,6 +1004,7 @@ local function bypassForward()
         -- second turtle while routing around the first. Bail so the caller tries
         -- the other direction and then waits.
         if detectLayer() then
+            base.makeRoomBeforeDig()
             local dug, why = digGuarded(applyDir)
             if not dug then
                 if why == "would_dig_turtle" then
@@ -1025,6 +1026,7 @@ local function bypassForward()
             if fenceBlocksStep("forward") then break end
             if not turtle.forward() then
                 if isTurtleBlock("forward") then break end  -- another turtle, stop
+                base.makeRoomBeforeDig()
                 turtle.dig()                                -- terrain — dig it
                 sleep(0.2)
                 if fenceBlocksStep("forward") then break end
@@ -1222,6 +1224,7 @@ local function tryMove(moveFn, digFn, dir)
                 return false, "blocked (" .. dir .. ")"
             end
             if digFn and _self.canDig then
+                base.makeRoomBeforeDig()
                 digFn()
                 sleep(digAttempts <= 4 and 0.2 or 0.4)
             else
@@ -1745,6 +1748,51 @@ end
 -- nil by default: delivery and support keep exactly the behaviour they have.
 local _makeRoomFn = nil
 function base.setMakeRoomFn(fn) _makeRoomFn = fn end
+
+-- ROOM AT THE INSTANT OF EVERY DIG ON THE WAY SOMEWHERE (1.9.125).
+--
+-- A move digs whatever is in its path, and turtle.dig() with no room for the
+-- drop does not refuse: it breaks the block and throws the item on the ground.
+-- The miner checked its pack only before setting off for each ore, never on the
+-- way, so one long dig through stone filled the pack and every block after that
+-- landed on the floor of the mining zone -- where it never despawns, because
+-- the chunk unloads when the miner leaves. The user reported the lag on
+-- 2026-10-01; the same gap is how node_139 lost a loader climbing to it.
+--
+-- A role sets a function that makes room if room is short (the miner banks to
+-- its ore chest). It runs before every dig in a move. nil by default: delivery
+-- and support keep exactly the behaviour they have.
+--
+-- Guarded against re-entry: making room may itself dig (to place the chest),
+-- and must not recurse into another round of making room.
+function base.setDigRoomFn(fn) _self.digRoomFn = fn end
+
+function base.makeRoomBeforeDig()
+    if not _self.digRoomFn or _self.makingRoom then return end
+    _self.makingRoom = true
+    local ok, err = pcall(_self.digRoomFn)
+    _self.makingRoom = false
+    if not ok then
+        logWarn("Dig make-room hook failed (" .. tostring(err) .. ")")
+    end
+    -- Measured, not assumed: a dig with no empty slot anywhere may throw its
+    -- drop on the ground. Counted on every one, logged at most once a minute
+    -- with the count since the last line, so the gate can see whether any spill
+    -- is left after this fix.
+    for s = 1, 16 do
+        if turtle.getItemCount(s) == 0 then return end
+    end
+    _self.fullDigs = (_self.fullDigs or 0) + 1
+    local now = os.clock()
+    if now - (_self.fullDigLogAt or -math.huge) >= 60 then
+        _self.fullDigLogAt = now
+        logWarn(string.format(
+            "Digging with no empty slot at %d,%d,%d -- the drop may land on the ground "
+            .. "(%d such dig(s) since the last report)",
+            _self.pos.x, _self.pos.y, _self.pos.z, _self.fullDigs))
+        _self.fullDigs = 0
+    end
+end
 
 -- Quick scan of inventory slots 1-BURN_MAX for any loose burnable items (used on boot).
 -- Skips if already at max fuel to avoid wasting coal from previous runs.

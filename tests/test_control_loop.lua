@@ -1163,7 +1163,7 @@ function(assert_eq)
 
     -- The dump must never dig to make room: docked, the block below is the
     -- station chest, and destroying it to dump ore is worse than not dumping.
-    local defAt = src:find("dumpIfInventoryTight = function%(why%)")
+    local defAt = src:find("dumpIfInventoryTight = function%(why")
     assert_eq(defAt ~= nil, true, "dumpIfInventoryTight definition moved or vanished")
     local body = src:sub(defAt, defAt + 1400)
     assert_eq(body:find("turtle%.detectDown%(%)") ~= nil, true,
@@ -1549,7 +1549,7 @@ function(assert_eq)
     assert_eq(declAt < installAt, true,
         "the forward declaration must precede the hook closure or it captures a nil global")
 
-    local assignAt = src:find("\ndumpIfInventoryTight = function%(why%)")
+    local assignAt = src:find("\ndumpIfInventoryTight = function%(why")
     assert_eq(assignAt ~= nil, true,
         "dumpIfInventoryTight must be assigned to the forward-declared local, not redeclared")
     assert_eq(installAt < assignAt, true,

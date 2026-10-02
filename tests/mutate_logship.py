@@ -178,6 +178,12 @@ H_HB      = "the check reaches the bench through a real heartbeat"
 H_REG     = "the check reaches the bench through a real REGISTER"
 H_IDLE    = "a turtle reports its hardware only while idle and not busy (SOURCE-ONLY, weaker)"
 H_MINER   = "the miner's own check is its departure check, and notices a returned loader (SOURCE-ONLY, weaker)"
+D_BEFORE  = "the role's room hook runs before a move digs, while the block still stands"
+D_FAIL    = "a hook that fails does not stop the move"
+D_RECURSE = "making room cannot recurse into making room"
+D_ONCE    = "a dig with nowhere for the drop is logged, once a minute"
+D_ROOMY   = "a dig with room is not logged"
+D_MINER   = "the miner banks before a dig when under two slots are free (SOURCE-ONLY, weaker)"
 E_PASSES  = "the estimate covers the passes still to come, not just this one"
 E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
@@ -995,6 +1001,34 @@ MUTANTS = [
 
     ('a handed-back loader is never noticed', 'ore_turtle.lua',
      [('            lastClear = os.clock()\n            clearStaleLoaderRecord()\n', '            lastClear = os.clock()\n')], H_MINER),
+
+    # -- Room before every dig on the way somewhere (1.9.125) ----------------
+    ('a move digs without asking for room', 'turtle_base.lua',
+     [('                base.makeRoomBeforeDig()\n                digFn()\n', '                digFn()\n')], D_BEFORE),
+
+    ('room is made after the dig, when the drop is already on the floor', 'turtle_base.lua',
+     [('                base.makeRoomBeforeDig()\n                digFn()\n', '                digFn()\n                base.makeRoomBeforeDig()\n')], D_BEFORE),
+
+    ('a failing room hook takes the move down with it', 'turtle_base.lua',
+     [('    local ok, err = pcall(_self.digRoomFn)\n', '    local ok, err = true, _self.digRoomFn()\n')], D_FAIL),
+
+    ('making room recurses into making room', 'turtle_base.lua',
+     [('    if not _self.digRoomFn or _self.makingRoom then return end\n', '    if not _self.digRoomFn then return end\n')], D_RECURSE),
+
+    ('a full-pack dig is logged every time', 'turtle_base.lua',
+     [('    if now - (_self.fullDigLogAt or -math.huge) >= 60 then\n', '    if true then\n')], D_ONCE),
+
+    ('every dig is logged as a spill', 'turtle_base.lua',
+     [('        if turtle.getItemCount(s) == 0 then return end\n', '')], D_ROOMY),
+
+    ('a dump mid-move reports DUMPING and clears the comms gap', 'ore_turtle.lua',
+     [('    if not quiet then reportPhase(proto.PHASE.DUMPING) end\n', '    reportPhase(proto.PHASE.DUMPING)\n')], D_MINER),
+
+    ("the dig hook's threshold is ignored", 'ore_turtle.lua',
+     [('    if free >= (minFree or REFUEL_FREE_SLOTS) then return end\n', '    if free >= REFUEL_FREE_SLOTS then return end\n')], D_MINER),
+
+    ('the miner banks in the depot, digging the floor', 'ore_turtle.lua',
+     [('    if base.isInsideBuilding(base.getPos()) then return end\n    dumpIfInventoryTight("digging a path", 2, true)\n', '    dumpIfInventoryTight("digging a path", 2, true)\n')], D_MINER),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",

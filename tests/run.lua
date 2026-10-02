@@ -14,6 +14,7 @@ local files = {
     "tests.test_equipment",
     "tests.test_geofence",
     "tests.test_bypass_geofence",
+    "tests.test_dig_room",
     "tests.test_inbox",
     "tests.test_loader_state",
     "tests.test_loader_beacon",

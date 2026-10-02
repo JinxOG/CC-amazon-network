@@ -937,8 +937,12 @@ local function dumpToEC()
     turtle.select(S_ORE_EC)   -- rescueProtectedItems leaves its own slot selected
 end
 
-local function dumpOres()
-    reportPhase(proto.PHASE.DUMPING)
+-- quiet: bank without reporting the DUMPING phase. Used for a dump made in the
+-- middle of a move (base.setDigRoomFn), which can happen during the silent
+-- flight home -- reporting a phase there would clear the comms-gap flag the
+-- server relies on to not declare the turtle lost.
+local function dumpOres(quiet)
+    if not quiet then reportPhase(proto.PHASE.DUMPING) end
     withDigTool("ore dump", dumpToEC)
 end
 
@@ -1002,12 +1006,12 @@ local REFUEL_FREE_SLOTS = 4
 -- This narrows the window. It does not close it -- the drop can still happen
 -- before the miner reaches a dump point, and it does nothing for other roles.
 -- The whitelist in refuelFromChest is the real fix and belongs to W3.
-dumpIfInventoryTight = function(why)
+dumpIfInventoryTight = function(why, minFree, quiet)
     local free = 0
     for s = MINE_FIRST, MINE_LAST do
         if turtle.getItemCount(s) == 0 then free = free + 1 end
     end
-    if free >= REFUEL_FREE_SLOTS then return end
+    if free >= (minFree or REFUEL_FREE_SLOTS) then return end
 
     -- dumpToEC digs whatever is below to place the ore chest. That is fine in
     -- the field -- it is one block of stone -- but when the miner is docked the
@@ -1027,8 +1031,20 @@ dumpIfInventoryTight = function(why)
 
     print(string.format("[MINER] Dumping ore before %s — only %d free mining slot(s)",
         why, free))
-    dumpOres()
+    dumpOres(quiet)
 end
+
+-- BEFORE EVERY DIG ON THE WAY SOMEWHERE (1.9.125). The pack used to be checked
+-- only before setting off for each ore, so a long dig through stone could fill
+-- it mid-trip and every block after that went on the ground -- the item piles
+-- and the lag at the mining zones. Two free slots: one dig yields at most one
+-- new kind of item, so two is room with a margin, and it is the same line
+-- inventoryFull() draws, so the miner banks no more often than it did.
+-- Never in the depot: dumpToEC digs below to place the chest.
+base.setDigRoomFn(function()
+    if base.isInsideBuilding(base.getPos()) then return end
+    dumpIfInventoryTight("digging a path", 2, true)
+end)
 
 local function inventoryFull()
     local free = 0
