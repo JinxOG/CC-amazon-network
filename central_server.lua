@@ -325,6 +325,7 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
     if prev and prev.online ~= false then
         state.registry[id].dispatchBlockedUntil = prev.dispatchBlockedUntil
         state.registry[id].dispatchBlockReason  = prev.dispatchBlockReason
+        state.registry[id].needsHands           = prev.needsHands
     end
 
     logInfo(string.format("%s %s [%s] fuel=%d/%d dock=%s",
@@ -2132,6 +2133,51 @@ function jobQueue.complete(jobId)
     saveJobs()
 end
 
+-- ─── A turtle that needs hands ───────────────────────────────────────────────
+--
+-- A refusal for missing or wrong hardware -- a protected slot holding the wrong
+-- thing, or a loader recorded as still standing in the world -- is not cured
+-- by time. The turtle reports its OWN check (base.setHardwareCheck, sent while
+-- it is idle at its dock), and that report is what lifts the bench: the moment
+-- someone fixes it in the world, with no command and nobody having to remember.
+
+function registry.isHardwareFault(reason)
+    local r = tostring(reason or "")
+    return r:find("^slot_%d+_must_") ~= nil or r:find("^loader_outstanding") ~= nil
+end
+
+function registry.benchForHardware(id, reason)
+    local t = state.registry[id or ""]
+    if not t then return end
+    -- Loud, and once: a turtle reporting the same fault every heartbeat would
+    -- otherwise bury the log in it.
+    if t.needsHands ~= reason then
+        logError(string.format(
+            "NEEDS HANDS: %s — %s. Benched until it reports its own check passing; "
+            .. "fixing it in the world is enough, no command needed.", id, tostring(reason)))
+    end
+    t.needsHands           = reason
+    t.dispatchBlockReason  = reason
+    -- Far enough out to mean "until fixed", finite so it serialises cleanly.
+    t.dispatchBlockedUntil = os.epoch("utc") + 365 * 86400000
+end
+
+-- verdict is what the turtle's own check said: "ok", a fault reason, or nil
+-- when it did not check (busy, or a role with no check).
+function registry.applyHardware(id, verdict)
+    local t = state.registry[id or ""]
+    if not t or verdict == nil then return end
+    if verdict == "ok" then
+        if t.needsHands then
+            logInfo(string.format("%s passed its own hardware check — back in service (was: %s)",
+                id, tostring(t.needsHands)))
+            t.needsHands, t.dispatchBlockedUntil, t.dispatchBlockReason = nil, nil, nil
+        end
+    elseif registry.isHardwareFault(verdict) then
+        registry.benchForHardware(id, verdict)
+    end
+end
+
 function jobQueue.fail(jobId, reason, recoverable)
     local job = state.jobs[jobId]
     if not job then return end
@@ -2149,7 +2195,15 @@ function jobQueue.fail(jobId, reason, recoverable)
         -- the normal resolution and must not need a server restart to land.
         -- Cleared outright when the turtle re-registers, since a reboot is the
         -- other way these get fixed.
-        if recoverable == false then
+        -- Ruled 2026-10-01: a HARDWARE refusal is not fixed by waiting. node_118
+        -- lost its ore ender chest in the outage of 2026-09-30, was benched for
+        -- 600 s per refusal, and was offered work three more times in one job --
+        -- three wasted dispatches, three respawns. A hardware fault now benches
+        -- until the turtle's own check passes (registry.applyHardware); every
+        -- other refusal keeps the timed bench.
+        if recoverable == false and registry.isHardwareFault(reason) then
+            registry.benchForHardware(job.assignedTo, reason)
+        elseif recoverable == false then
             t.dispatchBlockedUntil = os.epoch("utc") + (CFG.DISPATCH_BLOCK_SEC * 1000)
             t.dispatchBlockReason  = reason or "unrecoverable failure"
             logWarn(string.format(
@@ -2880,6 +2934,7 @@ local handlers = {}
 handlers[proto.MSG.REGISTER] = function(msg)
     local p    = msg.payload
     local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob, p.awaitingSector, p.privateChannel)
+    registry.applyHardware(msg.from, p.hardware)
     -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
         ok       = true,
@@ -2926,6 +2981,7 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
             end
             if p.chunk    then t.chunk    = p.chunk    end
             if p.commsGap ~= nil then t.commsGap = p.commsGap end
+            registry.applyHardware(msg.from, p.hardware)
             -- Receiving a heartbeat at all is proof the planned comms gap is
             -- over: during a real one the miner's modem is physically off, so
             -- nothing can arrive. Without this, commsGap stays set from the
@@ -4835,6 +4891,9 @@ function server.run()
                 -- "only one turtle went out" so hard to explain.
                 blockReason = t.dispatchBlockReason or nil,
                 blockedUntil = t.dispatchBlockedUntil or nil,
+                -- Set only for a hardware fault: something only a person in the
+                -- world can fix. Distinct from a timed bench, which clears itself.
+                needsHands = t.needsHands or nil,
                 commsGap = t.commsGap and true or false,
                 -- Scalar, like everything else here. Step 2 of the channel
                 -- rollout is gated on every turtle showing one.

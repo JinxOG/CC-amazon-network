@@ -170,6 +170,14 @@ O_CRASH   = "a crash after the last sign of life is still reported as a crash"
 O_UPDATE  = "a restart into a new version is reported as an update"
 O_STAMP   = "the alive stamp records the time and the running version"
 O_FIRST   = "with no alive stamp yet, an old crash is not blamed for the restart"
+H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
+H_LOADER  = "an outstanding loader needs hands too"
+H_LIFT    = "the turtle's own passing check lifts the bench at once"
+H_ONCE    = "needs hands is logged once, not on every heartbeat"
+H_HB      = "the check reaches the bench through a real heartbeat"
+H_REG     = "the check reaches the bench through a real REGISTER"
+H_IDLE    = "a turtle reports its hardware only while idle and not busy (SOURCE-ONLY, weaker)"
+H_MINER   = "the miner's own check is its departure check, and notices a returned loader (SOURCE-ONLY, weaker)"
 E_PASSES  = "the estimate covers the passes still to come, not just this one"
 E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
@@ -770,8 +778,8 @@ MUTANTS = [
        "        if false then\n")], Z_LATE_RS),
 
     ("a completing job never checks for an orphaned zone", "central_server.lua",
-     [("    respawnIfOrphaned(jobId, job, state.miningZones[jobId])\n    state.miningZones[jobId] = nil\n    saveJobs()\nend\n\nfunction jobQueue.fail",
-       "    state.miningZones[jobId] = nil\n    saveJobs()\nend\n\nfunction jobQueue.fail")], Z_ORPHAN),
+     [("    respawnIfOrphaned(jobId, job, state.miningZones[jobId])\n    state.miningZones[jobId] = nil\n    saveJobs()\nend\n",
+       "    state.miningZones[jobId] = nil\n    saveJobs()\nend\n")], Z_ORPHAN),
 
     ("an orphaned zone is respawned silently", "central_server.lua",
      [('        "Zone %s left with %d unmined sector(s) after %s %s and %d of %d miner(s) on it",',
@@ -959,6 +967,34 @@ MUTANTS = [
 
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
+
+    # -- A turtle that needs hands (ruled 2026-10-01, 1.9.124) ---------------
+    ('a hardware refusal gets the ten-minute bench again', 'central_server.lua',
+     [('        if recoverable == false and registry.isHardwareFault(reason) then\n', '        if false then\n')], H_BENCH),
+
+    ('an outstanding loader is not a hardware fault', 'central_server.lua',
+     [('    return r:find("^slot_%d+_must_") ~= nil or r:find("^loader_outstanding") ~= nil\n', '    return r:find("^slot_%d+_must_") ~= nil\n')], H_LOADER),
+
+    ('a passing check does not lift the bench', 'central_server.lua',
+     [('            t.needsHands, t.dispatchBlockedUntil, t.dispatchBlockReason = nil, nil, nil\n', '')], H_LIFT),
+
+    ('needs hands is shouted on every report', 'central_server.lua',
+     [('    if t.needsHands ~= reason then\n', '    if true then\n')], H_ONCE),
+
+    ("the heartbeat ignores the turtle's check", 'central_server.lua',
+     [('            if p.commsGap ~= nil then t.commsGap = p.commsGap end\n            registry.applyHardware(msg.from, p.hardware)\n', '            if p.commsGap ~= nil then t.commsGap = p.commsGap end\n')], H_HB),
+
+    ("REGISTER ignores the turtle's check", 'central_server.lua',
+     [('p.awaitingSector, p.privateChannel)\n    registry.applyHardware(msg.from, p.hardware)\n', 'p.awaitingSector, p.privateChannel)\n')], H_REG),
+
+    ('a working turtle reports its hardware', 'turtle_base.lua',
+     [('    if not _self.hardwareCheck or _self.busy or _self.status ~= proto.STATUS.IDLE then\n', '    if not _self.hardwareCheck then\n')], H_IDLE),
+
+    ("the miner's check skips the strict slot check", 'ore_turtle.lua',
+     [('        local ok, why = preflightSlots()\n        if not ok then return why end\n', '')], H_MINER),
+
+    ('a handed-back loader is never noticed', 'ore_turtle.lua',
+     [('            lastClear = os.clock()\n            clearStaleLoaderRecord()\n', '            lastClear = os.clock()\n')], H_MINER),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",
@@ -1158,7 +1194,50 @@ def run_suite():
     return r.stdout + r.stderr
 
 
+# A RUN THAT IS KILLED LEAVES A MUTANT BEHIND, unless it leaves this too.
+#
+# Each mutation is reverted in a `finally`, and a killed process never reaches
+# one. Twice in two days (2026-09-28, 2026-10-01) a run was stopped mid-mutation
+# -- interrupted once, killed with its session once -- and left a source file
+# mutated in the working tree: on 09-28 turtle_base.lua with a REBOOT handler
+# rewritten, one commit away from shipping to the whole fleet.
+#
+# So the original is written here BEFORE a mutant touches the file, and removed
+# after the restore. If it is still here when a run starts, the last run was
+# killed mid-mutant, and the file it names is restored first.
+INFLIGHT = ".mutate_inflight.json"
+
+
+def heal_inflight():
+    import json, os
+    if not os.path.exists(INFLIGHT):
+        return False
+    with io.open(INFLIGHT, encoding="utf-8") as f:
+        rec = json.load(f)
+    io.open(rec["path"], "w", encoding="utf-8", newline="").write(rec["raw"])
+    os.remove(INFLIGHT)
+    print("RECOVERED  a previous run was killed mid-mutant (%s); %s restored "
+          "from its pre-mutation copy" % (rec.get("label", "?"), rec["path"]))
+    return True
+
+
 def main():
+    heal_inflight()
+
+    # OPTIONAL SELECTION: label substrings on the command line run only the
+    # mutants whose label contains one. With none, every mutant runs. The full
+    # set has outgrown a single command's time limit, which is what kept
+    # pushing it into the background where it could be killed.
+    only = sys.argv[1:]
+    selected = [m for m in MUTANTS if not only or any(o in m[0] for o in only)]
+    if only:
+        print("selected %d of %d mutants" % (len(selected), len(MUTANTS)))
+        # A selection that matches nothing has checked nothing, and must not
+        # print the line that means "every mutant was killed".
+        if not selected:
+            print("NO MUTANT MATCHED %r -- nothing was checked" % only)
+            return 1
+
     # THE BASELINE. Without it every verdict below is unsound.
     #
     # On 2026-09-10 an assertion in test_stall_witness.lua was already FAILING
@@ -1175,7 +1254,7 @@ def main():
         return 1
 
     problems = []
-    for label, path, steps, target in MUTANTS:
+    for label, path, steps, target in selected:
         # The RAW bytes, restored verbatim in the finally below. Reading in text
         # mode turns CRLF into LF, and writing that back left every mutated
         # file with rewritten line endings -- a phantom change git would then
@@ -1193,6 +1272,9 @@ def main():
             problems.append(f"MALFORMED  {label}: {bad} in {path}")
             continue
 
+        import json, os
+        with io.open(INFLIGHT, "w", encoding="utf-8") as f:
+            json.dump({"path": path, "raw": raw, "label": label}, f)
         io.open(path, "w", encoding="utf-8", newline="").write(mutated)
         try:
             ok, err = compiles(path)
@@ -1207,12 +1289,14 @@ def main():
                     f"SURVIVED   {label}: '{target}' stayed green; red were {red}")
         finally:
             io.open(path, "w", encoding="utf-8", newline="").write(raw)
+            if os.path.exists(INFLIGHT):
+                os.remove(INFLIGHT)
 
     print()
     if problems:
         print("\n".join(problems))
         return 1
-    print(f"{len(MUTANTS)} mutants, every one killed by its intended test")
+    print(f"{len(selected)} mutants, every one killed by its intended test")
     return 0
 
 

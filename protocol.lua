@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.123"
+proto.VERSION = "1.9.124"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -252,6 +252,7 @@ function proto.payloadHeartbeat(status, fuelLevel, position, jobId, extra)
         phase    = extra.phase,
         chunk    = extra.chunk,      -- { cx=, cz= } the miner is working in
         commsGap = extra.commsGap,   -- true while a deliberate gap is expected
+        hardware = extra.hardware,   -- the role's own fitness check, idle only
     }
 end
 

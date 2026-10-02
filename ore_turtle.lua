@@ -2249,6 +2249,33 @@ end
 
 initProtectedSlots()
 
+-- THE MINER'S OWN FITNESS CHECK (ruled 2026-10-01), reported while it is idle at
+-- its dock. Exactly the checks that refuse a job at departure -- preflightSlots,
+-- and a loader recorded as still standing in the world -- so a miner that cannot
+-- work is benched BEFORE it is offered work, and released as soon as someone
+-- fixes it. node_118 lost its ore chest in the outage of 2026-09-30 and was
+-- offered three jobs it could only refuse.
+--
+-- clearStaleLoaderRecord first, so a loader handed back is noticed without a
+-- reboot -- but at most once a minute: on one rare path it sends a progress
+-- message every call, and this runs on every idle heartbeat.
+base.setHardwareCheck((function()
+    local lastClear = -math.huge
+    return function()
+        local ok, why = preflightSlots()
+        if not ok then return why end
+        if os.clock() - lastClear >= 60 then
+            lastClear = os.clock()
+            clearStaleLoaderRecord()
+        end
+        if loader_state.hasPlaced() then
+            local s = loader_state.get()
+            return string.format("loader_outstanding at %d,%d,%d", s.x, s.y, s.z)
+        end
+        return "ok"
+    end
+end)())
+
 -- Wait for the GPS constellation before doing ANYTHING that moves.
 --
 -- turtle_base's initPosition falls back to "Tracking from (0,0,0)" when

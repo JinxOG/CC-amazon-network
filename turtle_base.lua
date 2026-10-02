@@ -113,6 +113,25 @@ function base.setSkyReturn(v)    _self.inSkyReturn = v    end
 -- false permanently, so tryMove's hold behaves exactly as it does today for
 -- delivery/support/warehouse turtles.
 function base.setAutonomousReturn(v) _self.autonomousReturn = v end
+
+-- A ROLE'S OWN FITNESS CHECK. A role that can be unfit to work -- a miner
+-- missing its ore chest, or with a loader still standing in the world -- sets a
+-- function returning "ok" or the reason it cannot work. It is reported in
+-- REGISTER and in every heartbeat, and the server benches or releases the
+-- turtle on it: released the moment it is fixed, with no reboot.
+function base.setHardwareCheck(fn) _self.hardwareCheck = fn end
+
+-- nil unless a check is set AND the turtle is idle. Idle ONLY: a working miner's
+-- ore chest is legitimately out of its slot while it dumps, and a check taken
+-- then would report that as missing hardware and bench a healthy turtle.
+function base.hardwareVerdict()
+    if not _self.hardwareCheck or _self.busy or _self.status ~= proto.STATUS.IDLE then
+        return nil
+    end
+    local ok, v = pcall(_self.hardwareCheck)
+    if ok and type(v) == "string" then return v end
+    return nil
+end
 function base.isAutonomousReturn()   return _self.autonomousReturn end
 
 -- Optional predicate consulted by tryMove's serverDown hold, once per sleep
@@ -2111,6 +2130,7 @@ local function register(maxAttempts)
             -- then keep sending there. Placed after awaitingSector so existing
             -- payload anchors keep their positions.
             privateChannel = OWN_CHANNEL,
+            hardware = base.hardwareVerdict(),
         })
 
         -- Waits for a REGISTER_ACK SPECIFICALLY, and routes anything else into
@@ -2493,7 +2513,8 @@ local function sendHeartbeat()
     -- version's wrong answer, shipped again one release later as the fix for it.
     local sent = comms.toServer(proto.MSG.HEARTBEAT, proto.payloadHeartbeat(
         _self.status, fuel.level(), base.getPos(), _self.jobId,
-        { phase = _self.phase, chunk = _self.chunk, commsGap = _self.commsGap }))
+        { phase = _self.phase, chunk = _self.chunk, commsGap = _self.commsGap,
+          hardware = base.hardwareVerdict() }))
     if not sent then _beatsUnsent = _beatsUnsent + 1 end
     _missedHeartbeats = _missedHeartbeats + 1
 

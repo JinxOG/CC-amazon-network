@@ -473,6 +473,143 @@ return {
         assert_eq(said ~= nil, true, "the newest one is still shown, labelled as undated")
     end,
 
+    -- A turtle that needs hands (ruled 2026-10-01, 1.9.124). -------------------
+    -- node_118 lost its ore chest in the 2026-09-30 outage and, benched for only
+    -- 600 s per refusal, was offered three jobs it could only refuse.
+    ["a hardware refusal benches until the turtle's own check passes, not for ten minutes"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local now = os.epoch("utc")
+        T.jobQueue.fail(JA, "slot_16_must_hold_the_ore_ender_chest", false)
+        local t = T.state.registry[A]
+        local hands, until_ = t.needsHands, t.dispatchBlockedUntil
+        restore()
+        assert_eq(hands, "slot_16_must_hold_the_ore_ender_chest", "the turtle is marked as needing hands")
+        assert_eq(until_ - now > 100 * 600 * 1000, true,
+            "and benched far past the 600 s that let node_118 be offered three more jobs")
+    end,
+
+    ["a refusal that time can fix keeps the ten-minute bench"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local now = os.epoch("utc")
+        T.jobQueue.fail(JA, "no_gps_fix: cannot confirm position, refusing to depart", false)
+        local t = T.state.registry[A]
+        local hands, until_ = t.needsHands, t.dispatchBlockedUntil
+        restore()
+        assert_eq(hands, nil, "no hardware is wrong, so nobody needs to go out")
+        assert_eq(until_ - now, T.CFG.DISPATCH_BLOCK_SEC * 1000, "the timed bench is unchanged")
+    end,
+
+    ["an outstanding loader needs hands too"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.jobQueue.fail(JA, "loader_outstanding at 1672,185,-2999", false)
+        local hands = T.state.registry[A].needsHands
+        restore()
+        assert_eq(hands, "loader_outstanding at 1672,185,-2999",
+            "node_119 refused every job for this until the loader was dealt with")
+    end,
+
+    ["the turtle's own passing check lifts the bench at once"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.jobQueue.fail(JA, "slot_16_must_hold_the_ore_ender_chest", false)
+        T.registry.applyHardware(A, "ok")
+        local t = T.state.registry[A]
+        local hands, until_, why = t.needsHands, t.dispatchBlockedUntil, t.dispatchBlockReason
+        restore()
+        assert_eq(hands, nil, "fixed in the world, and the next report says so")
+        assert_eq(until_, nil, "so it is dispatchable again, with no command")
+        assert_eq(why, nil)
+    end,
+
+    ["a turtle reporting a fault is benched before it is ever offered work"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.registry.applyHardware(A, "slot_16_must_hold_the_ore_ender_chest")
+        local hands = T.state.registry[A].needsHands
+        restore()
+        assert_eq(hands, "slot_16_must_hold_the_ore_ender_chest",
+            "caught at the dock, not after a dispatch and a respawn")
+    end,
+
+    ["needs hands is logged once, not on every heartbeat"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        for _ = 1, 3 do T.registry.applyHardware(A, "slot_16_must_hold_the_ore_ender_chest") end
+        local n = 0
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("NEEDS HANDS", 1, true) then n = n + 1 end
+        end
+        restore()
+        assert_eq(n, 1, "loud once; a turtle reports it every few seconds")
+    end,
+
+    ["a turtle that did not check leaves its bench as it was"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.jobQueue.fail(JA, "slot_16_must_hold_the_ore_ender_chest", false)
+        T.registry.applyHardware(A, nil)        -- busy, or a role with no check
+        local hands = T.state.registry[A].needsHands
+        restore()
+        assert_eq(hands, "slot_16_must_hold_the_ore_ender_chest",
+            "silence is not a passing check")
+    end,
+
+    ["the check reaches the bench through a real heartbeat"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local hb = T.handlers[proto.MSG.HEARTBEAT]
+        hb({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000,
+             hardware = "slot_16_must_hold_the_ore_ender_chest" } })
+        local benched = T.state.registry[A].needsHands
+        hb({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000, hardware = "ok" } })
+        local after = T.state.registry[A].needsHands
+        restore()
+        assert_eq(benched, "slot_16_must_hold_the_ore_ender_chest", "a heartbeat can bench")
+        assert_eq(after, nil, "and the next one, after the fix, releases")
+    end,
+
+    ["the check reaches the bench through a real REGISTER"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.handlers[proto.MSG.REGISTER]({ from = A, payload = {
+            role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+            position = { x = 0, y = 60, z = 0 },
+            hardware = "slot_16_must_hold_the_ore_ender_chest" } })
+        local hands = T.state.registry[A].needsHands
+        restore()
+        assert_eq(hands, "slot_16_must_hold_the_ore_ender_chest",
+            "node_118's first boot after the outage would have been benched right here")
+    end,
+
+    -- The turtle half cannot run headless here, so its two load-bearing lines
+    -- are pinned by source. Weaker than a behaviour test, and labelled so.
+    ["a turtle reports its hardware only while idle and not busy (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("turtle_base.lua", "r"); local src = f:read("a"); f:close()
+        local body = src:match("function base%.hardwareVerdict%(%)(.-)\nend")
+        assert_eq(body ~= nil, true, "base.hardwareVerdict exists")
+        assert_eq(body and body:find("_self.busy", 1, true) ~= nil, true,
+            "a working miner's ore chest is out of its slot while it dumps")
+        assert_eq(body and body:find("proto.STATUS.IDLE", 1, true) ~= nil, true)
+        local _, n = src:gsub("hardware = base%.hardwareVerdict%(%)", "")
+        assert_eq(n, 2, "carried in REGISTER and in the heartbeat")
+    end,
+
+    ["the miner's own check is its departure check, and notices a returned loader (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local block = src:match("base%.setHardwareCheck%((.-)\nend%)%(%)%)")
+        assert_eq(block ~= nil, true, "the miner sets a hardware check")
+        assert_eq(block and block:find("preflightSlots()", 1, true) ~= nil, true,
+            "the same strict check that refuses a job at departure")
+        assert_eq(block and block:find("clearStaleLoaderRecord()", 1, true) ~= nil, true,
+            "or a benched miner would never notice its loader being handed back")
+        assert_eq(block and block:find("loader_outstanding", 1, true) ~= nil, true)
+    end,
+
     ["the alive stamp records the time and the running version"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
