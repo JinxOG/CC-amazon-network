@@ -1041,10 +1041,32 @@ end
 -- new kind of item, so two is room with a margin, and it is the same line
 -- inventoryFull() draws, so the miner banks no more often than it did.
 -- Never in the depot: dumpToEC digs below to place the chest.
-base.setDigRoomFn(function()
-    if base.isInsideBuilding(base.getPos()) then return end
-    dumpIfInventoryTight("digging a path", 2, true)
-end)
+--
+-- A DUMP THAT FREES NOTHING IS NOT RETRIED BEFORE EVERY BLOCK. The dump keeps
+-- anything recorded as hardware, and node_139 recorded raw thorium as hardware:
+-- on 2026-10-01 it dumped four times in three minutes and had 0 free slots
+-- after every one. Without this the hook would place and lift the ore chest
+-- before every single block for the rest of the job. So after a dump that
+-- leaves under two slots free, it stands down for a minute and says why --
+-- loudly, because that turtle is spilling and only a person can fix it.
+base.setDigRoomFn((function()
+    local standDownUntil = -math.huge
+    return function()
+        if base.isInsideBuilding(base.getPos()) then return end
+        if os.clock() < standDownUntil then return end
+        dumpIfInventoryTight("digging a path", 2, true)
+        local free = 0
+        for s = MINE_FIRST, MINE_LAST do
+            if turtle.getItemCount(s) == 0 then free = free + 1 end
+        end
+        if free < 2 then
+            standDownUntil = os.clock() + 60
+            print(string.format(
+                "[MINER] WARNING: banking left %d free mining slot(s) -- the pack holds "
+                .. "items it will not bank; digs will spill until someone empties it", free))
+        end
+    end
+end)())
 
 local function inventoryFull()
     local free = 0

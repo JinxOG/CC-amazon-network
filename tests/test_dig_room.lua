@@ -180,12 +180,16 @@ return {
     ["the miner banks before a dig when under two slots are free (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
         local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
-        local block = src:match("base%.setDigRoomFn%(function%(%)(.-)\nend%)")
+        local block = src:match("base%.setDigRoomFn%(%(function%(%)(.-)\nend%)%(%)%)")
         assert_eq(block ~= nil, true, "the miner installs a dig room hook")
         assert_eq(block and block:find('dumpIfInventoryTight("digging a path", 2, true)', 1, true) ~= nil,
             true, "two free slots, and quiet")
         assert_eq(block and block:find("base.isInsideBuilding", 1, true) ~= nil, true,
             "never in the depot, where the dump would dig the floor")
+        assert_eq(block and block:find("if os.clock() < standDownUntil then return end", 1, true) ~= nil,
+            true, "a dump that freed nothing is not retried before every block")
+        assert_eq(block and block:find("standDownUntil = os.clock() + 60", 1, true) ~= nil, true,
+            "and the stand-down is set when the dump left the pack full")
         assert_eq(src:find("if not quiet then reportPhase(proto.PHASE.DUMPING) end", 1, true) ~= nil,
             true, "a quiet dump must not clear the comms-gap flag of a silent flight home")
         assert_eq(src:find("if free >= (minFree or REFUEL_FREE_SLOTS) then return end", 1, true) ~= nil,

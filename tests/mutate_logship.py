@@ -1028,7 +1028,13 @@ MUTANTS = [
      [('    if free >= (minFree or REFUEL_FREE_SLOTS) then return end\n', '    if free >= REFUEL_FREE_SLOTS then return end\n')], D_MINER),
 
     ('the miner banks in the depot, digging the floor', 'ore_turtle.lua',
-     [('    if base.isInsideBuilding(base.getPos()) then return end\n    dumpIfInventoryTight("digging a path", 2, true)\n', '    dumpIfInventoryTight("digging a path", 2, true)\n')], D_MINER),
+     [('        if base.isInsideBuilding(base.getPos()) then return end\n', '')], D_MINER),
+
+    ('a dump that frees nothing is retried before every block', 'ore_turtle.lua',
+     [('        if os.clock() < standDownUntil then return end\n', '')], D_MINER),
+
+    ('the stand-down is never set', 'ore_turtle.lua',
+     [('            standDownUntil = os.clock() + 60\n', '')], D_MINER),
 
     # -- The warehouse digest (1.9.115) --------------------------------------
     ("anyone may send a digest", "central_server.lua",
