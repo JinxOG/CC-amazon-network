@@ -15,6 +15,26 @@
 
 local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
 
+-- PINNED TO A COMMIT when the deploy named one (see proto.stageUpdateRef). A
+-- branch URL is cached for five minutes and can serve the previous release; a
+-- commit URL cannot. Read here, deleted when this run finishes either way. Not
+-- required from protocol.lua: the updater must work before that file exists.
+local REF
+if fs.exists("update_ref.txt") then
+    local f = fs.open("update_ref.txt", "r")
+    local body = f and f.readAll() or ""
+    if f then f.close() end
+    REF = body:match("^%s*(%x+)%s*$")
+    if REF and #REF ~= 40 then REF = nil end
+end
+if REF then
+    REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/" .. REF .. "/"
+    print("Pinned to commit " .. REF:sub(1, 10))
+end
+local function clearRef()
+    pcall(function() if fs.exists("update_ref.txt") then fs.delete("update_ref.txt") end end)
+end
+
 -- Files every computer needs
 local COMMON = {
     "protocol.lua",
@@ -296,6 +316,7 @@ if failed > 0 then
     print("Free space: " .. tostring(fs.getFreeSpace(".")) .. "B")
     print("Check HTTP APIs are enabled, and that the disk is not full.")
     print("NOT rebooting — fix errors first, then reboot manually.")
+    clearRef()
     -- Persisted because the caller reboots regardless of what we return, and the
     -- reboot wipes the terminal. Without this the only record of a failed update
     -- is a machine quietly running the wrong code.
@@ -309,6 +330,7 @@ if failed > 0 then
             -- to the count without a download reason, so the count can exceed
             -- the lines below; that is itself a clue.
             for i = 1, math.min(3, #failures) do f.write(failures[i] .. "\n") end
+            if REF then f.write("pinned to " .. REF .. "\n") end
             f.close()
         end
     end)
@@ -316,6 +338,7 @@ else
     -- Clear any marker from a previous failed run, so the server does not report
     -- a stale failure after a successful update.
     pcall(function() if fs.exists("update_failed.txt") then fs.delete("update_failed.txt") end end)
+    clearRef()
     print("\nAll files updated successfully!")
     print("Free space: " .. tostring(fs.getFreeSpace(".")) .. "B")
     print("Rebooting in 3 seconds...")

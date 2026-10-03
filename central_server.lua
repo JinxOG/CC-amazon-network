@@ -1214,21 +1214,24 @@ end
 -- 2026-09-22: it had no logship at all, which ships from 1.9.93, so it sat on
 -- pre-1.9.93 files while fifteen turtles moved on without it. It listens on
 -- CH_WAREHOUSE and runs updater.lua on UPDATE_ALL exactly as a turtle does.
-local function fanOutUpdateAll()
+-- ref: the commit the deploy named (proto.stageUpdateRef), or nil for master.
+-- A busy turtle keeps it in pendingUpdate and gets the same ref when it idles.
+local function fanOutUpdateAll(ref)
+    if not proto.isCommitRef(ref) then ref = nil end
     local nImmediate, nStaged = 0, 0
     for _, tr in pairs(state.registry) do
         if tr.online then
             if tr.status == proto.STATUS.IDLE then
-                sendTo(tr.id, proto.MSG.UPDATE_ALL, {})
+                sendTo(tr.id, proto.MSG.UPDATE_ALL, { ref = ref })
                 nImmediate = nImmediate + 1
             else
-                tr.pendingUpdate = true
+                tr.pendingUpdate = ref or true
                 nStaged = nStaged + 1
             end
         end
     end
     proto.send(state.modem, proto.CH_WAREHOUSE,
-        proto.encode(proto.MSG.UPDATE_ALL, "server", "warehouse", {}))
+        proto.encode(proto.MSG.UPDATE_ALL, "server", "warehouse", { ref = ref }))
     logInfo(string.format("UPDATE_ALL: sent to %d idle, queued for %d busy turtle(s), and to the warehouse",
         nImmediate, nStaged))
     return nImmediate, nStaged
@@ -3011,8 +3014,9 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         end
         -- Deliver any staged update now that the turtle is idle
         if t and t.pendingUpdate and t.status == proto.STATUS.IDLE then
+            local ref = type(t.pendingUpdate) == "string" and t.pendingUpdate or nil
             t.pendingUpdate = nil
-            sendTo(msg.from, proto.MSG.UPDATE_ALL, {})
+            sendTo(msg.from, proto.MSG.UPDATE_ALL, { ref = ref })
             logInfo("UPDATE_ALL: delivered to " .. msg.from .. " (now idle)")
         end
     else
@@ -4143,13 +4147,22 @@ end
 --
 -- So the command only stages the fan-out, in a file that survives the reboot.
 -- The new server arms it at boot and sends it once the turtles are back.
-function server.stageFanOut()
+-- ref: the commit the deploy named. It is kept in the marker so the fan-out
+-- after the reboot sends the same commit, and staged for this server's own
+-- updater, which runs moments later.
+function server.stageFanOut(ref)
+    if not proto.isCommitRef(ref) then ref = nil end
     local f = fs.open(CFG.FANOUT_FILE, "w")
-    if f then f.write(tostring(os.epoch("utc"))); f.close() end
+    if f then f.write(ref or "master"); f.close() end
+    proto.stageUpdateRef(ref)
 end
 
 function server.armFanOut(nowMs)
     if not fs.exists(CFG.FANOUT_FILE) then return end
+    local f = fs.open(CFG.FANOUT_FILE, "r")
+    local body = f and f.readAll() or ""
+    if f then f.close() end
+    state.fanOutRef = proto.isCommitRef(body) and body or nil
     state.fanOutDueAt = (nowMs or os.epoch("utc")) + CFG.FANOUT_DELAY_SEC * 1000
     logInfo(string.format(
         "Restarted for a deploy -- the fleet is sent UPDATE_ALL in %ds, once its turtles "
@@ -4160,7 +4173,7 @@ function server.fanOutIfDue(nowMs)
     if not state.fanOutDueAt or (nowMs or os.epoch("utc")) < state.fanOutDueAt then return end
     state.fanOutDueAt = nil
     pcall(fs.delete, CFG.FANOUT_FILE)
-    fanOutUpdateAll()
+    fanOutUpdateAll(state.fanOutRef)
 end
 
 -- The server's own update failed and it is staying on its old code. Sending
@@ -4566,7 +4579,7 @@ function server.run()
             -- The fleet is told AFTER the server restarts onto the new code --
             -- see server.stageFanOut. fanOutUpdateAll still does the sending,
             -- idle turtles at once and busy ones when they next report idle.
-            server.stageFanOut()
+            server.stageFanOut(p.ref)
 
             -- Flag for self-update; acted on in the http_success handler
             -- after the bridge response is fully processed.

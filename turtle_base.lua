@@ -2992,6 +2992,8 @@ function base.run(jobHandler)
             if _self.busy and _self.jobId then
                 base.sendFailed("update_all", false)
             end
+            -- Fetch the commit the deploy named, not whatever master's cache holds.
+            proto.stageUpdateRef(msg.payload and msg.payload.ref)
             sleep(1)
             if fs.exists("updater.lua") then
                 shell.run("updater")

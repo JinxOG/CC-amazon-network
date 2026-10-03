@@ -337,6 +337,8 @@ local function routeMsg(raw)
     -- ── Hard reboot ─────────────────────────────────────────────────────────
     if msg.type == proto.MSG.UPDATE_ALL then
         log("UPDATE_ALL — rebooting...")
+        -- The commit the deploy named; see proto.stageUpdateRef.
+        proto.stageUpdateRef(msg.payload and msg.payload.ref)
         sleep(1)
         if fs.exists("updater.lua") then shell.run("updater") else os.reboot() end
         return

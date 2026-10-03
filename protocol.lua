@@ -520,4 +520,33 @@ function proto.selfId()
     return "node_" .. tostring(os.getComputerID())
 end
 
+-- A DEPLOY NAMES ITS COMMIT, and every updater fetches from that commit.
+--
+-- updater.lua fetched .../master/<file> from raw.githubusercontent.com, which
+-- answers with Cache-Control: max-age=300. On 2026-10-03 a deploy made seconds
+-- after a push installed the PREVIOUS release on the server and all fifteen
+-- turtles, and a second deploy six minutes later still gave the server stale
+-- files. A URL naming a commit is immutable, so no cache can serve it stale.
+--
+-- The bridge knows the commit after its git pull and sends it with UPDATE_ALL;
+-- each computer writes it here just before running the updater, which reads it
+-- and deletes it. No ref (an older bridge, a manual run) means master, as before.
+proto.UPDATE_REF_FILE = "update_ref.txt"
+
+-- A full 40-hex commit id, and nothing else: it becomes part of a URL.
+function proto.isCommitRef(ref)
+    return type(ref) == "string" and #ref == 40 and ref:match("^%x+$") ~= nil
+end
+
+-- Write the ref for the updater, or remove a stale one. Returns whether pinned.
+function proto.stageUpdateRef(ref)
+    if proto.isCommitRef(ref) then
+        local f = fs.open(proto.UPDATE_REF_FILE, "w")
+        if f then f.write(ref); f.close(); return true end
+        return false
+    end
+    if fs.exists(proto.UPDATE_REF_FILE) then fs.delete(proto.UPDATE_REF_FILE) end
+    return false
+end
+
 return proto

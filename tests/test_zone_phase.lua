@@ -736,7 +736,7 @@ return {
         local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
         local branch = src:match('elseif t == "UPDATE_ALL" then(.-)pendingUpdate = true')
         assert_eq(branch ~= nil, true, "the UPDATE_ALL command branch exists")
-        assert_eq(branch and branch:find("server.stageFanOut()", 1, true) ~= nil, true,
+        assert_eq(branch and branch:find("server.stageFanOut(", 1, true) ~= nil, true,
             "it stages")
         assert_eq(branch and branch:find("fanOutUpdateAll()", 1, true) == nil, true,
             "and does not send before the restart")
@@ -772,6 +772,95 @@ return {
         assert_eq(up:find('noteFailure(src, httpErr or "no response")', 1, true) ~= nil, true)
         assert_eq(up:find("for i = 1, math.min(3, #failures) do f.write(failures[i]", 1, true) ~= nil,
             true, "and written where the turtle reads it")
+    end,
+
+    -- A deploy names its commit (2026-10-03). A deploy seconds after a push
+    -- installed the PREVIOUS release on the server and all fifteen turtles:
+    -- raw.githubusercontent caches master for five minutes. A commit URL cannot
+    -- be stale, so the deploy's commit goes to every updater.
+    ["a deploy that names its commit sends that commit to the whole fleet"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local REF = string.rep("ab12", 10)
+        T.state.registry[A].status = proto.STATUS.IDLE        -- B stays busy
+        server.stageFanOut(REF)
+        local ownRef = fs.open(proto.UPDATE_REF_FILE, "r")
+        local own = ownRef and ownRef.readAll()
+        server.armFanOut(1000)
+        server.fanOutIfDue(1000 + T.CFG.FANOUT_DELAY_SEC * 1000)
+        local toA = 0
+        for _, b in ipairs(T.sent) do
+            local body = tostring(b)
+            -- Addressed to A: the warehouse is sent the commit too, and must
+            -- not be able to stand in for the turtle here.
+            if body:find("UPDATE_ALL", 1, true) and body:find(REF, 1, true)
+                    and body:find(A, 1, true) then toA = toA + 1 end
+        end
+        local staged = T.state.registry[B].pendingUpdate
+        T.state.registry[B].status = proto.STATUS.IDLE
+        T.sent = {}
+        T.handlers[proto.MSG.HEARTBEAT]({ from = B, payload = {
+            status = proto.STATUS.IDLE, fuel = 100000 } })
+        local toB = false
+        for _, b in ipairs(T.sent) do
+            local body = tostring(b)
+            if body:find("UPDATE_ALL", 1, true) and body:find(REF, 1, true) then toB = true end
+        end
+        restore()
+        assert_eq(own, REF, "the server's own updater is pinned before it runs")
+        assert_eq(toA, 1, "the idle turtle is sent the commit")
+        assert_eq(staged, REF, "the busy turtle keeps it")
+        assert_eq(toB, true, "and is sent the same commit when it next reports idle")
+    end,
+
+    ["a malformed ref is never put in a URL"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        T.state.registry[A].status = proto.STATUS.IDLE
+        server.stageFanOut("../../evil/" .. string.rep("a", 29))
+        local pinned = fs.exists(proto.UPDATE_REF_FILE)
+        server.armFanOut(1000)
+        server.fanOutIfDue(1000 + T.CFG.FANOUT_DELAY_SEC * 1000)
+        local leaked = false
+        for _, b in ipairs(T.sent) do
+            if tostring(b):find("evil", 1, true) then leaked = true end
+        end
+        restore()
+        assert_eq(pinned, false, "the server's updater falls back to master")
+        assert_eq(leaked, false, "and nothing of it reaches a turtle")
+        assert_eq(proto.isCommitRef(string.rep("0", 40)), true)
+        assert_eq(proto.isCommitRef(string.rep("0", 39)), false, "short is not a commit")
+        assert_eq(proto.isCommitRef(string.rep("g", 40)), false, "not hex is not a commit")
+        assert_eq(proto.isCommitRef(nil), false)
+    end,
+
+    ["a deploy with no ref fetches master, as before, and clears a stale pin"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local f = fs.open(proto.UPDATE_REF_FILE, "w"); f.write(string.rep("c", 40)); f.close()
+        server.stageFanOut(nil)
+        local stale = fs.exists(proto.UPDATE_REF_FILE)
+        restore()
+        assert_eq(stale, false, "an old pin left on disk would install an old release")
+    end,
+
+    ["every updater reads the pin, and every computer writes it first (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local function src(n) local f = io.open(n, "r"); local s = f:read("a"); f:close(); return s end
+        local up = src("updater.lua")
+        assert_eq(up:find('REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/" .. REF .. "/"', 1, true) ~= nil,
+            true, "the updater fetches from the commit when pinned")
+        local _, clears = up:gsub("\n    clearRef%(%)", "")
+        assert_eq(clears, 2, "and drops the pin whether the run succeeds or fails")
+        for _, n in ipairs({ "turtle_base.lua", "warehouse.lua" }) do
+            local s = src(n)
+            local pinAt = s:find("proto.stageUpdateRef(msg.payload and msg.payload.ref)", 1, true)
+            local runAt = pinAt and s:find('shell.run("updater")', pinAt, true)
+            assert_eq(pinAt ~= nil and runAt ~= nil, true, n .. " pins before it runs the updater")
+        end
     end,
 
     ["the alive stamp records the time and the running version"] =

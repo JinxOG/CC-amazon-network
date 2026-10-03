@@ -188,6 +188,10 @@ V_ARRIVE  = "move.to still arrives after stepping aside"
 V_ORDER   = "a climber gives the descender time to move first"
 V_DEPOT   = "no turtle steps sideways near the depot, where the holes are shared on purpose"
 V_BOXED   = "a turtle boxed in by turtles does not step anywhere"
+C_SEND    = "a deploy that names its commit sends that commit to the whole fleet"
+C_BAD     = "a malformed ref is never put in a URL"
+C_STALE   = "a deploy with no ref fetches master, as before, and clears a stale pin"
+C_SRC     = "every updater reads the pin, and every computer writes it first (SOURCE-ONLY, weaker)"
 H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
 H_LOADER  = "an outstanding loader needs hands too"
 H_LIFT    = "the turtle's own passing check lifts the bench at once"
@@ -995,6 +999,31 @@ MUTANTS = [
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
 
+    # -- A deploy names its commit (2026-10-03) -------------------------------
+    ('the fan-out drops the commit', 'central_server.lua',
+     [('                sendTo(tr.id, proto.MSG.UPDATE_ALL, { ref = ref })\n', '                sendTo(tr.id, proto.MSG.UPDATE_ALL, {})\n')], C_SEND),
+
+    ('a busy turtle forgets the commit', 'central_server.lua',
+     [('                tr.pendingUpdate = ref or true\n', '                tr.pendingUpdate = true\n')], C_SEND),
+
+    ("the server's own updater is not pinned", 'central_server.lua',
+     [('    if f then f.write(ref or "master"); f.close() end\n    proto.stageUpdateRef(ref)\n', '    if f then f.write(ref or "master"); f.close() end\n')], C_SEND),
+
+    ('the reboot loses the commit', 'central_server.lua',
+     [('    state.fanOutRef = proto.isCommitRef(body) and body or nil\n', '    state.fanOutRef = nil\n')], C_SEND),
+
+    ('any string is a commit', 'protocol.lua',
+     [('    return type(ref) == "string" and #ref == 40 and ref:match("^%x+$") ~= nil\n', '    return type(ref) == "string"\n')], C_BAD),
+
+    ('a stale pin survives a deploy with no ref', 'protocol.lua',
+     [('    if fs.exists(proto.UPDATE_REF_FILE) then fs.delete(proto.UPDATE_REF_FILE) end\n    return false\n', '    return false\n')], C_STALE),
+
+    ('the updater ignores the pin', 'updater.lua',
+     [('    REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/" .. REF .. "/"\n', '    REPO = REPO\n')], C_SRC),
+
+    ('a turtle runs the updater unpinned', 'turtle_base.lua',
+     [('            proto.stageUpdateRef(msg.payload and msg.payload.ref)\n', '')], C_SRC),
+
     # -- A head-on meeting in a one-block shaft (job_0058) -------------------
     ('a vertical meeting waits out its 120 s again', 'turtle_base.lua',
      [('            if (dir == "down" or dir == "up") and not bypassAttempted\n', '            if false and not bypassAttempted\n')], V_STEP),
@@ -1026,16 +1055,16 @@ MUTANTS = [
 
     # -- A deploy tells the fleet after the server restarts (1.9.126) -------
     ('the deploy fans out before the server restarts', 'central_server.lua',
-     [('            server.stageFanOut()\n', '            fanOutUpdateAll()\n')], F_SRC),
+     [('            server.stageFanOut(p.ref)\n', '            fanOutUpdateAll()\n')], F_SRC),
 
     ('stageFanOut sends at once', 'central_server.lua',
-     [('    if f then f.write(tostring(os.epoch("utc"))); f.close() end\n', '    if f then f.write(tostring(os.epoch("utc"))); f.close() end\n    fanOutUpdateAll()\n')], F_STAGE),
+     [('    if f then f.write(ref or "master"); f.close() end\n', '    if f then f.write(ref or "master"); f.close() end\n    fanOutUpdateAll()\n')], F_STAGE),
 
     ('the staged fan-out is sent with no delay', 'central_server.lua',
      [('    state.fanOutDueAt = (nowMs or os.epoch("utc")) + CFG.FANOUT_DELAY_SEC * 1000\n', '    state.fanOutDueAt = (nowMs or os.epoch("utc"))\n')], F_SEND),
 
     ('the staged fan-out repeats', 'central_server.lua',
-     [('    state.fanOutDueAt = nil\n    pcall(fs.delete, CFG.FANOUT_FILE)\n    fanOutUpdateAll()\n', '    pcall(fs.delete, CFG.FANOUT_FILE)\n    fanOutUpdateAll()\n')], F_SEND),
+     [('    state.fanOutDueAt = nil\n    pcall(fs.delete, CFG.FANOUT_FILE)\n    fanOutUpdateAll(state.fanOutRef)\n', '    pcall(fs.delete, CFG.FANOUT_FILE)\n    fanOutUpdateAll(state.fanOutRef)\n')], F_SEND),
 
     ('the marker survives the fan-out', 'central_server.lua',
      [('    state.fanOutDueAt = nil\n    pcall(fs.delete, CFG.FANOUT_FILE)\n', '    state.fanOutDueAt = nil\n')], F_SEND),
