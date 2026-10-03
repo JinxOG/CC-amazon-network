@@ -203,6 +203,16 @@ function base.isInsideBuilding(pos)
         and pos.z >= BUILDING.minZ and pos.z <= BUILDING.maxZ
 end
 
+-- Within 32 blocks of the building's footprint, at ANY height: the dispatch and
+-- arrivals holes are one-block shafts that turtles queue in, and the sky return
+-- comes down a column over the arrivals hole. Nothing may step sideways here.
+function base.nearDepot(pos)
+    local m = 32
+    return pos.x >= BUILDING.minX - m and pos.x <= BUILDING.maxX + m
+        and pos.z >= BUILDING.minZ - m and pos.z <= BUILDING.maxZ + m
+end
+
+
 -- ─── Comms ───────────────────────────────────────────────────────────────────
 
 local comms = {}
@@ -1129,6 +1139,26 @@ local function waitReporter(what, now)
     end
 end
 
+-- One block sideways, whichever of the four sides is free: not fenced, not a
+-- turtle, and diggable if it is rock. Makes room before digging like any move.
+-- Returns true having moved; false having turned back to where it started.
+function base.sidestepOutOfColumn()
+    for _ = 1, 4 do
+        if not fenceBlocksStep("forward") and not isTurtleBlock("forward") then
+            if turtle.detect() and _self.canDig then
+                base.makeRoomBeforeDig()
+                digGuarded("forward")
+            end
+            if turtle.forward() then
+                applyMove("forward")
+                return true
+            end
+        end
+        move.turnRight()
+    end
+    return false
+end
+
 local function tryMove(moveFn, digFn, dir)
     -- Hold position while the server is unreachable so it does not lose track of
     -- us — except during a fixed-path sky return, or an autonomous return, where
@@ -1225,6 +1255,32 @@ local function tryMove(moveFn, digFn, dir)
                 bypassAttempted = true
                 if bypassForward() then
                     return true   -- position already updated inside bypassForward
+                end
+            end
+            -- A HEAD-ON MEETING IN A ONE-BLOCK SHAFT. job_0058, 2026-09-16:
+            -- node_139 climbing and node_138 descending met in one column, each
+            -- waited 120 s for the other, and the climber's job failed for good.
+            -- Forward meetings had a bypass; vertical ones had nothing.
+            --
+            -- One of them must yield, and they cannot talk, so the rule is by
+            -- direction: the DESCENDING turtle steps sideways after ~3 s. The
+            -- climber waits longer (~35 s) before doing the same, so a head-on
+            -- pair always resolves with the descender moving, and a climber under
+            -- something that will never move (a standing loader) still gets out.
+            --
+            -- Returns true having moved sideways, not vertically: move.to's
+            -- vertical loop simply asks again from the new column, and its X/Z
+            -- loops bring the turtle back afterwards. Never near the depot, whose
+            -- holes are one-block shafts turtles queue in on purpose.
+            if (dir == "down" or dir == "up") and not bypassAttempted
+                    and turtleWaits >= (dir == "down" and 6 or 20)
+                    and not base.nearDepot(_self.pos) then
+                bypassAttempted = true
+                if base.sidestepOutOfColumn() then
+                    logInfo(string.format(
+                        "Stepped out of a shared shaft to let a turtle pass (was moving %s), now at %d,%d,%d",
+                        dir, _self.pos.x, _self.pos.y, _self.pos.z))
+                    return true
                 end
             end
             -- Back off progressively: 0.5s → 1s → 1.5s → 2s (cap)

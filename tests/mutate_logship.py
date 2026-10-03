@@ -183,6 +183,11 @@ F_TSRC    = "the turtle carries its update failure, and the updater records the 
 P_MINED   = "mined material is not hardware, whatever slot it sits in"
 P_HW      = "every piece of miner hardware is hardware"
 P_INIT    = "the miner records only hardware as protected at boot (SOURCE-ONLY, weaker)"
+V_STEP    = "a descending turtle steps out of a shared shaft instead of waiting it out"
+V_ARRIVE  = "move.to still arrives after stepping aside"
+V_ORDER   = "a climber gives the descender time to move first"
+V_DEPOT   = "no turtle steps sideways near the depot, where the holes are shared on purpose"
+V_BOXED   = "a turtle boxed in by turtles does not step anywhere"
 H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
 H_LOADER  = "an outstanding loader needs hands too"
 H_LIFT    = "the turtle's own passing check lifts the bench at once"
@@ -989,6 +994,25 @@ MUTANTS = [
 
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
+
+    # -- A head-on meeting in a one-block shaft (job_0058) -------------------
+    ('a vertical meeting waits out its 120 s again', 'turtle_base.lua',
+     [('            if (dir == "down" or dir == "up") and not bypassAttempted\n', '            if false and not bypassAttempted\n')], V_STEP),
+
+    ('the climber yields as soon as the descender', 'turtle_base.lua',
+     [('                    and turtleWaits >= (dir == "down" and 6 or 20)\n', '                    and turtleWaits >= 6\n')], V_ORDER),
+
+    ('a turtle steps sideways at the depot', 'turtle_base.lua',
+     [('                    and not base.nearDepot(_self.pos) then\n', '                    then\n')], V_DEPOT),
+
+    # Two guards stop the side-step digging a turtle -- the turtle check before
+    # it and digGuarded inside it -- so removing either alone is an EQUIVALENT
+    # mutant. Removing both is the failure that matters.
+    ('the side-step digs a neighbouring turtle', 'turtle_base.lua',
+     [('        if not fenceBlocksStep("forward") and not isTurtleBlock("forward") then\n            if turtle.detect() and _self.canDig then\n                base.makeRoomBeforeDig()\n                digGuarded("forward")\n', '        if not fenceBlocksStep("forward") then\n            if turtle.detect() and _self.canDig then\n                base.makeRoomBeforeDig()\n                turtle.dig()\n')], V_BOXED),
+
+    ('a side-step reports failure', 'turtle_base.lua',
+     [('                        dir, _self.pos.x, _self.pos.y, _self.pos.z))\n                    return true\n', '                        dir, _self.pos.x, _self.pos.y, _self.pos.z))\n')], V_STEP),
 
     # -- Only hardware is protected at boot (2026-10-03) ----------------------
     ('anything is hardware', 'equipment.lua',
