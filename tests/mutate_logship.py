@@ -180,6 +180,9 @@ F_DROP    = "a failed server update does not send the fleet new code"
 F_SRC     = "the UPDATE_ALL command stages the fan-out, and a failed update drops it (SOURCE-ONLY, weaker)"
 F_REG     = "a turtle whose update failed says so, and why, at REGISTER"
 F_TSRC    = "the turtle carries its update failure, and the updater records the reason (SOURCE-ONLY, weaker)"
+P_MINED   = "mined material is not hardware, whatever slot it sits in"
+P_HW      = "every piece of miner hardware is hardware"
+P_INIT    = "the miner records only hardware as protected at boot (SOURCE-ONLY, weaker)"
 H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
 H_LOADER  = "an outstanding loader needs hands too"
 H_LIFT    = "the turtle's own passing check lifts the bench at once"
@@ -984,6 +987,16 @@ MUTANTS = [
 
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
+
+    # -- Only hardware is protected at boot (2026-10-03) ----------------------
+    ('anything is hardware', 'equipment.lua',
+     [('    if type(name) ~= "string" then return false end\n', '    if true then return true end\n')], P_MINED),
+
+    ('the ender chest is not hardware', 'equipment.lua',
+     [('    return name == "enderstorage:ender_chest" or name:find("entangled", 1, true) ~= nil\n', '    return false\n')], P_HW),
+
+    ('the boot record trusts the slot again', 'ore_turtle.lua',
+     [('        if item and not equipment.isHardwareItem(item.name) then\n', '        if false then\n')], P_INIT),
 
     # -- A deploy tells the fleet after the server restarts (1.9.126) -------
     ('the deploy fans out before the server restarts', 'central_server.lua',

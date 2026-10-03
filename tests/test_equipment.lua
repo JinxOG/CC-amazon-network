@@ -408,4 +408,36 @@ return {
         assert_eq(ok, true, reason)
         assert_eq(peripheral.find("modem") ~= nil, true, "modem now findable")
     end,
+
+    -- The planned restart of 2026-10-03: four miners rebooted mid-job recorded
+    -- the rock and ore in their open hardware slots as hardware, never banked it,
+    -- filled up and spilled. Hardware is decided by name, against the known list.
+    ["mined material is not hardware, whatever slot it sits in"] = function(assert_eq)
+        local eq = fresh(E_MINE(), fullInv({}))
+        for _, n in ipairs({ "minecraft:cobbled_deepslate", "minecraft:lapis_lazuli",
+                             "mekanism:raw_osmium", "minecraft:redstone", "minecraft:tuff",
+                             "electrodynamics:dustsulfur", "minecraft:ender_pearl" }) do
+            assert_eq(eq.isHardwareItem(n), false, n .. " was recorded as hardware on 2026-10-03")
+        end
+        assert_eq(eq.isHardwareItem(nil), false)
+    end,
+
+    ["every piece of miner hardware is hardware"] = function(assert_eq)
+        local eq = fresh(E_MINE(), fullInv({}))
+        for _, n in ipairs({ "advancedperipherals:geo_scanner", "computercraft:turtle_advanced",
+                             "minecraft:diamond_pickaxe", "advancedperipherals:chunk_controller",
+                             "computercraft:wireless_modem_advanced", "enderstorage:ender_chest" }) do
+            assert_eq(eq.isHardwareItem(n), true, n .. " must stay protected")
+        end
+    end,
+
+    ["the miner records only hardware as protected at boot (SOURCE-ONLY, weaker)"] = function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local body = src:match("local function initProtectedSlots%(%)(.-)\nend\n")
+        assert_eq(body ~= nil, true, "initProtectedSlots exists")
+        local guardAt = body and body:find("if item and not equipment.isHardwareItem(item.name) then", 1, true)
+        local recordAt = body and body:find("protectedItemNames[item.name] = s", 1, true)
+        assert_eq(guardAt ~= nil, true, "a slot's contents are checked before they are recorded")
+        assert_eq(recordAt ~= nil and guardAt < recordAt, true, "and the check comes first")
+    end,
 }

@@ -453,4 +453,25 @@ function equipment.reconcile()
     return true
 end
 
+-- IS THIS ITEM MINER HARDWARE AT ALL? Answered by name, against the known list.
+--
+-- ore_turtle's initProtectedSlots recorded WHATEVER sat in a protected slot at
+-- boot as hardware never to be banked. A miner rebooted mid-job has its loader
+-- standing in the world and its swap slot open, both filled by whatever it was
+-- digging -- so in the planned restart of 2026-10-03 all four miners recorded
+-- ore and rock as hardware (cobbled deepslate, lapis, raw osmium, redstone,
+-- tuff, sulfur dust), refused to bank them for the rest of the job, filled up,
+-- and spilled. node_119 then dug its loader with no room and lost it. node_139
+-- had done the same with raw thorium on 2026-10-01.
+--
+-- The two ender chests share one registry name with each other, and an
+-- entangled chest stands in for one in some builds; both are hardware.
+function equipment.isHardwareItem(name)
+    if type(name) ~= "string" then return false end
+    for _, n in pairs(I) do
+        if n == name then return true end
+    end
+    return name == "enderstorage:ender_chest" or name:find("entangled", 1, true) ~= nil
+end
+
 return equipment

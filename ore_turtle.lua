@@ -716,7 +716,15 @@ end
 local function initProtectedSlots()
     for _, s in ipairs({ S_SCANNER, S_LOADER, S_TOOL, S_MODEM, S_FUEL_EC, S_ORE_EC }) do
         local item = turtle.getItemDetail(s)
-        if item then
+        if item and not equipment.isHardwareItem(item.name) then
+            -- Mined material sitting in a hardware slot -- a reboot mid-job,
+            -- with the loader out and the swap slot open. NOT recorded: a name
+            -- recorded here is never banked again, and on 2026-10-03 that filled
+            -- all four miners with deepslate until they spilled and one lost its
+            -- loader. Left unrecorded, the next dump banks it like any ore.
+            print(string.format("[INIT] Slot %d holds %s -- not hardware, so it will be banked, "
+                .. "not protected", s, item.name))
+        elseif item then
             protectedItemNames[item.name] = s   -- last-write-wins; used only for boolean "is protected?" checks
             protectedSlotNames[s] = item.name   -- slot → name; authoritative for rescue
             print(string.format("[INIT] Protected slot %d: %s", s, item.name))
