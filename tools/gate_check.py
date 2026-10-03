@@ -344,6 +344,15 @@ for l in logs("node=server&contains=job_").get("lines", []):
     m = re.search(r"Job (?:complete|permanently failed): (job_\d+)", l.get("msg") or "")
     if m and m.group(1) in job_node:
         ends.append((p_ts(l["ts"]), "end", job_node[m.group(1)], ""))
+# A miner rebooted mid-job abandons its sector the moment it reports boot
+# recovery: the server requeues the job then (1.9.122) and the miner flies home.
+# Without this its hold ran on until its NEXT order -- after the 2026-10-03
+# planned restart node_139 "held" (1696,-3072) until 08:58, overlapping the miner
+# given it at 08:57, though node_139 had left it at 08:40. A false fault.
+for l in logs("node=server&contains=recovering%20from%20a%20reboot").get("lines", []):
+    m = re.search(r"(node_\d+) is recovering from a reboot", l.get("msg") or "")
+    if m:
+        ends.append((p_ts(l["ts"]), "end", m.group(1), ""))
 
 def overlapping(starts):
     """starts: (ts, node, sector). Returns (holds, clashes)."""
