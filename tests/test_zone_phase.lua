@@ -343,6 +343,55 @@ return {
             "its radio silence is given the length of a flight home, not a 60 s swap")
     end,
 
+    -- The planned outage of 2026-10-03. A rebooted miner's OWN status is IDLE --
+    -- it is flying home, not running a job -- and its modem stays on for the
+    -- climb to its loader. Those IDLE heartbeats overwrote RETURNING within two
+    -- minutes and every miner was sent a job it could not hear.
+    ["a miner flying home after a reboot stays RETURNING through its own IDLE heartbeats"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            jobId = JA, phase = proto.PHASE.RETRIEVING,
+            detail = "boot recovery — loader at 1704,185,-3095" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = {
+            status = proto.STATUS.IDLE, fuel = 100000, phase = proto.PHASE.RETRIEVING } })
+        local status = T.state.registry[A].status
+        local offered = false
+        for _, t in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+            if t.id == A then offered = true end
+        end
+        restore()
+        assert_eq(status, proto.STATUS.RETURNING, "its IDLE is not believed until it docks")
+        assert_eq(offered, false, "so it is never offered a job it cannot hear")
+    end,
+
+    ["docking ends it: the miner is idle and dispatchable at once"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            jobId = JA, phase = proto.PHASE.RETRIEVING,
+            detail = "boot recovery — loader at 1704,185,-3095" } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = { phase = proto.PHASE.DOCKED } })
+        local status, flag = T.state.registry[A].status, T.state.registry[A].homeAfterReboot
+        restore()
+        assert_eq(status, proto.STATUS.IDLE, "home, so the requeued work can go out on this tick")
+        assert_eq(flag, nil, "and its next IDLE heartbeat is believed")
+    end,
+
+    ["a DOCKED heartbeat ends it too, if the phase report was lost"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            jobId = JA, phase = proto.PHASE.RETRIEVING,
+            detail = "boot recovery — loader at 1704,185,-3095" } })
+        local hb = T.handlers[proto.MSG.HEARTBEAT]
+        hb({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000, phase = proto.PHASE.DOCKED } })
+        hb({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000, phase = proto.PHASE.DOCKED } })
+        local status = T.state.registry[A].status
+        restore()
+        assert_eq(status, proto.STATUS.IDLE, "or a lost DOCKED report would bench it forever")
+    end,
+
     ["an ordinary loader swap mid-job is NOT treated as boot recovery"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })

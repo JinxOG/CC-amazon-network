@@ -170,6 +170,9 @@ O_CRASH   = "a crash after the last sign of life is still reported as a crash"
 O_UPDATE  = "a restart into a new version is reported as an update"
 O_STAMP   = "the alive stamp records the time and the running version"
 O_FIRST   = "with no alive stamp yet, an old crash is not blamed for the restart"
+R_STAY    = "a miner flying home after a reboot stays RETURNING through its own IDLE heartbeats"
+R_DOCK    = "docking ends it: the miner is idle and dispatchable at once"
+R_HBDOCK  = "a DOCKED heartbeat ends it too, if the phase report was lost"
 H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
 H_LOADER  = "an outstanding loader needs hands too"
 H_LIFT    = "the turtle's own passing check lifts the bench at once"
@@ -974,6 +977,22 @@ MUTANTS = [
 
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
+
+    # -- Home after a reboot means RETURNING until DOCKED (2026-10-03) -------
+    ('a rebooted miner is never flagged as homebound', 'central_server.lua',
+     [('            t.homeAfterReboot = true\n', '')], R_STAY),
+
+    ("a homebound miner's IDLE heartbeat is believed", 'central_server.lua',
+     [('    if t.homeAfterReboot and status == proto.STATUS.IDLE then status = nil end\n', '')], R_STAY),
+
+    ('a DOCKED report leaves the miner RETURNING', 'central_server.lua',
+     [('            if t.status == proto.STATUS.RETURNING then t.status = proto.STATUS.IDLE end\n', '')], R_DOCK),
+
+    ('a DOCKED report never clears the flag', 'central_server.lua',
+     [('        if t.homeAfterReboot then\n            t.homeAfterReboot = nil\n', '        if t.homeAfterReboot then\n')], R_DOCK),
+
+    ('a DOCKED heartbeat never clears the flag', 'central_server.lua',
+     [('                    t.homeAfterReboot = nil   -- home: its IDLE means idle again\n', '')], R_HBDOCK),
 
     # -- A turtle that needs hands (ruled 2026-10-01, 1.9.124) ---------------
     ('a hardware refusal gets the ten-minute bench again', 'central_server.lua',

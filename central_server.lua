@@ -418,6 +418,10 @@ function registry.update(id, status, fuel, position, jobId, version)
     -- at its own dock, fully fuelled, while dispatch reported idle=0 every minute.
     if status then t.reportedStatus = status end
 
+    -- A miner flying home after a reboot is not idle, whatever it reports:
+    -- see handleMinePhase's boot recovery. Only DOCKED ends it.
+    if t.homeAfterReboot and status == proto.STATUS.IDLE then status = nil end
+
     -- Guard: if the server has an ASSIGNED/IN_PROGRESS job for this turtle, don't
     -- let a stale IDLE heartbeat (sent before JOB_ASSIGN is received) overwrite
     -- the server-side assignment and re-open the turtle for a second dispatch.
@@ -2977,7 +2981,10 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
                 -- Terminal phase: docked and idle again, so the last chunk it
                 -- worked is stale from here on. Mirrors the same check in
                 -- handleMinePhase() for the MINE_PHASE-message delivery path.
-                if p.phase == proto.PHASE.DOCKED then t.chunk = nil end
+                if p.phase == proto.PHASE.DOCKED then
+                    t.chunk = nil
+                    t.homeAfterReboot = nil   -- home: its IDLE means idle again
+                end
             end
             if p.chunk    then t.chunk    = p.chunk    end
             if p.commsGap ~= nil then t.commsGap = p.commsGap end
@@ -3577,6 +3584,13 @@ local function handleMinePhase(msg)
     -- the phase-report path instead of JOB_COMPLETE.
     if p.phase == proto.PHASE.DOCKED then
         t.chunk = nil
+        -- Home after a reboot: from here its IDLE means idle. Set to IDLE now
+        -- rather than waiting for the next heartbeat, so its zone's requeued
+        -- job can go out on this dispatch tick.
+        if t.homeAfterReboot then
+            t.homeAfterReboot = nil
+            if t.status == proto.STATUS.RETURNING then t.status = proto.STATUS.IDLE end
+        end
     end
     jobQueue.progress(p.jobId, proto.STATUS.WORKING,
         string.format("phase %s%s", p.phase, p.detail and (" — " .. p.detail) or ""))
@@ -3610,6 +3624,15 @@ local function handleMinePhase(msg)
                 msg.from, jid))
             jobQueue.reassign(jid, msg.from, "boot_recovery")
             t.status = proto.STATUS.RETURNING
+            -- RETURNING until it reports DOCKED, whatever its heartbeats say.
+            -- A rebooted miner's own status is IDLE -- it is not running a job,
+            -- it is flying home -- and its modem stays on for the climb to its
+            -- loader. In the planned outage of 2026-10-03 those IDLE heartbeats
+            -- overwrote RETURNING within two minutes and every miner was sent a
+            -- job it could not hear (ACK timeouts at 02:13). registry.update
+            -- reads this flag; DOCKED clears it, and a REGISTER starts a fresh
+            -- entry without it.
+            t.homeAfterReboot = true
         end
     end
 end
