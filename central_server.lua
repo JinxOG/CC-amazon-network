@@ -61,6 +61,11 @@ local CFG = {
     -- crash.log entry belongs to THIS restart or to some earlier one.
     ALIVE_FILE        = "alive.stamp",
     ALIVE_INTERVAL    = 60,
+    -- A deploy's fleet update waits for the server's own restart: see
+    -- server.stageFanOut. The marker survives the reboot; the delay lets the
+    -- turtles re-register first, so the fan-out finds them online.
+    FANOUT_FILE       = "update_fanout.pending",
+    FANOUT_DELAY_SEC  = 45,
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -2939,6 +2944,12 @@ handlers[proto.MSG.REGISTER] = function(msg)
     local p    = msg.payload
     local dock, reSendJob, reSendSector = registry.register(msg.from, p.role, p.fuel, p.fuelMax, p.position, p.midJob, p.awaitingSector, p.privateChannel)
     registry.applyHardware(msg.from, p.hardware)
+    -- Its last update failed and it is running old code. Said at every
+    -- REGISTER until an update succeeds (the updater then deletes the file).
+    if type(p.updateFailed) == "string" then
+        logError(string.format("UPDATE FAILED on %s, still on its old code: %s",
+            msg.from, (p.updateFailed:gsub("%s+$", ""):gsub("\n", " | "))))
+    end
     -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
         ok       = true,
@@ -4119,6 +4130,48 @@ function server.writeAliveStamp(nowMs)
     end
 end
 
+-- THE FLEET UPDATES AFTER THE SERVER HAS RESTARTED, NOT BEFORE.
+--
+-- An UPDATE_ALL used to fan out to the turtles first and restart the server
+-- three seconds later. Each turtle's updater downloads for ~20 s; the server
+-- vanished mid-download, the turtle's reconnect abandoned the half-run updater
+-- without a word, and the turtle carried on on its old code. 1.9.122 and
+-- 1.9.123 each reached ONE turtle of fifteen (2026-09-30, 10-01: all fifteen
+-- logged "UPDATE_ALL received" at 00:50:34; only node_145, the fastest, ever
+-- rebooted). A second UPDATE_ALL always worked -- because by then the server
+-- had nothing left to restart for.
+--
+-- So the command only stages the fan-out, in a file that survives the reboot.
+-- The new server arms it at boot and sends it once the turtles are back.
+function server.stageFanOut()
+    local f = fs.open(CFG.FANOUT_FILE, "w")
+    if f then f.write(tostring(os.epoch("utc"))); f.close() end
+end
+
+function server.armFanOut(nowMs)
+    if not fs.exists(CFG.FANOUT_FILE) then return end
+    state.fanOutDueAt = (nowMs or os.epoch("utc")) + CFG.FANOUT_DELAY_SEC * 1000
+    logInfo(string.format(
+        "Restarted for a deploy -- the fleet is sent UPDATE_ALL in %ds, once its turtles "
+        .. "have re-registered", CFG.FANOUT_DELAY_SEC))
+end
+
+function server.fanOutIfDue(nowMs)
+    if not state.fanOutDueAt or (nowMs or os.epoch("utc")) < state.fanOutDueAt then return end
+    state.fanOutDueAt = nil
+    pcall(fs.delete, CFG.FANOUT_FILE)
+    fanOutUpdateAll()
+end
+
+-- The server's own update failed and it is staying on its old code. Sending
+-- the fleet new code now would leave it ahead of the server, so it is not sent.
+function server.dropFanOut()
+    if not fs.exists(CFG.FANOUT_FILE) then return end
+    pcall(fs.delete, CFG.FANOUT_FILE)
+    logError("The fleet was NOT sent UPDATE_ALL: the server's own update failed, and "
+        .. "turtles ahead of their server is worse than both behind.")
+end
+
 function server.run()
     state.modem = peripheral.find("modem")
     if not state.modem then
@@ -4510,10 +4563,10 @@ function server.run()
             server.recallAll(p.reason or "admin_recall")
 
         elseif t == "UPDATE_ALL" then
-            -- Staged update: send immediately to IDLE turtles only.
-            -- Busy turtles (miners underground, mid-delivery) are flagged and
-            -- will receive UPDATE_ALL the next time they heartbeat in as IDLE.
-            fanOutUpdateAll()
+            -- The fleet is told AFTER the server restarts onto the new code --
+            -- see server.stageFanOut. fanOutUpdateAll still does the sending,
+            -- idle turtles at once and busy ones when they next report idle.
+            server.stageFanOut()
 
             -- Flag for self-update; acted on in the http_success handler
             -- after the bridge response is fully processed.
@@ -5226,6 +5279,8 @@ function server.run()
 
     -- Say why the previous run ended. See server.bootReport.
     pcall(server.bootReport)
+    -- A deploy's fleet update, staged before the restart. See server.stageFanOut.
+    pcall(server.armFanOut)
     W.loadDockAssignments()
     loadJobs()
     loadPersistentZones()
@@ -5598,6 +5653,7 @@ function server.run()
                                 logError("UPDATE FAILED — NOT rebooting. This server is still "
                                     .. "running its previous code; see update_failed.txt. "
                                     .. "Free disk space and re-run 'updater'.")
+                                server.dropFanOut()
                             else
                                 os.reboot()
                             end
@@ -5764,6 +5820,7 @@ function server.run()
                 pcall(server.writeAliveStamp, wc)
                 state.lastAliveWC = wc
             end
+            pcall(server.fanOutIfDue)
 
             -- RS storage — this is the one that actually bit us. storageTimer
             -- re-arms only inside its own handler, so a single dropped timer

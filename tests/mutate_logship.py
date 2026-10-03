@@ -173,6 +173,13 @@ O_FIRST   = "with no alive stamp yet, an old crash is not blamed for the restart
 R_STAY    = "a miner flying home after a reboot stays RETURNING through its own IDLE heartbeats"
 R_DOCK    = "docking ends it: the miner is idle and dispatchable at once"
 R_HBDOCK  = "a DOCKED heartbeat ends it too, if the phase report was lost"
+F_STAGE   = "a deploy stages the fleet update instead of sending it"
+F_SEND    = "the restarted server sends the staged update once its turtles are back"
+F_NONE    = "a boot with nothing staged sends nothing"
+F_DROP    = "a failed server update does not send the fleet new code"
+F_SRC     = "the UPDATE_ALL command stages the fan-out, and a failed update drops it (SOURCE-ONLY, weaker)"
+F_REG     = "a turtle whose update failed says so, and why, at REGISTER"
+F_TSRC    = "the turtle carries its update failure, and the updater records the reason (SOURCE-ONLY, weaker)"
 H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
 H_LOADER  = "an outstanding loader needs hands too"
 H_LIFT    = "the turtle's own passing check lifts the bench at once"
@@ -977,6 +984,40 @@ MUTANTS = [
 
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
+
+    # -- A deploy tells the fleet after the server restarts (1.9.126) -------
+    ('the deploy fans out before the server restarts', 'central_server.lua',
+     [('            server.stageFanOut()\n', '            fanOutUpdateAll()\n')], F_SRC),
+
+    ('stageFanOut sends at once', 'central_server.lua',
+     [('    if f then f.write(tostring(os.epoch("utc"))); f.close() end\n', '    if f then f.write(tostring(os.epoch("utc"))); f.close() end\n    fanOutUpdateAll()\n')], F_STAGE),
+
+    ('the staged fan-out is sent with no delay', 'central_server.lua',
+     [('    state.fanOutDueAt = (nowMs or os.epoch("utc")) + CFG.FANOUT_DELAY_SEC * 1000\n', '    state.fanOutDueAt = (nowMs or os.epoch("utc"))\n')], F_SEND),
+
+    ('the staged fan-out repeats', 'central_server.lua',
+     [('    state.fanOutDueAt = nil\n    pcall(fs.delete, CFG.FANOUT_FILE)\n    fanOutUpdateAll()\n', '    pcall(fs.delete, CFG.FANOUT_FILE)\n    fanOutUpdateAll()\n')], F_SEND),
+
+    ('the marker survives the fan-out', 'central_server.lua',
+     [('    state.fanOutDueAt = nil\n    pcall(fs.delete, CFG.FANOUT_FILE)\n', '    state.fanOutDueAt = nil\n')], F_SEND),
+
+    ('every boot fans out', 'central_server.lua',
+     [('    if not fs.exists(CFG.FANOUT_FILE) then return end\n    state.fanOutDueAt', '    state.fanOutDueAt')], F_NONE),
+
+    ('a failed server update keeps the staged fan-out', 'central_server.lua',
+     [('    if not fs.exists(CFG.FANOUT_FILE) then return end\n    pcall(fs.delete, CFG.FANOUT_FILE)\n    logError(', '    if not fs.exists(CFG.FANOUT_FILE) then return end\n    logError(')], F_DROP),
+
+    ('a failed server update never drops the fan-out', 'central_server.lua',
+     [('                                server.dropFanOut()\n', '')], F_SRC),
+
+    ("a turtle's update failure is not logged", 'central_server.lua',
+     [('    if type(p.updateFailed) == "string" then\n', '    if false then\n')], F_REG),
+
+    ('REGISTER does not carry the update failure', 'turtle_base.lua',
+     [('            updateFailed = base.readUpdateFailed(),\n', '')], F_TSRC),
+
+    ('the updater discards the HTTP reason again', 'updater.lua',
+     [('        noteFailure(src, httpErr or "no response")\n', '')], F_TSRC),
 
     # -- Home after a reboot means RETURNING until DOCKED (2026-10-03) -------
     ('a rebooted miner is never flagged as homebound', 'central_server.lua',

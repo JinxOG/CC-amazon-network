@@ -659,6 +659,121 @@ return {
         assert_eq(block and block:find("loader_outstanding", 1, true) ~= nil, true)
     end,
 
+    -- A deploy reached one turtle of fifteen (2026-09-30, 10-01). The fleet
+    -- was told to update and the server restarted three seconds later. Now the
+    -- fleet is told after the server is back on the new code.
+    ["a deploy stages the fleet update instead of sending it"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        T.state.registry[A].status = proto.STATUS.IDLE
+        server.stageFanOut()
+        local sent = 0
+        for _, b in ipairs(T.sent) do
+            if tostring(b):find("UPDATE_ALL", 1, true) then sent = sent + 1 end
+        end
+        local staged = fs.exists(T.CFG.FANOUT_FILE)
+        restore()
+        assert_eq(sent, 0, "nobody is told while the server is about to restart")
+        assert_eq(staged, true, "the fan-out survives the reboot in a file")
+    end,
+
+    ["the restarted server sends the staged update once its turtles are back"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        T.state.registry[A].status = proto.STATUS.IDLE
+        local function count()
+            local n = 0
+            for _, b in ipairs(T.sent) do
+                if tostring(b):find("UPDATE_ALL", 1, true) then n = n + 1 end
+            end
+            return n
+        end
+        server.stageFanOut()
+        server.armFanOut(1000)
+        server.fanOutIfDue(1000 + 1000)
+        local early = count()
+        server.fanOutIfDue(1000 + T.CFG.FANOUT_DELAY_SEC * 1000)
+        local due = count()
+        server.fanOutIfDue(1000 + T.CFG.FANOUT_DELAY_SEC * 1000 + 5000)
+        local again = count()
+        local left = fs.exists(T.CFG.FANOUT_FILE)
+        local staged = T.state.registry[B].pendingUpdate
+        restore()
+        assert_eq(early, 0, "not before the turtles have had time to re-register")
+        assert_eq(due >= 1, true, "then the idle turtle (and the warehouse) are told")
+        assert_eq(staged, true, "and the busy one is told when it next reports idle")
+        assert_eq(again, due, "once, not on every loop turn")
+        assert_eq(left, false, "and the marker is gone, so the next reboot does not repeat it")
+    end,
+
+    ["a boot with nothing staged sends nothing"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        server.armFanOut(1000)
+        local due = T.state.fanOutDueAt
+        restore()
+        assert_eq(due, nil, "an ordinary restart is not a deploy")
+    end,
+
+    ["a failed server update does not send the fleet new code"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        server.stageFanOut()
+        server.dropFanOut()
+        server.armFanOut(1000)
+        local due, said = T.state.fanOutDueAt, logged(T, "was NOT sent UPDATE_ALL")
+        restore()
+        assert_eq(due, nil, "turtles ahead of their server is worse than both behind")
+        assert_eq(said ~= nil, true, "and it says so")
+    end,
+
+    ["the UPDATE_ALL command stages the fan-out, and a failed update drops it (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
+        local branch = src:match('elseif t == "UPDATE_ALL" then(.-)pendingUpdate = true')
+        assert_eq(branch ~= nil, true, "the UPDATE_ALL command branch exists")
+        assert_eq(branch and branch:find("server.stageFanOut()", 1, true) ~= nil, true,
+            "it stages")
+        assert_eq(branch and branch:find("fanOutUpdateAll()", 1, true) == nil, true,
+            "and does not send before the restart")
+        assert_eq(src:find("pcall(server.armFanOut)", 1, true) ~= nil, true, "armed at boot")
+        assert_eq(src:find("pcall(server.fanOutIfDue)", 1, true) ~= nil, true, "checked every turn")
+        local failed = src:match('if fs.exists%("update_failed.txt"%) then(.-)else%s+os.reboot%(%)')
+        assert_eq(failed and failed:find("server.dropFanOut()", 1, true) ~= nil, true,
+            "a server staying on old code does not push new code to its fleet")
+    end,
+
+    ["a turtle whose update failed says so, and why, at REGISTER"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.handlers[proto.MSG.REGISTER]({ from = A, payload = {
+            role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+            position = { x = 0, y = 60, z = 0 },
+            updateFailed = "2 file(s) failed at 2026-10-01 00:50:50, free=600000B\nturtle_base.lua: HTTP 429\n" } })
+        local said = logged(T, "UPDATE FAILED on " .. A)
+        restore()
+        assert_eq(said ~= nil, true, "a turtle quietly on old code is the thing to see")
+        assert_eq(said and said:find("turtle_base.lua: HTTP 429", 1, true) ~= nil, true,
+            "with the file and the reason, not just a count")
+    end,
+
+    ["the turtle carries its update failure, and the updater records the reason (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("turtle_base.lua", "r"); local tb = f:read("a"); f:close()
+        f = io.open("updater.lua", "r"); local up = f:read("a"); f:close()
+        assert_eq(tb:find("updateFailed = base.readUpdateFailed(),", 1, true) ~= nil, true,
+            "REGISTER carries it")
+        assert_eq(up:find("local response, httpErr = http.get(url, NO_CACHE)", 1, true) ~= nil, true,
+            "the HTTP reason is kept, not discarded")
+        assert_eq(up:find('noteFailure(src, httpErr or "no response")', 1, true) ~= nil, true)
+        assert_eq(up:find("for i = 1, math.min(3, #failures) do f.write(failures[i]", 1, true) ~= nil,
+            true, "and written where the turtle reads it")
+    end,
+
     ["the alive stamp records the time and the running version"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

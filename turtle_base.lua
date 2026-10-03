@@ -121,6 +121,18 @@ function base.setAutonomousReturn(v) _self.autonomousReturn = v end
 -- turtle on it: released the moment it is fixed, with no reboot.
 function base.setHardwareCheck(fn) _self.hardwareCheck = fn end
 
+-- The contents of update_failed.txt, which updater.lua writes when it refuses
+-- to reboot into a broken update and deletes after a good one. nil when absent.
+-- Capped: it is a REGISTER field, not a file transfer.
+function base.readUpdateFailed()
+    if not fs.exists("update_failed.txt") then return nil end
+    local f = fs.open("update_failed.txt", "r")
+    if not f then return nil end
+    local body = f.readAll()
+    f.close()
+    return body and body:sub(1, 400) or nil
+end
+
 -- nil unless a check is set AND the turtle is idle. Idle ONLY: a working miner's
 -- ore chest is legitimately out of its slot while it dumps, and a check taken
 -- then would report that as missing hardware and bench a healthy turtle.
@@ -2179,6 +2191,10 @@ local function register(maxAttempts)
             -- payload anchors keep their positions.
             privateChannel = OWN_CHANNEL,
             hardware = base.hardwareVerdict(),
+            -- The updater's own failure record, if its last run failed. The
+            -- updater runs inside this turtle and its printed reasons never
+            -- reached the fleet log; this is how a failed update gets said.
+            updateFailed = base.readUpdateFailed(),
         })
 
         -- Waits for a REGISTER_ACK SPECIFICALLY, and routes anything else into

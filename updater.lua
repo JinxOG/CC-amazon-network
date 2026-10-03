@@ -108,6 +108,16 @@ print("Free space: " .. tostring(freeBefore) .. "B")
 
 local NO_CACHE = { ["Cache-Control"] = "no-cache", ["Pragma"] = "no-cache" }
 
+-- WHICH FILE FAILED, AND WHY, kept for update_failed.txt -- which the turtle
+-- reports to the server at its next REGISTER. The printed lines below never
+-- reached the fleet log: on 2026-10-01 fourteen turtles abandoned an update
+-- within 24 s, and not one line said which download failed or what the error
+-- was. A count alone cannot tell a full disk from a refused download.
+local failures = {}
+local function noteFailure(src, why)
+    failures[#failures + 1] = src .. ": " .. tostring(why)
+end
+
 local function download(src, dst)
     dst = dst or src
     local url = REPO .. src
@@ -115,9 +125,12 @@ local function download(src, dst)
     if dst ~= src then io.write(" -> " .. dst) end
     io.write("... ")
 
-    local response = http.get(url, NO_CACHE)
+    -- http.get's second return is the reason (an HTTP status, a refused
+    -- connection); it was discarded, which is why nothing said what failed.
+    local response, httpErr = http.get(url, NO_CACHE)
     if not response then
-        print("FAILED (no response)")
+        print("FAILED (" .. tostring(httpErr or "no response") .. ")")
+        noteFailure(src, httpErr or "no response")
         return false
     end
 
@@ -126,6 +139,7 @@ local function download(src, dst)
 
     if not content or #content == 0 then
         print("FAILED (empty response)")
+        noteFailure(src, "empty response")
         return false
     end
 
@@ -168,6 +182,7 @@ local function download(src, dst)
             end
             print("    STILL FAILED (" .. err2 .. ") -- " .. dst .. " is now MISSING, re-run once space is free")
         end
+        noteFailure(src, err)
         return false
     end
 
@@ -175,6 +190,7 @@ local function download(src, dst)
     local okMove = pcall(function() fs.move(tmp, dst) end)
     if not okMove then
         print("FAILED (could not move " .. tmp .. " into place)")
+        noteFailure(src, "could not move into place")
         return false
     end
     print("OK")
@@ -289,6 +305,10 @@ if failed > 0 then
             f.write(string.format("%d file(s) failed at %s, free=%sB\n",
                 failed, tostring(os.date and os.date("%Y-%m-%d %H:%M:%S") or "?"),
                 tostring(fs.getFreeSpace("."))))
+            -- The first few reasons. Verify-stage failures (MISSING/EMPTY) add
+            -- to the count without a download reason, so the count can exceed
+            -- the lines below; that is itself a clue.
+            for i = 1, math.min(3, #failures) do f.write(failures[i] .. "\n") end
             f.close()
         end
     end)
