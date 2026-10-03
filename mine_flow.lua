@@ -602,6 +602,35 @@ function mine_flow.retrieveLoader()
         return false, "loader_not_in_front"
     end
 
+    -- ROOM FOR THE LOADER, AT THE INSTANT OF THE DIG.
+    --
+    -- turtle.dig() with no free slot breaks the block, returns TRUE, and
+    -- destroys the drop. Here the drop is a turtle, so the fleet loses the
+    -- hardware permanently and the chunk it was holding unloads. Three in the
+    -- field -- node_139 on 1.9.30, node_139 again 2026-10-01 16:13:08, node_119
+    -- 2026-10-03 04:36 -- each after a dump that freed nothing.
+    --
+    -- The caller in ore_turtle attempts a dump immediately before this and its
+    -- comment claims to be "the check that actually protects the loader". It is
+    -- not: it never verifies the dump achieved anything, and a dump frees
+    -- nothing when the pack holds items it will not bank (rock recorded as
+    -- hardware, 2026-10-02) or when the ore chest cannot be placed. So the
+    -- guarantee has to be made HERE, where the dig is, and it has to REFUSE
+    -- rather than try to make room -- making room is what already failed.
+    --
+    -- Refusing leaves the loader STANDING, which is strictly better than gone:
+    -- the chunk stays loaded, loader_state stays truthful, and an operator can
+    -- empty the pack and let the miner collect it. Placed before the equipment
+    -- swap deliberately, so a refusal costs no comms gap and has nothing to
+    -- undo.
+    local freeSlots = 0
+    for s = 1, 16 do
+        if turtle.getItemCount(s) == 0 then freeSlots = freeSlots + 1 end
+    end
+    if freeSlots == 0 then
+        return false, "no_room_for_loader"
+    end
+
     report("RETRIEVING", "comms gap expected")
 
     if not chunkyEquipped then

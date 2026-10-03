@@ -1236,6 +1236,84 @@ return {
 
     -- ─── retrieveLoader ─────────────────────────────────────────────────
 
+    -- A DIG WITH NOWHERE TO PUT THE LOADER DESTROYS IT.
+    --
+    -- turtle.dig() with no free slot breaks the block, returns TRUE, and the
+    -- drop is destroyed rather than collected. For this one dig the drop is a
+    -- turtle, so the fleet loses hardware permanently and the chunk it was
+    -- holding unloads.
+    --
+    -- Three in the field: node_139 on 1.9.30, node_139 again 2026-10-01
+    -- 16:13:08, node_119 2026-10-03 04:36 -- each logged "Dumping ore before
+    -- loader dig - only 0 free mining slot(s)" and then dug anyway. The caller
+    -- in ore_turtle attempts a dump first and its comment claims to be "the
+    -- check that actually protects the loader", but it never verifies that the
+    -- dump freed anything, and a dump frees nothing when the pack holds items
+    -- it will not bank (rock recorded as hardware, 2026-10-02) or when the ore
+    -- chest cannot be placed.
+    --
+    -- Refusing LEAVES THE LOADER STANDING, which is strictly better than gone:
+    -- the chunk stays loaded, loader_state stays truthful, and a person can
+    -- empty the pack and let the miner collect it.
+    ["retrieveLoader refuses the dig with no free slot, and leaves the loader standing"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = { name = "minecraft:cobbled_deepslate", count = 1 }  -- what the rock bug put there
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        for s = 4, 13 do inv[s] = { name = "minecraft:tuff", count = 64 } end
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, _, ls, c = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+        local freeBefore = 0
+        for s = 1, 16 do if c.inv[s] == nil then freeBefore = freeBefore + 1 end end
+        assert_eq(freeBefore, 0, "precondition: the pack is genuinely full")
+
+        -- NINTH STUB FIDELITY GAP, and it would have hidden this entirely.
+        -- The stub's turtle.dig() REFUSES when there is no room (returns false,
+        -- leaving the block standing). Real CC:Tweaked breaks the block, returns
+        -- TRUE, and destroys the drop -- which is the whole reason a loader is
+        -- lost rather than merely not collected. Against the stub alone the
+        -- "still standing" assertion below passes whether or not the guard
+        -- exists, so model the game here.
+        turtle.dig = function()
+            if c.world["0,80,-1"] == nil then return false end
+            local slot
+            for s = 1, 16 do if c.inv[s] == nil then slot = s; break end end
+            local name = c.world["0,80,-1"]
+            c.world["0,80,-1"] = nil
+            if slot then c.inv[slot] = { name = name, count = 1 } end
+            return true
+        end
+
+        local ok, why = flow.retrieveLoader()
+
+        assert_eq(ok, false, "it must refuse rather than destroy the loader")
+        assert_eq(why, "no_room_for_loader", "and name the reason")
+        assert_eq(c.world["0,80,-1"], eqm.ITEMS.LOADER_TURTLE,
+            "THE LOADER MUST STILL BE STANDING -- that is the whole point")
+        assert_eq(ls.hasPlaced(), true,
+            "and the record must still say so, or nobody will come back for it")
+        -- Refused as a precondition, before any swap: comms are never given up
+        -- for a retrieval that was not going to happen.
+        assert_eq(eq.sideOf("modem") ~= nil, true,
+            "the modem must not be sacrificed for a dig we refused")
+    end,
+
+    ["retrieveLoader still proceeds with a single free slot"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = nil                                  -- the one free slot
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        for s = 4, 13 do inv[s] = { name = "minecraft:tuff", count = 64 } end
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, _, gf, ls = loadFlow(E_MINE(), inv, world)
+        gf.setAnchorChunk(0, 0, 1)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+
+        local ok, reason = flow.retrieveLoader()
+        assert_eq(ok, true, "one empty slot is room: " .. tostring(reason))
+    end,
+
     ["retrieveLoader keeps chunky on across the dig, restores modem, and clears the record"] = function(assert_eq)
         local eqm = require("equipment")
         local inv = travelInv()
@@ -1472,17 +1550,26 @@ return {
     end,
 
     ["retrieveLoader leaves the loader_state record intact when the dig itself fails"] = function(assert_eq)
-        -- Force turtle.dig() to fail its own "no space for the item" path
-        -- (distinct from the chunky_missing pre-check above) by filling
-        -- every slot but one with an unrelated, maxed-out stack, leaving no
-        -- home for the dug loader-turtle item and no empty slot either.
+        -- This test used to force the failure by filling EVERY slot, i.e. the
+        -- no-room case. That is now refused up front as no_room_for_loader and
+        -- never reaches the dig -- and it was never a safe way to pin this
+        -- property anyway: the stub refuses a dig with no room, while real
+        -- CC:Tweaked breaks the block and destroys the drop. So the old setup
+        -- asserted the stub's kindness as correct behaviour while the game was
+        -- losing loaders.
+        --
+        -- Room is left available here and the dig is made to fail on its own
+        -- (an unbreakable block is the real-world case), which is what this
+        -- test is actually about: a failure after the equipment swap must leave
+        -- the persisted record alone so somebody comes back for the loader.
         local eqm = require("equipment")
         local inv = {}
-        for s = 1, 15 do inv[s] = { name = "minecraft:cobblestone", count = 64 } end
-        inv[16] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        for s = 1, 14 do inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        inv[16] = { name = eqm.ITEMS.CHUNKY, count = 1 }   -- slot 15 left free
         local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
         local flow, eq, gf, ls = loadFlow(E_MINE(), inv, world)
         ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+        turtle.dig = function() return false, "Unbreakable block detected" end
 
         local ok, reason = flow.retrieveLoader()
         assert_eq(ok, false)
