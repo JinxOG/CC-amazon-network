@@ -853,10 +853,10 @@ MUTANTS = [
      [("                    total = total + (tonumber(n) or 0)\n", "")], R_DUMP),
 
     ("the warehouse is left out of the update fan-out", "central_server.lua",
-     [("    proto.send(state.modem, proto.CH_WAREHOUSE,\n        proto.encode(proto.MSG.UPDATE_ALL, \"server\", \"warehouse\", {}))\n", "")], U_WARE),
+     [("    proto.send(state.modem, proto.CH_WAREHOUSE,\n        proto.encode(proto.MSG.UPDATE_ALL, \"server\", \"warehouse\", { ref = ref }))\n", "")], U_WARE),
 
     ("a busy turtle is skipped instead of staged", "central_server.lua",
-     [("                tr.pendingUpdate = true\n                nStaged = nStaged + 1\n",
+     [("                tr.pendingUpdate = ref or true\n                nStaged = nStaged + 1\n",
        "                nStaged = nStaged + 1\n")], U_WARE),
 
     ("a cancel respawns a replacement again", "central_server.lua",
@@ -1070,7 +1070,7 @@ MUTANTS = [
      [('    state.fanOutDueAt = nil\n    pcall(fs.delete, CFG.FANOUT_FILE)\n', '    state.fanOutDueAt = nil\n')], F_SEND),
 
     ('every boot fans out', 'central_server.lua',
-     [('    if not fs.exists(CFG.FANOUT_FILE) then return end\n    state.fanOutDueAt', '    state.fanOutDueAt')], F_NONE),
+     [('    if not fs.exists(CFG.FANOUT_FILE) then return end\n    local f = fs.open(CFG.FANOUT_FILE, "r")\n', '    local f = fs.open(CFG.FANOUT_FILE, "r")\n')], F_NONE),
 
     ('a failed server update keeps the staged fan-out', 'central_server.lua',
      [('    if not fs.exists(CFG.FANOUT_FILE) then return end\n    pcall(fs.delete, CFG.FANOUT_FILE)\n    logError(', '    if not fs.exists(CFG.FANOUT_FILE) then return end\n    logError(')], F_DROP),
