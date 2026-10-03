@@ -145,4 +145,59 @@ return {
             assert_eq(c.world[k], TURTLE, "neighbour at " .. k .. " untouched")
         end
     end,
+
+    -- A recall mid-flight (2026-09-22): node_119 was recalled at 08:59 and flew
+    -- 1,700 blocks on regardless. An abort predicate stops move.to at the next
+    -- block; it is set only around the outbound flight.
+    ["a flight with an abort set stops at the next block once it fires"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 0, y = 60, z = 0, facing = 0 } })
+        local steps = 0
+        base.setMoveAbort(function() steps = steps + 1; return steps > 3 end)
+        local ok, why = base.move.to(20, 60, 0)
+        base.setMoveAbort(nil)
+        local p = base.getPos()
+        assert_eq(ok, false)
+        assert_eq(why, "aborted")
+        assert_eq(p.x, 3, "three blocks flown, then it stopped -- not twenty")
+    end,
+
+    ["with no abort set, a flight is exactly what it was"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 0, y = 60, z = 0, facing = 0 } })
+        local ok = base.move.to(5, 62, -4)
+        local p = base.getPos()
+        assert_eq(ok, true)
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "5,62,-4")
+    end,
+
+    ["the abort is checked on every axis, climbing included"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 0, y = 60, z = 0, facing = 0 } })
+        base.setMoveAbort(function() return true end)
+        local okUp   = base.move.to(0, 70, 0)
+        local okDown = base.move.to(0, 50, 0)
+        local okZ    = base.move.to(0, 60, 9)
+        base.setMoveAbort(nil)
+        local p = base.getPos()
+        assert_eq(okUp == false and okDown == false and okZ == false, true)
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "0,60,0", "not one block moved")
+    end,
+
+    ["the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local armAt   = src:find("base.setMoveAbort(base.isRecalled)", 1, true)
+        local moveAt  = armAt and src:find("local mOk, mErr = base.move.to(standX, travelY, standZ)", armAt, true)
+        local clearAt = moveAt and src:find("base.setMoveAbort(nil)", moveAt, true)
+        local turnAt  = clearAt and src:find("recallReturn()", clearAt, true)
+        local failAt  = clearAt and src:find("if not mOk then", clearAt, true)
+        assert_eq(armAt ~= nil and moveAt ~= nil and clearAt ~= nil, true,
+            "armed before the outbound flight, cleared after it")
+        assert_eq(turnAt ~= nil and failAt ~= nil and turnAt < failAt, true,
+            "a recall is answered before the flight is judged to have failed")
+        local home = src:match("local function soloReturn%(%)(.-)reportPhase")
+        assert_eq(home and home:find("base.setMoveAbort(nil)", 1, true) ~= nil, true,
+            "and the trip home clears it first, whatever was left set")
+    end,
 }

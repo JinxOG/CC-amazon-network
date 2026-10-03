@@ -1823,6 +1823,8 @@ local function mineJob(job)
     -- and permanently loads a chunk — make sure we are self-loading, then fly
     -- home.
     local function soloReturn()
+        -- The trip home is never abandoned, whatever was set for the way out.
+        base.setMoveAbort(nil)
         reportPhase(proto.PHASE.RETURNING)
         -- Dump first: the pickaxe is still on during a normal sector end, and
         -- withDigTool covers the cases where it is not.
@@ -2090,6 +2092,10 @@ local function mineJob(job)
         -- happens at the altitude we arrived at.
         local standX, standZ = sx + STAND_OFFSET, sz + STAND_OFFSET
         local curPos = base.getPos()
+        -- A recall that arrives mid-flight stops the flight at the next block
+        -- (base.setMoveAbort). Cleared before anything else moves the turtle:
+        -- the trip home below must never be abandoned the same way.
+        base.setMoveAbort(base.isRecalled)
         if curPos.y > travelY then
             base.move.to(standX, curPos.y, standZ)
         end
@@ -2104,6 +2110,12 @@ local function mineJob(job)
         -- blocked it from taking any further job via the loader_outstanding
         -- guard. Two miners were lost that way in one run.
         local mOk, mErr = base.move.to(standX, travelY, standZ)
+        base.setMoveAbort(nil)
+        if base.isRecalled() then
+            base.sendProgress("recalled in flight -- turning back before the sector")
+            recallReturn()
+            return
+        end
         if not mOk then
             print("[MINER] Cannot reach the placement square: " .. tostring(mErr))
             base.sendProgress("sector_setup_failed: approach_failed: " .. tostring(mErr))

@@ -1327,13 +1327,23 @@ function move.face(dir)
 end
 
 -- Navigate to absolute world coordinate.
+-- A LEG THAT MAY BE ABANDONED. A role sets a predicate around a move it would
+-- rather give up than finish -- the miner's outbound flight, while a recall may
+-- arrive -- and move.to checks it before every block. 2026-09-22: node_119 was
+-- recalled at 08:59 and flew 1,700 blocks on regardless, nine minutes, because
+-- nothing in the flight asked. Never set around a trip home: a recall must not
+-- stop a turtle that is already coming back. nil (the default) costs nothing.
+function base.setMoveAbort(fn) _self.moveAbort = fn end
+
 function move.to(tx, ty, tz)
     -- Vertical first
     while _self.pos.y < ty do
+        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end
         local ok, err = move.up()
         if not ok then return false, "stuck up: " .. (err or "?") end
     end
     while _self.pos.y > ty do
+        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end
         local ok, err = move.down()
         if not ok then return false, "stuck down: " .. (err or "?") end
     end
@@ -1341,12 +1351,14 @@ function move.to(tx, ty, tz)
     -- (without this, a 2-block bypass past the target leaves facing wrong and
     --  the turtle drives away from the target forever)
     while _self.pos.x ~= tx do
+        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end
         if _self.pos.x < tx then move.face(1) else move.face(3) end
         local ok, err = move.forward()
         if not ok then return false, "stuck X: " .. (err or "?") end
     end
     -- Z axis: same per-step facing recalc
     while _self.pos.z ~= tz do
+        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end
         if _self.pos.z < tz then move.face(2) else move.face(0) end
         local ok, err = move.forward()
         if not ok then return false, "stuck Z: " .. (err or "?") end

@@ -192,6 +192,9 @@ C_SEND    = "a deploy that names its commit sends that commit to the whole fleet
 C_BAD     = "a malformed ref is never put in a URL"
 C_STALE   = "a deploy with no ref fetches master, as before, and clears a stale pin"
 C_SRC     = "every updater reads the pin, and every computer writes it first (SOURCE-ONLY, weaker)"
+A_STOP    = "a flight with an abort set stops at the next block once it fires"
+A_AXES    = "the abort is checked on every axis, climbing included"
+A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
 H_BENCH   = "a hardware refusal benches until the turtle's own check passes, not for ten minutes"
 H_LOADER  = "an outstanding loader needs hands too"
 H_LIFT    = "the turtle's own passing check lifts the bench at once"
@@ -998,6 +1001,19 @@ MUTANTS = [
 
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
+
+    # -- A recall mid-flight turns the miner back (2026-09-22) ---------------
+    ('the horizontal legs ignore the abort', 'turtle_base.lua',
+     [('    while _self.pos.x ~= tx do\n        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end\n', '    while _self.pos.x ~= tx do\n')], A_STOP),
+
+    ('the climb ignores the abort', 'turtle_base.lua',
+     [('    while _self.pos.y < ty do\n        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end\n', '    while _self.pos.y < ty do\n')], A_AXES),
+
+    ('the miner never arms the abort', 'ore_turtle.lua',
+     [('        base.setMoveAbort(base.isRecalled)\n', '')], A_MINER),
+
+    ('the trip home can be abandoned', 'ore_turtle.lua',
+     [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
 
     # -- A deploy names its commit (2026-10-03) -------------------------------
     ('the fan-out drops the commit', 'central_server.lua',
