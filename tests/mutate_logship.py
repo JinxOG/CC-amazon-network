@@ -1002,6 +1002,9 @@ MUTANTS = [
     ("a restart with no alive stamp blames any crash on record", "central_server.lua",
      [('    if not alive then\n', '    if false then\n')], O_FIRST),
 
+    ('the fan-out does not say which commit', 'central_server.lua',
+     [('        nImmediate, nStaged, ref and ("pinned to " .. ref) or "from master (no commit named)"))\n', '        nImmediate, nStaged, "from master (no commit named)"))\n')], C_SEND),
+
     # -- A recall mid-flight turns the miner back (2026-09-22) ---------------
     ('the horizontal legs ignore the abort', 'turtle_base.lua',
      [('    while _self.pos.x ~= tx do\n        if _self.moveAbort and _self.moveAbort() then return false, "aborted" end\n', '    while _self.pos.x ~= tx do\n')], A_STOP),

@@ -1232,8 +1232,8 @@ local function fanOutUpdateAll(ref)
     end
     proto.send(state.modem, proto.CH_WAREHOUSE,
         proto.encode(proto.MSG.UPDATE_ALL, "server", "warehouse", { ref = ref }))
-    logInfo(string.format("UPDATE_ALL: sent to %d idle, queued for %d busy turtle(s), and to the warehouse",
-        nImmediate, nStaged))
+    logInfo(string.format("UPDATE_ALL: sent to %d idle, queued for %d busy turtle(s), and to the warehouse -- %s",
+        nImmediate, nStaged, ref and ("pinned to " .. ref) or "from master (no commit named)"))
     return nImmediate, nStaged
 end
 

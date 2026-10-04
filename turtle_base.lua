@@ -3000,7 +3000,9 @@ function base.run(jobHandler)
             os.reboot()
 
         elseif msg.type == proto.MSG.UPDATE_ALL then
-            logWarn("UPDATE_ALL received — running updater then rebooting...")
+            local pin = msg.payload and proto.isCommitRef(msg.payload.ref) and msg.payload.ref
+            logWarn("UPDATE_ALL received — running updater then rebooting"
+                .. (pin and (" (pinned to " .. pin:sub(1, 10) .. ")") or " (from master)"))
             if _self.busy and _self.jobId then
                 base.sendFailed("update_all", false)
             end

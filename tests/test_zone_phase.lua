@@ -807,7 +807,10 @@ return {
             local body = tostring(b)
             if body:find("UPDATE_ALL", 1, true) and body:find(REF, 1, true) then toB = true end
         end
+        local said = logged(T, "pinned to " .. REF)
         restore()
+        assert_eq(said ~= nil, true,
+            "the fan-out says which commit -- the updater's own print never reaches the log")
         assert_eq(own, REF, "the server's own updater is pinned before it runs")
         assert_eq(toA, 1, "the idle turtle is sent the commit")
         assert_eq(staged, REF, "the busy turtle keeps it")
