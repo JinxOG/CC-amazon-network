@@ -1911,6 +1911,25 @@ local function mineJob(job)
         _jobId = nil
     end
 
+    -- A REAL POSITION BEFORE WE DECIDE WHERE WE ARE (2026-10-06).
+    --
+    -- The next three lines ask "did I reboot mid-job?" by looking at where we
+    -- are, and answer it by flying home. On an unfixed position that question
+    -- is ALWAYS answered yes -- a turtle tracking from 0,0,0 is not inside the
+    -- depot -- so a miner that booted before the GPS hosts came up and was then
+    -- handed a job flew a solo return from a guess. That is the same mechanism
+    -- that lost node_118/119/138/139 on 2026-10-05, on the path 1.9.132 did not
+    -- cover: it fixed recoverPlacedLoader, which is boot recovery, while this is
+    -- the job runner's own reboot recovery.
+    --
+    -- The no_gps_fix refusal further down would have stopped it, but it sits
+    -- after this branch, which has already flown by then.
+    --
+    -- Waiting rather than refusing, exactly as recoverPlacedLoader does: a miner
+    -- that really did reboot in the field has to come home, and it can do that
+    -- as soon as a fix arrives. Returns immediately when the fix is already in.
+    base.waitForPositionFix("deciding whether this job rebooted mid-flight")
+
     local startPos = base.getPos()
     if not base.isInsideBuilding(startPos) then
         base.sendProgress("Rebooted mid-job — solo return")

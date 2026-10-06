@@ -334,4 +334,42 @@ function(assert_eq)
         .. "with a chunk loader standing")
 end
 
+-- A JOB MUST NOT DECIDE WHERE IT IS ON A GUESS EITHER.
+--
+-- 1.9.132 made recoverPlacedLoader wait for a real GPS fix, after four miners
+-- were lost on 2026-10-05: the GPS hosts came up after the turtles, each miner
+-- believed it was at 0,0,0 and flew off from there.
+--
+-- mineJob has the same shape and was not covered. Its first act is to read its
+-- position and ask "did I reboot mid-job?"; if the answer is yes it flies a
+-- solo return immediately. On an unfixed position the answer is always yes --
+-- 0,0,0 is not the depot -- so a miner that booted without a fix and was then
+-- handed a job flew home from a guess. The no_gps_fix refusal that would have
+-- stopped it sits fifty lines further down, after this branch has already gone.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load, so its
+-- job path cannot be driven from this harness. Same technique as the
+-- recoverPlacedLoader ordering test in test_shaft_sidestep.
+suite["a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    -- Built with string.char(10) rather than an escape: the newline is what
+    -- terminates the function at column 0, and a literal one here would end
+    -- this string instead.
+    local NL = string.char(10)
+    local body = src:match("local function mineJob%(job%)(.-)" .. NL .. "end" .. NL)
+    assert_eq(body ~= nil, true, "mineJob moved or vanished")
+
+    local waitAt   = body and body:find("base.waitForPositionFix(", 1, true)
+    local readAt   = body and body:find("local startPos = base.getPos()", 1, true)
+    local flyAt    = body and body:find('recallReturn("reboot_recovery"', 1, true)
+    assert_eq(waitAt ~= nil, true,
+        "mineJob must wait for a real fix before it reads its own position")
+    assert_eq(readAt ~= nil and flyAt ~= nil, true, "the reboot-recovery branch moved")
+    assert_eq(waitAt < readAt and waitAt < flyAt, true,
+        "the fix must come BEFORE the position is read and before the flight home: "
+        .. "an unfixed position makes 'I rebooted in the field' always true")
+end
+
 return suite

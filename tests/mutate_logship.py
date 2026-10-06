@@ -220,6 +220,7 @@ E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
 E_LONG    = "a job cannot finish sooner than the longest sector one miner holds"
 R_FLIGHT  = "a recall is checked before departing and before the loader goes down (SOURCE-ONLY, weaker)"
 L_ROOM    = "retrieveLoader refuses the dig with no free slot, and leaves the loader standing"
+J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
 L_ONE     = "retrieveLoader still proceeds with a single free slot"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
@@ -1208,6 +1209,9 @@ MUTANTS = [
 
     ('the stand-down is never set', 'ore_turtle.lua',
      [('            standDownUntil = os.clock() + 60\n', '')], D_MINER),
+    ("the job runner decides where it is without waiting for a fix", "ore_turtle.lua",
+     [('    base.waitForPositionFix("deciding whether this job rebooted mid-flight")\n', '')], J_FIX),
+
     ("the loader-dig room guard is removed", "mine_flow.lua",
      [('    if freeSlots == 0 then\n        return false, "no_room_for_loader"\n',
        '    if false then\n        return false, "no_room_for_loader"\n')], L_ROOM),
