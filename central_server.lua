@@ -4190,6 +4190,34 @@ function server.releaseLostTurtle(tid)
     return released
 end
 
+-- The surveyed zone with the most of this ore STILL IN THE GROUND, for the
+-- restock watchdog. Counts only the sectors a targeted mine would actually
+-- visit (ensureMineZone's targeted branch): not done, and not failed three
+-- times. Until 2026-10-06 this summed every sector, so a mined-out zone ranked
+-- by what it USED to hold -- and the targeted mine sent there found no sector
+-- to mine, finished at once, and the watchdog chose the same zone again.
+-- Returns key, count; nil, 0 when no zone has any left.
+function server.bestRestockZone(oreName)
+    local bestKey, bestCount = nil, 0
+    for key, pz in pairs(state.persistentZones) do
+        if pz.surveyed then
+            local doneSet = {}
+            for _, s in ipairs(pz.doneSectors or {}) do doneSet[s.x .. "," .. s.z] = true end
+            local fails = pz.sectorFailCount or {}
+            local count = 0
+            for sKey, oreMap in pairs(pz.sectorOreMap or {}) do
+                if not doneSet[sKey] and (fails[sKey] or 0) < 3 then
+                    count = count + (oreMap[oreName] or 0)
+                end
+            end
+            if count > bestCount then
+                bestCount = count; bestKey = key
+            end
+        end
+    end
+    return bestKey, bestCount
+end
+
 function server.stageFanOut(ref)
     if not proto.isCommitRef(ref) then ref = nil end
     local f = fs.open(CFG.FANOUT_FILE, "w")
@@ -4388,19 +4416,7 @@ function server.run()
             if not prevId then
                 local current = stockMap[oreName] or 0
                 if current < minimum then
-                    -- Find the surveyed zone with the highest count of this ore
-                    local bestKey, bestCount = nil, 0
-                    for key, pz in pairs(state.persistentZones) do
-                        if pz.surveyed then
-                            local count = 0
-                            for _, oreMap in pairs(pz.sectorOreMap or {}) do
-                                count = count + (oreMap[oreName] or 0)
-                            end
-                            if count > bestCount then
-                                bestCount = count; bestKey = key
-                            end
-                        end
-                    end
+                    local bestKey, bestCount = server.bestRestockZone(oreName)
                     if bestKey then
                         local pz = state.persistentZones[bestKey]
                         local rb = pz.rawBounds

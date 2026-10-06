@@ -900,6 +900,31 @@ return {
     -- An older turtle catches up (2026-10-06): the in-memory queue of busy
     -- turtles was wiped by three world restarts, and two miners had been away
     -- during both deploys. The version is the record now, not the queue.
+    -- Restock picks where the ore IS, not where it was (2026-10-06): W1's
+    -- classification of the ore-map dump showed 13 zones mixing worked and
+    -- unworked sectors, and the chooser summed both.
+    ["restock ranks a zone by the ore in sectors not yet mined"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        T.state.persistentZones = {
+            mined = { surveyed = true,
+                      doneSectors = { { x = 0, z = 0 }, { x = 16, z = 0 } },
+                      sectorOreMap = { ["0,0"] = { iron = 4000 }, ["16,0"] = { iron = 4000 } } },
+            fresh = { surveyed = true, doneSectors = {},
+                      sectorOreMap = { ["0,0"] = { iron = 300 } } },
+            failed = { surveyed = true, doneSectors = {}, sectorFailCount = { ["0,0"] = 3 },
+                       sectorOreMap = { ["0,0"] = { iron = 5000 } } },
+            unsurveyed = { doneSectors = {}, sectorOreMap = { ["0,0"] = { iron = 9000 } } },
+        }
+        local key, count = server.bestRestockZone("iron")
+        local none = server.bestRestockZone("gold")
+        restore()
+        assert_eq(key, "fresh", "a mined-out zone ranks by what is left, not what it held")
+        assert_eq(count, 300)
+        assert_eq(none, nil, "no zone with the ore left is no zone")
+    end,
+
     ["a turtle reporting an older version is queued for the current release"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

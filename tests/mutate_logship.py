@@ -204,6 +204,7 @@ U_OLD     = "a turtle reporting an older version is queued for the current relea
 U_SAME    = "a turtle on the current version, or a newer one, is left alone"
 U_REF     = "the deploy's commit survives a restart"
 U_CMP     = "older is compared as numbers, not text"
+R_STOCK   = "restock ranks a zone by the ore in sectors not yet mined"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1030,6 +1031,16 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- Restock picks where the ore is, not where it was (2026-10-06) --------
+    ('restock counts mined-out sectors', 'central_server.lua',
+     [('                if not doneSet[sKey] and (fails[sKey] or 0) < 3 then\n                    count = count + (oreMap[oreName] or 0)\n', '                if (fails[sKey] or 0) < 3 then\n                    count = count + (oreMap[oreName] or 0)\n')], R_STOCK),
+
+    ('restock counts sectors that failed three times', 'central_server.lua',
+     [('                if not doneSet[sKey] and (fails[sKey] or 0) < 3 then\n                    count = count + (oreMap[oreName] or 0)\n', '                if not doneSet[sKey] then\n                    count = count + (oreMap[oreName] or 0)\n')], R_STOCK),
+
+    ('restock ranks unsurveyed zones', 'central_server.lua',
+     [('        if pz.surveyed then\n            local doneSet = {}\n', '        if true then\n            local doneSet = {}\n')], R_STOCK),
 
     # -- An older turtle catches up (2026-10-06) ------------------------------
     ('an older turtle is never queued', 'central_server.lua',
