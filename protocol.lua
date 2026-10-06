@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.133"
+proto.VERSION = "1.9.134"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -532,6 +532,21 @@ end
 -- each computer writes it here just before running the updater, which reads it
 -- and deletes it. No ref (an older bridge, a manual run) means master, as before.
 proto.UPDATE_REF_FILE = "update_ref.txt"
+
+-- True when version a is OLDER than b, comparing dotted numbers ("1.9.58" <
+-- "1.9.132"). Non-numeric or missing parts compare as 0; anything unreadable
+-- is never "older", so a garbled report cannot trigger an update.
+function proto.versionOlder(a, b)
+    if type(a) ~= "string" or type(b) ~= "string" then return false end
+    local pa, pb = {}, {}
+    for n in a:gmatch("[^.]+") do pa[#pa + 1] = tonumber(n) or 0 end
+    for n in b:gmatch("[^.]+") do pb[#pb + 1] = tonumber(n) or 0 end
+    for i = 1, math.max(#pa, #pb) do
+        local x, y = pa[i] or 0, pb[i] or 0
+        if x ~= y then return x < y end
+    end
+    return false
+end
 
 -- A full 40-hex commit id, and nothing else: it becomes part of a URL.
 function proto.isCommitRef(ref)

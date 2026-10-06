@@ -897,6 +897,63 @@ return {
             "an unregistered name still has its dock released")
     end,
 
+    -- An older turtle catches up (2026-10-06): the in-memory queue of busy
+    -- turtles was wiped by three world restarts, and two miners had been away
+    -- during both deploys. The version is the record now, not the queue.
+    ["a turtle reporting an older version is queued for the current release"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local hb = T.handlers[proto.MSG.HEARTBEAT]
+        T.state.deployRef = string.rep("d", 40)
+        hb({ from = A, payload = { status = proto.STATUS.WORKING, fuel = 100000, version = "1.9.58" } })
+        hb({ from = A, payload = { status = proto.STATUS.WORKING, fuel = 100000, version = "1.9.58" } })
+        local queued = T.state.registry[A].pendingUpdate
+        local n = 0
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("queued for the current release", 1, true) then n = n + 1 end
+        end
+        restore()
+        assert_eq(queued, string.rep("d", 40), "queued, pinned to the last deploy's commit")
+        assert_eq(n, 1, "once per registration, not on every heartbeat")
+    end,
+
+    ["a turtle on the current version, or a newer one, is left alone"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local hb = T.handlers[proto.MSG.HEARTBEAT]
+        hb({ from = A, payload = { status = proto.STATUS.WORKING, fuel = 100000, version = proto.VERSION } })
+        hb({ from = B, payload = { status = proto.STATUS.WORKING, fuel = 100000, version = "99.0.0" } })
+        local a, b = T.state.registry[A].pendingUpdate, T.state.registry[B].pendingUpdate
+        restore()
+        assert_eq(a, nil, "nothing to catch up")
+        assert_eq(b, nil, "a newer turtle is a canary, never downgraded")
+    end,
+
+    ["the deploy's commit survives a restart"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local REF = string.rep("e", 40)
+        server.stageFanOut(REF)
+        T.state.deployRef = nil                       -- the restart
+        server.armFanOut(1000)
+        local kept = T.state.deployRef
+        server.fanOutIfDue(1000 + T.CFG.FANOUT_DELAY_SEC * 1000)   -- the fan-out marker goes...
+        local still = fs.exists(T.CFG.DEPLOY_REF_FILE)
+        restore()
+        assert_eq(kept, REF, "a turtle catching up later gets the same commit")
+        assert_eq(still, true, "...but the deploy's commit is kept")
+    end,
+
+    ["older is compared as numbers, not text"] =
+    function(assert_eq)
+        assert_eq(proto.versionOlder("1.9.58", "1.9.132"), true, "58 < 132, though '5' > '1'")
+        assert_eq(proto.versionOlder("1.9.132", "1.9.58"), false)
+        assert_eq(proto.versionOlder("1.9.132", "1.9.132"), false)
+        assert_eq(proto.versionOlder("1.9", "1.9.1"), true)
+        assert_eq(proto.versionOlder(nil, "1.9.1"), false, "unreadable is never older")
+    end,
+
     ["the alive stamp records the time and the running version"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

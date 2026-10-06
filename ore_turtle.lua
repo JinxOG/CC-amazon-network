@@ -2438,6 +2438,25 @@ local sok, serr = pcall(recoverPlacedScanner)
 if not sok then
     print("[MINER] Scanner recovery crashed: " .. tostring(serr))
 end
+-- REBOOTED OUTSIDE THE BASE WITH NOTHING TO RECOVER: GO HOME (2026-10-06).
+-- turtle_base defers an out-of-base miner to us, and the only thing here that
+-- moved it was recoverPlacedLoader -- so a miner rebooted mid-flight with its
+-- loader aboard hovered where it stopped until a person fetched it (node_182
+-- and node_183, after the 06:14 restart). Recall did not reach it either: it
+-- sets a flag for a job runner that is not running. Measured position and
+-- facing first, then the same sky route a recall would take.
+local hok, herr = pcall(function()
+    if loader_state.hasPlaced() then return end
+    if base.isInsideBuilding(base.getPos()) then return end
+    base.waitForPositionFix("rebooted outside the base with no loader to recover")
+    if base.isInsideBuilding(base.getPos()) then return end
+    print("[MINER] Rebooted outside the base with nothing to recover -- flying home")
+    base.sendProgress("rebooted_outside_base: flying home")
+    base.returnToDockFromSky()
+end)
+if not hok then
+    print("[MINER] Going home after an out-of-base reboot crashed: " .. tostring(herr))
+end
 local ok, err = pcall(base.run, mineJob)
 if not ok then
     -- Unhandled crash. Print so it's visible on the terminal, then reboot

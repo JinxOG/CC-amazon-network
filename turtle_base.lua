@@ -770,28 +770,43 @@ end
 
 -- Detect actual facing by moving forward one block and comparing GPS positions.
 -- Without this, position tracking is wrong from the very first move.
+-- Returns true only when the facing was actually measured (_self.facingKnown).
+-- 2026-10-06: node_182 rebooted mid-air, logged "GPS lost during facing
+-- detection. Assuming north.", and every move after that went the wrong way --
+-- it flew ~1,000 blocks off before it was stopped. A guessed facing is now
+-- recorded as unknown, and base.waitForPositionFix will not let a turtle move
+-- on it. Also false when all four sides are blocked: no step, no measurement,
+-- where the old code logged the assumed facing as if it had been found.
 local function detectFacing()
     local x1, y1, z1 = gps.locate(CFG.GPS_TIMEOUT)
     if not x1 then
-        logWarn("Cannot detect facing — no GPS. Assuming north.")
-        return
+        logWarn("Cannot detect facing — no GPS. Facing UNKNOWN; not moving on a guess.")
+        _self.facingKnown = false
+        return false
     end
 
     -- Try to move forward one step to detect direction
-    if not turtle.forward() then
+    local moved = turtle.forward()
+    if not moved then
         -- Blocked — try turning until we find a free direction
         for _ = 1, 4 do
             turtle.turnRight()
-            if turtle.forward() then break end
+            if turtle.forward() then moved = true; break end
         end
+    end
+    if not moved then
+        logWarn("Cannot detect facing — boxed in on all four sides. Facing UNKNOWN.")
+        _self.facingKnown = false
+        return false
     end
 
     local x2, y2, z2 = gps.locate(CFG.GPS_TIMEOUT)
     turtle.back()  -- return to original position
 
     if not x2 then
-        logWarn("GPS lost during facing detection. Assuming north.")
-        return
+        logWarn("GPS lost during facing detection. Facing UNKNOWN; not moving on a guess.")
+        _self.facingKnown = false
+        return false
     end
 
     local dx = math.floor(x2) - math.floor(x1)
@@ -801,10 +816,15 @@ local function detectFacing()
     elseif dx > 0 then _self.facing = 1  -- east  (+X)
     elseif dz > 0 then _self.facing = 2  -- south (+Z)
     elseif dx < 0 then _self.facing = 3  -- west  (-X)
+    else
+        _self.facingKnown = false
+        return false
     end
 
     local names = { [0]="north", [1]="east", [2]="south", [3]="west" }
     logInfo("Facing: " .. names[_self.facing])
+    _self.facingKnown = true
+    return true
 end
 
 local function initPosition()
@@ -825,18 +845,22 @@ end
 -- a reboot calls this first: it retries GPS until a fix arrives, standing still,
 -- then re-detects facing -- a late fix without it still points every move
 -- the wrong way.
-function base.hasPositionFix() return _self.posFixed == true end
+function base.detectFacingForTest() return detectFacing() end
+
+-- Position AND facing: either one wrong sends every move astray (2026-10-05,
+-- position; 2026-10-06, facing).
+function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end
 
 function base.waitForPositionFix(why)
-    if _self.posFixed then return true end
-    logWarn(string.format("No GPS fix -- NOT moving until one arrives (%s)", tostring(why)))
+    if _self.posFixed and _self.facingKnown then return true end
+    logWarn(string.format("No GPS fix or facing -- NOT moving until both are measured (%s)",
+        tostring(why)))
     local tries = 0
-    while not gpsSync() do
+    while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do
         tries = tries + 1
         sleep(10)
     end
-    detectFacing()
-    logInfo(string.format("GPS fix after %d retries: %d,%d,%d -- %s can go ahead",
+    logInfo(string.format("Position and facing measured after %d retries: %d,%d,%d -- %s can go ahead",
         tries, _self.pos.x, _self.pos.y, _self.pos.z, tostring(why)))
     return true
 end

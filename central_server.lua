@@ -66,6 +66,8 @@ local CFG = {
     -- turtles re-register first, so the fan-out finds them online.
     FANOUT_FILE       = "update_fanout.pending",
     FANOUT_DELAY_SEC  = 45,
+    -- The commit of the last deploy, kept across restarts (see catch-up below).
+    DEPLOY_REF_FILE   = "deploy_ref.txt",
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -477,6 +479,22 @@ function registry.update(id, status, fuel, position, jobId, version)
                 .. "running code you are not reading",
                 id, tostring(version), tostring(proto.VERSION)))
         end
+    end
+    -- AN OLDER TURTLE CATCHES UP (2026-10-06). The queue of busy turtles awaiting
+    -- an update lived only in memory: three world restarts that morning wiped
+    -- it, and miners queued at 01:40 were still on the old release at 06:30,
+    -- without the GPS fix the deploy was for. Two more had been away during
+    -- both deploys. So the queue is no longer the record -- the version is. Any
+    -- turtle reporting an OLDER version than this server's is queued for the
+    -- current release, pinned to the last deploy's commit, and delivered the
+    -- usual way when it is next idle. Once per registration (a REGISTER starts a
+    -- fresh entry), so an update that fails on the turtle is not retried on
+    -- every heartbeat. Never a NEWER version: that is a canary, not a laggard.
+    if version and not t.updateOffered and proto.versionOlder(version, proto.VERSION) then
+        t.updateOffered = true
+        t.pendingUpdate = t.pendingUpdate or state.deployRef or true
+        logInfo(string.format("%s runs %s, this server %s -- queued for the current release "
+            .. "when it is next idle", id, tostring(version), tostring(proto.VERSION)))
     end
 end
 
@@ -4177,9 +4195,20 @@ function server.stageFanOut(ref)
     local f = fs.open(CFG.FANOUT_FILE, "w")
     if f then f.write(ref or "master"); f.close() end
     proto.stageUpdateRef(ref)
+    -- Kept, unlike the fan-out marker: a turtle catching up later (registry.update)
+    -- must be sent the same commit, however many restarts later that is.
+    local g = fs.open(CFG.DEPLOY_REF_FILE, "w")
+    if g then g.write(ref or "master"); g.close() end
 end
 
 function server.armFanOut(nowMs)
+    -- The last deploy's commit, for turtles catching up (see registry.update).
+    if fs.exists(CFG.DEPLOY_REF_FILE) then
+        local g = fs.open(CFG.DEPLOY_REF_FILE, "r")
+        local body = g and g.readAll() or ""
+        if g then g.close() end
+        state.deployRef = proto.isCommitRef(body) and body or nil
+    end
     if not fs.exists(CFG.FANOUT_FILE) then return end
     local f = fs.open(CFG.FANOUT_FILE, "r")
     local body = f and f.readAll() or ""

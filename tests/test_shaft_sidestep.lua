@@ -229,6 +229,7 @@ return {
     ["a turtle that already has a fix does not wait"] =
     function(assert_eq)
         local base, c = fresh({ pos = { x = 7, y = 70, z = 7, facing = 0 } })
+        base.detectFacingForTest()                      -- position AND facing measured
         local calls = 0
         local real = gps.locate
         gps.locate = function(...) calls = calls + 1; return real(...) end
@@ -248,5 +249,61 @@ return {
         assert_eq(waitAt ~= nil and depotAt ~= nil and flyAt ~= nil, true)
         assert_eq(waitAt < depotAt and waitAt < flyAt, true,
             "the depot check and the flight both use the position; the fix comes first")
+    end,
+
+    -- A guessed facing (2026-10-06): node_182 logged "GPS lost during facing
+    -- detection. Assuming north." and flew ~1,000 blocks the wrong way.
+    ["a facing that could not be measured is unknown, and the wait measures it before moving"] =
+    function(assert_eq)
+        local c = stub.install({ pos = { x = 40, y = 120, z = 40, facing = 1 } })   -- really east
+        local calls = 0
+        gps = { locate = function()
+            calls = calls + 1
+            -- 1: gpsSync, 2: detection's first fix, 3: its second fix -- lost
+            -- there, mid-detection, as on node_182.
+            if calls == 3 then return nil end
+            return c.pos.x, c.pos.y, c.pos.z
+        end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"]    = nil
+        local base = require("turtle_base")
+        base.gpsSync()
+        base.detectFacingForTest()
+        local before = base.hasPositionFix()
+        base.waitForPositionFix("test")
+        local after = base.hasPositionFix()
+        base.move.forward()
+        local p = base.getPos()
+        assert_eq(before, false, "a facing lost mid-detection is not a facing")
+        assert_eq(after, true, "measured before anything moves")
+        assert_eq(p.x .. "," .. p.z, "41,40", "and a step forward goes where the turtle thinks: east")
+    end,
+
+    ["a turtle boxed in on all sides does not claim a facing"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos   = { x = 0, y = 60, z = 0, facing = 0 },
+            world = { [key(1, 60, 0)] = "minecraft:stone", [key(-1, 60, 0)] = "minecraft:stone",
+                      [key(0, 60, 1)] = "minecraft:stone", [key(0, 60, -1)] = "minecraft:stone" },
+        })
+        local ok = base.detectFacingForTest()
+        assert_eq(ok, false, "no step, no measurement")
+        assert_eq(base.hasPositionFix(), false)
+    end,
+
+    ["a miner rebooted outside the base with nothing to recover flies home (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local scanAt = src:find("local sok, serr = pcall(recoverPlacedScanner)", 1, true)
+        local homeAt = src:find('base.waitForPositionFix("rebooted outside the base with no loader to recover")', 1, true)
+        local flyAt  = homeAt and src:find("base.returnToDockFromSky()", homeAt, true)
+        local runAt  = src:find("local ok, err = pcall(base.run, mineJob)", 1, true)
+        assert_eq(scanAt ~= nil and homeAt ~= nil and flyAt ~= nil and runAt ~= nil, true)
+        assert_eq(scanAt < homeAt and flyAt < runAt, true,
+            "after both recoveries, before any job is taken")
+        local guard = src:sub(scanAt, homeAt)
+        assert_eq(guard:find("if loader_state.hasPlaced() then return end", 1, true) ~= nil, true,
+            "a standing loader is boot recovery's job, not this")
+        assert_eq(guard:find("if base.isInsideBuilding(base.getPos()) then return end", 1, true) ~= nil, true)
     end,
 }

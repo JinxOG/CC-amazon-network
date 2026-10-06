@@ -197,6 +197,13 @@ L_CMD     = "the REMOVE_TURTLE command uses it for a turtle it cannot find (SOUR
 G_WAIT    = "a turtle with no GPS fix waits for one, standing still, then knows where and which way"
 G_SKIP    = "a turtle that already has a fix does not wait"
 G_BOOT    = "boot recovery waits for a real position before anything else (SOURCE-ONLY, weaker)"
+K_FACE    = "a facing that could not be measured is unknown, and the wait measures it before moving"
+K_BOX     = "a turtle boxed in on all sides does not claim a facing"
+K_HOME    = "a miner rebooted outside the base with nothing to recover flies home (SOURCE-ONLY, weaker)"
+U_OLD     = "a turtle reporting an older version is queued for the current release"
+U_SAME    = "a turtle on the current version, or a newer one, is left alone"
+U_REF     = "the deploy's commit survives a restart"
+U_CMP     = "older is compared as numbers, not text"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1024,15 +1031,44 @@ MUTANTS = [
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
 
+    # -- An older turtle catches up (2026-10-06) ------------------------------
+    ('an older turtle is never queued', 'central_server.lua',
+     [('        t.pendingUpdate = t.pendingUpdate or state.deployRef or true\n', '')], U_OLD),
+
+    ('an older turtle is queued on every heartbeat', 'central_server.lua',
+     [('    if version and not t.updateOffered and proto.versionOlder(version, proto.VERSION) then\n', '    if version and proto.versionOlder(version, proto.VERSION) then\n')], U_OLD),
+
+    ('any different version is queued, newer included', 'central_server.lua',
+     [('    if version and not t.updateOffered and proto.versionOlder(version, proto.VERSION) then\n', '    if version and not t.updateOffered and version ~= proto.VERSION then\n')], U_SAME),
+
+    ("the deploy's commit is not kept", 'central_server.lua',
+     [('    local g = fs.open(CFG.DEPLOY_REF_FILE, "w")\n', '    local g = nil\n')], U_REF),
+
+    ('versions compare as text', 'protocol.lua',
+     [('    for n in a:gmatch("[^.]+") do pa[#pa + 1] = tonumber(n) or 0 end\n    for n in b:gmatch("[^.]+") do pb[#pb + 1] = tonumber(n) or 0 end\n', '    for n in a:gmatch("[^.]+") do pa[#pa + 1] = n end\n    for n in b:gmatch("[^.]+") do pb[#pb + 1] = n end\n')], U_CMP),
+
+    # -- Never move on a guessed facing; go home after a stranded reboot ------
+    ('the wait ignores the facing', 'turtle_base.lua',
+     [('function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end\n', 'function base.hasPositionFix() return _self.posFixed == true end\n')], K_FACE),
+
+    ('a stranded miner never goes home', 'ore_turtle.lua',
+     [('    base.returnToDockFromSky()\nend)\n', 'end)\n')], K_HOME),
+
+    ('a stranded miner flies home over a standing loader', 'ore_turtle.lua',
+     [('    if loader_state.hasPlaced() then return end\n    if base.isInsideBuilding(base.getPos()) then return end\n    base.waitForPositionFix("rebooted outside', '    if base.isInsideBuilding(base.getPos()) then return end\n    base.waitForPositionFix("rebooted outside')], K_HOME),
+
+    ('a facing lost mid-detection is assumed again', 'turtle_base.lua',
+     [('        logWarn("GPS lost during facing detection. Facing UNKNOWN; not moving on a guess.")\n        _self.facingKnown = false\n        return false\n', '        _self.facingKnown = true\n        return true\n')], K_FACE),
+
+    ('a boxed-in turtle claims a facing again (both guards gone)', 'turtle_base.lua',
+     [('    if not moved then\n        logWarn("Cannot detect facing — boxed in on all four sides. Facing UNKNOWN.")\n        _self.facingKnown = false\n        return false\n    end\n', ''), ('    else\n        _self.facingKnown = false\n        return false\n    end\n', '    end\n')], K_BOX),
+
     # -- Never fly on a guessed position (2026-10-05) ------------------------
     ('a fix is never recorded', 'turtle_base.lua',
      [('        _self.posFixed = true\n', '')], G_WAIT),
 
     ('a turtle with no fix goes ahead anyway', 'turtle_base.lua',
-     [('    while not gpsSync() do\n        tries = tries + 1\n        sleep(10)\n    end\n', '')], G_WAIT),
-
-    ('a turtle with a fix asks GPS again anyway', 'turtle_base.lua',
-     [('    if _self.posFixed then return true end\n    logWarn(', '    logWarn(')], G_SKIP),
+     [('    while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do\n        tries = tries + 1\n        sleep(10)\n    end\n', '')], G_WAIT),
 
     ('boot recovery flies without a fix', 'ore_turtle.lua',
      [('    base.waitForPositionFix(string.format("boot recovery of the loader at %d,%d,%d", s.x, s.y, s.z))\n', '')], G_BOOT),
@@ -1411,6 +1447,11 @@ MUTANTS = [
 # while leaving the original in place, is an EQUIVALENT mutant. It changes no
 # behaviour, so every test staying green is the correct outcome, not a hole.
 READY_GUARD_EQUIVALENT = True
+
+# Deliberately NOT a mutant: removing waitForPositionFix's early return is
+# EQUIVALENT -- the loop condition short-circuits on posFixed and facingKnown
+# without touching GPS, so only a log line differs.
+WAIT_EARLY_RETURN_EQUIVALENT = True
 
 
 def compiles(path):
