@@ -866,6 +866,37 @@ return {
         end
     end,
 
+    -- Four miners lost in the field after the double world restart of
+    -- 2026-10-05 still held their bays on disk, and REMOVE_TURTLE refused them
+    -- because a restart had emptied the registry.
+    ["a lost turtle's dock can be released though it never registered"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local W = package.loaded["waypoints"]
+        local dock = W.assignDock("DELIVERY", "node_lost")
+        local held = W.getDockFor("DELIVERY", "node_lost") ~= nil
+        local ok = server.releaseLostTurtle("node_lost")
+        local after = W.getDockFor("DELIVERY", "node_lost")
+        local said = logged(T, "node_lost was not registered")
+        local again = server.releaseLostTurtle("node_lost")
+        restore()
+        assert_eq(dock ~= nil and held, true, "precondition: it held a bay")
+        assert_eq(ok, true)
+        assert_eq(after, nil, "the bay is free for a replacement")
+        assert_eq(said ~= nil, true, "and the log says why")
+        assert_eq(again, false, "a name holding nothing reports nothing to release")
+    end,
+
+    ["the REMOVE_TURTLE command uses it for a turtle it cannot find (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
+        local branch = src:match('elseif t == "REMOVE_TURTLE" then(.-)\n            %-%- Cancel active job')
+        assert_eq(branch ~= nil, true, "the REMOVE_TURTLE branch exists")
+        assert_eq(branch and branch:find("server.releaseLostTurtle(tid)", 1, true) ~= nil, true,
+            "an unregistered name still has its dock released")
+    end,
+
     ["the alive stamp records the time and the running version"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

@@ -192,6 +192,8 @@ C_SEND    = "a deploy that names its commit sends that commit to the whole fleet
 C_BAD     = "a malformed ref is never put in a URL"
 C_STALE   = "a deploy with no ref fetches master, as before, and clears a stale pin"
 C_SRC     = "every updater reads the pin, and every computer writes it first (SOURCE-ONLY, weaker)"
+L_REL     = "a lost turtle's dock can be released though it never registered"
+L_CMD     = "the REMOVE_TURTLE command uses it for a turtle it cannot find (SOURCE-ONLY, weaker)"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1017,6 +1019,13 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- A lost turtle's dock can be released (2026-10-05) --------------------
+    ("a lost turtle's dock is never released", 'central_server.lua',
+     [('            W.releaseDock(pool, tid)\n            released = true\n', '            released = true\n')], L_REL),
+
+    ('REMOVE_TURTLE refuses an unregistered turtle again', 'central_server.lua',
+     [('                if not server.releaseLostTurtle(tid) then\n                    logWarn(', '                if true then\n                    logWarn(')], L_CMD),
 
     # -- A deploy names its commit (2026-10-03) -------------------------------
     ('the fan-out drops the commit', 'central_server.lua',

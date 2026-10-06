@@ -4150,6 +4150,28 @@ end
 -- ref: the commit the deploy named. It is kept in the marker so the fan-out
 -- after the reboot sends the same commit, and staged for this server's own
 -- updater, which runs moments later.
+-- A TURTLE THAT NEVER CAME BACK still holds its dock. The registry is rebuilt
+-- from REGISTER after every server restart, but dock assignments are saved to
+-- disk -- so a turtle lost in the field (four miners after the double world
+-- restart of 2026-10-05) is absent from the registry and REMOVE_TURTLE refused
+-- it, while its bay stayed reserved for a name that will never return. Miners
+-- share the DELIVERY bays, so four lost miners left too few for replacements.
+-- Releases whatever dock the name holds in either pool. Returns true if it held one.
+function server.releaseLostTurtle(tid)
+    if type(tid) ~= "string" or tid == "" then return false end
+    local released = false
+    for _, pool in ipairs({ "DELIVERY", "SUPPORT" }) do
+        if W.getDockFor(pool, tid) then
+            W.releaseDock(pool, tid)
+            released = true
+        end
+    end
+    if released then
+        logInfo("REMOVE_TURTLE: " .. tid .. " was not registered (lost?) -- its dock is released")
+    end
+    return released
+end
+
 function server.stageFanOut(ref)
     if not proto.isCommitRef(ref) then ref = nil end
     local f = fs.open(CFG.FANOUT_FILE, "w")
@@ -4720,7 +4742,11 @@ function server.run()
             local tid = p.turtleId
             local tr  = state.registry[tid]
             if not tr then
-                logWarn("REMOVE_TURTLE: turtle not found: " .. tostring(tid))
+                -- Not registered is not the same as not holding a dock: see
+                -- server.releaseLostTurtle.
+                if not server.releaseLostTurtle(tid) then
+                    logWarn("REMOVE_TURTLE: turtle not found: " .. tostring(tid))
+                end
                 return
             end
             -- Cancel active job and recall the linked partner
