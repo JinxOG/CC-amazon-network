@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Mining is on hold for one in-world look - does a new loader carry its chunk controller
 date: 2026-10-06
-status: open
+status: SPEC-OWNER=open,W1=closed
 ---
 
 # Mining is on hold for one in-world look - does a new loader carry its chunk controller

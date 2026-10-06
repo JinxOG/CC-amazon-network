@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Confirmed by the server operator: chunkLoadValidTime = 600 s is the 10-minute freeze; placed loaders are not refreshing their lease
 date: 2026-10-06
-status: open
+status: W1=closed,SPEC-OWNER=open
 ---
 
 # Confirmed by the server operator: chunkLoadValidTime = 600 s is the 10-minute freeze; placed loaders are not refreshing their lease

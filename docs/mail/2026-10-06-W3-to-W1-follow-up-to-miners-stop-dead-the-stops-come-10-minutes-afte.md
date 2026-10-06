@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Follow-up to 'miners stop dead': the stops come ~10 minutes after the loader is placed, and the server op's chunk-loading answer
 date: 2026-10-06
-status: open
+status: closed
 ---
 
 # Follow-up to 'miners stop dead': the stops come ~10 minutes after the loader is placed, and the server op's chunk-loading answer
