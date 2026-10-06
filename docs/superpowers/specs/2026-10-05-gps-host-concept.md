@@ -14,6 +14,14 @@ what failed on 2026-09-17: **all four computers stopped at once**, nothing
 reported it, and the only symptom was every turtle refusing to move for want
 of a fix. Cause never found; the user restarted them by hand.
 
+**It happened again, worse, on 2026-10-05.** Two world restarts; at the
+02:29 boot the GPS hosts were not yet up, docked turtles logged *"No GPS fix.
+Tracking from (0,0,0)"*, and **four miners mid-job ran their recovery from that
+guess, flew off blind and were lost** (replaced by node_177–184). W3's 1.9.132
+makes a turtle wait for a real fix before moving at every boot — the turtle
+side is now covered. The host side is not: nothing tells the fleet that GPS is
+down, or that it has just come back.
+
 The hosts are the one part of the fleet's infrastructure that is invisible.
 The idea is to make them visible, resilient and updatable.
 
@@ -33,6 +41,8 @@ nothing on the turtle side changes. Everything below is added around
    into the wrong place.
 3. **Report restarts with a boot id.** Four restarts at once means the server
    or the chunk restarted — the clue missing on 09-17.
+   **Announce "GPS up" on boot**, so the fleet knows the moment fixes are
+   available again after a world restart instead of each turtle polling.
 4. **Restart itself on error** rather than sitting dead.
 5. **Hosts watch each other** and report a neighbour that stops answering.
 6. **Support more than four hosts.** With exactly four, losing one can break
