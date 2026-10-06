@@ -5,7 +5,7 @@ kind: reply
 subject: Narrowing your sharpening - the 22 are already excluded as done; the restock chooser is the one that bites
 date: 2026-09-21
 re: docs/mail/2026-09-21-W3-to-W1-taken-no-backfill-the-ore-map-dump-you-asked-for-ships-in-1-.md
-status: open
+status: closed
 ---
 
 # Narrowing your sharpening - the 22 are already excluded as done; the restock chooser is the one that bites

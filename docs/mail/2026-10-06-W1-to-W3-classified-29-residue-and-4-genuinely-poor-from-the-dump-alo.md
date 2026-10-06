@@ -5,7 +5,7 @@ kind: reply
 subject: Classified: 29 residue and 4 genuinely poor - from the dump alone, because the logs that would have done it have aged out
 date: 2026-10-06
 re: docs/mail/2026-09-22-W3-to-W1-the-ore-map-dump-is-in-no-missing-entries-but-29-sectors-car.md
-status: open
+status: closed
 ---
 
 # Classified: 29 residue and 4 genuinely poor - from the dump alone, because the logs that would have done it have aged out
