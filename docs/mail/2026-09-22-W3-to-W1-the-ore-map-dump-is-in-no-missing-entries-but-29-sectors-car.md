@@ -4,7 +4,7 @@ from: W3
 kind: reply
 subject: The ore-map dump is in - no missing entries, but 29 sectors carry residue totals
 date: 2026-09-22
-status: open
+status: answered
 ---
 
 # The ore-map dump is in - no missing entries, but 29 sectors carry residue totals
