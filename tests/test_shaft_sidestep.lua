@@ -200,4 +200,53 @@ return {
         assert_eq(home and home:find("base.setMoveAbort(nil)", 1, true) ~= nil, true,
             "and the trip home clears it first, whatever was left set")
     end,
+
+    -- Never fly on a guessed position (2026-10-05): four miners booted after a
+    -- world restart with no GPS fix, believed they were at 0,0,0, and flew off.
+    ["a turtle with no GPS fix waits for one, standing still, then knows where and which way"] =
+    function(assert_eq)
+        local c = stub.install({ pos = { x = 500, y = 80, z = -300, facing = 2 } })
+        local calls = 0
+        gps = { locate = function()
+            calls = calls + 1
+            if calls <= 3 then return nil end              -- hosts still down
+            return c.pos.x, c.pos.y, c.pos.z
+        end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"]    = nil
+        local base = require("turtle_base")
+        base.gpsSync()                                     -- fails: no fix yet
+        local before = base.hasPositionFix()
+        local ok = base.waitForPositionFix("test")
+        local p = base.getPos()
+        assert_eq(before, false, "a failed sync is not a fix")
+        assert_eq(ok, true)
+        assert_eq(base.hasPositionFix(), true)
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "500,80,-300",
+            "the real position, not 0,0,0 -- and not one block moved while waiting")
+    end,
+
+    ["a turtle that already has a fix does not wait"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 7, y = 70, z = 7, facing = 0 } })
+        local calls = 0
+        local real = gps.locate
+        gps.locate = function(...) calls = calls + 1; return real(...) end
+        base.waitForPositionFix("test")
+        assert_eq(base.hasPositionFix(), true)
+        assert_eq(calls, 0, "no GPS round trip when the fix is already there")
+    end,
+
+    ["boot recovery waits for a real position before anything else (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local body = src:match("local function recoverPlacedLoader%(%)(.-)\nend\n")
+        assert_eq(body ~= nil, true, "recoverPlacedLoader exists")
+        local waitAt  = body and body:find("base.waitForPositionFix(", 1, true)
+        local depotAt = body and body:find("base.isInsideBuilding(base.getPos())", 1, true)
+        local flyAt   = body and body:find("reportPhase(proto.PHASE.RETRIEVING,", 1, true)
+        assert_eq(waitAt ~= nil and depotAt ~= nil and flyAt ~= nil, true)
+        assert_eq(waitAt < depotAt and waitAt < flyAt, true,
+            "the depot check and the flight both use the position; the fix comes first")
+    end,
 }

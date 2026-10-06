@@ -194,6 +194,9 @@ C_STALE   = "a deploy with no ref fetches master, as before, and clears a stale 
 C_SRC     = "every updater reads the pin, and every computer writes it first (SOURCE-ONLY, weaker)"
 L_REL     = "a lost turtle's dock can be released though it never registered"
 L_CMD     = "the REMOVE_TURTLE command uses it for a turtle it cannot find (SOURCE-ONLY, weaker)"
+G_WAIT    = "a turtle with no GPS fix waits for one, standing still, then knows where and which way"
+G_SKIP    = "a turtle that already has a fix does not wait"
+G_BOOT    = "boot recovery waits for a real position before anything else (SOURCE-ONLY, weaker)"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1019,6 +1022,19 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- Never fly on a guessed position (2026-10-05) ------------------------
+    ('a fix is never recorded', 'turtle_base.lua',
+     [('        _self.posFixed = true\n', '')], G_WAIT),
+
+    ('a turtle with no fix goes ahead anyway', 'turtle_base.lua',
+     [('    while not gpsSync() do\n        tries = tries + 1\n        sleep(10)\n    end\n', '')], G_WAIT),
+
+    ('a turtle with a fix asks GPS again anyway', 'turtle_base.lua',
+     [('    if _self.posFixed then return true end\n    logWarn(', '    logWarn(')], G_SKIP),
+
+    ('boot recovery flies without a fix', 'ore_turtle.lua',
+     [('    base.waitForPositionFix(string.format("boot recovery of the loader at %d,%d,%d", s.x, s.y, s.z))\n', '')], G_BOOT),
 
     # -- A lost turtle's dock can be released (2026-10-05) --------------------
     ("a lost turtle's dock is never released", 'central_server.lua',

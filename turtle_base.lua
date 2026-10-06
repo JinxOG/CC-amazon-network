@@ -749,6 +749,7 @@ local function gpsSync()
     local x, y, z = gps.locate(CFG.GPS_TIMEOUT)
     if x then
         _self.pos = { x=math.floor(x), y=math.floor(y), z=math.floor(z) }
+        _self.posFixed = true
         return true
     else
         logWarn("GPS locate failed — continuing with dead-reckoned position")
@@ -813,6 +814,31 @@ local function initPosition()
     else
         logWarn("No GPS fix. Tracking from (0,0,0). Facing assumed north.")
     end
+end
+
+-- NEVER FLY ON A GUESSED POSITION. 2026-10-05: the world restarted at 02:29 with
+-- the GPS hosts not yet up; every turtle booted with "No GPS fix. Tracking from
+-- (0,0,0)", and the four miners mid-job ran boot recovery from that guess --
+-- flying toward loaders 1,700 and 2,800 blocks off in the wrong place. None came
+-- back; all four were lost. A position is trustworthy only once GPS has given it
+-- (posFixed, set by gpsSync). Anything that is about to travel on its own after
+-- a reboot calls this first: it retries GPS until a fix arrives, standing still,
+-- then re-detects facing -- a late fix without it still points every move
+-- the wrong way.
+function base.hasPositionFix() return _self.posFixed == true end
+
+function base.waitForPositionFix(why)
+    if _self.posFixed then return true end
+    logWarn(string.format("No GPS fix -- NOT moving until one arrives (%s)", tostring(why)))
+    local tries = 0
+    while not gpsSync() do
+        tries = tries + 1
+        sleep(10)
+    end
+    detectFacing()
+    logInfo(string.format("GPS fix after %d retries: %d,%d,%d -- %s can go ahead",
+        tries, _self.pos.x, _self.pos.y, _self.pos.z, tostring(why)))
+    return true
 end
 
 local function applyMove(dir)

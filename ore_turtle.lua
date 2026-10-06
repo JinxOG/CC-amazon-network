@@ -1664,6 +1664,12 @@ local function recoverPlacedLoader()
     -- without this every beacon from a loader that IS still alive is ignored.
     mine_flow.adoptRecordedLoader()
 
+    -- A REAL POSITION FIRST (2026-10-05). After a world restart the GPS hosts can
+    -- come up after the turtles; a miner that booted without a fix believed it
+    -- was at 0,0,0 and flew off after its loader in the wrong place -- four lost.
+    -- Both the depot check below and the whole flight depend on where we are.
+    base.waitForPositionFix(string.format("boot recovery of the loader at %d,%d,%d", s.x, s.y, s.z))
+
     -- Never fly (or dig) out of the depot. If a stale record survived a trip
     -- home, an operator has to resolve it: leaving the building under our own
     -- navigation would mean digging through the building itself.
