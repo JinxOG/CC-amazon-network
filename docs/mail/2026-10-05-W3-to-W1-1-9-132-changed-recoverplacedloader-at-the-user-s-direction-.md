@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: 1.9.132 changed recoverPlacedLoader at the user's direction: no boot recovery without a real GPS fix - four miners were lost to it; plus a coal-slot card for you
 date: 2026-10-05
-status: open
+status: answered
 ---
 
 # 1.9.132 changed recoverPlacedLoader at the user's direction: no boot recovery without a real GPS fix - four miners were lost to it; plus a coal-slot card for you

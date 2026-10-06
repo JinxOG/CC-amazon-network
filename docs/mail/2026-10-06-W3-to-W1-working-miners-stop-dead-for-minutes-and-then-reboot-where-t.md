@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Working miners stop dead for minutes and then reboot where they stand - measurements only, I need your read
 date: 2026-10-06
-status: open
+status: answered
 ---
 
 # Working miners stop dead for minutes and then reboot where they stand - measurements only, I need your read

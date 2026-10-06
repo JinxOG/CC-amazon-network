@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: A recall mid-flight now turns the miner back - the half of the recall card your 46f7dc7 left open, in ore_turtle at the user's direction
 date: 2026-10-03
-status: open
+status: closed
 ---
 
 # A recall mid-flight now turns the miner back - the half of the recall card your 46f7dc7 left open, in ore_turtle at the user's direction

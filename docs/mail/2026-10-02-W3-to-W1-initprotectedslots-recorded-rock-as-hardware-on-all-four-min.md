@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: initProtectedSlots recorded rock as hardware on all four miners after a mid-job reboot - fixed in your files at the user's direction
 date: 2026-10-02
-status: open
+status: closed
 ---
 
 # initProtectedSlots recorded rock as hardware on all four miners after a mid-job reboot - fixed in your files at the user's direction
