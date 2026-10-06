@@ -492,8 +492,14 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
         -- confirmed alive via the beacon gate above, so arm the fence anyway
         -- -- leaving chunky off AND the fence unarmed would be exactly the
         -- unloaded-and-unfenced state this module exists to prevent, and the
-        -- loader really is holding this chunk regardless of why toMineMode
-        -- reported failure.
+        -- loader is confirmed ALIVE regardless of why toMineMode reported
+        -- failure.
+        --
+        -- "Alive", said carefully: this comment used to claim the loader "really
+        -- is holding this chunk", and the beacon gate has never proved that. It
+        -- proves the loader is powered and running its program. Whether a placed
+        -- chunky turtle holds a chunk -- and how many the server will hold at
+        -- once -- is under measurement with W3 (2026-10-06).
         if equipment.sideOf("chunky") == nil then
             geofence.setAnchorBlock(tx, tz, chunkRadius)
             log("toMineMode failed after the swap already landed -- " ..
