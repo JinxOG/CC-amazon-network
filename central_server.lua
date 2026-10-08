@@ -66,6 +66,9 @@ local CFG = {
     -- turtles re-register first, so the fan-out finds them online.
     FANOUT_FILE       = "update_fanout.pending",
     FANOUT_DELAY_SEC  = 45,
+    -- After an update is delivered, how long the turtle is left alone to reboot
+    -- into it before it can be offered work again (registry.getIdle).
+    UPDATE_REBOOT_MS  = 120000,
     -- The commit of the last deploy, kept across restarts (see catch-up below).
     DEPLOY_REF_FILE   = "deploy_ref.txt",
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
@@ -530,9 +533,17 @@ function registry.getIdle(role)
         -- 0680, 0681 and 0682 all went to the same turtle and all failed with
         -- loader_outstanding, so a four-miner order put exactly one miner out.
         local blockedOk = not (t.dispatchBlockedUntil and now < t.dispatchBlockedUntil)
+        -- AN UPDATE COMES BEFORE THE NEXT JOB (2026-10-08). node_179 docked at
+        -- 20:08:21 with 1.9.138 queued and was dispatched in the same second:
+        -- the update waits for a heartbeat, the dispatch did not, and it worked
+        -- the next job for hours on old code. Not offered work while one is
+        -- queued, nor for UPDATE_REBOOT_MS after delivery while it reboots into
+        -- it (bounded, so a turtle that never comes back is not benched for good).
+        local updatingOk = not t.pendingUpdate
+            and not (t.updateSentAt and now - t.updateSentAt < CFG.UPDATE_REBOOT_MS)
         if t.online and t.status == proto.STATUS.IDLE
                     and (role == nil or t.role == role)
-                    and fuelOk and blockedOk then
+                    and fuelOk and blockedOk and updatingOk then
             table.insert(result, t)
         end
     end
@@ -2997,6 +3008,11 @@ handlers[proto.MSG.REGISTER] = function(msg)
     if type(p.updateFailed) == "string" then
         logError(string.format("UPDATE FAILED on %s, still on its old code: %s",
             msg.from, (p.updateFailed:gsub("%s+$", ""):gsub("\n", " | "))))
+        -- Not offered the catch-up again on this registration: it would reboot
+        -- into the same failure and come straight back. The next deploy, or a
+        -- registration whose update did not fail, offers it again.
+        local ft = state.registry[msg.from]
+        if ft then ft.updateOffered = true end
     end
     -- REGISTER_ACK FIRST — turtle must receive dock assignment before any job.
     sendTo(msg.from, proto.MSG.REGISTER_ACK, {
@@ -3061,6 +3077,7 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         if t and t.pendingUpdate and t.status == proto.STATUS.IDLE then
             local ref = type(t.pendingUpdate) == "string" and t.pendingUpdate or nil
             t.pendingUpdate = nil
+            t.updateSentAt  = os.epoch("utc")
             sendTo(msg.from, proto.MSG.UPDATE_ALL, { ref = ref })
             logInfo("UPDATE_ALL: delivered to " .. msg.from .. " (now idle)")
         end

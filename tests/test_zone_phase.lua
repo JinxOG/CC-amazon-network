@@ -998,6 +998,55 @@ return {
         assert_eq(none, nil, "no zone with the ore left is no zone")
     end,
 
+    -- 2026-10-08 20:08:21: node_179 docked on 1.9.135 with 1.9.138 queued for it,
+    -- and in the same second was dispatched job_0175 -- the update waits on a
+    -- heartbeat, the dispatch did not. It went back out on old code for hours.
+    ["a turtle with a queued update is not offered work until it has it"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local now = 5000000
+        os.epoch = function() return now end
+        local t = T.state.registry[A]
+        t.status, t.jobId, t.fuel = proto.STATUS.IDLE, nil, 100000
+        t.pendingUpdate = string.rep("d", 40)
+        local function offered()
+            for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+                if w.id == A then return true end
+            end
+            return false
+        end
+        local queued = offered()
+        local before = #T.sent
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        local delivered = 0
+        for i = before + 1, #T.sent do
+            if tostring(T.sent[i]):find("UPDATE_ALL", 1, true) then delivered = delivered + 1 end
+        end
+        local rebooting = offered()
+        now = now + 121000
+        local later = offered()
+        restore()
+        assert_eq(queued, false, "not while the update is still queued")
+        assert_eq(delivered, 1, "the next heartbeat delivers it")
+        assert_eq(rebooting, false, "nor while it is rebooting into it")
+        assert_eq(later, true, "but a turtle that never came back is not benched for good")
+    end,
+
+    -- The catch-up must not loop on a turtle whose update keeps failing: it
+    -- would reboot into the same failure, re-register, and be offered it again.
+    ["a turtle whose last update failed is not offered it again on that registration"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.handlers[proto.MSG.REGISTER]({ from = A, payload = {
+            role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+            updateFailed = "turtle_base.lua: HTTP 429" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = {
+            status = proto.STATUS.IDLE, fuel = 100000, version = "1.9.100" } })
+        local queued = T.state.registry[A].pendingUpdate
+        restore()
+        assert_eq(queued, nil, "it says why at REGISTER; offering it again would loop")
+    end,
+
     ["a turtle reporting an older version is queued for the current release"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })

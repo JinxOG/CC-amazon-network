@@ -217,6 +217,8 @@ ST_SERVER = "a stuck turtle's report raises NEEDS HANDS with where it is, once"
 CL_DOCK   = "leftover coal goes back into the dock chest"
 CL_RES    = "a miner keeps its coal reserve slot and returns the rest"
 CL_EC     = "leftover coal goes back into the fuel ender chest before it is picked up"
+UP_FIRST  = "a turtle with a queued update is not offered work until it has it"
+UP_LOOP   = "a turtle whose last update failed is not offered it again on that registration"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1049,6 +1051,22 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- An update comes before the next job (2026-10-08) ---------------------
+    ('a turtle with a queued update is dispatched anyway', 'central_server.lua',
+     [('        local updatingOk = not t.pendingUpdate\n            and not', '        local updatingOk = true\n            and not')], UP_FIRST),
+
+    ('a rebooting turtle is dispatched', 'central_server.lua',
+     [('            and not (t.updateSentAt and now - t.updateSentAt < CFG.UPDATE_REBOOT_MS)\n', '\n')], UP_FIRST),
+
+    ('the delivery time is not kept', 'central_server.lua',
+     [('            t.updateSentAt  = os.epoch("utc")\n', '')], UP_FIRST),
+
+    ('a turtle that never came back is benched for good', 'central_server.lua',
+     [('            and not (t.updateSentAt and now - t.updateSentAt < CFG.UPDATE_REBOOT_MS)\n', '            and not t.updateSentAt\n')], UP_FIRST),
+
+    ('a failed update is offered again at once', 'central_server.lua',
+     [('        if ft then ft.updateOffered = true end\n', '')], UP_LOOP),
 
     # -- Leftover coal goes back after a refuel (2026-10-08) ------------------
     ('dock leftovers stay aboard', 'turtle_base.lua',
