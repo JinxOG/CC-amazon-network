@@ -53,6 +53,18 @@ for k, v in (st.get("mineZones") or {}).items():
         worked.append((b["x1"], b["z1"], b["x2"], b["z2"]))
         print(f"  (including LIVE zone {k}: x {b['x1']}..{b['x2']} z {b['z1']}..{b['z2']})")
 
+# A zone just ORDERED is not in mineZones until its first job is dispatched, and
+# dispatch is staggered a minute per miner -- so picking several zones in a row
+# would put the next one on top of the last. /state's queued jobs carry no
+# bounds, so the caller names them: --avoid x1,z1,x2,z2 (the corners passed to
+# ORDER_MINE), widened by the same 16 blocks the server adds for a zone's key.
+import sys
+for i, arg in enumerate(sys.argv):
+    if arg == "--avoid" and i + 1 < len(sys.argv):
+        ax1, az1, ax2, az2 = (int(q) for q in sys.argv[i + 1].split(","))
+        worked.append((ax1 - 16, az1 - 16, ax2 + 16, az2 + 16))
+        print(f"  (avoiding just-ordered zone x {ax1}..{ax2} z {az1}..{az2})")
+
 def clear_of_worked(box):
     x1, z1, x2, z2 = box
     for (bx1, bz1, bx2, bz2) in worked:
