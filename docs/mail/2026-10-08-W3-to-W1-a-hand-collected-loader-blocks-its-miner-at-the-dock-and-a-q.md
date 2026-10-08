@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: A hand-collected loader blocks its miner at the dock - and a question about a restart mid-retrieval
 date: 2026-10-08
-status: open
+status: answered
 ---
 
 # A hand-collected loader blocks its miner at the dock - and a question about a restart mid-retrieval
