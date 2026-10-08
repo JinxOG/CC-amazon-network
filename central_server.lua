@@ -2192,6 +2192,24 @@ function registry.benchForHardware(id, reason)
     t.dispatchBlockedUntil = os.epoch("utc") + 365 * 86400000
 end
 
+-- A TURTLE STUCK WAITING FOR A POSITION (2026-10-08). base.waitForPositionFix
+-- reports once a minute while a turtle cannot measure its position or facing
+-- (node_184, boxed in by rock after a restart, sat for hours while the server
+-- only ever called it offline). Shown on the dashboard and logged once per
+-- distinct report. No dispatch bench: the turtle is not idle, and it carries
+-- on by itself the moment it can measure. Cleared like any needsHands, by the
+-- turtle's own hardware check passing at its dock (registry.applyHardware).
+function registry.flagStuck(id, detail)
+    local t = state.registry[id or ""]
+    if not t then return end
+    if t.needsHands ~= detail then
+        logError(string.format(
+            "NEEDS HANDS: %s — %s. It carries on by itself once it can measure; "
+            .. "going there and digging it a hole is faster.", id, tostring(detail)))
+    end
+    t.needsHands = detail
+end
+
 -- verdict is what the turtle's own check said: "ok", a fault reason, or nil
 -- when it did not check (busy, or a role with no check).
 function registry.applyHardware(id, verdict)
@@ -3076,6 +3094,9 @@ end
 handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     local p = msg.payload
     registry.update(msg.from, p.status, nil, p.position, p.jobId)
+    if type(p.detail) == "string" and p.detail:find("^stuck_no_fix") then
+        registry.flagStuck(msg.from, p.detail)
+    end
     jobQueue.noteWorking(p.jobId, msg.from)
     jobQueue.progress(p.jobId, p.status, p.detail)
 end

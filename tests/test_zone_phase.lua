@@ -256,6 +256,29 @@ return {
         assert_eq(line ~= nil, true, "and the decision is logged with the sectors left")
     end,
 
+    -- A stuck turtle's report (2026-10-08): node_184 sat boxed in for hours and
+    -- the server only ever said it was offline, then pruned it.
+    ["a stuck turtle's report raises NEEDS HANDS with where it is, once"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local h = T.handlers[proto.MSG.STATUS_UPDATE]
+        local d = "stuck_no_fix: facing unknown at 1960,-50,-3351 (boot recovery)"
+        for _ = 1, 3 do
+            h({ from = A, payload = { jobId = JA, status = proto.STATUS.WORKING, detail = d,
+                                      position = { x = 1960, y = -50, z = -3351 } } })
+        end
+        h({ from = B, payload = { jobId = JB, status = proto.STATUS.WORKING, detail = "mining" } })
+        local n = 0
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("NEEDS HANDS: " .. A, 1, true) and e.msg:find("1960,-50,-3351", 1, true) then n = n + 1 end
+        end
+        local flag, other = T.state.registry[A].needsHands, T.state.registry[B].needsHands
+        restore()
+        assert_eq(flag, d, "the dashboard shows why and where")
+        assert_eq(n, 1, "said once, not every minute")
+        assert_eq(other, nil, "an ordinary progress report raises nothing")
+    end,
+
     -- 2026-10-08: the user asked for every miner home to swap loaders. Recall-all
     -- turned node_184 round, but its job (a loader placement that was blocked)
     -- was still open; it failed recoverably as it docked, was retried, and the

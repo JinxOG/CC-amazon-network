@@ -294,6 +294,43 @@ return {
         assert_eq(base.hasPositionFix(), false)
     end,
 
+    -- A stuck turtle says so (2026-10-08). node_184 and node_182 registered at
+    -- 12:07:56 and were never heard from again: the wait runs before base.run
+    -- starts heartbeats, so they sent nothing, the server pruned them, and only
+    -- a screenshot showed what was wrong. Once a minute while waiting, a turtle
+    -- now reports where it is and ships its log lines.
+    ["a turtle stuck waiting for a fix says where it is, once a minute"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos   = { x = 0, y = 60, z = 0, facing = 0 },
+            world = { [key(1, 60, 0)] = "minecraft:stone", [key(-1, 60, 0)] = "minecraft:stone",
+                      [key(0, 60, 1)] = "minecraft:stone", [key(0, 60, -1)] = "minecraft:stone" },
+        })
+        base.setCanDig(false)
+        local sent = {}
+        local savedFind, savedSleep = peripheral.find, sleep
+        peripheral.find = function()
+            return { transmit = function(ch, reply, body) sent[#sent + 1] = tostring(body) end,
+                     open = function() end, isOpen = function() return true end, close = function() end }
+        end
+        base.recoverModem()
+        local naps = 0
+        sleep = function()
+            naps = naps + 1
+            if naps == 13 then c.world[key(1, 60, 0)] = nil end       -- someone digs it a hole
+        end
+        base.waitForPositionFix("test")
+        peripheral.find, sleep = savedFind, savedSleep
+        local stuck, logs = 0, 0
+        for _, b in ipairs(sent) do
+            if b:find("stuck_no_fix: facing unknown at 0,60,0 (test)", 1, true) then stuck = stuck + 1 end
+            if b:find("NOT moving until both are measured", 1, true) then logs = logs + 1 end
+        end
+        assert_eq(base.hasPositionFix(), true, "and it carries on once it can measure")
+        assert_eq(stuck, 3, "tries 1, 7 and 13: once a minute, not every 10 s")
+        assert_eq(logs >= 1, true, "its log lines go out too")
+    end,
+
     -- Boxed in by rock after a reboot (2026-10-08). The 12:05 restart caught
     -- node_184 and node_182 mining at depth, stone on all four sides. 1.9.134
     -- would not move without a measured facing, could not step to measure it,

@@ -862,6 +862,19 @@ function base.waitForPositionFix(why)
     local tries = 0
     while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do
         tries = tries + 1
+        -- A STUCK TURTLE SAYS SO (2026-10-08). node_184 and node_182 registered
+        -- at 12:07:56 and were never heard from again: this wait runs before
+        -- base.run starts heartbeats and the log outbox, so the server pruned
+        -- them as offline and only a screenshot showed why. Once a minute (the
+        -- first try, then every sixth) it reports where it is and ships its log
+        -- lines; the server raises NEEDS HANDS on the report.
+        if tries % 6 == 1 then
+            local where = _self.posFixed
+                and string.format("facing unknown at %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z)
+                or "no GPS fix, position unknown"
+            pcall(base.sendProgress, string.format("stuck_no_fix: %s (%s)", where, tostring(why)))
+            pcall(flushLogQueue)
+        end
         sleep(10)
     end
     logInfo(string.format("Position and facing measured after %d retries: %d,%d,%d -- %s can go ahead",

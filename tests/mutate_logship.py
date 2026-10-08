@@ -212,6 +212,8 @@ BX_NODIG  = "a turtle boxed in on all sides that cannot dig does not claim a fac
 BX_TURTLE = "a miner boxed in by turtles digs none of them"
 BX_DEPOT  = "a miner boxed in near the depot digs nothing"
 BX_FENCE  = "a miner boxed in at the edge of its fence digs nothing"
+ST_TURTLE = "a turtle stuck waiting for a fix says where it is, once a minute"
+ST_SERVER = "a stuck turtle's report raises NEEDS HANDS with where it is, once"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1040,6 +1042,22 @@ MUTANTS = [
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
 
+    # -- A stuck turtle says so; the server flags it (2026-10-08) -------------
+    ('a stuck turtle stays silent', 'turtle_base.lua',
+     [('        if tries % 6 == 1 then\n', '        if false then\n')], ST_TURTLE),
+
+    ('a stuck turtle reports every 10 s', 'turtle_base.lua',
+     [('        if tries % 6 == 1 then\n', '        if true then\n')], ST_TURTLE),
+
+    ("a stuck turtle's log lines stay aboard", 'turtle_base.lua',
+     [('            pcall(flushLogQueue)\n        end\n        sleep(10)\n', '        end\n        sleep(10)\n')], ST_TURTLE),
+
+    ('the server ignores a stuck report', 'central_server.lua',
+     [('        registry.flagStuck(msg.from, p.detail)\n', '')], ST_SERVER),
+
+    ('the server logs a stuck turtle every minute', 'central_server.lua',
+     [('    if t.needsHands ~= detail then\n', '    if true then\n')], ST_SERVER),
+
     # -- Boxed in by rock after a reboot: dig one block out (2026-10-08) ------
     ('a boxed-in miner never digs out', 'turtle_base.lua',
      [('        moved = base.digOutForFacing(x1, y1, z1)\n', '')], BX_ROCK),
@@ -1116,7 +1134,8 @@ MUTANTS = [
      [('        _self.posFixed = true\n', '')], G_WAIT),
 
     ('a turtle with no fix goes ahead anyway', 'turtle_base.lua',
-     [('    while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do\n        tries = tries + 1\n        sleep(10)\n    end\n', '')], G_WAIT),
+     [('    while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do\n',
+       '    while false do\n')], G_WAIT),
 
     ('boot recovery flies without a fix', 'ore_turtle.lua',
      [('    base.waitForPositionFix(string.format("boot recovery of the loader at %d,%d,%d", s.x, s.y, s.z))\n', '')], G_BOOT),
