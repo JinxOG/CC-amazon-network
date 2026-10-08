@@ -198,7 +198,7 @@ G_WAIT    = "a turtle with no GPS fix waits for one, standing still, then knows 
 G_SKIP    = "a turtle that already has a fix does not wait"
 G_BOOT    = "boot recovery waits for a real position before anything else (SOURCE-ONLY, weaker)"
 K_FACE    = "a facing that could not be measured is unknown, and the wait measures it before moving"
-K_BOX     = "a turtle boxed in on all sides does not claim a facing"
+K_BOX     = "a turtle boxed in on all sides that cannot dig does not claim a facing"
 K_HOME    = "a miner rebooted outside the base with nothing to recover flies home (SOURCE-ONLY, weaker)"
 U_OLD     = "a turtle reporting an older version is queued for the current release"
 U_SAME    = "a turtle on the current version, or a newer one, is left alone"
@@ -207,6 +207,11 @@ U_CMP     = "older is compared as numbers, not text"
 R_STOCK   = "restock ranks a zone by the ore in sectors not yet mined"
 RC_ALL    = "recall-all cancels every unfinished job, so nothing is sent back out"
 RC_FINAL  = "a cancelled job is never retried, however the turtle reports the failure"
+BX_ROCK   = "a miner boxed in by rock digs one block out and measures its facing"
+BX_NODIG  = "a turtle boxed in on all sides that cannot dig does not claim a facing"
+BX_TURTLE = "a miner boxed in by turtles digs none of them"
+BX_DEPOT  = "a miner boxed in near the depot digs nothing"
+BX_FENCE  = "a miner boxed in at the edge of its fence digs nothing"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1034,6 +1039,22 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- Boxed in by rock after a reboot: dig one block out (2026-10-08) ------
+    ('a boxed-in miner never digs out', 'turtle_base.lua',
+     [('        moved = base.digOutForFacing(x1, y1, z1)\n', '')], BX_ROCK),
+
+    ('a turtle that may not dig digs out anyway', 'turtle_base.lua',
+     [('    if not _self.canDig then return false end\n    local pos = { x = math.floor(x)', '    local pos = { x = math.floor(x)')], BX_NODIG),
+
+    ('digging out ignores the depot', 'turtle_base.lua',
+     [('    if base.nearDepot(pos) then return false end\n    if _geofence and _geofence.isActive() then\n        for _, d in ipairs', '    if _geofence and _geofence.isActive() then\n        for _, d in ipairs')], BX_DEPOT),
+
+    ('digging out ignores the fence', 'turtle_base.lua',
+     [('            if not _geofence.contains(pos.x + d[1], pos.z + d[2]) then return false end\n', '')], BX_FENCE),
+
+    ('digging out digs a turtle', 'turtle_base.lua',
+     [('            if digGuarded("forward") and turtle.forward() then\n                logWarn("Boxed in', '            if turtle.dig() and turtle.forward() then\n                logWarn("Boxed in')], BX_TURTLE),
 
     # -- Recall-all cancels; a cancel is final (2026-10-08) ------------------
     ('recall-all cancels nothing', 'central_server.lua',

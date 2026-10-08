@@ -795,6 +795,10 @@ local function detectFacing()
         end
     end
     if not moved then
+        -- Defined after digGuarded, so reached through base at call time.
+        moved = base.digOutForFacing(x1, y1, z1)
+    end
+    if not moved then
         logWarn("Cannot detect facing — boxed in on all four sides. Facing UNKNOWN.")
         _self.facingKnown = false
         return false
@@ -1001,6 +1005,41 @@ local function digGuarded(dir)
     if not fn then return false, "no_dig_for_dir" end
     if isTurtleBlock(dir) then return false, "would_dig_turtle" end
     return fn()
+end
+
+-- BOXED IN BY ROCK AFTER A REBOOT (2026-10-08). The 12:05 restart caught node_184
+-- and node_182 mining at depth with stone on all four sides. detectFacing must
+-- step to measure, 1.9.134 rightly will not move on a guessed facing, and the
+-- two retried every 10 s until a player dug them a hole. A miner carries a
+-- pickaxe for exactly this: dig one block, so the caller can step and measure.
+--
+-- Nothing tells it which way it faces, so it may dig in ANY of the four
+-- directions -- and so it digs only where all four are safe:
+--   * not near the depot, whose walls and one-block shafts are not rock;
+--   * not when any neighbour lies outside an armed fence, since the one it digs
+--     could be that one;
+--   * never a turtle (digGuarded) -- a placed loader is one.
+-- Returns true having stepped forward one block; the caller steps back.
+function base.digOutForFacing(x, y, z)
+    if not _self.canDig then return false end
+    local pos = { x = math.floor(x), y = math.floor(y), z = math.floor(z) }
+    if base.nearDepot(pos) then return false end
+    if _geofence and _geofence.isActive() then
+        for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+            if not _geofence.contains(pos.x + d[1], pos.z + d[2]) then return false end
+        end
+    end
+    for _ = 1, 4 do
+        if turtle.detect() then
+            base.makeRoomBeforeDig()
+            if digGuarded("forward") and turtle.forward() then
+                logWarn("Boxed in on all four sides -- dug one block out to measure facing")
+                return true
+            end
+        end
+        turtle.turnRight()
+    end
+    return false
 end
 
 -- Attempt to route around a turtle blocking the forward path.

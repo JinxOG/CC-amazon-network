@@ -279,16 +279,96 @@ return {
         assert_eq(p.x .. "," .. p.z, "41,40", "and a step forward goes where the turtle thinks: east")
     end,
 
-    ["a turtle boxed in on all sides does not claim a facing"] =
+    ["a turtle boxed in on all sides that cannot dig does not claim a facing"] =
     function(assert_eq)
         local base, c = fresh({
             pos   = { x = 0, y = 60, z = 0, facing = 0 },
+            -- A pickaxe IS fitted: canDig is the rule under test, not the tool.
+            equipped = { left = "minecraft:diamond_pickaxe" },
             world = { [key(1, 60, 0)] = "minecraft:stone", [key(-1, 60, 0)] = "minecraft:stone",
                       [key(0, 60, 1)] = "minecraft:stone", [key(0, 60, -1)] = "minecraft:stone" },
         })
+        base.setCanDig(false)
         local ok = base.detectFacingForTest()
         assert_eq(ok, false, "no step, no measurement")
         assert_eq(base.hasPositionFix(), false)
+    end,
+
+    -- Boxed in by rock after a reboot (2026-10-08). The 12:05 restart caught
+    -- node_184 and node_182 mining at depth, stone on all four sides. 1.9.134
+    -- would not move without a measured facing, could not step to measure it,
+    -- and retried every 10 s for good: safe, and stuck until a player dug it a
+    -- hole. A miner carries a pickaxe for exactly this.
+    ["a miner boxed in by rock digs one block out and measures its facing"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos      = { x = 0, y = 60, z = 0, facing = 1 },          -- really east
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            world    = { [key(1, 60, 0)] = "minecraft:stone", [key(-1, 60, 0)] = "minecraft:stone",
+                         [key(0, 60, 1)] = "minecraft:stone", [key(0, 60, -1)] = "minecraft:stone" },
+        })
+        local ok = base.detectFacingForTest()
+        local p = base.getPos()
+        local left = 0
+        for _, k in ipairs({ key(1, 60, 0), key(-1, 60, 0), key(0, 60, 1), key(0, 60, -1) }) do
+            if c.world[k] then left = left + 1 end
+        end
+        base.move.forward()
+        local q = base.getPos()
+        assert_eq(ok, true, "measured, not stuck")
+        assert_eq(base.hasPositionFix(), true)
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "0,60,0", "back where it started")
+        assert_eq(left, 3, "exactly one block dug")
+        assert_eq(q.x .. "," .. q.z, "1,0", "and the facing it measured is the real one: east")
+    end,
+
+    ["a miner boxed in by turtles digs none of them"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos      = { x = 0, y = 60, z = 0, facing = 0 },
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            world    = { [key(1, 60, 0)] = TURTLE, [key(-1, 60, 0)] = TURTLE,
+                         [key(0, 60, 1)] = TURTLE, [key(0, 60, -1)] = TURTLE },
+        })
+        local ok = base.detectFacingForTest()
+        local left = 0
+        for _, k in ipairs({ key(1, 60, 0), key(-1, 60, 0), key(0, 60, 1), key(0, 60, -1) }) do
+            if c.world[k] == TURTLE then left = left + 1 end
+        end
+        assert_eq(ok, false)
+        assert_eq(left, 4, "never dig a turtle -- a loader is one")
+    end,
+
+    ["a miner boxed in near the depot digs nothing"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos      = { x = 180, y = 40, z = -2800, facing = 0 },
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            world    = { [key(181, 40, -2800)] = "minecraft:stone", [key(179, 40, -2800)] = "minecraft:stone",
+                         [key(180, 40, -2799)] = "minecraft:stone", [key(180, 40, -2801)] = "minecraft:stone" },
+        })
+        local ok = base.detectFacingForTest()
+        local left = 0
+        for k in pairs(c.world) do left = left + 1 end
+        assert_eq(ok, false, "the depot's walls and shafts are not rock to clear")
+        assert_eq(left, 4)
+    end,
+
+    ["a miner boxed in at the edge of its fence digs nothing"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos      = { x = 15, y = 60, z = 8, facing = 0 },         -- east edge of chunk 0,0
+            equipped = { left = "minecraft:diamond_pickaxe" },
+            world    = { [key(16, 60, 8)] = "minecraft:stone", [key(14, 60, 8)] = "minecraft:stone",
+                         [key(15, 60, 9)] = "minecraft:stone", [key(15, 60, 7)] = "minecraft:stone" },
+        })
+        base.geofence.setAnchorBlock(8, 8, 0)                       -- fence = chunk 0,0 only
+        local ok = base.detectFacingForTest()
+        local left = 0
+        for k in pairs(c.world) do left = left + 1 end
+        base.geofence.clear()
+        assert_eq(ok, false, "facing unknown, so any of the four could be the one leaving the fence")
+        assert_eq(left, 4)
     end,
 
     ["a miner rebooted outside the base with nothing to recover flies home (SOURCE-ONLY, weaker)"] =
