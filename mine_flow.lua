@@ -169,6 +169,35 @@ local function isFleetTurtle(name)
     return name:find("turtle") ~= nil
 end
 
+-- Proof of possession, by label.
+--
+-- The same physical turtle cannot be carried and standing at once, so a loader
+-- in the pack proves a standing-loader record is stale. That premise broke when
+-- it turned out every advanced turtle is computercraft:turtle_advanced: "a
+-- loader in our inventory" was really "an advanced turtle in our inventory",
+-- and a dug-up fleet member satisfied it. Clearing on that evidence would
+-- abandon a loader that really is out there.
+--
+-- A label recorded at placement restores the proof, and only for the loader we
+-- actually placed. Both halves are required: the item id, because a label is a
+-- display string and anything may carry one, and the exact label, because
+-- another miner's loader in our pack is not ours to write off.
+--
+-- Scans every slot: a loader displaced into a mining slot is still carried.
+function mine_flow.carriedLoaderSlotByLabel(label)
+    -- No empty-string guard: CC never reports an empty displayName, so ""
+    -- already matches nothing. A guard that cannot be exercised is a claim
+    -- no test can check, and its mutant survived saying exactly that.
+    if type(label) ~= "string" then return nil end
+    for s = 1, 16 do
+        local d = turtle.getItemDetail(s, true)
+        if d and d.name == equipment.ITEMS.LOADER_TURTLE and d.displayName == label then
+            return s
+        end
+    end
+    return nil
+end
+
 -- Returns the dig's own result, or false, "would_dig_turtle" when the block in
 -- that direction is a fleet member.
 function mine_flow.digGuarded(dir)
@@ -426,7 +455,14 @@ function mine_flow.placeLoader(chunkRadius, anchorChunk)
     -- A record we could not write is a loader we must not place: the whole
     -- record-before-place ordering exists so a crash errs toward "we may have
     -- one out there". Fail closed with the loader still in inventory.
-    local recorded, recErr = loader_state.record(tx, p.y, tz, anchorChunk, chunkRadius)
+    -- Read the label off the item while we still hold it. This is the only
+    -- moment it is certain: once placed, the thing in the world is a turtle like
+    -- any other, and once dug up again the pack may hold more than one.
+    local heldDetail = turtle.getItemDetail(slot, true)
+    local heldLabel  = heldDetail and heldDetail.displayName
+
+    local recorded, recErr =
+        loader_state.record(tx, p.y, tz, anchorChunk, chunkRadius, heldLabel)
     if not recorded then
         return false, recErr or "loader_state_write_failed"
     end

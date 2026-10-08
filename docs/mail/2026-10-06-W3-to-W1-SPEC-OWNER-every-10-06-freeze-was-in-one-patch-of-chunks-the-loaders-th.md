@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Every 10-06 freeze was in one patch of chunks - the loaders there held nothing, the same loaders held for hours elsewhere
 date: 2026-10-06
-status: open
+status: W1=closed,SPEC-OWNER=open
 ---
 
 # Every 10-06 freeze was in one patch of chunks - the loaders there held nothing, the same loaders held for hours elsewhere

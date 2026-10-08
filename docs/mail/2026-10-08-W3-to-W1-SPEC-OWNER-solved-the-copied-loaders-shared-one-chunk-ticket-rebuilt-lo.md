@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Solved - the copied loaders shared one chunk ticket; rebuilt loaders held everywhere, freeze spots included
 date: 2026-10-08
-status: open
+status: W1=closed,SPEC-OWNER=open
 ---
 
 # Solved - the copied loaders shared one chunk ticket; rebuilt loaders held everywhere, freeze spots included

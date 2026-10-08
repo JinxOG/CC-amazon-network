@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Retracted - there is no 25-ticket ceiling; hold the parking proposal
 date: 2026-10-06
-status: open
+status: SPEC-OWNER=open,W1=closed
 ---
 
 # Retracted - there is no 25-ticket ceiling; hold the parking proposal

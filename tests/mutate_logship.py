@@ -238,6 +238,11 @@ E_LONG    = "a job cannot finish sooner than the longest sector one miner holds"
 R_FLIGHT  = "a recall is checked before departing and before the loader goes down (SOURCE-ONLY, weaker)"
 L_ROOM    = "retrieveLoader refuses the dig with no free slot, and leaves the loader standing"
 J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
+B_REC     = "placeLoader records the label of the loader it put down"
+B_ITEM    = "a non-turtle item with the same label is not proof"
+B_DIFF    = "a different label is not proof"
+B_NONE    = "a record with no label is no proof, and must not match everything"
+B_ORDER   = "a recorded label is checked before the unlabelled refusal (SOURCE-ONLY, weaker)"
 L_ONE     = "retrieveLoader still proceeds with a single free slot"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
@@ -1312,6 +1317,18 @@ MUTANTS = [
 
     ('the stand-down is never set', 'ore_turtle.lua',
      [('            standDownUntil = os.clock() + 60\n', '')], D_MINER),
+    ("the placed loader's label is not recorded", "mine_flow.lua",
+     [('loader_state.record(tx, p.y, tz, anchorChunk, chunkRadius, heldLabel)', 'loader_state.record(tx, p.y, tz, anchorChunk, chunkRadius, nil)')], B_REC),
+
+    ("any item wearing the label counts as the loader", "mine_flow.lua",
+     [('if d and d.name == equipment.ITEMS.LOADER_TURTLE and d.displayName == label then', 'if d and d.displayName == label then')], B_ITEM),
+
+    ("any carried loader counts, whatever its label", "mine_flow.lua",
+     [('if d and d.name == equipment.ITEMS.LOADER_TURTLE and d.displayName == label then', 'if d and d.name == equipment.ITEMS.LOADER_TURTLE then')], B_DIFF),
+
+    ("the miner ignores the recorded label", "ore_turtle.lua",
+     [('    local byLabel = mine_flow.carriedLoaderSlotByLabel(s.label)', '    local byLabel = nil')], B_ORDER),
+
     ("the job runner decides where it is without waiting for a fix", "ore_turtle.lua",
      [('    base.waitForPositionFix("deciding whether this job rebooted mid-flight")\n', '')], J_FIX),
 

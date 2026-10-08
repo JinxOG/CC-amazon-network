@@ -140,4 +140,26 @@ return {
         assert_eq(ls2.hasPlaced(), false,
             "a corrupt file must not brick the miner on boot")
     end,
+    -- The label is what later proves a CARRIED turtle is the one we placed.
+    -- Every advanced turtle shares one item id, so without it a dug-up miner in
+    -- the pack looks exactly like our own returned loader (see
+    -- clearStaleLoaderRecord). An in-world probe on 2026-08-22 established that
+    -- a label replaces the upgrade-derived displayName, survives place->break on
+    -- the item, and is readable from Lua.
+    ["the record carries the loader's label, and survives a reload"] = function(assert_eq)
+        local ls = require("loader_state")
+        assert_eq(ls.record(10, 70, -20, { sx = 0, sz = 0 }, 1, "loader_196"), true)
+        assert_eq(ls.get().label, "loader_196")
+        package.loaded["loader_state"] = nil
+        local ls2 = require("loader_state")
+        assert_eq(ls2.get().label, "loader_196", "the label must survive a reboot")
+    end,
+
+    ["a record written without a label simply has none"] = function(assert_eq)
+        local ls = require("loader_state")
+        assert_eq(ls.record(1, 2, 3, { sx = 0, sz = 0 }, 1), true)
+        assert_eq(ls.get().label, nil,
+            "older records predate the label and must stay readable")
+    end,
+
 }
