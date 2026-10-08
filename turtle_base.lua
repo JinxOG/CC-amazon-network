@@ -1995,6 +1995,41 @@ function fuel.refuel()
     end
 end
 
+-- LEFTOVER COAL GOES BACK (2026-10-08, the user). Both refuels suck coal into
+-- every empty working slot and burn it, but a turtle burns only what its tank
+-- has room for and keeps the rest -- so it came away from every refuel with its
+-- inventory full of coal it could not use. After burning, every fuel item left
+-- in the working slots goes back into the chest it came from. The one exception
+-- is a miner's coal reserve slot, which it keeps stocked on purpose.
+fuel.ITEMS = { ["minecraft:coal"] = true, ["minecraft:charcoal"] = true,
+               ["minecraft:coal_block"] = true }
+
+-- The drop that puts items back where `suckFn` took them from; nil if unknown,
+-- because a drop toward no inventory throws the items on the ground.
+function fuel.dropFor(suckFn)
+    if suckFn == turtle.suckDown then return turtle.dropDown end
+    if suckFn == turtle.suckUp   then return turtle.dropUp   end
+    if suckFn == turtle.suck     then return turtle.drop     end
+    return nil
+end
+
+function fuel.returnLeftover(dropFn, where)
+    if not dropFn then return 0 end
+    local back = 0
+    for s = 1, BURN_MAX do
+        local i = turtle.getItemDetail(s)
+        if s ~= _self.fuelReserveSlot and i and fuel.ITEMS[i.name] then
+            turtle.select(s)
+            if dropFn() then back = back + i.count - turtle.getItemCount(s) end
+        end
+    end
+    turtle.select(1)
+    if back > 0 then
+        logInfo(string.format("Returned %d leftover fuel item(s) to %s", back, where))
+    end
+    return back
+end
+
 -- Deploy the entangled chest, drain coal into slots 1-BURN_MAX, burn it, recover chest.
 -- Before deploying, clears non-fuel debris from slots 1-BURN_MAX to ensure there is
 -- room for coal (support turtles accumulate road debris while following delivery).
@@ -2101,6 +2136,7 @@ function fuel.refuelFromChest()
     end
     local gained = fuel.level() - before
     logInfo(string.format("Refuelled +%d (now %d/%d)", gained, fuel.level(), fuel.max()))
+    fuel.returnLeftover(fuel.dropFor(suckFn), "the fuel ender chest")
 
     -- Break chest — drops as item, turtle auto-collects
     digFn()
@@ -2172,11 +2208,13 @@ function fuel.dockRefuel()
 
     -- Suck coal from dock chest into slots 1-BURN_MAX only
     local suckFns = { turtle.suckDown, turtle.suckUp, turtle.suck }
+    local source  = nil   -- the side that actually gave coal, for the return
     for _, suckFn in ipairs(suckFns) do
         for s = 1, BURN_MAX do
             if turtle.getItemCount(s) == 0 then
                 turtle.select(s)
                 if not suckFn(64) then break end
+                source = source or suckFn
             end
         end
     end
@@ -2192,6 +2230,7 @@ function fuel.dockRefuel()
     end
     turtle.select(1)
     local gained = fuel.level() - before
+    fuel.returnLeftover(fuel.dropFor(source), "the dock chest")
 
     if gained > 0 then
         logInfo(string.format("Dock refuel +%d (now %d/%d)", gained, fuel.level(), fuel.max()))
@@ -2909,6 +2948,8 @@ function base.init(role)
                 { eq.ITEMS.SCANNER, eq.ITEMS.LOADER_TURTLE,
                   eq.ITEMS.PICKAXE, eq.ITEMS.CHUNKY, eq.ITEMS.MODEM })
             logInfo("Protected slots 1-4 — the debris sweep will not drop miner hardware")
+            -- The coal reserve the miner keeps stocked; a refuel never returns it.
+            _self.fuelReserveSlot = eq.SLOTS.COAL
         else
             logWarn("equipment.lua unavailable — debris sweep is UNPROTECTED on this miner")
         end

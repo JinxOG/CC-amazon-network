@@ -151,7 +151,11 @@ function M.install(opts)
             if not i then return false, "No items to combust" end
             local per = FUEL_PER_ITEM[i.name]
             if not per then return false, "Items not combustible" end
-            local burn = math.min(i.count, n or i.count)
+            -- CC:Tweaked burns only the items needed to reach the limit and
+            -- leaves the rest in the slot. Burning the whole stack here hid the
+            -- leftover coal that filled turtles' inventories (2026-10-08).
+            local need = math.ceil((100000 - c.fuel) / per)
+            local burn = math.min(i.count, n or i.count, need)
             c.fuel = math.min(c.fuel + burn * per, 100000)
             i.count = i.count - burn
             if i.count <= 0 then c.inv[c.selected] = nil end

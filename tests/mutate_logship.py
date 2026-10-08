@@ -214,6 +214,9 @@ BX_DEPOT  = "a miner boxed in near the depot digs nothing"
 BX_FENCE  = "a miner boxed in at the edge of its fence digs nothing"
 ST_TURTLE = "a turtle stuck waiting for a fix says where it is, once a minute"
 ST_SERVER = "a stuck turtle's report raises NEEDS HANDS with where it is, once"
+CL_DOCK   = "leftover coal goes back into the dock chest"
+CL_RES    = "a miner keeps its coal reserve slot and returns the rest"
+CL_EC     = "leftover coal goes back into the fuel ender chest before it is picked up"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1046,6 +1049,22 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- Leftover coal goes back after a refuel (2026-10-08) ------------------
+    ('dock leftovers stay aboard', 'turtle_base.lua',
+     [('    fuel.returnLeftover(fuel.dropFor(source), "the dock chest")\n', '')], CL_DOCK),
+
+    ('ender-chest leftovers stay aboard', 'turtle_base.lua',
+     [('    fuel.returnLeftover(fuel.dropFor(suckFn), "the fuel ender chest")\n', '')], CL_EC),
+
+    ('the dock forgets which side gave coal', 'turtle_base.lua',
+     [('                source = source or suckFn\n', '')], CL_DOCK),
+
+    ('leftovers go back to the wrong side', 'turtle_base.lua',
+     [('    if suckFn == turtle.suckDown then return turtle.dropDown end\n', '    if suckFn == turtle.suckDown then return turtle.dropUp end\n')], CL_DOCK),
+
+    ("a miner's coal reserve is returned too", 'turtle_base.lua',
+     [('        if s ~= _self.fuelReserveSlot and i and fuel.ITEMS[i.name] then\n', '        if i and fuel.ITEMS[i.name] then\n')], CL_RES),
 
     # -- A stuck turtle says so; the server flags it (2026-10-08) -------------
     ('a stuck turtle stays silent', 'turtle_base.lua',

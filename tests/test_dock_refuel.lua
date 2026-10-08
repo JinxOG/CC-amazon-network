@@ -43,9 +43,14 @@ local function refuelAtDock(role, opts)
     local savedSleep, savedLabel, savedId   = sleep, os.getComputerLabel, os.getComputerID
     local savedPeripheral, savedGps         = peripheral, gps
 
+    local function stacks(n)
+        local t = {}
+        for i = 1, n do t[i] = { name = COAL, count = 64 } end
+        return t
+    end
     local containers = {
-        [EC]         = { { name = COAL, count = 64 } },
-        [DOCK_CHEST] = {},
+        [EC]         = stacks(opts.ecStacks or 1),
+        [DOCK_CHEST] = stacks(opts.dockStacks or 0),
     }
     if opts.dockChestCoal then
         containers[DOCK_CHEST] = { { name = COAL, count = 64 } }
@@ -119,10 +124,61 @@ local function refuelAtDock(role, opts)
     sleep, os.getComputerLabel, os.getComputerID = savedSleep, savedLabel, savedId
     peripheral, gps = savedPeripheral, savedGps
 
-    return ok, before, after, containers
+    return ok, before, after, containers, c
+end
+
+local function coalIn(list)
+    local n = 0
+    for _, st in ipairs(list) do if st.name == COAL then n = n + st.count end end
+    return n
+end
+
+-- Loose coal aboard, by slot, ignoring the slots named in `skip`.
+local function looseCoal(c, skip)
+    local n = 0
+    for s = 1, 16 do
+        local i = c.inv[s]
+        if i and i.name == COAL and not (skip and skip[s]) then n = n + i.count end
+    end
+    return n
 end
 
 return {
+    -- Leftover coal (2026-10-08, the user): a refuel sucked coal into every empty
+    -- slot, burned only what the tank had room for, and kept the rest -- so a
+    -- turtle came away with its inventory full of coal it could not use.
+    ["leftover coal goes back into the dock chest"] = function(assert_eq)
+        local ok, before, after, containers, c = refuelAtDock(proto.ROLE.DELIVERY,
+            { fuel = 70000, dockStacks = 14 })
+        local burned = math.ceil((100000 - before) / 80)
+        assert_eq(ok, true)
+        assert_eq(after, 100000, "the tank is filled")
+        assert_eq(looseCoal(c), 0, "no coal left aboard")
+        assert_eq(coalIn(containers[DOCK_CHEST]), 14 * 64 - burned, "the rest went back")
+    end,
+
+    ["a miner keeps its coal reserve slot and returns the rest"] = function(assert_eq)
+        local ok, before, after, containers, c = refuelAtDock(proto.ROLE.MINER,
+            { fuel = 70000, dockStacks = 14 })
+        local burned = math.ceil((100000 - before) / 80)
+        local reserve = c.inv[14] and c.inv[14].count or 0
+        assert_eq(ok, true)
+        assert_eq(looseCoal(c, { [14] = true }), 0, "no coal outside the reserve slot")
+        assert_eq(reserve, 64, "the reserve slot keeps its stack")
+        assert_eq(coalIn(containers[DOCK_CHEST]), 14 * 64 - burned - reserve)
+    end,
+
+    ["leftover coal goes back into the fuel ender chest before it is picked up"] =
+    function(assert_eq)
+        local ok, before, after, containers, c = refuelAtDock(proto.ROLE.MINER,
+            { fuel = 600, ecStacks = 40 })
+        local burned = math.ceil((after - before) / 80)
+        local reserve = c.inv[14] and c.inv[14].count or 0
+        assert_eq(ok, true)
+        assert_eq(looseCoal(c, { [14] = true }), 0, "no coal outside the reserve slot")
+        assert_eq(coalIn(containers[EC]), 40 * 64 - burned - reserve, "the rest went back")
+    end,
+
     -- The actual bug: an empty dock chest used to mean no refuel at all.
     ["a miner with an empty dock chest refuels from its own fuel ender chest"] =
     function(assert_eq)
