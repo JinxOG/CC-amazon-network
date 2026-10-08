@@ -839,8 +839,8 @@ MUTANTS = [
      [("                if j2key == zone.persistentKey then onZone = onZone + 1 end\n", "")], E_FULL),
 
     ("a failed job no longer respawns", "central_server.lua",
-     [("    if job.status == JOB_STATUS.FAILED then\n        respawnIfOrphaned(jobId, job, zone)\n",
-       "    if false then\n        respawnIfOrphaned(jobId, job, zone)\n")], RESPAWN),
+     [("    if job.status == JOB_STATUS.FAILED or job.cancelledByOperator then\n        respawnIfOrphaned(jobId, job, zone)\n",
+       "    if job.cancelledByOperator then\n        respawnIfOrphaned(jobId, job, zone)\n")], RESPAWN),
 
     ("hand-outs are not logged", "central_server.lua",
      [('    logInfo(string.format("Assigned sector (%d,%d)%s to %s [%s]",\n',
@@ -879,7 +879,8 @@ MUTANTS = [
        "                nStaged = nStaged + 1\n")], U_WARE),
 
     ("a cancel respawns a replacement again", "central_server.lua",
-     [("    if job.cancelledByOperator then\n", "    if false then\n")], C_CANCEL),
+     [("    if job.cancelledByOperator then\n        logInfo(string.format(\"Zone %s has",
+       "    if false then\n        logInfo(string.format(\"Zone %s has")], C_CANCEL),
 
     ("the cancel flag is never set", "central_server.lua",
      [("    job.cancelledByOperator = true\n", "")], C_CANCEL),
@@ -1333,7 +1334,7 @@ MUTANTS = [
        "        neverDeparted = false\n")], R_REFUSE),
 
     ("every failure is treated as a refusal", "central_server.lua",
-     [("    if zone and zone.persistentKey and job.assignedTo and not neverDeparted then\n",
+     [("    if zone and zone.persistentKey and job.assignedTo and not neverDeparted\n       and not job.cancelledByOperator then\n",
        "    if false then\n")], R_REAL),
 
     ("the refusal is not logged", "central_server.lua",
