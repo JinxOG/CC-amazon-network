@@ -3114,6 +3114,11 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     if type(p.detail) == "string" and p.detail:find("^stuck_no_fix") then
         registry.flagStuck(msg.from, p.detail)
     end
+    -- The other way home after a reboot (ore_turtle, 1.9.134): outside the base
+    -- with no loader to recover, it flies home and says so. Held the same way.
+    if type(p.detail) == "string" and p.detail:find("^rebooted_outside_base") then
+        registry.holdUntilDocked(msg.from)
+    end
     jobQueue.noteWorking(p.jobId, msg.from)
     jobQueue.progress(p.jobId, p.status, p.detail)
 end
@@ -3703,20 +3708,35 @@ local function handleMinePhase(msg)
                 .. "by design -- %s requeued now rather than after a timeout",
                 msg.from, jid))
             jobQueue.reassign(jid, msg.from, "boot_recovery")
-            t.status = proto.STATUS.RETURNING
-            -- RETURNING until it reports DOCKED, whatever its heartbeats say.
-            -- A rebooted miner's own status is IDLE -- it is not running a job,
-            -- it is flying home -- and its modem stays on for the climb to its
-            -- loader. In the planned outage of 2026-10-03 those IDLE heartbeats
-            -- overwrote RETURNING within two minutes and every miner was sent a
-            -- job it could not hear (ACK timeouts at 02:13). registry.update
-            -- reads this flag; DOCKED clears it, and a REGISTER starts a fresh
-            -- entry without it.
-            t.homeAfterReboot = true
         end
+        -- JOB OR NO JOB (2026-10-08, the double reboot at 22:52 and 22:57). The
+        -- first reboot requeued every miner's job; the second caught them
+        -- recovering again with nothing assigned, this hold was only set when a
+        -- job was, and all seven were sent a job they could not hear -- one a
+        -- minute, every one an ACK timeout. A recovering miner is held whatever
+        -- it was doing.
+        registry.holdUntilDocked(msg.from)
     end
 end
 handlers[proto.MSG.MINE_PHASE] = handleMinePhase
+
+-- A miner flying home after a reboot is not idle until it reports DOCKED. Its
+-- own heartbeats say IDLE (it runs no job), so registry.update ignores those
+-- while homeAfterReboot is set. A REGISTER starts a fresh entry without it.
+function registry.holdUntilDocked(id)
+    local t = state.registry[id or ""]
+    if not t then return end
+    -- RETURNING until it reports DOCKED, whatever its heartbeats say.
+    -- A rebooted miner's own status is IDLE -- it is not running a job,
+    -- it is flying home -- and its modem stays on for the climb to its
+    -- loader. In the planned outage of 2026-10-03 those IDLE heartbeats
+    -- overwrote RETURNING within two minutes and every miner was sent a
+    -- job it could not hear (ACK timeouts at 02:13). registry.update
+    -- reads this flag; DOCKED clears it, and a REGISTER starts a fresh
+    -- entry without it.
+    t.status          = proto.STATUS.RETURNING
+    t.homeAfterReboot = true
+end
 
 -- JOB_REQUEST handler registered after 'server' is declared (see below)
 

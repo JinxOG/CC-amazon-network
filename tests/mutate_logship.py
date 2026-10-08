@@ -212,6 +212,7 @@ BX_NODIG  = "a turtle boxed in on all sides that cannot dig does not claim a fac
 BX_TURTLE = "a miner boxed in by turtles digs none of them"
 BX_DEPOT  = "a miner boxed in near the depot digs nothing"
 BX_FENCE  = "a miner boxed in at the edge of its fence digs nothing"
+BX_STOWED = "a miner boxed in with its pickaxe stowed borrows it to dig out"
 ST_TURTLE = "a turtle stuck waiting for a fix says where it is, once a minute"
 ST_SERVER = "a stuck turtle's report raises NEEDS HANDS with where it is, once"
 CL_DOCK   = "leftover coal goes back into the dock chest"
@@ -219,6 +220,8 @@ CL_RES    = "a miner keeps its coal reserve slot and returns the rest"
 CL_EC     = "leftover coal goes back into the fuel ender chest before it is picked up"
 UP_FIRST  = "a turtle with a queued update is not offered work until it has it"
 UP_LOOP   = "a turtle whose last update failed is not offered it again on that registration"
+RB_AGAIN  = "a miner recovering again with no job left is still not offered work"
+RB_HOME   = "a miner flying home with nothing to recover is not offered work until it docks"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1007,7 +1010,7 @@ MUTANTS = [
      [('        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil\n', '        and true\n')], O_SWAP),
 
     ('the recovering turtle is left dispatchable', "central_server.lua",
-     [('            t.status = proto.STATUS.RETURNING\n', '')], O_REQUEUE),
+     [('    t.status          = proto.STATUS.RETURNING\n', '')], O_REQUEUE),
 
     ('boot recovery gets only the short swap grace', "central_server.lua",
      [('    t.commsGapGraceSec = bootRecovery and CFG.BOOT_RECOVERY_GRACE_SEC or nil\n', '    t.commsGapGraceSec = nil\n')], O_REQUEUE),
@@ -1051,6 +1054,13 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- A recovering miner is held, job or no job (2026-10-08 double reboot) --
+    ('a recovering miner with no job is not held', 'central_server.lua',
+     [('        registry.holdUntilDocked(msg.from)\n    end\nend\nhandlers[proto.MSG.MINE_PHASE]', '    end\nend\nhandlers[proto.MSG.MINE_PHASE]')], RB_AGAIN),
+
+    ('a miner flying home with nothing to recover is not held', 'central_server.lua',
+     [('        registry.holdUntilDocked(msg.from)\n    end\n    jobQueue.noteWorking', '    end\n    jobQueue.noteWorking')], RB_HOME),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',
@@ -1101,6 +1111,9 @@ MUTANTS = [
      [('    if t.needsHands ~= detail then\n', '    if true then\n')], ST_SERVER),
 
     # -- Boxed in by rock after a reboot: dig one block out (2026-10-08) ------
+    ('digging out never borrows the stowed pickaxe', 'turtle_base.lua',
+     [('    if not _digToolWrapper then return digAndStep() end\n', '    if true then return digAndStep() end\n')], BX_STOWED),
+
     ('a boxed-in miner never digs out', 'turtle_base.lua',
      [('        moved = base.digOutForFacing(x1, y1, z1)\n', '')], BX_ROCK),
 
@@ -1114,7 +1127,7 @@ MUTANTS = [
      [('            if not _geofence.contains(pos.x + d[1], pos.z + d[2]) then return false end\n', '')], BX_FENCE),
 
     ('digging out digs a turtle', 'turtle_base.lua',
-     [('            if digGuarded("forward") and turtle.forward() then\n                logWarn("Boxed in', '            if turtle.dig() and turtle.forward() then\n                logWarn("Boxed in')], BX_TURTLE),
+     [('                if digGuarded("forward") and turtle.forward() then\n                    logWarn("Boxed in', '                if turtle.dig() and turtle.forward() then\n                    logWarn("Boxed in')], BX_TURTLE),
 
     # -- Recall-all cancels; a cancel is final (2026-10-08) ------------------
     ('recall-all cancels nothing', 'central_server.lua',
@@ -1279,7 +1292,7 @@ MUTANTS = [
 
     # -- Home after a reboot means RETURNING until DOCKED (2026-10-03) -------
     ('a rebooted miner is never flagged as homebound', 'central_server.lua',
-     [('            t.homeAfterReboot = true\n', '')], R_STAY),
+     [('    t.homeAfterReboot = true\nend\n', 'end\n')], R_STAY),
 
     ("a homebound miner's IDLE heartbeat is believed", 'central_server.lua',
      [('    if t.homeAfterReboot and status == proto.STATUS.IDLE then status = nil end\n', '')], R_STAY),

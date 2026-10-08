@@ -359,6 +359,44 @@ return {
         assert_eq(q.x .. "," .. q.z, "1,0", "and the facing it measured is the real one: east")
     end,
 
+    -- Boxed in mid-flight (2026-10-08 22:57). The second of two reboots caught
+    -- node_178 climbing its own one-block shaft in travel mode: chunky and
+    -- modem equipped, pickaxe stowed in slot 3. The dig-out tried the tool in
+    -- hand, had none, and it waited. A miner borrows its pickaxe to dig the
+    -- way every other travel-mode dig does (ore_turtle's withDigTool).
+    ["a miner boxed in with its pickaxe stowed borrows it to dig out"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos      = { x = 0, y = 60, z = 0, facing = 1 },
+            equipped = { left = "computercraft:wireless_modem_advanced",
+                         right = "advancedperipherals:chunk_controller" },
+            world    = { [key(1, 60, 0)] = "minecraft:stone", [key(-1, 60, 0)] = "minecraft:stone",
+                         [key(0, 60, 1)] = "minecraft:stone", [key(0, 60, -1)] = "minecraft:stone" },
+        })
+        local borrowed, during = 0, nil
+        base.setDigToolWrapper(function(what, fn)
+            borrowed = borrowed + 1
+            local saved = c.equipped.left
+            c.equipped.left = "minecraft:diamond_pickaxe"         -- modem side, as withDigTool
+            local ok, err = pcall(fn)
+            during = c.equipped.right
+            c.equipped.left = saved
+            if not ok then error(err, 0) end
+            return true
+        end)
+        local ok = base.detectFacingForTest()
+        base.setDigToolWrapper(nil)
+        local left = 0
+        for _, k in ipairs({ key(1, 60, 0), key(-1, 60, 0), key(0, 60, 1), key(0, 60, -1) }) do
+            if c.world[k] then left = left + 1 end
+        end
+        assert_eq(ok, true, "measured, not stuck")
+        assert_eq(borrowed, 1, "the pickaxe was borrowed once")
+        assert_eq(during, "advancedperipherals:chunk_controller", "chunky stayed on: never unloaded")
+        assert_eq(left, 3, "exactly one block dug")
+        assert_eq(c.equipped.left, "computercraft:wireless_modem_advanced", "and the modem is back")
+    end,
+
     ["a miner boxed in by turtles digs none of them"] =
     function(assert_eq)
         local base, c = fresh({

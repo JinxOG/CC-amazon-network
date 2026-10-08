@@ -438,6 +438,54 @@ return {
         assert_eq(offered, false, "so it is never offered a job it cannot hear")
     end,
 
+    -- The double reboot of 2026-10-08 (22:52, then 22:57). The first requeued
+    -- every miner's job; the second caught them recovering again with no job
+    -- left, and the hold was only set when a job was -- so all seven were IDLE,
+    -- and the server sent each a job it could not hear, one a minute, every one
+    -- an ACK timeout.
+    ["a miner recovering again with no job left is still not offered work"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.status, t.jobId = proto.STATUS.IDLE, nil              -- requeued by the first reboot
+        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "PENDING", nil
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            phase = proto.PHASE.RETRIEVING, detail = "boot recovery — loader at 2344,185,-3095" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        local offered = false
+        for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+            if w.id == A then offered = true end
+        end
+        local status = t.status
+        restore()
+        assert_eq(status, proto.STATUS.RETURNING, "recovering is recovering, job or no job")
+        assert_eq(offered, false, "never offered a job it cannot hear")
+    end,
+
+    -- The other way home after a reboot: a miner outside the base with no loader
+    -- to recover (1.9.134) says "rebooted_outside_base: flying home".
+    ["a miner flying home with nothing to recover is not offered work until it docks"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.status, t.jobId = proto.STATUS.IDLE, nil
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = A, payload = {
+            status = proto.STATUS.IDLE, detail = "rebooted_outside_base: flying home" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        local function offered()
+            for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+                if w.id == A then return true end
+            end
+            return false
+        end
+        local flying = offered()
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = { phase = proto.PHASE.DOCKED } })
+        local home = offered()
+        restore()
+        assert_eq(flying, false, "not while it flies home")
+        assert_eq(home, true, "and docking releases it")
+    end,
+
     ["docking ends it: the miner is idle and dispatchable at once"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
