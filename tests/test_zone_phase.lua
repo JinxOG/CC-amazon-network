@@ -256,6 +256,56 @@ return {
         assert_eq(line ~= nil, true, "and the decision is logged with the sectors left")
     end,
 
+    -- 2026-10-08: the user asked for every miner home to swap loaders. Recall-all
+    -- turned node_184 round, but its job (a loader placement that was blocked)
+    -- was still open; it failed recoverably as it docked, was retried, and the
+    -- miner was sent straight back out in the same second. Recall-all now
+    -- cancels every unfinished job, so nothing is left to retry or dispatch.
+    ["recall-all cancels every unfinished job, so nothing is sent back out"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local server = package.loaded["central_server"]
+        T.state.jobs["job_0062"] = {
+            id = "job_0062", type = proto.JOB.MINE, status = "PENDING", params = {},
+            priority = 5, history = {}, createdAt = 1, retries = 0,
+        }
+        server.recallAll("admin_recall")
+        local before = #T.sent
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "sector_setup_failed: placement_blocked", recoverable = true } })
+        local assigned = 0
+        for i = before + 1, #T.sent do
+            if tostring(T.sent[i]):find("JOB_ASSIGN", 1, true) then assigned = assigned + 1 end
+        end
+        local sa, sb, sc = T.state.jobs[JA].status, T.state.jobs[JB].status, T.state.jobs["job_0062"].status
+        restore()
+        assert_eq(sa, "CANCELLED", "the working job is cancelled, and a late retryable failure cannot revive it")
+        assert_eq(sb, "CANCELLED", "every working job")
+        assert_eq(sc, "CANCELLED", "a queued job too, or it is dispatched to the miner that just docked")
+        assert_eq(assigned, 0, "no miner is sent back out")
+    end,
+
+    -- The same hole without recall-all: a cancelled job whose turtle reports the
+    -- failure as retryable was put back in the queue, since the retry never
+    -- asked whether the operator had cancelled it.
+    ["a cancelled job is never retried, however the turtle reports the failure"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({
+            phase = "MINE", pending = { copy(S2) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, phase = "MINE", jobId = JA } },
+        })
+        local server = package.loaded["central_server"]
+        server.cancelJob(JA)
+        T.state.miningZones[JA] = zone              -- cancelJob drops the zone ref
+        T.handlers[proto.MSG.JOB_FAILED]({ from = A, payload = {
+            jobId = JA, reason = "recalled", recoverable = true } })
+        local status = T.state.jobs[JA].status
+        local fails = (T.state.persistentZones["zk"].sectorFailCount or {})[S1.x .. "," .. S1.z]
+        restore()
+        assert_eq(status, "CANCELLED", "a cancel is final")
+        assert_eq(fails, nil, "and the operator's stop is not counted against the sector")
+    end,
+
     -- 2026-09-29: job_0095 joined a four-sector zone, worked two and a half
     -- minutes and reported itself complete. The zone carried on with ONE miner
     -- where it had been dispatched two, which roughly doubles the job. The

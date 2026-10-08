@@ -2271,7 +2271,10 @@ function jobQueue.fail(jobId, reason, recoverable)
                 la.x, la.z, jobId, reason or "?"))
         end
     end
-    if zone and zone.persistentKey and job.assignedTo and not neverDeparted then
+    -- An operator's cancel is not the sector's fault either: three recalls would
+    -- otherwise blacklist ground nothing had failed on.
+    if zone and zone.persistentKey and job.assignedTo and not neverDeparted
+       and not job.cancelledByOperator then
         local la = zone.lastAssignments and zone.lastAssignments[job.assignedTo]
         if la then
             local pz   = state.persistentZones[zone.persistentKey]
@@ -2303,7 +2306,13 @@ function jobQueue.fail(jobId, reason, recoverable)
         end
     end
 
-    if recoverable and job.retries < CFG.MAX_JOB_RETRIES then
+    if job.cancelledByOperator then
+        -- A CANCEL IS FINAL (2026-10-08). The turtle answers a cancel's recall
+        -- with a failure, and if it calls that failure retryable the job went
+        -- back in the queue and out to the next idle miner. The respawn below
+        -- still runs, so it can log that no replacement is queued.
+        job.status = JOB_STATUS.CANCELLED
+    elseif recoverable and job.retries < CFG.MAX_JOB_RETRIES then
         job.retries    = job.retries + 1
         job.status     = JOB_STATUS.PENDING
         job.assignedTo = nil
@@ -2328,7 +2337,7 @@ function jobQueue.fail(jobId, reason, recoverable)
         end
     end
     -- Auto-respawn: a zone left with sectors and nobody on it gets a replacement.
-    if job.status == JOB_STATUS.FAILED then
+    if job.status == JOB_STATUS.FAILED or job.cancelledByOperator then
         respawnIfOrphaned(jobId, job, zone)
     end
     state.miningZones[jobId] = nil
@@ -3877,7 +3886,26 @@ function server.cancelJob(jobId)
     return true
 end
 
+-- Every caller is an operator saying "everyone home": the dashboard, the server
+-- console, startup_server's manual recall. Until 2026-10-08 it only turned the
+-- turtles round and left their jobs open, so a miner that docked with a
+-- retryable failure was re-queued and sent straight back out (node_184, 08:39).
+-- It now cancels every unfinished job first, through server.cancelJob, so each
+-- is final and nothing is left for the dispatcher to hand out.
 function server.recallAll(reason)
+    local open = {}
+    for id, job in pairs(state.jobs) do
+        if job.status ~= JOB_STATUS.COMPLETE and job.status ~= JOB_STATUS.FAILED
+           and job.status ~= JOB_STATUS.CANCELLED then
+            open[#open + 1] = id
+        end
+    end
+    for _, id in ipairs(open) do
+        if state.jobs[id].status ~= JOB_STATUS.CANCELLED then server.cancelJob(id) end
+    end
+    if #open > 0 then
+        logWarn(string.format("Recall-all cancelled %d unfinished job(s)", #open))
+    end
     sendBroadcast(proto.MSG.RECALL, proto.payloadRecall(reason or "server_recall"))
     logWarn("Recalled all turtles: " .. (reason or "server_recall"))
 end

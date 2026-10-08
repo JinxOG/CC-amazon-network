@@ -205,6 +205,8 @@ U_SAME    = "a turtle on the current version, or a newer one, is left alone"
 U_REF     = "the deploy's commit survives a restart"
 U_CMP     = "older is compared as numbers, not text"
 R_STOCK   = "restock ranks a zone by the ore in sectors not yet mined"
+RC_ALL    = "recall-all cancels every unfinished job, so nothing is sent back out"
+RC_FINAL  = "a cancelled job is never retried, however the turtle reports the failure"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1031,6 +1033,19 @@ MUTANTS = [
 
     ('the trip home can be abandoned', 'ore_turtle.lua',
      [('        -- The trip home is never abandoned, whatever was set for the way out.\n        base.setMoveAbort(nil)\n', '')], A_MINER),
+
+    # -- Recall-all cancels; a cancel is final (2026-10-08) ------------------
+    ('recall-all cancels nothing', 'central_server.lua',
+     [('        if state.jobs[id].status ~= JOB_STATUS.CANCELLED then server.cancelJob(id) end\n', '')], RC_ALL),
+
+    ('recall-all cancels only jobs already out, not queued ones', 'central_server.lua',
+     [('        if job.status ~= JOB_STATUS.COMPLETE and job.status ~= JOB_STATUS.FAILED\n', '        if job.status ~= JOB_STATUS.COMPLETE and job.status ~= JOB_STATUS.FAILED and job.status ~= JOB_STATUS.PENDING\n')], RC_ALL),
+
+    ('a cancelled job is retried again', 'central_server.lua',
+     [('    if job.cancelledByOperator then\n        -- A CANCEL IS FINAL', '    if false then\n        -- A CANCEL IS FINAL')], RC_FINAL),
+
+    ("an operator's cancel counts against the sector", 'central_server.lua',
+     [('       and not job.cancelledByOperator then\n', '       then\n')], RC_FINAL),
 
     # -- Restock picks where the ore is, not where it was (2026-10-06) --------
     ('restock counts mined-out sectors', 'central_server.lua',
