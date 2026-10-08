@@ -198,6 +198,56 @@ end
 
 return {
 
+    -- PROOF OF POSSESSION BY LABEL.
+    --
+    -- The same physical turtle cannot be carried and standing at once, so a
+    -- loader in the pack proves the record is stale. The premise broke because
+    -- every advanced turtle shares one item id: "a loader in our inventory" was
+    -- really "an advanced turtle in our inventory", and a dug-up miner satisfied
+    -- it. A recorded label restores the proof for the loader we actually placed.
+    --
+    -- Until now every rescue ended with the operator deleting loader_state.dat
+    -- by hand (node_184, 2026-10-08).
+    ["a carried turtle whose label matches the record is proof of possession"] = function(assert_eq)
+        local flow, eq, _, _, c = loadFlow(E_MINE(), travelInv())
+        c.inv[7] = { name = eq.ITEMS.LOADER_TURTLE, count = 1, displayName = "loader_196" }
+        assert_eq(flow.carriedLoaderSlotByLabel("loader_196"), 7)
+    end,
+
+    ["a different label is not proof"] = function(assert_eq)
+        local flow, eq, _, _, c = loadFlow(E_MINE(), travelInv())
+        c.inv[7] = { name = eq.ITEMS.LOADER_TURTLE, count = 1, displayName = "loader_203" }
+        assert_eq(flow.carriedLoaderSlotByLabel("loader_196"), nil,
+            "someone else's loader must not clear our record")
+    end,
+
+    -- The item id still has to match. A label is a display string and nothing
+    -- stops another item carrying the same one.
+    ["a non-turtle item with the same label is not proof"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        c.inv[7] = { name = "minecraft:stone", count = 1, displayName = "loader_196" }
+        assert_eq(flow.carriedLoaderSlotByLabel("loader_196"), nil)
+    end,
+
+    -- An older record has no label at all, and must not match the first
+    -- advanced turtle in the pack -- which is the whole failure this replaces.
+    ["a record with no label is no proof, and must not match everything"] = function(assert_eq)
+        local flow, eq, _, _, c = loadFlow(E_MINE(), travelInv())
+        c.inv[7] = { name = eq.ITEMS.LOADER_TURTLE, count = 1, displayName = "loader_196" }
+        assert_eq(flow.carriedLoaderSlotByLabel(nil), nil,
+            "no recorded label means fall through to the old refusal, not a match")
+    end,
+
+    ["placeLoader records the label of the loader it put down"] = function(assert_eq)
+        local inv = travelInv()
+        local eqm = require("equipment")
+        inv[2] = { name = eqm.ITEMS.LOADER_TURTLE, count = 1, displayName = "loader_196" }
+        local flow, _, _, ls = loadFlow(E_TRAVEL(), inv, nil, beaconOnFirstPump(LOADER_LANDING))
+        assert_eq(flow.placeLoader(1, { cx = 0, cz = -1 }), true)
+        assert_eq(ls.get().label, "loader_196",
+            "the record must carry the label so a later rescue can prove possession")
+    end,
+
     -- Never dig a turtle: the MINING half of the guard ------------------------
     --
     -- 2026-08-22, node_139 docked carrying node_119 -- a MINER -- as an item.

@@ -53,11 +53,20 @@ end
 -- module exists to prevent. Raising here instead would abort placeLoader from
 -- inside, which is survivable, but only by luck of where the pcall happens to
 -- sit; a checked return makes the contract explicit.
-function loader_state.record(x, y, z, sector, radius)
+-- `label` is the placed loader's label, read off the item before it left the
+-- inventory. It is what later proves a CARRIED turtle is the one we placed:
+-- every advanced turtle shares one item id, so possession alone stopped being
+-- proof once a dug-up miner could sit in the pack. An in-world probe
+-- (2026-08-22) established that a label replaces the upgrade-derived
+-- displayName, survives place -> break on the item, and is readable from Lua.
+-- Optional: records written before this existed have none, and must stay
+-- readable.
+function loader_state.record(x, y, z, sector, radius, label)
     local rec = {
         x = x, y = y, z = z,
         sector = sector,
         radius = radius,
+        label = label,
         placedAt = os.epoch("utc"),
     }
     local f = fs.open(PATH, "w")

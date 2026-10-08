@@ -372,4 +372,23 @@ function(assert_eq)
         .. "an unfixed position makes 'I rebooted in the field' always true")
 end
 
+-- The recorded label must be consulted BEFORE the unlabelled refusal, or the
+-- refusal fires first and the rescue still needs a manual file delete. The
+-- matching logic itself is behavioural in test_mine_flow; this pins the order.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["a recorded label is checked before the unlabelled refusal (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    local byLabelAt = src:find("mine_flow.carriedLoaderSlotByLabel(s.label)", 1, true)
+    local refuseAt  = src:find("equipment.LOADER_LABEL == nil", 1, true)
+    assert_eq(byLabelAt ~= nil, true,
+        "clearStaleLoaderRecord must consult the label recorded at placement")
+    assert_eq(refuseAt ~= nil, true, "the unlabelled refusal moved or vanished")
+    assert_eq(byLabelAt < refuseAt, true,
+        "proof by label has to come first, or the refusal fires and the operator "
+        .. "still has to delete loader_state.dat by hand")
+end
+
 return suite

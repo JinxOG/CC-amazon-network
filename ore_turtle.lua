@@ -1626,6 +1626,32 @@ local function clearStaleLoaderRecord()
     -- remedy is then the documented loader_state.dat delete, which is explicit
     -- about what it is asserting. Fails toward keeping a record we might not
     -- need, never toward forgetting a loader that is standing in the world.
+    -- PROOF BY LABEL FIRST (2026-10-08).
+    --
+    -- placeLoader records the label it read off the item before putting it down,
+    -- so a carried turtle wearing that exact label is the loader we placed --
+    -- positive evidence, not the beacon-silence inference Invariant D rules out.
+    -- This is what the unlabelled refusal below could never do, and every rescue
+    -- until now ended with the operator deleting loader_state.dat by hand
+    -- (node_184, 2026-10-08: dug out at depth, loader collected by hand, then
+    -- "cannot prove it is ours" every minute at the dock).
+    --
+    -- It also settles the restart-mid-retrieval case: a miner that rebooted
+    -- after digging its loader up but before clearing the record used to take
+    -- the refusal below and then fly to the recorded position carrying the very
+    -- loader it was going to look for.
+    local byLabel = mine_flow.carriedLoaderSlotByLabel(s.label)
+    if byLabel then
+        print(string.format(
+            "[MINER] Carrying %s, the loader recorded at %d,%d,%d — record is "
+            .. "stale, clearing.", tostring(s.label), s.x, s.y, s.z))
+        base.sendProgress(string.format(
+            "stale_loader_record_cleared at %d,%d,%d (carrying %s in slot %d)",
+            s.x, s.y, s.z, tostring(s.label), byLabel))
+        loader_state.clear()
+        return true
+    end
+
     local carried = equipment.findLoaderSlot()
     if carried and equipment.LOADER_LABEL == nil then
         reportForeignTurtle(carried, turtle.getItemDetail(carried))
