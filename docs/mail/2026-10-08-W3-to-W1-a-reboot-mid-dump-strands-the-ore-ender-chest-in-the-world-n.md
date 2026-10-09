@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: A reboot mid-dump strands the ore ender chest in the world - node_181, and two ore_turtle edits of mine in 1.9.139
 date: 2026-10-08
-status: open
+status: answered
 ---
 
 # A reboot mid-dump strands the ore ender chest in the world - node_181, and two ore_turtle edits of mine in 1.9.139
