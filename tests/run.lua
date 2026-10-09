@@ -18,6 +18,7 @@ local files = {
     "tests.test_shaft_sidestep",
     "tests.test_inbox",
     "tests.test_loader_state",
+    "tests.test_chest_state",
     "tests.test_loader_beacon",
     "tests.test_mine_phase",
     "tests.test_mine_flow",
