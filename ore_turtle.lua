@@ -2480,7 +2480,26 @@ local hok, herr = pcall(function()
     if base.isInsideBuilding(base.getPos()) then return end
     print("[MINER] Rebooted outside the base with nothing to recover -- flying home")
     base.sendProgress("rebooted_outside_base: flying home")
-    base.returnToDockFromSky()
+    -- Flown as an autonomous return, like boot recovery's flight: a server down
+    -- for a second reboot must not hold it mid-air waiting for permission.
+    base.setAutonomousReturn(true)
+    local docked, dockErr = base.returnToDockFromSky()
+    base.setAutonomousReturn(false)
+    -- HANDED BACK AS IDLE (2026-10-08). node_181, 183 and 184 took this path
+    -- after the double reboot, docked at 23:14 and sat RETURNING: the status
+    -- returnToDockFromSky sets, with nothing here setting it back and no DOCKED
+    -- sent, so the server never offered them work -- the deadlock that
+    -- recoverPlacedLoader's own tail fixed in 1.9.22. Ends the same way, and
+    -- likewise never claims a dock it did not reach.
+    if docked == false then
+        print("[MINER] Flying home after an out-of-base reboot did NOT reach the dock: "
+            .. tostring(dockErr))
+        base.sendProgress("dock_not_reached: " .. tostring(dockErr))
+        return
+    end
+    tidyAtDock()
+    base.setStatus(proto.STATUS.IDLE)
+    reportPhase(proto.PHASE.DOCKED)
 end)
 if not hok then
     print("[MINER] Going home after an out-of-base reboot crashed: " .. tostring(herr))

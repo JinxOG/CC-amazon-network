@@ -359,6 +359,44 @@ return {
         assert_eq(q.x .. "," .. q.z, "1,0", "and the facing it measured is the real one: east")
     end,
 
+    -- Boxed in mid-flight (2026-10-08 22:57). The second of two reboots caught
+    -- node_178 climbing its own one-block shaft in travel mode: chunky and
+    -- modem equipped, pickaxe stowed in slot 3. The dig-out tried the tool in
+    -- hand, had none, and it waited. A miner borrows its pickaxe to dig the
+    -- way every other travel-mode dig does (ore_turtle's withDigTool).
+    ["a miner boxed in with its pickaxe stowed borrows it to dig out"] =
+    function(assert_eq)
+        local base, c = fresh({
+            pos      = { x = 0, y = 60, z = 0, facing = 1 },
+            equipped = { left = "computercraft:wireless_modem_advanced",
+                         right = "advancedperipherals:chunk_controller" },
+            world    = { [key(1, 60, 0)] = "minecraft:stone", [key(-1, 60, 0)] = "minecraft:stone",
+                         [key(0, 60, 1)] = "minecraft:stone", [key(0, 60, -1)] = "minecraft:stone" },
+        })
+        local borrowed, during = 0, nil
+        base.setDigToolWrapper(function(what, fn)
+            borrowed = borrowed + 1
+            local saved = c.equipped.left
+            c.equipped.left = "minecraft:diamond_pickaxe"         -- modem side, as withDigTool
+            local ok, err = pcall(fn)
+            during = c.equipped.right
+            c.equipped.left = saved
+            if not ok then error(err, 0) end
+            return true
+        end)
+        local ok = base.detectFacingForTest()
+        base.setDigToolWrapper(nil)
+        local left = 0
+        for _, k in ipairs({ key(1, 60, 0), key(-1, 60, 0), key(0, 60, 1), key(0, 60, -1) }) do
+            if c.world[k] then left = left + 1 end
+        end
+        assert_eq(ok, true, "measured, not stuck")
+        assert_eq(borrowed, 1, "the pickaxe was borrowed once")
+        assert_eq(during, "advancedperipherals:chunk_controller", "chunky stayed on: never unloaded")
+        assert_eq(left, 3, "exactly one block dug")
+        assert_eq(c.equipped.left, "computercraft:wireless_modem_advanced", "and the modem is back")
+    end,
+
     ["a miner boxed in by turtles digs none of them"] =
     function(assert_eq)
         local base, c = fresh({
@@ -422,5 +460,26 @@ return {
         assert_eq(guard:find("if loader_state.hasPlaced() then return end", 1, true) ~= nil, true,
             "a standing loader is boot recovery's job, not this")
         assert_eq(guard:find("if base.isInsideBuilding(base.getPos()) then return end", 1, true) ~= nil, true)
+    end,
+
+    -- The double reboot of 2026-10-08: node_181, 183 and 184 took this path,
+    -- docked at 23:14 -- and sat there RETURNING. returnToDockFromSky sets that
+    -- status, nothing on this path set it back, and no DOCKED went out, so the
+    -- server never offered them work: the exact deadlock recoverPlacedLoader's
+    -- own tail fixed in 1.9.22. It now ends the same way.
+    ["a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local homeAt = src:find('base.waitForPositionFix("rebooted outside the base with no loader to recover")', 1, true)
+        local runAt  = src:find("local ok, err = pcall(base.run, mineJob)", 1, true)
+        local body   = homeAt and runAt and src:sub(homeAt, runAt) or ""
+        local function at(s) return body:find(s, 1, true) end
+        local fly, failed = at("base.returnToDockFromSky()"), at("if docked == false then")
+        local idle, phase = at("base.setStatus(proto.STATUS.IDLE)"), at("reportPhase(proto.PHASE.DOCKED)")
+        local auto = at("base.setAutonomousReturn(true)")
+        assert_eq(fly ~= nil and failed ~= nil and idle ~= nil and phase ~= nil and auto ~= nil, true,
+            "flies as an autonomous return, checks it docked, then says IDLE and DOCKED")
+        assert_eq(auto < fly and fly < failed and failed < idle and idle < phase, true,
+            "in that order: never IDLE for a dock it did not reach")
     end,
 }

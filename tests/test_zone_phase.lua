@@ -272,11 +272,22 @@ return {
         for _, e in ipairs(T.state.log) do
             if e.msg:find("NEEDS HANDS: " .. A, 1, true) and e.msg:find("1960,-50,-3351", 1, true) then n = n + 1 end
         end
+        -- A rebooted turtle runs no job: its job was requeued, and its own
+        -- heartbeats say IDLE. Without the hold, that IDLE is believed.
+        local stuckOffered = false
+        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "PENDING", nil
+        T.state.registry[A].jobId = nil
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+            if w.id == A then stuckOffered = true end
+        end
         local flag, other = T.state.registry[A].needsHands, T.state.registry[B].needsHands
         restore()
         assert_eq(flag, d, "the dashboard shows why and where")
         assert_eq(n, 1, "said once, not every minute")
         assert_eq(other, nil, "an ordinary progress report raises nothing")
+        -- 2026-10-08 23:15-23:50: node_178, stuck, was sent 19 jobs it could not hear.
+        assert_eq(stuckOffered, false, "and a stuck turtle is not offered work")
     end,
 
     -- 2026-10-08: the user asked for every miner home to swap loaders. Recall-all
@@ -436,6 +447,54 @@ return {
         restore()
         assert_eq(status, proto.STATUS.RETURNING, "its IDLE is not believed until it docks")
         assert_eq(offered, false, "so it is never offered a job it cannot hear")
+    end,
+
+    -- The double reboot of 2026-10-08 (22:52, then 22:57). The first requeued
+    -- every miner's job; the second caught them recovering again with no job
+    -- left, and the hold was only set when a job was -- so all seven were IDLE,
+    -- and the server sent each a job it could not hear, one a minute, every one
+    -- an ACK timeout.
+    ["a miner recovering again with no job left is still not offered work"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.status, t.jobId = proto.STATUS.IDLE, nil              -- requeued by the first reboot
+        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "PENDING", nil
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            phase = proto.PHASE.RETRIEVING, detail = "boot recovery — loader at 2344,185,-3095" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        local offered = false
+        for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+            if w.id == A then offered = true end
+        end
+        local status = t.status
+        restore()
+        assert_eq(status, proto.STATUS.RETURNING, "recovering is recovering, job or no job")
+        assert_eq(offered, false, "never offered a job it cannot hear")
+    end,
+
+    -- The other way home after a reboot: a miner outside the base with no loader
+    -- to recover (1.9.134) says "rebooted_outside_base: flying home".
+    ["a miner flying home with nothing to recover is not offered work until it docks"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.status, t.jobId = proto.STATUS.IDLE, nil
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = A, payload = {
+            status = proto.STATUS.IDLE, detail = "rebooted_outside_base: flying home" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        local function offered()
+            for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+                if w.id == A then return true end
+            end
+            return false
+        end
+        local flying = offered()
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = { phase = proto.PHASE.DOCKED } })
+        local home = offered()
+        restore()
+        assert_eq(flying, false, "not while it flies home")
+        assert_eq(home, true, "and docking releases it")
     end,
 
     ["docking ends it: the miner is idle and dispatchable at once"] =
@@ -996,6 +1055,55 @@ return {
         assert_eq(key, "fresh", "a mined-out zone ranks by what is left, not what it held")
         assert_eq(count, 300)
         assert_eq(none, nil, "no zone with the ore left is no zone")
+    end,
+
+    -- 2026-10-08 20:08:21: node_179 docked on 1.9.135 with 1.9.138 queued for it,
+    -- and in the same second was dispatched job_0175 -- the update waits on a
+    -- heartbeat, the dispatch did not. It went back out on old code for hours.
+    ["a turtle with a queued update is not offered work until it has it"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local now = 5000000
+        os.epoch = function() return now end
+        local t = T.state.registry[A]
+        t.status, t.jobId, t.fuel = proto.STATUS.IDLE, nil, 100000
+        t.pendingUpdate = string.rep("d", 40)
+        local function offered()
+            for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+                if w.id == A then return true end
+            end
+            return false
+        end
+        local queued = offered()
+        local before = #T.sent
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        local delivered = 0
+        for i = before + 1, #T.sent do
+            if tostring(T.sent[i]):find("UPDATE_ALL", 1, true) then delivered = delivered + 1 end
+        end
+        local rebooting = offered()
+        now = now + 121000
+        local later = offered()
+        restore()
+        assert_eq(queued, false, "not while the update is still queued")
+        assert_eq(delivered, 1, "the next heartbeat delivers it")
+        assert_eq(rebooting, false, "nor while it is rebooting into it")
+        assert_eq(later, true, "but a turtle that never came back is not benched for good")
+    end,
+
+    -- The catch-up must not loop on a turtle whose update keeps failing: it
+    -- would reboot into the same failure, re-register, and be offered it again.
+    ["a turtle whose last update failed is not offered it again on that registration"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.handlers[proto.MSG.REGISTER]({ from = A, payload = {
+            role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+            updateFailed = "turtle_base.lua: HTTP 429" } })
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = {
+            status = proto.STATUS.IDLE, fuel = 100000, version = "1.9.100" } })
+        local queued = T.state.registry[A].pendingUpdate
+        restore()
+        assert_eq(queued, nil, "it says why at REGISTER; offering it again would loop")
     end,
 
     ["a turtle reporting an older version is queued for the current release"] =

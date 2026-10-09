@@ -1042,17 +1042,29 @@ function base.digOutForFacing(x, y, z)
             if not _geofence.contains(pos.x + d[1], pos.z + d[2]) then return false end
         end
     end
-    for _ = 1, 4 do
-        if turtle.detect() then
-            base.makeRoomBeforeDig()
-            if digGuarded("forward") and turtle.forward() then
-                logWarn("Boxed in on all four sides -- dug one block out to measure facing")
-                return true
+    local function digAndStep()
+        for _ = 1, 4 do
+            if turtle.detect() then
+                base.makeRoomBeforeDig()
+                if digGuarded("forward") and turtle.forward() then
+                    logWarn("Boxed in on all four sides -- dug one block out to measure facing")
+                    return true
+                end
             end
+            turtle.turnRight()
         end
-        turtle.turnRight()
+        return false
     end
-    return false
+    -- In travel mode a miner's pickaxe is stowed (2026-10-08 22:57: node_178,
+    -- caught by a second reboot climbing its own shaft with chunky and modem
+    -- on). The installed wrapper borrows it for the dig, as every travel-mode
+    -- dig does, and never from chunky's side. Roles without one dig as they are.
+    if not _digToolWrapper then return digAndStep() end
+    local stepped = false
+    local ok, err = pcall(_digToolWrapper, "digging out to measure facing",
+        function() stepped = digAndStep() end)
+    if not ok then logWarn("Dig-out to measure facing failed: " .. tostring(err)) end
+    return ok and stepped
 end
 
 -- Attempt to route around a turtle blocking the forward path.
