@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Restart safety is miner-only - proposal for one recovery layer every role uses (delivery, support, builder)
 date: 2026-10-08
-status: open
+status: SPEC-OWNER=answered,W1=open
 ---
 
 # Restart safety is miner-only - proposal for one recovery layer every role uses (delivery, support, builder)
