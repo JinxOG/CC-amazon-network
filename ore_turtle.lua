@@ -1476,8 +1476,10 @@ local function retrievePlacedLoader(stand)
                 base.sendProgress(string.format(
                     "loader_record_corrected to %d,%d,%d from %d,%d,%d",
                     beaconPos.x, beaconPos.y, beaconPos.z, rec.x, rec.y, rec.z))
-                loader_state.record(beaconPos.x, beaconPos.y, beaconPos.z,
-                    rec.sector, rec.radius)
+                -- correctPosition, not record: the latter takes the label as
+                -- its last argument and this call used to omit it, dropping the
+                -- label on the one path that only runs during reboot recovery.
+                loader_state.correctPosition(beaconPos.x, beaconPos.y, beaconPos.z)
                 rec = loader_state.get() or rec
                 -- The stand square was derived from the stale record, so it is
                 -- stale too. Derive a fresh one from the corrected position.

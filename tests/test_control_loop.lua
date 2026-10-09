@@ -1588,8 +1588,11 @@ function(assert_eq)
     -- when the assignment was stubbed to nil.
     assert_eq(body:find("\n            local beaconPos = mine_flow%.nearbyBeaconPos%(%)") ~= nil, true,
         "a retry must ask the loader where it thinks it is")
-    assert_eq(body:find("\n                loader_state%.record%(beaconPos%.x") ~= nil, true,
-        "a corrected position must be written back to the record")
+    assert_eq(body:find("\n                loader_state%.correctPosition%(beaconPos%.x") ~= nil, true,
+        "a corrected position must be written back, without restating what the "
+        .. "loader is -- record() takes the label last and this call omitted it, "
+        .. "dropping the label on the one path that only runs during reboot "
+        .. "recovery (W3, 2026-10-08)")
     assert_eq(body:find("\n                stand = nil") ~= nil, true,
         "the stand square derived from the stale record must be discarded")
 

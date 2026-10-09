@@ -82,6 +82,34 @@ function loader_state.record(x, y, z, sector, radius, label)
     return true
 end
 
+-- Correct WHERE the recorded loader is, without restating WHAT it is.
+--
+-- Boot recovery believes the loader's own beacon over the record when the two
+-- disagree, and one-block mismatches are real (node_182, 2026-10-06:
+-- "ahead=1767 recorded=1768"). That correction used to call record() again and
+-- pass no label, so the label was dropped by the one path that only runs during
+-- reboot recovery -- which is the exact case the label exists for. A rescued
+-- loader was then refused all over again. Found by W3, 2026-10-08.
+--
+-- Everything but the position is carried over deliberately, placedAt included:
+-- this is the same loader, placed at the same time, seen more accurately.
+-- Refuses rather than inventing a record, because a correction with nothing to
+-- correct means the caller's own state is wrong and writing one would hide it.
+function loader_state.correctPosition(x, y, z)
+    local rec = load()
+    if not rec then return false, "no_loader_recorded" end
+    local updated = {}
+    for k, v in pairs(rec) do updated[k] = v end
+    updated.x, updated.y, updated.z = x, y, z
+    local f = fs.open(PATH, "w")
+    if not f then return false, "loader_state_write_failed" end
+    f.write(textutils.serialise(updated))
+    f.close()
+    _cache  = updated
+    _loaded = true
+    return true
+end
+
 -- Call this only AFTER retrieval is confirmed (the loader is back in
 -- inventory). Clearing early would erase the only record of a loader that
 -- turned out still to be standing in the world.

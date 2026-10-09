@@ -162,4 +162,46 @@ return {
             "older records predate the label and must stay readable")
     end,
 
+    -- CORRECTING A POSITION MUST NOT FORGET WHAT THE LOADER IS.
+    --
+    -- Boot recovery believes the loader's own beacon over the record when they
+    -- disagree (1-block mismatches are real: node_182, 10-06,
+    -- "ahead=1767 recorded=1768"). That path used to re-record with record(),
+    -- which takes the label as its last argument, and passed none -- so the
+    -- label was dropped by the one path that only runs during reboot recovery,
+    -- which is the exact case the label exists for. Found by W3, 10-08.
+    --
+    -- A dedicated correction keeps that from being possible: there is no
+    -- argument to forget.
+    ["correcting the position keeps the label, sector and radius"] = function(assert_eq)
+        local ls = require("loader_state")
+        assert_eq(ls.record(100, 70, -200, { cx = 6, cz = -13 }, 1, "loader_196"), true)
+        assert_eq(ls.correctPosition(101, 70, -200), true)
+        local r = ls.get()
+        assert_eq(r.x, 101, "the position is corrected")
+        assert_eq(r.y, 70); assert_eq(r.z, -200)
+        assert_eq(r.label, "loader_196", "the label MUST survive the correction")
+        assert_eq(r.radius, 1, "and so must the radius")
+        assert_eq(r.sector and r.sector.cx, 6, "and the sector")
+    end,
+
+    ["correcting the position survives a reload"] = function(assert_eq)
+        local ls = require("loader_state")
+        assert_eq(ls.record(1, 2, 3, { cx = 0, cz = 0 }, 1, "loader_203"), true)
+        assert_eq(ls.correctPosition(4, 5, 6), true)
+        package.loaded["loader_state"] = nil
+        local ls2 = require("loader_state")
+        local r = ls2.get()
+        assert_eq(r.x, 4); assert_eq(r.label, "loader_203")
+    end,
+
+    ["correcting with nothing recorded is refused, not invented"] = function(assert_eq)
+        local ls = require("loader_state")
+        ls.clear()
+        local ok, why = ls.correctPosition(1, 2, 3)
+        assert_eq(ok, false, "there is no loader to correct")
+        assert_eq(why, "no_loader_recorded")
+        assert_eq(ls.hasPlaced(), false, "and nothing may be created by trying")
+    end,
+
 }

@@ -245,6 +245,8 @@ B_REC     = "placeLoader records the label of the loader it put down"
 B_ITEM    = "a non-turtle item with the same label is not proof"
 B_DIFF    = "a different label is not proof"
 B_NONE    = "a record with no label is no proof, and must not match everything"
+C_KEEP    = "correcting the position keeps the label, sector and radius"
+C_CALL    = "retrieval retries and believes the loader's own position (SOURCE-ONLY, weaker)"
 B_ORDER   = "a recorded label is checked before the unlabelled refusal (SOURCE-ONLY, weaker)"
 L_ONE     = "retrieveLoader still proceeds with a single free slot"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
@@ -1347,6 +1349,12 @@ MUTANTS = [
 
     ("the miner ignores the recorded label", "ore_turtle.lua",
      [('    local byLabel = mine_flow.carriedLoaderSlotByLabel(s.label)', '    local byLabel = nil')], B_ORDER),
+
+    ("the position correction rebuilds the record from scratch", "loader_state.lua",
+     [('    local updated = {}\n    for k, v in pairs(rec) do updated[k] = v end\n', '    local updated = { sector = rec.sector, radius = rec.radius }\n')], C_KEEP),
+
+    ("the beacon correction re-records instead of correcting", "ore_turtle.lua",
+     [('loader_state.correctPosition(beaconPos.x, beaconPos.y, beaconPos.z)', 'loader_state.record(beaconPos.x, beaconPos.y, beaconPos.z, rec.sector, rec.radius)')], C_CALL),
 
     ("the job runner decides where it is without waiting for a fix", "ore_turtle.lua",
      [('    base.waitForPositionFix("deciding whether this job rebooted mid-flight")\n', '')], J_FIX),
