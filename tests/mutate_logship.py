@@ -222,6 +222,7 @@ UP_FIRST  = "a turtle with a queued update is not offered work until it has it"
 UP_LOOP   = "a turtle whose last update failed is not offered it again on that registration"
 RB_AGAIN  = "a miner recovering again with no job left is still not offered work"
 RB_HOME   = "a miner flying home with nothing to recover is not offered work until it docks"
+RB_IDLE   = "a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1062,6 +1063,18 @@ MUTANTS = [
     ('a miner flying home with nothing to recover is not held', 'central_server.lua',
      [('        registry.holdUntilDocked(msg.from)\n    end\n    jobQueue.noteWorking', '    end\n    jobQueue.noteWorking')], RB_HOME),
 
+    ('a stuck turtle is still offered work', 'central_server.lua',
+     [('    registry.holdUntilDocked(id)\nend\n', 'end\n')], ST_SERVER),
+
+    ('a miner home with nothing to recover stays RETURNING', 'ore_turtle.lua',
+     [('    base.setStatus(proto.STATUS.IDLE)\n    reportPhase(proto.PHASE.DOCKED)\nend)\n', '    reportPhase(proto.PHASE.DOCKED)\nend)\n')], RB_IDLE),
+
+    ('it claims a dock it never reached', 'ore_turtle.lua',
+     [('    if docked == false then\n        print("[MINER] Flying home after an out-of-base reboot did NOT reach', '    if false then\n        print("[MINER] Flying home after an out-of-base reboot did NOT reach')], RB_IDLE),
+
+    ('its flight home waits on a server that is down', 'ore_turtle.lua',
+     [('    base.setAutonomousReturn(true)\n    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n', '    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n')], RB_IDLE),
+
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',
      [('        local updatingOk = not t.pendingUpdate\n            and not', '        local updatingOk = true\n            and not')], UP_FIRST),
@@ -1173,7 +1186,8 @@ MUTANTS = [
      [('function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end\n', 'function base.hasPositionFix() return _self.posFixed == true end\n')], K_FACE),
 
     ('a stranded miner never goes home', 'ore_turtle.lua',
-     [('    base.returnToDockFromSky()\nend)\n', 'end)\n')], K_HOME),
+     [('    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n',
+       '    local docked, dockErr = nil, nil\n    base.setAutonomousReturn(false)\n')], K_HOME),
 
     ('a stranded miner flies home over a standing loader', 'ore_turtle.lua',
      [('    if loader_state.hasPlaced() then return end\n    if base.isInsideBuilding(base.getPos()) then return end\n    base.waitForPositionFix("rebooted outside', '    if base.isInsideBuilding(base.getPos()) then return end\n    base.waitForPositionFix("rebooted outside')], K_HOME),

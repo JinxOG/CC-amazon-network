@@ -272,11 +272,22 @@ return {
         for _, e in ipairs(T.state.log) do
             if e.msg:find("NEEDS HANDS: " .. A, 1, true) and e.msg:find("1960,-50,-3351", 1, true) then n = n + 1 end
         end
+        -- A rebooted turtle runs no job: its job was requeued, and its own
+        -- heartbeats say IDLE. Without the hold, that IDLE is believed.
+        local stuckOffered = false
+        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "PENDING", nil
+        T.state.registry[A].jobId = nil
+        T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+            if w.id == A then stuckOffered = true end
+        end
         local flag, other = T.state.registry[A].needsHands, T.state.registry[B].needsHands
         restore()
         assert_eq(flag, d, "the dashboard shows why and where")
         assert_eq(n, 1, "said once, not every minute")
         assert_eq(other, nil, "an ordinary progress report raises nothing")
+        -- 2026-10-08 23:15-23:50: node_178, stuck, was sent 19 jobs it could not hear.
+        assert_eq(stuckOffered, false, "and a stuck turtle is not offered work")
     end,
 
     -- 2026-10-08: the user asked for every miner home to swap loaders. Recall-all

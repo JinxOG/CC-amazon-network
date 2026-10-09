@@ -461,4 +461,25 @@ return {
             "a standing loader is boot recovery's job, not this")
         assert_eq(guard:find("if base.isInsideBuilding(base.getPos()) then return end", 1, true) ~= nil, true)
     end,
+
+    -- The double reboot of 2026-10-08: node_181, 183 and 184 took this path,
+    -- docked at 23:14 -- and sat there RETURNING. returnToDockFromSky sets that
+    -- status, nothing on this path set it back, and no DOCKED went out, so the
+    -- server never offered them work: the exact deadlock recoverPlacedLoader's
+    -- own tail fixed in 1.9.22. It now ends the same way.
+    ["a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local homeAt = src:find('base.waitForPositionFix("rebooted outside the base with no loader to recover")', 1, true)
+        local runAt  = src:find("local ok, err = pcall(base.run, mineJob)", 1, true)
+        local body   = homeAt and runAt and src:sub(homeAt, runAt) or ""
+        local function at(s) return body:find(s, 1, true) end
+        local fly, failed = at("base.returnToDockFromSky()"), at("if docked == false then")
+        local idle, phase = at("base.setStatus(proto.STATUS.IDLE)"), at("reportPhase(proto.PHASE.DOCKED)")
+        local auto = at("base.setAutonomousReturn(true)")
+        assert_eq(fly ~= nil and failed ~= nil and idle ~= nil and phase ~= nil and auto ~= nil, true,
+            "flies as an autonomous return, checks it docked, then says IDLE and DOCKED")
+        assert_eq(auto < fly and fly < failed and failed < idle and idle < phase, true,
+            "in that order: never IDLE for a dock it did not reach")
+    end,
 }

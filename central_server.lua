@@ -2219,6 +2219,10 @@ function registry.flagStuck(id, detail)
             .. "going there and digging it a hole is faster.", id, tostring(detail)))
     end
     t.needsHands = detail
+    -- And not offered work it cannot hear (2026-10-08 23:15-23:50: node_178,
+    -- boxed in, was sent 19 jobs, every one an ACK timeout). It is recovering
+    -- from a reboot, so it is held like one, until it reports DOCKED.
+    registry.holdUntilDocked(id)
 end
 
 -- verdict is what the turtle's own check said: "ok", a fault reason, or nil
