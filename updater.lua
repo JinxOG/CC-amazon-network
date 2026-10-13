@@ -64,6 +64,7 @@ local ROLE_FILES = {
         "equipment.lua",
         "geofence.lua",
         "loader_state.lua",
+        "chest_state.lua",
         "mine_flow.lua",
         { src = "ore_turtle.lua", dst = "startup.lua" },
     },

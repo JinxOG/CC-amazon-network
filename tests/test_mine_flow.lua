@@ -37,6 +37,7 @@ local function freshModules()
     package.loaded["equipment"]    = nil
     package.loaded["geofence"]     = nil
     package.loaded["loader_state"] = nil
+    package.loaded["chest_state"]  = nil
     package.loaded["mine_flow"]    = nil
 end
 
@@ -197,6 +198,138 @@ end
 
 
 return {
+
+    -- ─── The ore chest's place/recover record (release 1 of the recovery layer)
+    --
+    -- node_181, 2026-10-08: DUMPING at 22:48:33, a reboot at 22:52 left the
+    -- chest standing near 2048,16,-3392, slot 16 empty at boot, and the miner
+    -- benched until a person handed it a new chest. Nothing on disk said a chest
+    -- was out there, so nothing could go back for it.
+    --
+    -- Built in W1's files to the ruled ledger contract (spec owner, 2026-10-08)
+    -- so W3 can MOVE it into turtle_base's ledger rather than rewrite it.
+    ["banking clears the chest record once the chest is back aboard"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local cs = require("chest_state")
+        bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        assert_eq(flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end }), true)
+        assert_eq(cs.hasPlaced(), false, "the chest came back, so nothing is out there")
+    end,
+
+    -- THE node_181 CASE: the chest went down and could not be picked back up.
+    -- The record is the only thing that can send anyone back for it.
+    ["a chest left standing keeps its record, with the block it is in"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local cs = require("chest_state")
+        bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local realDig = turtle.digDown
+        turtle.digDown = function() return false, "interrupted" end
+        flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        turtle.digDown = realDig
+        assert_eq(cs.hasPlaced(), true, "a chest is still out there and must be recorded")
+        local r = cs.get()
+        assert_eq(r.x, c.pos.x); assert_eq(r.y, c.pos.y - 1); assert_eq(r.z, c.pos.z)
+    end,
+
+    -- Reaches the ROLLBACK: the faces are clear, so the record is written, and
+    -- then place() fails because there is no chest to place. A false record
+    -- would send boot recovery digging at a block the chest never occupied.
+    -- (Blocking all three faces instead never writes a record at all, so it
+    -- cannot test this -- the mutant that removed the rollback survived against
+    -- exactly that test.)
+    ["a record written for a place that then failed is rolled back"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local cs = require("chest_state")
+        bankingDrops(c)
+        c.inv[16] = nil                      -- nothing to place, faces all clear
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local ok, why = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, false); assert_eq(why, "chest_not_placed")
+        assert_eq(cs.hasPlaced(), false,
+            "the place failed cleanly, so nothing is out there and the record "
+            .. "written a moment earlier must be gone")
+    end,
+
+    ["a chest that never went down leaves no record"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local cs = require("chest_state")
+        bankingDrops(c)
+        for _, k in ipairs({ wkey(c.pos.x, c.pos.y - 1, c.pos.z),
+                             wkey(c.pos.x, c.pos.y + 1, c.pos.z),
+                             wkey(c.pos.x, c.pos.y, c.pos.z - 1) }) do
+            c.world[k] = "minecraft:bedrock"
+        end
+        unbreakable({ "down", "up", "forward" })
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local ok, why = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, false); assert_eq(why, "chest_not_placed")
+        assert_eq(cs.hasPlaced(), false,
+            "a clean failure means nothing is out there; a false record would send "
+            .. "a miner digging at a block it never used")
+    end,
+
+    ["recoverPlacedChest digs an adjacent chest back and clears the record"] = function(assert_eq)
+        local inv = travelInv(); inv[16] = nil
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv,
+            { [wkey(0, 79, 0)] = "enderstorage:ender_chest" })
+        local cs = require("chest_state"); cs.record(0, 79, 0)
+        local ok, why = flow.recoverPlacedChest({ chestSlot = 16 })
+        assert_eq(ok, true, tostring(why))
+        assert_eq(c.world[wkey(0, 79, 0)], nil, "it came out of the world")
+        assert_eq(cs.hasPlaced(), false, "and the record is done with")
+    end,
+
+    -- The loader lesson, and here a full pack is the EXPECTED state: the miner
+    -- rebooted part-way through a dump.
+    ["recoverPlacedChest refuses with no free slot, leaving the chest standing"] = function(assert_eq)
+        local inv = travelInv(); inv[16] = nil
+        for s = 1, 16 do
+            if inv[s] == nil then inv[s] = { name = "minecraft:tuff", count = 64 } end
+        end
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv,
+            { [wkey(0, 79, 0)] = "enderstorage:ender_chest" })
+        local cs = require("chest_state"); cs.record(0, 79, 0)
+        local ok, why = flow.recoverPlacedChest({ chestSlot = 16 })
+        assert_eq(ok, false); assert_eq(why, "no_room_for_chest")
+        assert_eq(c.world[wkey(0, 79, 0)], "enderstorage:ender_chest",
+            "the chest MUST still be standing -- a dig with no room destroys it")
+        assert_eq(cs.hasPlaced(), true, "and the record must survive for the retry")
+    end,
+
+    ["recoverPlacedChest will not dig a block that is not the chest"] = function(assert_eq)
+        local inv = travelInv(); inv[16] = nil
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv,
+            { [wkey(0, 79, 0)] = "minecraft:stone" })
+        local cs = require("chest_state"); cs.record(0, 79, 0)
+        local ok, why = flow.recoverPlacedChest({ chestSlot = 16 })
+        assert_eq(ok, false); assert_eq(why, "chest_not_in_place")
+        assert_eq(c.world[wkey(0, 79, 0)], "minecraft:stone",
+            "digging whatever sits at a remembered coordinate is how the loader "
+            .. "retrieval used to destroy the wrong block")
+        assert_eq(cs.hasPlaced(), true)
+    end,
+
+    ["recoverPlacedChest does not go looking for a chest that is not adjacent"] = function(assert_eq)
+        local inv = travelInv(); inv[16] = nil
+        local flow = loadFlow(E_MINE(), inv, {})
+        local cs = require("chest_state"); cs.record(500, 60, 500)
+        local ok, why = flow.recoverPlacedChest({ chestSlot = 16 })
+        assert_eq(ok, false); assert_eq(why, "chest_not_adjacent")
+        assert_eq(cs.hasPlaced(), true, "the record stays so a person can be told where")
+    end,
+
+    ["recoverPlacedChest with nothing recorded is a no-op"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        require("chest_state").clear()
+        local ok, why = flow.recoverPlacedChest({ chestSlot = 16 })
+        assert_eq(ok, false); assert_eq(why, "no_chest_recorded")
+    end,
 
     -- PROOF OF POSSESSION BY LABEL.
     --

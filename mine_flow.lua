@@ -52,6 +52,14 @@
 local equipment    = require("equipment")
 local geofence      = require("geofence")
 local loader_state = require("loader_state")
+local chest_state  = require("chest_state")
+
+-- The ore chest is identified by exact name before anything digs at a
+-- remembered coordinate. equipment.isHardwareItem also accepts "entangled",
+-- which is right for a slot check and wrong here: what we placed is an ender
+-- chest and nothing else may be dug in its place.
+local ORE_CHEST_ITEM = "enderstorage:ender_chest"
+
 
 local mine_flow = {}
 
@@ -168,6 +176,7 @@ local function isFleetTurtle(name)
     if name:sub(1, 10) == "minecraft:" then return false end
     return name:find("turtle") ~= nil
 end
+
 
 -- Proof of possession, by label.
 --
@@ -1003,6 +1012,16 @@ end
 -- mine_flow.digGuarded(f.name), and `name` is exactly its direction key. An
 -- unguarded dig closure sitting in this table is how the guard gets bypassed
 -- again by someone reaching for the obvious-looking field.
+-- Which absolute block a face puts the chest into. bankPayload chooses the face
+-- at runtime, so the record stores a position, never a direction -- a direction
+-- would be wrong the moment the turtle turned.
+local function faceBlock(p, name)
+    if name == "down" then return p.x, p.y - 1, p.z end
+    if name == "up"   then return p.x, p.y + 1, p.z end
+    local ax, az = aheadBlock(p)
+    return ax, p.y, az
+end
+
 local BANK_FACES = {
     { name = "down",
       detect = function() return turtle.detectDown() end,
@@ -1055,7 +1074,23 @@ function mine_flow.bankPayload(opts)
             if opts.afterDig then opts.afterDig() end
             turtle.select(chestSlot)
         end
-        if not f.detect() and f.place() then face = f break end
+        if not f.detect() then
+            -- RECORD BEFORE THE PLACE, same ordering as loader_state and for the
+            -- same reason: a crash between the record and the place leaves a
+            -- false positive that recovery resolves harmlessly, while a crash
+            -- the other way round strands the chest with nothing recording
+            -- where. node_181 lost its chest exactly that way on 2026-10-08.
+            local bx, by, bz = faceBlock(_hooks.pos(), f.name)
+            local recOk, recErr = chest_state.record(bx, by, bz)
+            -- A record we could not write is a chest we must not place.
+            if not recOk then return false, recErr or "chest_state_write_failed" end
+            if f.place() then face = f break end
+            -- A CLEAN place() failure: we get a definite answer and nothing left
+            -- the inventory, so the record just written is a false positive. Roll
+            -- it back before trying the next face, or boot recovery sends the
+            -- miner digging at a block it never used.
+            chest_state.clear()
+        end
     end
 
     -- No face took the chest -- an empty chest slot, or boxed in by blocks that
@@ -1075,8 +1110,74 @@ function mine_flow.bankPayload(opts)
     end
 
     turtle.select(chestSlot)
-    mine_flow.digGuarded(face.name)
+    local backOk = mine_flow.digGuarded(face.name)
+    -- Clear ONLY once the chest is demonstrably back in its slot. A dig that
+    -- failed, or one with nowhere to put the drop, leaves a chest standing --
+    -- and the record is then the only thing that can send anyone back for it.
+    -- The record says "a chest is STANDING at X". Once the block is dug there is
+    -- nothing standing, whichever slot the item landed in -- turtle.dig() puts
+    -- the drop in the selected slot when it can and the first free one when it
+    -- cannot. Keying this on slot 16 made the record outlive the chest.
+    if backOk then chest_state.clear() end
     return true, face.name
+end
+
+-- Recover an ore chest left standing by a reboot mid-dump.
+--
+-- node_181, 2026-10-08: DUMPING at 22:48:33, the reboot at 22:52 left its chest
+-- near 2048,16,-3392, slot 16 empty at boot, and it was benched until a person
+-- handed it a new one. A reboot does not move or turn a turtle, so the chest is
+-- still on one of the three faces bankPayload uses.
+--
+-- Built to the ledger contract ruled on 2026-10-08 so it can be MOVED into
+-- turtle_base's generic ledger rather than rewritten: record before place, clear
+-- after recover, refuse rather than guess, and report coordinates when it cannot.
+--
+-- Four guards, each one paid for already:
+--   * adjacency -- it never goes looking; a chest that is not on a face is a
+--     NEEDS HANDS with coordinates, which the caller raises;
+--   * identity before digging -- digging whatever sits at a remembered
+--     coordinate is how the loader retrieval used to destroy the wrong block;
+--   * through digGuarded -- never destroy a fleet member that has since parked
+--     in that block;
+--   * a free slot FIRST -- a dig with no room breaks the block and destroys the
+--     drop, and a miner recovering a chest has just rebooted part-way through a
+--     dump, so a full pack is the expected state here, not the unlucky one.
+function mine_flow.recoverPlacedChest(opts)
+    opts = opts or {}
+    local chestSlot = opts.chestSlot
+    if not chestSlot then return false, "no_chest_slot" end
+    local rec = chest_state.get()
+    if not rec then return false, "no_chest_recorded" end
+
+    local p = _hooks.pos()
+    local dir
+    if rec.x == p.x and rec.z == p.z and rec.y == p.y - 1 then
+        dir = "down"
+    elseif rec.x == p.x and rec.z == p.z and rec.y == p.y + 1 then
+        dir = "up"
+    else
+        local ax, az = aheadBlock(p)
+        if rec.x == ax and rec.z == az and rec.y == p.y then dir = "forward" end
+    end
+    if not dir then return false, "chest_not_adjacent" end
+
+    local seen, block = GUARD_INSPECT[dir]()
+    if not seen or type(block) ~= "table" or block.name ~= ORE_CHEST_ITEM then
+        return false, "chest_not_in_place"
+    end
+
+    local free = 0
+    for s = 1, 16 do
+        if turtle.getItemCount(s) == 0 then free = free + 1 end
+    end
+    if free == 0 then return false, "no_room_for_chest" end
+
+    turtle.select(chestSlot)
+    local dug, why = mine_flow.digGuarded(dir)
+    if not dug then return false, why or "chest_dig_failed" end
+    chest_state.clear()
+    return true
 end
 
 return mine_flow

@@ -391,4 +391,24 @@ function(assert_eq)
         .. "still has to delete loader_state.dat by hand")
 end
 
+-- The chest recovery must run BEFORE the loader recovery. The loader recovery
+-- flies off to the sector, so a chest left behind by the same reboot would be
+-- abandoned for the whole trip. Ruled order (spec owner, 2026-10-08).
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load, so its
+-- boot sequence cannot be driven from this harness. The recovery's own guards
+-- are behavioural in test_mine_flow.
+suite["the ore chest is recovered before the loader at boot (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    local chestAt  = src:find("pcall(recoverPlacedChestAtBoot)", 1, true)
+    local loaderAt = src:find("pcall(recoverPlacedLoader)", 1, true)
+    assert_eq(chestAt ~= nil, true, "boot must try to recover a recorded ore chest")
+    assert_eq(loaderAt ~= nil, true, "the loader recovery moved or vanished")
+    assert_eq(chestAt < loaderAt, true,
+        "the chest is adjacent and cheap; the loader recovery flies away, so a "
+        .. "chest recovered after it is abandoned for the whole trip")
+end
+
 return suite

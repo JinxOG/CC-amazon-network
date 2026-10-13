@@ -252,6 +252,12 @@ B_ITEM    = "a non-turtle item with the same label is not proof"
 B_DIFF    = "a different label is not proof"
 B_NONE    = "a record with no label is no proof, and must not match everything"
 C_KEEP    = "correcting the position keeps the label, sector and radius"
+K_KEEP    = "a chest left standing keeps its record, with the block it is in"
+K_NONE    = "a record written for a place that then failed is rolled back"
+K_ROOM    = "recoverPlacedChest refuses with no free slot, leaving the chest standing"
+K_ID      = "recoverPlacedChest will not dig a block that is not the chest"
+K_ADJ     = "recoverPlacedChest does not go looking for a chest that is not adjacent"
+K_ORDER   = "the ore chest is recovered before the loader at boot (SOURCE-ONLY, weaker)"
 C_CALL    = "retrieval retries and believes the loader's own position (SOURCE-ONLY, weaker)"
 B_ORDER   = "a recorded label is checked before the unlabelled refusal (SOURCE-ONLY, weaker)"
 L_ONE     = "retrieveLoader still proceeds with a single free slot"
@@ -1400,6 +1406,27 @@ MUTANTS = [
 
     ("the beacon correction re-records instead of correcting", "ore_turtle.lua",
      [('loader_state.correctPosition(beaconPos.x, beaconPos.y, beaconPos.z)', 'loader_state.record(beaconPos.x, beaconPos.y, beaconPos.z, rec.sector, rec.radius)')], C_CALL),
+
+    ("a placed ore chest is never recorded", "mine_flow.lua",
+     [('local recOk, recErr = chest_state.record(bx, by, bz)', 'local recOk, recErr = true, nil')], K_KEEP),
+
+    ("the record is cleared even when the chest could not be dug back", "mine_flow.lua",
+     [('    if backOk then chest_state.clear() end', '    if true then chest_state.clear() end')], K_KEEP),
+
+    ("a clean place failure leaves a false record behind", "mine_flow.lua",
+     [('            chest_state.clear()\n        end', '        end')], K_NONE),
+
+    ("the chest recovery digs with no room for the drop", "mine_flow.lua",
+     [('    if free == 0 then return false, "no_room_for_chest" end', '    if false then return false, "no_room_for_chest" end')], K_ROOM),
+
+    ("the chest recovery digs without checking what is there", "mine_flow.lua",
+     [('    if not seen or type(block) ~= "table" or block.name ~= ORE_CHEST_ITEM then', '    if false then')], K_ID),
+
+    ("the chest recovery goes looking for a chest that is not adjacent", "mine_flow.lua",
+     [('    if not dir then return false, "chest_not_adjacent" end', '    if not dir then dir = "down" end')], K_ADJ),
+
+    ("the loader is recovered before the chest at boot", "ore_turtle.lua",
+     [('    local cok, cerr = pcall(recoverPlacedChestAtBoot)', '    local cok, cerr = true, nil')], K_ORDER),
 
     ("the job runner decides where it is without waiting for a fix", "ore_turtle.lua",
      [('    base.waitForPositionFix("deciding whether this job rebooted mid-flight")\n', '')], J_FIX),

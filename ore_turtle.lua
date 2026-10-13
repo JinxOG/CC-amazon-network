@@ -25,6 +25,7 @@ local W            = require("waypoints")
 local equipment    = require("equipment")
 local geofence     = require("geofence")
 local loader_state = require("loader_state")
+local chest_state  = require("chest_state")
 local mine_flow    = require("mine_flow")
 
 -- ── Slots ────────────────────────────────────────────────────────────────────
@@ -1134,6 +1135,38 @@ end
 -- Called at boot, before any job is accepted. The scanner is placed directly
 -- below the turtle and picked straight back up, so the turtle has not moved
 -- between the two: recovery is verify-and-dig, with no navigation at all.
+-- Recover an ore chest left standing by a reboot mid-dump.
+--
+-- node_181, 2026-10-08: DUMPING at 22:48:33, the reboot at 22:52 left its chest
+-- near 2048,16,-3392, slot 16 empty at boot, and it was benched for missing
+-- hardware until a person handed it a new one. The record is what makes going
+-- back for it possible; mine_flow.recoverPlacedChest holds the guards.
+--
+-- It NEVER goes looking. A chest that is not on one of the three faces
+-- bankPayload uses is reported with its coordinates so somebody can fetch it,
+-- which is the ruled behaviour (spec owner, 2026-10-08) and the opposite of
+-- flying off on a remembered position.
+local function recoverPlacedChestAtBoot()
+    if not chest_state.hasPlaced() then return end
+    local rec = chest_state.get()
+    print(string.format("[MINER] Boot: ore chest recorded at %d,%d,%d — recovering",
+        rec.x, rec.y, rec.z))
+
+    local ok, why = mine_flow.recoverPlacedChest({ chestSlot = S_ORE_EC })
+    if ok then
+        print("[MINER] Ore chest recovered.")
+        base.sendProgress(string.format("ore_chest_recovered at %d,%d,%d",
+            rec.x, rec.y, rec.z))
+        return
+    end
+
+    print(string.format("[MINER] NEEDS HANDS: ore chest at %d,%d,%d — %s",
+        rec.x, rec.y, rec.z, tostring(why)))
+    base.sendProgress(string.format(
+        "needs_hands: ore chest left at %d,%d,%d (%s) — the record is kept so it "
+        .. "can be collected", rec.x, rec.y, rec.z, tostring(why)))
+end
+
 local function recoverPlacedScanner()
     local rec = scannerRecorded()
     if not rec then return end
@@ -2453,6 +2486,14 @@ if not _haveGpsFix then
         .. "s — refusing to move. Check the GPS host computers.")
     base.sendProgress("no_gps_fix: refusing to move until the GPS hosts are up")
 else
+    -- The ore chest FIRST. It is adjacent and cheap, and the loader recovery
+    -- flies off to the sector -- a chest left behind by the same reboot would
+    -- be abandoned for the whole trip. Ruled order (spec owner, 2026-10-08).
+    local cok, cerr = pcall(recoverPlacedChestAtBoot)
+    if not cok then
+        print("[MINER] Ore chest recovery crashed: " .. tostring(cerr))
+    end
+
     -- Recover an abandoned loader before any job can be accepted.
     local rok, rerr = pcall(recoverPlacedLoader)
     if not rok then
