@@ -147,4 +147,24 @@ return {
         assert_eq(h.failures, 1)         -- but the index write was not silent
         assert_eq(type(h.lastError), "string")
     end,
+
+    -- Sector progress has its own namespace for one specific reason: the
+    -- server loads EVERY key under "z" as a zone, and its migration skips the
+    -- disk import when any "z" key exists. A progress entry parked there would
+    -- return as a phantom zone after every restart, and on a fresh boot could
+    -- read as total zone loss. This pins the separation rather than trusting
+    -- that nobody reuses the prefix.
+    ["sector progress never surfaces as a zone"] = function(assert_eq)
+        local cs = fresh(fakeKV())
+        cs.put(cs.NS.ZONE,   "0,0,32,32", { total = 4 })
+        cs.put(cs.NS.SECTOR, "0,0,32,32", { mined = 3 })
+        local zones = cs.listKeys(cs.NS.ZONE)
+        assert_eq(#zones, 1, "a sector entry must not be enumerated as a zone")
+        assert_eq(zones[1], "0,0,32,32")
+        assert_eq(#cs.listKeys(cs.NS.SECTOR), 1, "and it must still be its own key")
+        assert_eq(cs.get(cs.NS.ZONE, "0,0,32,32").total, 4,
+            "the zone must not be overwritten by the sector entry sharing its name")
+        assert_eq(cs.BUDGET[cs.NS.SECTOR], 16, "budgeted from W3 measured 8, doubled")
+    end,
+
 }

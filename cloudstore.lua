@@ -15,6 +15,13 @@ cloudstore.NS = {
     INDEX = "ix",    -- ore coordinate index, one key per sector
     LOG   = "log",   -- shipped turtle logs, TTL'd
     JOB   = "j",     -- job state
+    -- Per-sector mining progress, one key per sector in progress, deleted on
+    -- completion. Its OWN namespace on purpose: loadPersistentZones loads every
+    -- key under "z" as a zone, and migrateZonesToCloud skips the disk import if
+    -- any "z" key exists -- so a progress entry parked there would come back as
+    -- a phantom zone after every restart, and could make a fresh boot read as
+    -- total zone loss (W6 -> W3, 2026-10-12).
+    SECTOR = "sp",   -- sector progress, in flight only
 }
 
 -- Declared allocations against the measured 10240-key limit. A subsystem that
@@ -26,6 +33,10 @@ cloudstore.BUDGET = {
     [cloudstore.NS.INDEX] = 6000,
     [cloudstore.NS.LOG]   = 2000,
     [cloudstore.NS.JOB]   = 200,
+    -- 8 concurrent in-progress sectors today: one per working miner, 8 miners,
+    -- 2 per zone, 4 zones per round, and a miner holds exactly one sector at a
+    -- time (W3, 2026-10-12). 16 is that doubled for growth, not a guess.
+    [cloudstore.NS.SECTOR] = 16,
 }
 
 local VALUE_LIMIT = 500000
