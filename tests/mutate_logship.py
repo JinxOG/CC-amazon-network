@@ -223,6 +223,7 @@ UP_LOOP   = "a turtle whose last update failed is not offered it again on that r
 RB_AGAIN  = "a miner recovering again with no job left is still not offered work"
 RB_HOME   = "a miner flying home with nothing to recover is not offered work until it docks"
 RB_IDLE   = "a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"
+CRAFT_WH  = "refreshCraftable stands down while the warehouse is alive (SOURCE-ONLY, weaker)"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1076,6 +1077,9 @@ MUTANTS = [
 
     ('its flight home waits on a server that is down', 'ore_turtle.lua',
      [('    base.setAutonomousReturn(true)\n    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n', '    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n')], RB_IDLE),
+
+    ('refreshCraftable polls with the warehouse alive', 'central_server.lua',
+     [('        -- stalls, 588 ms. Same guard and window as refreshStorage\'s.\n        if os.epoch("utc") - (state.storageSenderSeenAt or 0) < 180000 then return end\n', "        -- stalls, 588 ms. Same guard and window as refreshStorage's.\n")], CRAFT_WH),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

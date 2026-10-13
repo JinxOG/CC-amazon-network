@@ -264,4 +264,18 @@ return {
             "and every loop turn must be counted, at the loop itself")
     end,
 
+    -- W6, 2026-10-12: between rounds, with the warehouse posting snapshots, this
+    -- computer still called listCraftableItems every 60 s -- one of the original
+    -- four stalls (588 ms). Its only consumer is now the fallback, so it stands
+    -- down on the same storageSenderSeenAt guard refreshStorage carries.
+    ["refreshCraftable stands down while the warehouse is alive (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
+        local body = src:match("local function refreshCraftable%(%)(.-)\n    end\n")
+        assert_eq(body ~= nil, true, "refreshCraftable exists")
+        local guard = body and body:find("state.storageSenderSeenAt", 1, true)
+        local call  = body and body:find("rsBridge.listCraftableItems()", 1, true)
+        assert_eq(guard ~= nil and call ~= nil and guard < call, true,
+            "the warehouse-alive check comes before the bridge call")
+    end,
 }

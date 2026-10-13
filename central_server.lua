@@ -4539,6 +4539,11 @@ function server.run()
     local function refreshCraftable()
         if not rsBridge then return end
         if mineJobLive() then return end   -- see refreshStorage below
+        -- And not while the warehouse is alive (W6, 2026-10-12): it already
+        -- sends the craftable flag, so this enumeration is only the fallback.
+        -- Between rounds it still ran every 60 s -- one of the original four
+        -- stalls, 588 ms. Same guard and window as refreshStorage's.
+        if os.epoch("utc") - (state.storageSenderSeenAt or 0) < 180000 then return end
         local ok, craft = pcall(function() return rsBridge.listCraftableItems() end)
         if ok and type(craft) == "table" then
             craftableMap = {}
