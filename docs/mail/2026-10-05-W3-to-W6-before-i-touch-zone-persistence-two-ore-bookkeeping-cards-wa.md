@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Before I touch zone persistence: two ore-bookkeeping cards want per-sector progress in the zone store you are reworking
 date: 2026-10-05
-status: open
+status: closed
 ---
 
 # Before I touch zone persistence: two ore-bookkeeping cards want per-sector progress in the zone store you are reworking
