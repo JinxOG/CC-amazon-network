@@ -528,6 +528,23 @@ return {
         end
     end,
 
+    -- 1.9.142 live, 21:40: node_181, docked with a loader recorded far away,
+    -- reported "recovering abandoned loader at 2376,-2903" (ore_turtle) and
+    -- stays put by design. The server read it as the field-reboot message and
+    -- held it RETURNING -- and a turtle that never leaves never says docked.
+    -- Only base.homeAfterBoot's own "recovering: at x,y,z" starts a recovery.
+    ["a miner's 'recovering abandoned loader' report alone does not hold it"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t, job = T.state.registry[A], T.state.jobs[JA]
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = A, payload = {
+            status = proto.STATUS.IDLE, detail = "recovering abandoned loader at 2376,-2903" } })
+        local held, status = t.homeAfterReboot, job.status
+        restore()
+        assert_eq(held, nil, "docked and staying docked: nothing to hold")
+        assert_eq(status, "IN_PROGRESS", "and nothing requeued")
+    end,
+
     ["a recovering turtle that never docks stays held"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })

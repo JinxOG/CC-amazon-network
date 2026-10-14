@@ -3142,7 +3142,10 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     -- passes after a field reboot; it replaces the two miner-only triggers (a
     -- RETRIEVING "boot recovery" phase report, and "rebooted_outside_base").
     -- "docked" from any return home ends it, as a miner's DOCKED phase does.
-    if type(p.detail) == "string" and p.detail:find("^recovering") then
+    -- "^recovering:" with the colon: ore_turtle's own "recovering abandoned
+    -- loader at ..." is sent by a DOCKED miner that stays put, and once read as
+    -- this message it held node_181 for good (1.9.142, 21:40).
+    if type(p.detail) == "string" and p.detail:find("^recovering:") then
         registry.beginRecovery(msg.from)
     elseif type(p.detail) == "string" and p.detail:find("^docked") then
         registry.endRecovery(msg.from)

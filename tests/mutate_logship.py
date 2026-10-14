@@ -256,6 +256,7 @@ R3_REQ    = "a boot-recovering miner's job is requeued at once, not after a time
 R3_DOCK   = "a recovering turtle of any role is released by docked"
 R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
+R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 R3_SAY    = "a turtle rebooted outside the base says it is recovering and recovers its ledger before it moves"
 R3_INSIDE = "a turtle inside the base but off its dock does not say it is recovering"
 R3_DOCKED = "a turtle that reaches its dock says docked"
@@ -1043,7 +1044,7 @@ MUTANTS = [
 
     # -- A whole-host outage mid-job (1.9.122) ---------------------------------
     ('boot recovery is never recognised', "central_server.lua",
-     [('    if type(p.detail) == "string" and p.detail:find("^recovering") then\n        registry.beginRecovery', '    if false then\n        registry.beginRecovery')], O_REQUEUE),
+     [('    if type(p.detail) == "string" and p.detail:find("^recovering:") then\n        registry.beginRecovery', '    if false then\n        registry.beginRecovery')], O_REQUEUE),
 
     ('every loader swap is treated as boot recovery', "central_server.lua",
      [('    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n', '    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\n    if p.phase == proto.PHASE.RETRIEVING then registry.beginRecovery(msg.from) end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n')], O_SWAP),
@@ -1216,10 +1217,13 @@ MUTANTS = [
      [('    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n', '    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\n    if p.phase == proto.PHASE.RETRIEVING and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) then registry.beginRecovery(msg.from) end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n')], R3_OLD1),
 
     ('the old rebooted_outside_base trigger is restored', 'central_server.lua',
-     [('    if type(p.detail) == "string" and p.detail:find("^recovering") then\n', '    if type(p.detail) == "string" and (p.detail:find("^recovering") or p.detail:find("^rebooted_outside_base")) then\n')], R3_OLD2),
+     [('    if type(p.detail) == "string" and p.detail:find("^recovering:") then\n', '    if type(p.detail) == "string" and (p.detail:find("^recovering:") or p.detail:find("^rebooted_outside_base")) then\n')], R3_OLD2),
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    ('any report starting "recovering" starts a recovery', 'central_server.lua',
+     [('p.detail:find("^recovering:") then\n        registry.beginRecovery', 'p.detail:find("^recovering") then\n        registry.beginRecovery')], R3_LOADER),
 
     ('every role has its job requeued on recovering', 'central_server.lua',
      [('    if t.role == proto.ROLE.MINER and job and job.assignedTo == id\n', '    if job and job.assignedTo == id\n')], R3_KEEP),
