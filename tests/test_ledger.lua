@@ -21,6 +21,34 @@ local function fresh(opts)
 end
 local E = { x = 10, y = 63, z = 0, face = "down", turtleAt = { x = 10, y = 64, z = 0 } }
 
+local EC   = "enderstorage:ender_chest"
+local PICK = "minecraft:diamond_pickaxe"
+local function key(x, y, z) return x .. "," .. y .. "," .. z end
+
+-- A turtle standing at 10,64,0 with the chest recorded at `entry`, already
+-- placed in the world. Returns base, c, and the radio messages it sends.
+local function standing(entry, opts)
+    opts = opts or {}
+    local world = opts.world or {}
+    if not opts.noChest then world[key(entry.x, entry.y, entry.z)] = EC end
+    local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = opts.facing or 0 },
+                            equipped = opts.equipped or { left = PICK },
+                            world = world, inv = opts.inv })
+    local sent = {}
+    peripheral.find = function()
+        return { transmit = function(ch, r, body) sent[#sent + 1] = tostring(body) end,
+                 open = function() end, isOpen = function() return true end, close = function() end }
+    end
+    base.recoverModem()
+    base.ledger.registerKind("fuel_chest", { blockName = EC, homeSlot = 16 })
+    base.ledger.record("fuel_chest", entry)
+    return base, c, sent
+end
+local function said(sent, text)
+    for _, b in ipairs(sent) do if b:find(text, 1, true) then return true end end
+    return false
+end
+
 return {
     ["nothing recorded on a clean start"] = function(assert_eq)
         local base = fresh()
@@ -76,5 +104,107 @@ return {
         local base2 = reload()
         assert_eq(base2.ledger.get("fuel_chest"), nil)
         assert_eq(next(base2.ledger.all()), nil, "and all() skips it too")
+    end,
+
+    -- Recovery (task 2) ------------------------------------------------------
+
+    ["a chest below is dug back into its home slot and the record cleared"] =
+    function(assert_eq)
+        local base, c = standing(E)
+        local ok = base.ledger.recover("fuel_chest")
+        assert_eq(ok, true)
+        assert_eq(c.inv[16] and c.inv[16].name, EC, "home in slot 16")
+        assert_eq(c.world[key(10, 63, 0)], nil, "gone from the world")
+        assert_eq(base.ledger.get("fuel_chest"), nil, "and the record cleared")
+    end,
+
+    ["a chest in front is dug after turning to the recorded facing"] =
+    function(assert_eq)
+        local F = { x = 11, y = 64, z = 0, face = "forward", facing = 1, turtleAt = { x = 10, y = 64, z = 0 } }
+        local base, c = standing(F, { facing = 3 })
+        local ok = base.ledger.recover("fuel_chest")
+        assert_eq(ok, true)
+        assert_eq(c.pos.facing, 1, "turned to face where it was placed")
+        assert_eq(c.world[key(11, 64, 0)], nil, "and dug that block")
+        assert_eq(c.inv[16] and c.inv[16].name, EC)
+    end,
+
+    ["a different block where the chest was is never dug"] =
+    function(assert_eq)
+        local base, c, sent = standing(E, { noChest = true, world = { [key(10, 63, 0)] = "minecraft:stone" } })
+        local ok = base.ledger.recover("fuel_chest")
+        assert_eq(ok, false)
+        assert_eq(c.world[key(10, 63, 0)], "minecraft:stone", "not ours, not dug")
+        assert_eq(base.ledger.get("fuel_chest") ~= nil, true, "the record is the only evidence: kept")
+        assert_eq(said(sent, "needs_hands: fuel_chest at 10,63,0"), true, "and someone is told where")
+    end,
+
+    ["a turtle not where it stood is not trusted"] =
+    function(assert_eq)
+        local away = { x = 10, y = 63, z = 0, face = "down", turtleAt = { x = 40, y = 64, z = 0 } }
+        local base, c, sent = standing(away)
+        local ok = base.ledger.recover("fuel_chest")
+        assert_eq(ok, false)
+        assert_eq(c.world[key(10, 63, 0)], EC, "nothing dug from the wrong place")
+        assert_eq(base.ledger.get("fuel_chest") ~= nil, true)
+        assert_eq(said(sent, "needs_hands: fuel_chest at 10,63,0"), true)
+    end,
+
+    ["a full pack is never emptied onto the ground"] =
+    function(assert_eq)
+        local inv = {}
+        for s = 1, 16 do inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        local base, c, sent = standing(E, { inv = inv })
+        local ok = base.ledger.recover("fuel_chest")
+        local total = 0
+        for s = 1, 16 do total = total + (c.inv[s] and c.inv[s].count or 0) end
+        assert_eq(ok, false)
+        assert_eq(total, 16 * 64, "nothing dropped to make room")
+        assert_eq(c.world[key(10, 63, 0)], EC, "and the chest left where it is")
+        assert_eq(base.ledger.get("fuel_chest") ~= nil, true)
+        assert_eq(said(sent, "needs_hands: fuel_chest"), true)
+    end,
+
+    ["a stowed pickaxe is borrowed"] =
+    function(assert_eq)
+        local base, c = standing(E, { equipped = { left = "computercraft:wireless_modem_advanced",
+                                                   right = "advancedperipherals:chunk_controller" } })
+        local borrowed = 0
+        base.setDigToolWrapper(function(what, fn)
+            borrowed = borrowed + 1
+            local saved = c.equipped.left
+            c.equipped.left = PICK
+            local ok, err = pcall(fn)
+            c.equipped.left = saved
+            if not ok then error(err, 0) end
+            return true
+        end)
+        local ok = base.ledger.recover("fuel_chest")
+        base.setDigToolWrapper(nil)
+        assert_eq(ok, true)
+        assert_eq(borrowed, 1)
+        assert_eq(c.world[key(10, 63, 0)], nil)
+    end,
+
+    ["forward recovery waits for a measured facing"] =
+    function(assert_eq)
+        local F = { x = 11, y = 64, z = 0, face = "forward", facing = 1, turtleAt = { x = 10, y = 64, z = 0 } }
+        local base, c, sent = standing(F, { facing = 1, world = {
+            [key(9, 64, 0)] = "minecraft:stone", [key(10, 64, 1)] = "minecraft:stone",
+            [key(10, 64, -1)] = "minecraft:stone" } })
+        base.setCanDig(false)
+        local naps, chestAtFirstReport = 0, nil
+        local savedSleep = sleep
+        sleep = function()
+            naps = naps + 1
+            if naps == 1 then chestAtFirstReport = c.world[key(11, 64, 0)] end
+            if naps == 2 then c.world[key(9, 64, 0)] = nil end      -- someone digs it a hole
+        end
+        local ok = base.ledger.recover("fuel_chest")
+        sleep = savedSleep
+        assert_eq(said(sent, "stuck_no_fix"), true, "it waited, and said so")
+        assert_eq(chestAtFirstReport, EC, "nothing dug while the facing was unknown")
+        assert_eq(ok, true, "and recovered once it could measure")
+        assert_eq(c.world[key(11, 64, 0)], nil)
     end,
 }

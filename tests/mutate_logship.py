@@ -228,6 +228,11 @@ LG_DISK   = "an unwritable disk is reported, never assumed"
 LG_TWO    = "two kinds out at once are kept separately"
 LG_ROLL   = "a rollback leaves no record"
 LG_TRUNC  = "a truncated file reads as no record and boots"
+LR_ID     = "a different block where the chest was is never dug"
+LR_POS    = "a turtle not where it stood is not trusted"
+LR_ROOM   = "a full pack is never emptied onto the ground"
+LR_PICK   = "a stowed pickaxe is borrowed"
+LR_FRONT  = "a chest in front is dug after turning to the recorded facing"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1097,6 +1102,25 @@ MUTANTS = [
 
     ('a truncated ledger file raises at boot', 'turtle_base.lua',
      [('    local ok, data = pcall(textutils.unserialise, raw or "")\n', '    local ok, data = true, textutils.unserialise(raw or "")\n    if data == nil then error("ledger: unreadable", 0) end\n')], LG_TRUNC),
+
+    # -- The placed-item ledger: recovery (recovery layer release 2) ----------
+    ('recovery digs whatever is there', 'turtle_base.lua',
+     [('    if not (seen and type(data) == "table" and data.name == spec.blockName) then\n', '    if false then\n')], LR_ID),
+
+    ('recovery trusts a turtle that has moved', 'turtle_base.lua',
+     [('    if _self.pos.x ~= at.x or _self.pos.y ~= at.y or _self.pos.z ~= at.z then\n', '    if false then\n')], LR_POS),
+
+    ('a failed recovery throws the record away', 'turtle_base.lua',
+     [('    logWarn("Ledger: " .. detail)\n', '    logWarn("Ledger: " .. detail)\n    base.ledger.clear(kind)\n')], LR_ID),
+
+    ('recovery drops cargo to make room', 'turtle_base.lua',
+     [('    if not hasRoom() then base.makeRoomBeforeDig() end\n', '    if not hasRoom() then turtle.select(1); turtle.dropDown() end\n')], LR_ROOM),
+
+    ('recovery never borrows the pickaxe', 'turtle_base.lua',
+     [('    if _digToolWrapper then\n        if not pcall(_digToolWrapper, "recovering the " .. kind, dig) then dug = false end\n', '    if false then\n        if not pcall(_digToolWrapper, "recovering the " .. kind, dig) then dug = false end\n')], LR_PICK),
+
+    ('recovery digs forward without turning', 'turtle_base.lua',
+     [('            if _self.facing == e.facing then break end\n            move.turnRight()\n', '            if _self.facing == e.facing then break end\n')], LR_FRONT),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

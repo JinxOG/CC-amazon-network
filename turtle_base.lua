@@ -2126,6 +2126,106 @@ function base.ledger.all()
     return out
 end
 
+-- A kind is two fields (W1's point, 2026-10-08): the block name that proves
+-- identity before digging, and the slot it must end up in. homeSlot may be a
+-- function, for slots a role only fixes in base.init (the fuel chest's).
+base.ledger._kinds = {}
+function base.ledger.registerKind(kind, spec)
+    base.ledger._kinds[kind] = spec
+end
+
+-- Any recovery that cannot finish keeps the record -- it is the only evidence
+-- -- and says where, so a person can go and get it.
+function base.ledger.needsHands(kind, e, reason)
+    local detail = string.format("needs_hands: %s at %s,%s,%s -- %s",
+        kind, tostring(e.x), tostring(e.y), tostring(e.z), tostring(reason))
+    logWarn("Ledger: " .. detail)
+    pcall(base.sendProgress, detail)
+    return false, reason
+end
+
+-- Take one recorded item back, in the contract's order (2026-10-12): position
+-- and facing measured; standing where it was placed (a reboot does not move a
+-- turtle, so anything else means the record cannot be trusted); aimed at the
+-- recorded face; the block IS the item; room made without dropping anything;
+-- dug through digGuarded, with the pickaxe borrowed when it is stowed; home
+-- slot confirmed; only then cleared. Every failure keeps the record.
+function base.ledger.recover(kind)
+    local L = base.ledger
+    local e = L.get(kind)
+    if not e then return true end
+    local spec = L._kinds[kind]
+    if not spec then return L.needsHands(kind, e, "unknown_kind") end
+
+    base.waitForPositionFix("recovering the " .. kind)
+    local at = e.turtleAt or {}
+    if _self.pos.x ~= at.x or _self.pos.y ~= at.y or _self.pos.z ~= at.z then
+        return L.needsHands(kind, e, "not_where_it_was_placed")
+    end
+
+    local dir = (e.face == "down" and "down") or (e.face == "up" and "up") or "forward"
+    if dir == "forward" then
+        if e.facing == nil then return L.needsHands(kind, e, "facing_not_recorded") end
+        for _ = 1, 4 do
+            if _self.facing == e.facing then break end
+            move.turnRight()
+        end
+        if _self.facing ~= e.facing then return L.needsHands(kind, e, "could_not_turn") end
+    end
+
+    local seen, data = INSPECT[dir]()
+    if not (seen and type(data) == "table" and data.name == spec.blockName) then
+        return L.needsHands(kind, e, "not_the_item")
+    end
+
+    local function hasRoom()
+        for s = 1, 16 do if turtle.getItemCount(s) == 0 then return true end end
+        return false
+    end
+    if not hasRoom() then base.makeRoomBeforeDig() end
+    if not hasRoom() then return L.needsHands(kind, e, "no_room") end
+
+    local dug = false
+    local function dig() dug = digGuarded(dir) and true or false end
+    if _digToolWrapper then
+        if not pcall(_digToolWrapper, "recovering the " .. kind, dig) then dug = false end
+    else
+        dig()
+    end
+    if not dug then return L.needsHands(kind, e, "dig_failed") end
+
+    local home = type(spec.homeSlot) == "function" and spec.homeSlot() or spec.homeSlot
+    local inHome = turtle.getItemDetail(home)
+    if not inHome then   -- dug into another slot: move one home (never onto something else)
+        for s = 1, 16 do
+            local d = turtle.getItemDetail(s)
+            if s ~= home and d and d.name == spec.blockName then
+                turtle.select(s)
+                turtle.transferTo(home, 1)
+                break
+            end
+        end
+        turtle.select(1)
+        inHome = turtle.getItemDetail(home)
+    end
+    if not (inHome and inHome.name == spec.blockName) then
+        return L.needsHands(kind, e, "not_back_in_its_slot")
+    end
+
+    L.clear(kind)
+    logInfo(string.format("Ledger: recovered the %s from %d,%d,%d", kind, e.x, e.y, e.z))
+    return true
+end
+
+-- Every recorded item, at boot. Returns how many came back.
+function base.ledger.recoverAll()
+    local n = 0
+    for kind in pairs(base.ledger.all()) do
+        if base.ledger.recover(kind) then n = n + 1 end
+    end
+    return n
+end
+
 -- Deploy the entangled chest, drain coal into slots 1-BURN_MAX, burn it, recover chest.
 -- Before deploying, clears non-fuel debris from slots 1-BURN_MAX to ensure there is
 -- room for coal (support turtles accumulate road debris while following delivery).
