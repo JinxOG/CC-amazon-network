@@ -3740,8 +3740,8 @@ end
 handlers[proto.MSG.MINE_PHASE] = handleMinePhase
 
 -- A turtle of any role recovering from a field reboot ("recovering", sent by
--- base.homeAfterBoot). The job it held is over -- it never resumes, it flies
--- home, a miner with its radio off -- so it is requeued now, the silence is
+-- base.homeAfterBoot). A miner's job is over -- it never resumes, it flies
+-- home with its radio off -- so it is requeued now, the silence is
 -- given the length of a flight home, and the turtle is held RETURNING until it
 -- docks, job or no job. On 2026-09-30 the server re-sent each miner its job,
 -- waited eight minutes and declared both dead halfway home; on 2026-10-08 a
@@ -3752,7 +3752,12 @@ function registry.beginRecovery(id)
     if not t then return end
     local jid = t.jobId
     local job = jid and state.jobs[jid]
-    if job and job.assignedTo == id
+    -- ONLY A MINER'S. registry.register re-sent a delivery or support turtle
+    -- its job at REGISTER (reSendJob), and it resumes that job once home;
+    -- requeueing it as well hands the same delivery to a second turtle. Until
+    -- release 4 brings their cargo home instead, they keep it -- and are still
+    -- held below, like a miner.
+    if t.role == proto.ROLE.MINER and job and job.assignedTo == id
        and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
         logInfo(string.format(
             "%s is recovering from a reboot and flying home -- %s requeued now "

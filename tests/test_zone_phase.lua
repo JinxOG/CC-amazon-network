@@ -507,6 +507,27 @@ return {
         assert_eq(graceAfter, nil, "and its next silence is an ordinary one")
     end,
 
+    -- registry.register re-sends a rebooted delivery or support turtle its job
+    -- (reSendJob, JOB_ASSIGN after REGISTER_ACK) and the turtle RESUMES it once
+    -- home. Requeueing that job too would hand the same delivery to a second
+    -- turtle. Until release 4 brings their cargo home instead, only a miner --
+    -- which never resumes -- has its job requeued; every role is still held.
+    ["a recovering delivery or support turtle keeps the job it will resume"] =
+    function(assert_eq)
+        for _, role in ipairs({ proto.ROLE.DELIVERY, proto.ROLE.SUPPORT }) do
+            local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+            local t, job = T.state.registry[A], T.state.jobs[JA]
+            t.role = role
+            recovering(T, A)
+            local status, owner, tJob, held = job.status, job.assignedTo, t.jobId, t.homeAfterReboot
+            restore()
+            assert_eq(status, "IN_PROGRESS", role .. ": not requeued -- it resumes the re-sent job")
+            assert_eq(owner, A, role .. ": still its job")
+            assert_eq(tJob, JA, role .. ": and its claim stands")
+            assert_eq(held, true, role .. ": but held until it docks, like a miner")
+        end
+    end,
+
     ["a recovering turtle that never docks stays held"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })

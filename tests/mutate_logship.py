@@ -255,6 +255,7 @@ R3_OLD2   = "rebooted_outside_base alone no longer holds"
 R3_REQ    = "a boot-recovering miner's job is requeued at once, not after a timeout"
 R3_DOCK   = "a recovering turtle of any role is released by docked"
 R3_HOLD   = "a recovering turtle that never docks stays held"
+R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_SAY    = "a turtle rebooted outside the base says it is recovering and recovers its ledger before it moves"
 R3_INSIDE = "a turtle inside the base but off its dock does not say it is recovering"
 R3_DOCKED = "a turtle that reaches its dock says docked"
@@ -1217,6 +1218,12 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    ('every role has its job requeued on recovering', 'central_server.lua',
+     [('    if t.role == proto.ROLE.MINER and job and job.assignedTo == id\n', '    if job and job.assignedTo == id\n')], R3_KEEP),
+
+    ('no role has its job requeued on recovering', 'central_server.lua',
+     [('    if t.role == proto.ROLE.MINER and job and job.assignedTo == id\n', '    if false and job and job.assignedTo == id\n')], R3_REQ),
 
     ('a recovering turtle gets only the swap grace', 'central_server.lua',
      [('    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\nend\n', 'end\n')], R3_REQ),
