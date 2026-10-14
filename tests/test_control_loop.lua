@@ -125,6 +125,40 @@ end
 
 local suite = {}
 
+-- Recovery layer release 2, task 4: every role runs base.run, so every role
+-- recovers its ledger at boot -- before the loop first waits for anything,
+-- which is before any job can reach it.
+suite["base.run recovers the ledger before the loop first waits"] = function(assert_eq)
+    withFakeRuntime(function()
+        clearModules()
+        local eq = require("equipment")
+        local c = stub.install({ fuel = 100000,
+            equipped = { left = eq.ITEMS.MODEM, right = "minecraft:diamond_pickaxe" },
+            world = { ["0,65,0"] = "enderstorage:ender_chest" } })
+        local clock, timerId = 1000000, 0
+        os.epoch      = function() return clock end
+        os.startTimer = function() timerId = timerId + 1; return timerId end
+        local atFirstWait
+        local base
+        os.pullEvent  = function()
+            if atFirstWait == nil then atFirstWait = base.ledger.get("fuel_chest") or false end
+            error("test: event queue exhausted", 0)
+        end
+        sleep    = function() end
+        parallel = { waitForAny = function(controlLoop) pcall(controlLoop) end }
+        gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+        base = require("turtle_base")
+        base.recoverModem()
+        base.ledger.record("fuel_chest", { x = 0, y = 65, z = 0, face = "up",
+                                           turtleAt = { x = 0, y = 64, z = 0 } })
+        base.run(function() end)
+        assert_eq(atFirstWait, false, "recovered before the loop first waits")
+        assert_eq(c.world["0,65,0"], nil, "the chest came back out of the world")
+        assert_eq(c.inv[16] and c.inv[16].name, "enderstorage:ender_chest")
+    end)
+end
+
+
 suite["a broadcast from a non-server sender does NOT reset the missed-heartbeat counter"] =
 function(assert_eq)
     withFakeRuntime(function()

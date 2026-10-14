@@ -238,6 +238,7 @@ FC_ROLL   = "a placement that fails leaves no record"
 FC_DONE   = "a finished refuel leaves no record"
 FC_KEEP   = "a reboot mid-refuel leaves the record for boot"
 FC_DOCK   = "a fuel chest stranded at the dock is recovered and nothing else is dug"
+LG_BOOT   = "base.run recovers the ledger before the loop first waits"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1142,6 +1143,9 @@ MUTANTS = [
 
     ('the fuel chest is not a kind the ledger knows', 'turtle_base.lua',
      [('base.ledger.registerKind("fuel_chest", { blockName = CHEST_ITEM,\n', 'local _unregistered = ({ blockName = CHEST_ITEM,\n')], FC_DOCK),
+
+    ('a role boots without recovering its ledger', 'turtle_base.lua',
+     [('    local lok, lerr = pcall(base.recoverLedger)\n', '    local lok, lerr = true, nil\n')], LG_BOOT),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

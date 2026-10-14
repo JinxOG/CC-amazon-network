@@ -3239,7 +3239,21 @@ end
 -- This ensures the job coroutine receives warehouse events (e.g. CHESTS_READY)
 -- while the control loop still handles heartbeats and RECALL.
 
+-- Recover everything the ledger says this turtle left in the world. Called at
+-- the top of base.run, so every role does it at boot; exported so a role with
+-- its own pre-run recovery (ore_turtle's loader) can call it first -- the chest
+-- is adjacent and cheap, the loader recovery flies away. A no-op when empty.
+function base.recoverLedger()
+    local n = base.ledger.recoverAll()
+    if n > 0 then logInfo(string.format("Ledger: recovered %d item(s) at boot", n)) end
+    return n
+end
+
 function base.run(jobHandler)
+    -- Before the loop, so before any job can reach this turtle. pcall'd: a
+    -- recovery that throws must not stop the turtle running at all.
+    local lok, lerr = pcall(base.recoverLedger)
+    if not lok then logWarn("Ledger recovery at boot failed: " .. tostring(lerr)) end
     -- Wall-clock heartbeat: immune to timer events being consumed by sleep() inside ensureFuel()
     local lastHeartbeatWall = os.epoch("utc")
     local heartbeatTarget   = heartbeatGap()
