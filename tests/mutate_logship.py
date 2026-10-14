@@ -1043,16 +1043,16 @@ MUTANTS = [
 
     # -- A whole-host outage mid-job (1.9.122) ---------------------------------
     ('boot recovery is never recognised', "central_server.lua",
-     [('        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil\n', '        and false\n')], O_REQUEUE),
+     [('    if type(p.detail) == "string" and p.detail:find("^recovering") then\n        registry.beginRecovery', '    if false then\n        registry.beginRecovery')], O_REQUEUE),
 
     ('every loader swap is treated as boot recovery', "central_server.lua",
-     [('        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil\n', '        and true\n')], O_SWAP),
+     [('    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n', '    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\n    if p.phase == proto.PHASE.RETRIEVING then registry.beginRecovery(msg.from) end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n')], O_SWAP),
 
     ('the recovering turtle is left dispatchable', "central_server.lua",
      [('    t.status          = proto.STATUS.RETURNING\n', '')], O_REQUEUE),
 
     ('boot recovery gets only the short swap grace', "central_server.lua",
-     [('    t.commsGapGraceSec = bootRecovery and CFG.BOOT_RECOVERY_GRACE_SEC or nil\n', '    t.commsGapGraceSec = nil\n')], O_REQUEUE),
+     [('    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\nend\nhandlers[proto.MSG.MINE_PHASE]', '    t.commsGapGraceSec = nil\nend\nhandlers[proto.MSG.MINE_PHASE]')], O_REQUEUE),
 
     ('the offline timer ignores the per-turtle grace', "central_server.lua",
      [('            and (now - t.phaseAt) < ((t.commsGapGraceSec or CFG.COMMS_GAP_GRACE_SEC) * 1000)\n', '            and (now - t.phaseAt) < (CFG.COMMS_GAP_GRACE_SEC * 1000)\n')], O_GRACE),
@@ -1096,10 +1096,12 @@ MUTANTS = [
 
     # -- A recovering miner is held, job or no job (2026-10-08 double reboot) --
     ('a recovering miner with no job is not held', 'central_server.lua',
-     [('        registry.holdUntilDocked(msg.from)\n    end\nend\nhandlers[proto.MSG.MINE_PHASE]', '    end\nend\nhandlers[proto.MSG.MINE_PHASE]')], RB_AGAIN),
+     [('    registry.holdUntilDocked(id)\n    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\n', '    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\n')], RB_AGAIN),
 
-    ('a miner flying home with nothing to recover is not held', 'central_server.lua',
-     [('p.detail:find("^rebooted_outside_base") then\n        registry.holdUntilDocked(msg.from)\n', 'p.detail:find("^rebooted_outside_base") then\n')], RB_HOME),
+    # Release 3: rebooted_outside_base no longer holds (its own mutant above);
+    # what can still go wrong for this miner is the DOCKED phase not releasing it.
+    ('a miner\'s DOCKED phase report no longer releases it', 'central_server.lua',
+     [('        registry.endRecovery(msg.from)\n    end\n    jobQueue.progress(', '    end\n    jobQueue.progress(')], RB_HOME),
 
     ('a stuck turtle is still offered work', 'central_server.lua',
      [('    registry.holdUntilDocked(id)\nend\n', 'end\n')], ST_SERVER),
@@ -1484,10 +1486,10 @@ MUTANTS = [
      [('    if t.homeAfterReboot and status == proto.STATUS.IDLE then status = nil end\n', '')], R_STAY),
 
     ('a DOCKED report leaves the miner RETURNING', 'central_server.lua',
-     [('            if t.status == proto.STATUS.RETURNING then t.status = proto.STATUS.IDLE end\n', '')], R_DOCK),
+     [('    if t.status == proto.STATUS.RETURNING then t.status = proto.STATUS.IDLE end\nend\n', 'end\n')], R_DOCK),
 
     ('a DOCKED report never clears the flag', 'central_server.lua',
-     [('        if t.homeAfterReboot then\n            t.homeAfterReboot = nil\n', '        if t.homeAfterReboot then\n')], R_DOCK),
+     [('    t.homeAfterReboot  = nil\n    t.commsGapGraceSec = nil\n', '    t.commsGapGraceSec = nil\n')], R_DOCK),
 
     ('a DOCKED heartbeat never clears the flag', 'central_server.lua',
      [('                    t.homeAfterReboot = nil   -- home: its IDLE means idle again\n', '')], R_HBDOCK),
