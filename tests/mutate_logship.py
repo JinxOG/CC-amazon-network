@@ -243,6 +243,13 @@ BG_WAIT   = "a booted turtle with no GPS fix does not move until it has one"
 BG_OFF    = "the guard is off until boot arms it"
 BG_FACE   = "a booted turtle that knows where it is but not which way it faces measures first"
 NH_SHOW   = "a needs_hands report is shown once, with where"
+RV_BOOT   = "a docked delivery turtle with no GPS at boot stays at its dock"
+RV_UPDN   = "a chest above is recovered without waiting for a facing"
+RV_STALE  = "a record for a chest already home is cleared without digging"
+RV_ABOARD = "a chest dug but not yet moved home is moved home and cleared"
+RV_SLOT   = "a home slot holding something else is cleared to make way"
+RV_FIELD  = "a ledger alert survives a passing hardware check, and clears when fixed"
+RV_THROW  = "a write that throws is reported, never raised"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1167,6 +1174,31 @@ MUTANTS = [
 
     ('a needs_hands report benches the turtle', 'central_server.lua',
      [('    t.needsHands = detail\nend\n\n-- verdict is what', '    t.needsHands = detail\n    registry.holdUntilDocked(id)\nend\n\n-- verdict is what')], NH_SHOW),
+
+    # -- The release 2 review's fixes ------------------------------------------
+    ('the boot route is chosen from a guessed position', 'turtle_base.lua',
+     [('            base.waitForPositionFix("boot: choosing a route home")\n', '            gpsSync()\n')], RV_BOOT),
+
+    ('an item above waits for a facing it does not need', 'turtle_base.lua',
+     [('    base.waitForPositionFix("recovering the " .. kind, dir ~= "forward")\n', '    base.waitForPositionFix("recovering the " .. kind)\n')], RV_UPDN),
+
+    ('a stale record sends someone to an empty block', 'turtle_base.lua',
+     [('    if inHome and inHome.name == spec.blockName then\n        L.clear(kind)\n', '    if false then\n        L.clear(kind)\n')], RV_STALE),
+
+    ('a chest already aboard is looked for in the world', 'turtle_base.lua',
+     [('        if L.bringHome(spec.blockName, home) then\n            L.clear(kind)\n', '        if false then\n            L.clear(kind)\n')], RV_ABOARD),
+
+    ('an occupied home slot is never cleared', 'turtle_base.lua',
+     [('    if d then\n        for s = 1, 16 do\n            if s ~= home and turtle.getItemCount(s) == 0 then\n', '    if d then\n        for s = 1, 0 do\n            if s ~= home and turtle.getItemCount(s) == 0 then\n')], RV_SLOT),
+
+    ('the ledger alert shares the hardware field again', 'central_server.lua',
+     [('    t.ledgerNeedsHands = detail\nend', '    t.needsHands = detail\nend')], RV_FIELD),
+
+    ('ledger_ok clears nothing', 'central_server.lua',
+     [('            t.ledgerNeedsHands = nil\n', '')], RV_FIELD),
+
+    ('a throwing ledger write escapes', 'turtle_base.lua',
+     [('    local wrote = pcall(function()\n        f.write(textutils.serialise(rec))\n        f.close()\n    end)\n', '    f.write(textutils.serialise(rec))\n    f.close()\n    local wrote = true\n')], RV_THROW),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

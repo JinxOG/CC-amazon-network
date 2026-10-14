@@ -301,7 +301,10 @@ return {
     -- record that raised NEEDS HANDS on every boot, pointing at an empty block.
     ["a record for a chest already home is cleared without digging"] =
     function(assert_eq)
-        local base, c, sent = standing(E, { noChest = true, inv = { [16] = { name = EC, count = 1 } } })
+        -- Fetched by hand, and the turtle has since moved on: it is no longer
+        -- where it placed the chest, and the chest is home.
+        local far = { x = 40, y = 63, z = 0, face = "down", turtleAt = { x = 40, y = 64, z = 0 } }
+        local base, c, sent = standing(far, { noChest = true, inv = { [16] = { name = EC, count = 1 } } })
         local ok = base.ledger.recover("fuel_chest")
         assert_eq(ok, true)
         assert_eq(base.ledger.get("fuel_chest"), nil, "the record was stale: cleared")
