@@ -26,24 +26,25 @@
 3. **A miner's phase DOCKED and the new "docked" both arrive.** The release must be idempotent. *Pinned in Task 1.*
 4. **Grace:** a recovering miner's radio-off flight must not be marked offline at the 60 s swap grace. *Pinned in Task 1.*
 5. **A turtle inside the building but off its dock** must not send "recovering". *Pinned in Task 2.*
+6. **Double delivery (found 2026-10-14, after Tasks 1–2).** `registry.register` re-sends a rebooted delivery or support turtle its job, and the turtle resumes it once home. Requeueing on "recovering" would hand the same delivery to a second turtle. Fixed in 8b7673a: only a miner's job is requeued, and every role is still held and graced. Release 4 lifts this when cargo comes home instead. *Pinned: "a recovering delivery or support turtle keeps the job it will resume"; mutants "every role has its job requeued" and "no role has its job requeued" both KILLED.*
 
 ---
 
 ### Task 1: The server's one recovery message
 **Files:** `central_server.lua` (STATUS_UPDATE handler; `handleMinePhase`; new `registry.beginRecovery`); test `tests/test_zone_phase.lua`.
-- [ ] Failing tests:
+- [x] Failing tests:
   - `"a recovering report requeues its job, holds it, and gives it the long grace"`
   - `"a recovering turtle is released by docked, from any role"`
   - `"a recovering turtle that never docks stays held"`
   - `"an old boot-recovery phase report alone no longer holds or requeues"` (old trigger 1)
   - `"rebooted_outside_base alone no longer holds"` (old trigger 2)
-- [ ] Make the existing boot-recovery tests send `recovering` first, then the phase reports, with the same expectations. That proves miner outcomes are identical.
-- [ ] Implement:
+- [x] Make the existing boot-recovery tests send `recovering` first, then the phase reports, with the same expectations. That proves miner outcomes are identical.
+- [x] Implement:
   - `beginRecovery(id)`: take the requeue code from handleMinePhase's bootRecovery block; set `t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC`; call `holdUntilDocked`.
   - A `^docked` detail releases the hold, as phase DOCKED does.
   - Delete the bootRecovery requeue/hold, and the `rebooted_outside_base` hold.
   - Keep the grace while `homeAfterReboot` is set (the phase reports must not reset it).
-- [ ] Mutants:
+- [x] Mutants:
   - restore old trigger 1;
   - restore old trigger 2;
   - no requeue;
@@ -54,15 +55,15 @@
 
 ### Task 2: Every role says so, and recovers before it flies
 **Files:** `turtle_base.lua` (`homeAfterBoot`; the three return functions); tests `tests/test_shaft_sidestep.lua` and `tests/test_ledger.lua`.
-- [ ] Failing tests:
+- [x] Failing tests:
   - `"a turtle rebooted outside the base says it is recovering"`: delivery, outside, after the measured position. Expect `recovering:` sent before any move.
   - `"a turtle rebooted outside the base recovers its ledger before flying home"`: fuel chest recorded where it stands. Expect it recovered, and the chest home, before the first move toward home.
   - `"a turtle inside the base but off its dock does not say it is recovering"`
   - `"a turtle that reaches its dock says docked"`
-- [ ] Implement:
+- [x] Implement:
   - in the not-inside branch: `pcall(base.sendProgress, "recovering: " .. pos)` then `pcall(base.recoverLedger)`;
   - `docked` sent on each successful return.
-- [ ] Mutants:
+- [x] Mutants:
   - no recovering report;
   - ledger recovered after the flight;
   - no docked report.
