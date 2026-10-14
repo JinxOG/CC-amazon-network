@@ -224,6 +224,10 @@ RB_AGAIN  = "a miner recovering again with no job left is still not offered work
 RB_HOME   = "a miner flying home with nothing to recover is not offered work until it docks"
 RB_IDLE   = "a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"
 CRAFT_WH  = "refreshCraftable stands down while the warehouse is alive (SOURCE-ONLY, weaker)"
+LG_DISK   = "an unwritable disk is reported, never assumed"
+LG_TWO    = "two kinds out at once are kept separately"
+LG_ROLL   = "a rollback leaves no record"
+LG_TRUNC  = "a truncated file reads as no record and boots"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1080,6 +1084,19 @@ MUTANTS = [
 
     ('refreshCraftable polls with the warehouse alive', 'central_server.lua',
      [('        -- stalls, 588 ms. Same guard and window as refreshStorage\'s.\n        if os.epoch("utc") - (state.storageSenderSeenAt or 0) < 180000 then return end\n', "        -- stalls, 588 ms. Same guard and window as refreshStorage's.\n")], CRAFT_WH),
+
+    # -- The placed-item ledger: storage (recovery layer release 2) -----------
+    ('the ledger claims a record it could not write', 'turtle_base.lua',
+     [('    if not f then\n        -- Leave the cache alone: claiming a placement we could not persist\n        -- would be a lie in memory as well as on disk.\n        return false, "ledger_write_failed"\n    end\n', '    if not f then\n        base.ledger._cache[kind], base.ledger._loaded[kind] = rec, true\n        return true\n    end\n')], LG_DISK),
+
+    ('clearing one kind clears them all', 'turtle_base.lua',
+     [('    local p = base.ledger.path(kind)\n    if fs.exists(p) then fs.delete(p) end\nend\n', '    for _, n in ipairs(fs.list("")) do\n        if n:match("^ledger_") then fs.delete(n) end\n    end\n    base.ledger._cache, base.ledger._loaded = {}, {}\nend\n')], LG_TWO),
+
+    ('a rollback leaves the file on disk', 'turtle_base.lua',
+     [('function base.ledger.rollback(kind)\n    base.ledger.clear(kind)\n', 'function base.ledger.rollback(kind)\n    base.ledger._cache[kind], base.ledger._loaded[kind] = nil, true\n')], LG_ROLL),
+
+    ('a truncated ledger file raises at boot', 'turtle_base.lua',
+     [('    local ok, data = pcall(textutils.unserialise, raw or "")\n', '    local ok, data = true, textutils.unserialise(raw or "")\n    if data == nil then error("ledger: unreadable", 0) end\n')], LG_TRUNC),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

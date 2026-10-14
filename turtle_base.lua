@@ -2042,6 +2042,90 @@ function fuel.returnLeftover(dropFn, where)
     return back
 end
 
+-- PLACED-ITEM LEDGER (recovery layer release 2; ruled 2026-10-08, contract
+-- 2026-10-12). Whatever a turtle places in the world and means to take back is
+-- recorded here BEFORE the place and cleared only once it is back in its home
+-- slot, so a reboot at any instant errs toward "we may have one out there" --
+-- the recoverable direction. One file per kind, because two can be out at once:
+-- a dump can start while the fuel chest is down. W1's chest_state (2026-10-08)
+-- is the storage contract this generalises; node_181 lost its ore chest to a
+-- reboot mid-dump that day because nothing on disk said it was out there.
+--
+-- A field of base rather than a module: a new module and its first require
+-- cannot ship in one OTA (the updater running it is the previous version).
+base.ledger = { _cache = {}, _loaded = {} }
+
+function base.ledger.path(kind) return "ledger_" .. kind .. ".dat" end
+
+-- `entry` = { x, y, z (the BLOCK), face = "down"|"up"|"forward", facing,
+-- turtleAt = { x, y, z } }. Returns true once on disk, or false, reason. The
+-- caller MUST NOT place on false: a crash after an unrecorded place strands the
+-- item with nothing recording why.
+function base.ledger.record(kind, entry)
+    local rec = {}
+    for k, v in pairs(entry) do rec[k] = v end
+    rec.placedAt = os.epoch("utc")
+    local f = fs.open(base.ledger.path(kind), "w")
+    if not f then
+        -- Leave the cache alone: claiming a placement we could not persist
+        -- would be a lie in memory as well as on disk.
+        return false, "ledger_write_failed"
+    end
+    f.write(textutils.serialise(rec))
+    f.close()
+    base.ledger._cache[kind], base.ledger._loaded[kind] = rec, true
+    return true
+end
+
+-- After a clean place() failure: nothing went down, and a false record would
+-- send a turtle digging at a block it never used.
+function base.ledger.rollback(kind)
+    base.ledger.clear(kind)
+    logInfo("Ledger: " .. kind .. " placement failed cleanly -- record rolled back")
+end
+
+-- Only once the item is confirmed back in its home slot. Clearing early would
+-- erase the only record of something still standing in the world.
+function base.ledger.clear(kind)
+    base.ledger._cache[kind], base.ledger._loaded[kind] = nil, true
+    local p = base.ledger.path(kind)
+    if fs.exists(p) then fs.delete(p) end
+end
+
+function base.ledger.get(kind)
+    local L = base.ledger
+    if L._loaded[kind] then return L._cache[kind] end
+    L._loaded[kind] = true
+    local p = L.path(kind)
+    if not fs.exists(p) then return nil end
+    local f = fs.open(p, "r")
+    if not f then return nil end
+    local raw = f.readAll()
+    f.close()
+    -- A truncated write must not brick the boot: an unreadable record is no
+    -- record, said out loud.
+    local ok, data = pcall(textutils.unserialise, raw or "")
+    if ok and type(data) == "table" and data.x ~= nil then
+        L._cache[kind] = data
+    else
+        logWarn("Ledger file for " .. kind .. " is unreadable -- treated as no record")
+    end
+    return L._cache[kind]
+end
+
+-- Every kind with a record, from disk, so a reboot sees what the last life left.
+function base.ledger.all()
+    local out = {}
+    for _, name in ipairs(fs.list("")) do
+        local kind = name:match("^ledger_(.+)%.dat$")
+        if kind then
+            local e = base.ledger.get(kind)
+            if e then out[kind] = e end
+        end
+    end
+    return out
+end
+
 -- Deploy the entangled chest, drain coal into slots 1-BURN_MAX, burn it, recover chest.
 -- Before deploying, clears non-fuel debris from slots 1-BURN_MAX to ensure there is
 -- room for coal (support turtles accumulate road debris while following delivery).

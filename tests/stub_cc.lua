@@ -456,6 +456,19 @@ function M.install(opts)
             }
         end,
         exists = function(path) return files[path] ~= nil end,
+        -- NINTH fidelity gap: fs.list was missing, so nothing that enumerates
+        -- its own files on disk (the placed-item ledger's all()) could run.
+        -- Root directory only: every file this project writes is at the root.
+        list = function(dir)
+            local out = {}
+            for name in pairs(files) do
+                if (dir == "" or dir == "/") and not name:find("/", 1, true) then
+                    out[#out + 1] = name
+                end
+            end
+            table.sort(out)
+            return out
+        end,
         -- EIGHTH fidelity gap. fs.getSize did not exist, so any code verifying a
         -- file it had just written -- the atomic-write pattern that lets a save
         -- drop its backup and reclaim the space -- failed inside the missing
