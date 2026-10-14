@@ -271,4 +271,28 @@ return {
         assert_eq(c.world[key(10, 63, 0)], "minecraft:chest", "the station chest is never touched")
         assert_eq(base.ledger.get("fuel_chest"), nil)
     end,
+
+    -- Review #5 (release 2): a chest above or below needs a position, not a
+    -- facing. At the dock the fuel chest always goes UP (the station chest is
+    -- below), and a turtle boxed in there cannot measure its facing -- it sat
+    -- before the main loop, unreachable, with the chest directly overhead.
+    ["a chest above is recovered without waiting for a facing"] =
+    function(assert_eq)
+        local U = { x = 10, y = 65, z = 0, face = "up", turtleAt = { x = 10, y = 64, z = 0 } }
+        local base, c = standing(U, { world = {
+            [key(11, 64, 0)] = "minecraft:stone", [key(9, 64, 0)] = "minecraft:stone",
+            [key(10, 64, 1)] = "minecraft:stone", [key(10, 64, -1)] = "minecraft:stone" } })
+        base.setCanDig(false)
+        local naps = 0
+        local savedSleep = sleep
+        sleep = function()
+            naps = naps + 1
+            if naps >= 3 then c.world[key(9, 64, 0)] = nil end   -- so a wrong wait still ends
+        end
+        local ok = base.ledger.recover("fuel_chest")
+        sleep = savedSleep
+        assert_eq(ok, true)
+        assert_eq(naps, 0, "no wait: up needs no facing")
+        assert_eq(c.world[key(10, 65, 0)], nil)
+    end,
 }

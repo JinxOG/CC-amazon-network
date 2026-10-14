@@ -859,12 +859,14 @@ function base.setDockForTest(d) _self.dock = d end
 
 function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end
 
-function base.waitForPositionFix(why)
-    if _self.posFixed and _self.facingKnown then return true end
+-- positionOnly: a caller that never moves sideways (recovering an item placed
+-- up or down) needs a measured position but no facing (review #5, release 2).
+function base.waitForPositionFix(why, positionOnly)
+    if _self.posFixed and (positionOnly or _self.facingKnown) then return true end
     logWarn(string.format("No GPS fix or facing -- NOT moving until both are measured (%s)",
         tostring(why)))
     local tries = 0
-    while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do
+    while not ((_self.posFixed or gpsSync()) and (positionOnly or _self.facingKnown or detectFacing())) do
         tries = tries + 1
         -- A STUCK TURTLE SAYS SO (2026-10-08). node_184 and node_182 registered
         -- at 12:07:56 and were never heard from again: this wait runs before
@@ -2179,13 +2181,12 @@ function base.ledger.recover(kind)
     local spec = L._kinds[kind]
     if not spec then return L.needsHands(kind, e, "unknown_kind") end
 
-    base.waitForPositionFix("recovering the " .. kind)
+    local dir = (e.face == "down" and "down") or (e.face == "up" and "up") or "forward"
+    base.waitForPositionFix("recovering the " .. kind, dir ~= "forward")
     local at = e.turtleAt or {}
     if _self.pos.x ~= at.x or _self.pos.y ~= at.y or _self.pos.z ~= at.z then
         return L.needsHands(kind, e, "not_where_it_was_placed")
     end
-
-    local dir = (e.face == "down" and "down") or (e.face == "up" and "up") or "forward"
     if dir == "forward" then
         if e.facing == nil then return L.needsHands(kind, e, "facing_not_recorded") end
         for _ = 1, 4 do
