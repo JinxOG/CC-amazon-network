@@ -577,6 +577,17 @@ return {
         base.setRoleForTest(proto.ROLE.DELIVERY)
         base.setDockForTest(dock)
         base.setBootGuardForTest(true)
+        -- Zero moves are expected; a cap turns any runaway route into a clean
+        -- failure instead of a hang.
+        local moves = 0
+        for _, f in ipairs({ "forward", "back", "up", "down" }) do
+            local real = turtle[f]
+            turtle[f] = function(...)
+                moves = moves + 1
+                if moves > 200 then error("runaway: 200 moves", 0) end
+                return real(...)
+            end
+        end
         local ok, err = pcall(base.homeAfterBoot)
         assert_eq(ok, true, tostring(err))
         assert_eq(c.world[below], "minecraft:chest", "its station chest is never dug")

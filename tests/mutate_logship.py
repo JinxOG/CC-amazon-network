@@ -1090,7 +1090,7 @@ MUTANTS = [
      [('        registry.holdUntilDocked(msg.from)\n    end\nend\nhandlers[proto.MSG.MINE_PHASE]', '    end\nend\nhandlers[proto.MSG.MINE_PHASE]')], RB_AGAIN),
 
     ('a miner flying home with nothing to recover is not held', 'central_server.lua',
-     [('        registry.holdUntilDocked(msg.from)\n    end\n    jobQueue.noteWorking', '    end\n    jobQueue.noteWorking')], RB_HOME),
+     [('p.detail:find("^rebooted_outside_base") then\n        registry.holdUntilDocked(msg.from)\n', 'p.detail:find("^rebooted_outside_base") then\n')], RB_HOME),
 
     ('a stuck turtle is still offered work', 'central_server.lua',
      [('    registry.holdUntilDocked(id)\nend\n', 'end\n')], ST_SERVER),
@@ -1170,10 +1170,10 @@ MUTANTS = [
      [('        registry.flagNeedsHands(msg.from, p.detail)\n', '')], NH_SHOW),
 
     ('a needs_hands report is logged every time', 'central_server.lua',
-     [('    if t.needsHands ~= detail then\n        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "\n', '    if true then\n        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "\n')], NH_SHOW),
+     [('    if t.ledgerNeedsHands ~= detail then\n        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "\n', '    if true then\n        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "\n')], NH_SHOW),
 
     ('a needs_hands report benches the turtle', 'central_server.lua',
-     [('    t.needsHands = detail\nend\n\n-- verdict is what', '    t.needsHands = detail\n    registry.holdUntilDocked(id)\nend\n\n-- verdict is what')], NH_SHOW),
+     [('    t.ledgerNeedsHands = detail\nend\n\n-- verdict is what', '    t.ledgerNeedsHands = detail\n    registry.holdUntilDocked(id)\nend\n\n-- verdict is what')], NH_SHOW),
 
     # -- The release 2 review's fixes ------------------------------------------
     ('the boot route is chosen from a guessed position', 'turtle_base.lua',
@@ -1328,7 +1328,7 @@ MUTANTS = [
      [('        _self.posFixed = true\n', '')], G_WAIT),
 
     ('a turtle with no fix goes ahead anyway', 'turtle_base.lua',
-     [('    while not ((_self.posFixed or gpsSync()) and (_self.facingKnown or detectFacing())) do\n',
+     [('    while not ((_self.posFixed or gpsSync()) and (positionOnly or _self.facingKnown or detectFacing())) do\n',
        '    while false do\n')], G_WAIT),
 
     ('boot recovery flies without a fix', 'ore_turtle.lua',
