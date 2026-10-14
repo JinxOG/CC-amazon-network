@@ -334,4 +334,24 @@ return {
         assert_eq(coal, 5, "and the coal was moved, not lost")
         assert_eq(base.ledger.get("fuel_chest"), nil)
     end,
+
+    -- Review #9 (release 2): a write that throws escaped refuelFromChest, which
+    -- delivery and support call with no wrapper -- killing base.run, and the
+    -- refuel retried on the next boot: a crash loop on a full disk.
+    ["a write that throws is reported, never raised"] = function(assert_eq)
+        local base = fresh()
+        local open = fs.open
+        fs.open = function(p, m)
+            if m == "w" then
+                return { write = function() error("Out of space", 0) end, close = function() end }
+            end
+            return open(p, m)
+        end
+        local ok, r1, r2 = pcall(base.ledger.record, "fuel_chest", E)
+        fs.open = open
+        assert_eq(ok, true, "nothing escapes: " .. tostring(r1))
+        assert_eq(r1, false)
+        assert_eq(r2, "ledger_write_failed")
+        assert_eq(base.ledger.get("fuel_chest"), nil)
+    end,
 }

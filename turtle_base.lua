@@ -2095,8 +2095,19 @@ function base.ledger.record(kind, entry)
         -- would be a lie in memory as well as on disk.
         return false, "ledger_write_failed"
     end
-    f.write(textutils.serialise(rec))
-    f.close()
+    -- A write can throw (a full disk) as well as fs.open returning nil. Escaping
+    -- here would kill base.run on roles that refuel unwrapped, and the refuel
+    -- would retry on the next boot: a crash loop (review #9). Caught, the
+    -- partial file removed, and reported like any other failed write.
+    local wrote = pcall(function()
+        f.write(textutils.serialise(rec))
+        f.close()
+    end)
+    if not wrote then
+        pcall(f.close)
+        if fs.exists(base.ledger.path(kind)) then pcall(fs.delete, base.ledger.path(kind)) end
+        return false, "ledger_write_failed"
+    end
     base.ledger._cache[kind], base.ledger._loaded[kind] = rec, true
     return true
 end
