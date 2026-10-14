@@ -854,6 +854,8 @@ function base.detectFacingForTest() return detectFacing() end
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
 -- position; 2026-10-06, facing).
 function base.setBootGuardForTest(on) _self.bootGuard = on end
+function base.setRoleForTest(r) _self.role = r end
+function base.setDockForTest(d) _self.dock = d end
 
 function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end
 
@@ -3160,6 +3162,49 @@ end
 
 -- ─── Init ────────────────────────────────────────────────────────────────────
 
+-- Boot homing, out of base.init so it can be tested (review #1, release 2).
+function base.homeAfterBoot()
+    -- If not physically at assigned dock, home there now before accepting any jobs.
+    -- This corrects position mismatches caused by crashes, reassignments, or reboots.
+    -- Only runs when inside the building at floor level (safe to use internal taxiway).
+    if _self.dock then
+        -- THE ROUTE IS CHOSEN FROM A MEASURED POSITION (review #1, release 2).
+        -- A single gpsSync that failed left (0,0,0), which is never "inside", so
+        -- a turtle sitting at its own dock took the outside route -- and once
+        -- GPS returned, delivery dug down through its station chest and the
+        -- floor. Miners keep their behaviour: ore_turtle measures before it
+        -- decides anything outside the base.
+        if _self.role == proto.ROLE.MINER then
+            gpsSync()
+        else
+            base.waitForPositionFix("boot: choosing a route home")
+        end
+        local p = _self.pos
+        local insideBuilding = base.isInsideBuilding(p)
+        local atDock = (p.x == _self.dock.x and p.z == _self.dock.z)
+        if insideBuilding and not atDock then
+            logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
+                _self.dock.x, _self.dock.z, p.x, p.z))
+            base.returnToDockInternal()
+        elseif not insideBuilding then
+            if _self.role == proto.ROLE.MINER then
+                logInfo(string.format(
+                    "Miner rebooted outside building at %d,%d,%d — deferring return to job handler",
+                    p.x, p.y, p.z))
+            elseif _self.role == proto.ROLE.SUPPORT and p.y > CFG.FLOOR_Y + 20 then
+                logInfo(string.format(
+                    "Mining support rebooted at altitude %d,%d,%d — deferring return to job handler",
+                    p.x, p.y, p.z))
+            else
+                logInfo(string.format(
+                    "Rebooted outside building at %d,%d,%d — returning via arrivals hole",
+                    p.x, p.y, p.z))
+                base.returnToDock()
+            end
+        end
+    end
+end
+
 function base.init(role)
     _self.id   = proto.selfId()
     _self.role = role
@@ -3205,35 +3250,7 @@ function base.init(role)
     -- ore_turtle's recoverPlacedLoader without the server. nil (unbounded, the
     -- original behaviour) for every other role.
     register(role == proto.ROLE.MINER and BOOT_REGISTER_ATTEMPTS or nil)
-    -- If not physically at assigned dock, home there now before accepting any jobs.
-    -- This corrects position mismatches caused by crashes, reassignments, or reboots.
-    -- Only runs when inside the building at floor level (safe to use internal taxiway).
-    if _self.dock then
-        gpsSync()
-        local p = _self.pos
-        local insideBuilding = base.isInsideBuilding(p)
-        local atDock = (p.x == _self.dock.x and p.z == _self.dock.z)
-        if insideBuilding and not atDock then
-            logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
-                _self.dock.x, _self.dock.z, p.x, p.z))
-            base.returnToDockInternal()
-        elseif not insideBuilding then
-            if _self.role == proto.ROLE.MINER then
-                logInfo(string.format(
-                    "Miner rebooted outside building at %d,%d,%d — deferring return to job handler",
-                    p.x, p.y, p.z))
-            elseif _self.role == proto.ROLE.SUPPORT and p.y > CFG.FLOOR_Y + 20 then
-                logInfo(string.format(
-                    "Mining support rebooted at altitude %d,%d,%d — deferring return to job handler",
-                    p.x, p.y, p.z))
-            else
-                logInfo(string.format(
-                    "Rebooted outside building at %d,%d,%d — returning via arrivals hole",
-                    p.x, p.y, p.z))
-                base.returnToDock()
-            end
-        end
-    end
+    base.homeAfterBoot()
     -- Startup homing may have set status to RETURNING — reset to IDLE now we're docked.
     _self.status = proto.STATUS.IDLE
     _self.jobId  = nil

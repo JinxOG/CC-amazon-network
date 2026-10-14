@@ -549,4 +549,38 @@ return {
         assert_eq(ok, true, "a test, or a tool, that never booted moves as it always did")
         assert_eq(calls, 0)
     end,
+
+    -- Review finding #1 (release 2, Critical). With GPS down at boot, base.init
+    -- chose the route home from (0,0,0) -- never "inside" -- so a DOCKED delivery
+    -- turtle took the outside route: its first step waited for the fix (the
+    -- guard), then it dug down through its own station chest and the floor.
+    -- The route is now chosen from a measured position.
+    ["a docked delivery turtle with no GPS at boot stays at its dock"] =
+    function(assert_eq)
+        stub.install({})
+        package.loaded["waypoints"] = nil
+        local proto = require("protocol")
+        local dock  = require("waypoints").assignDock(proto.ROLE.DELIVERY, "node_boot_test")
+        local below = dock.x .. "," .. (dock.y - 1) .. "," .. dock.z
+        local c = stub.install({ pos = { x = dock.x, y = dock.y, z = dock.z, facing = 2 },
+                                 equipped = { left = "minecraft:diamond_pickaxe" },
+                                 world = { [below] = "minecraft:chest" } })
+        local calls = 0
+        gps = { locate = function()
+            calls = calls + 1
+            if calls <= 3 then return nil end
+            return c.pos.x, c.pos.y, c.pos.z
+        end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"]    = nil
+        local base = require("turtle_base")
+        base.setRoleForTest(proto.ROLE.DELIVERY)
+        base.setDockForTest(dock)
+        base.setBootGuardForTest(true)
+        local ok, err = pcall(base.homeAfterBoot)
+        assert_eq(ok, true, tostring(err))
+        assert_eq(c.world[below], "minecraft:chest", "its station chest is never dug")
+        assert_eq(c.pos.x .. "," .. c.pos.y .. "," .. c.pos.z,
+            dock.x .. "," .. dock.y .. "," .. dock.z, "and it never left its dock")
+    end,
 }
