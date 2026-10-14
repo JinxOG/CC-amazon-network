@@ -2180,6 +2180,18 @@ function base.ledger.recover(kind)
     if not e then return true end
     local spec = L._kinds[kind]
     if not spec then return L.needsHands(kind, e, "unknown_kind") end
+    local home = type(spec.homeSlot) == "function" and spec.homeSlot() or spec.homeSlot
+
+    -- ALREADY HOME (review #3): a reboot between the dig and the clear, or a
+    -- person fetching it by hand. The record is stale; going to dig would send
+    -- someone to an empty block on every boot.
+    local inHome = turtle.getItemDetail(home)
+    if inHome and inHome.name == spec.blockName then
+        L.clear(kind)
+        logInfo("Ledger: the " .. kind .. " is already home -- stale record cleared")
+        pcall(base.sendProgress, "ledger_ok: " .. kind)
+        return true
+    end
 
     local dir = (e.face == "down" and "down") or (e.face == "up" and "up") or "forward"
     base.waitForPositionFix("recovering the " .. kind, dir ~= "forward")
@@ -2198,6 +2210,13 @@ function base.ledger.recover(kind)
 
     local seen, data = INSPECT[dir]()
     if not (seen and type(data) == "table" and data.name == spec.blockName) then
+        -- Dug before the reboot landed, and still in a working slot (review #3).
+        if L.bringHome(spec.blockName, home) then
+            L.clear(kind)
+            logInfo("Ledger: the " .. kind .. " was already aboard -- moved home, record cleared")
+            pcall(base.sendProgress, "ledger_ok: " .. kind)
+            return true
+        end
         return L.needsHands(kind, e, "not_the_item")
     end
 
@@ -2217,27 +2236,56 @@ function base.ledger.recover(kind)
     end
     if not dug then return L.needsHands(kind, e, "dig_failed") end
 
-    local home = type(spec.homeSlot) == "function" and spec.homeSlot() or spec.homeSlot
-    local inHome = turtle.getItemDetail(home)
-    if not inHome then   -- dug into another slot: move one home (never onto something else)
-        for s = 1, 16 do
-            local d = turtle.getItemDetail(s)
-            if s ~= home and d and d.name == spec.blockName then
-                turtle.select(s)
-                turtle.transferTo(home, 1)
-                break
-            end
-        end
-        turtle.select(1)
-        inHome = turtle.getItemDetail(home)
-    end
-    if not (inHome and inHome.name == spec.blockName) then
-        return L.needsHands(kind, e, "not_back_in_its_slot")
+    if not L.bringHome(spec.blockName, home) then
+        -- It IS aboard, so the record no longer describes the world: clear it,
+        -- and say plainly what is wrong instead (review #2).
+        L.clear(kind)
+        return L.needsHands(kind, e, "aboard_but_not_in_slot_" .. tostring(home))
     end
 
     L.clear(kind)
     logInfo(string.format("Ledger: recovered the %s from %d,%d,%d", kind, e.x, e.y, e.z))
+    pcall(base.sendProgress, "ledger_ok: " .. kind)
     return true
+end
+
+-- Put one `name` into `home`: true once it is there. Clears the home slot
+-- first by moving whatever else holds it to a free slot -- never dropping it
+-- (refuel guards against coal landing in CHEST_SLOT; review #2). Takes the item
+-- from a working slot below `home`, or from a reserved slot above it only when
+-- that holds 2+ -- refuelFromChest's own rule, because every ender chest shares
+-- one item name and a lone chest above is another chest's home.
+function base.ledger.bringHome(name, home)
+    local d = turtle.getItemDetail(home)
+    if d and d.name == name then return true end
+    if d then
+        for s = 1, 16 do
+            if s ~= home and turtle.getItemCount(s) == 0 then
+                turtle.select(home)
+                turtle.transferTo(s)
+                break
+            end
+        end
+        if turtle.getItemCount(home) > 0 then turtle.select(1); return false end
+    end
+    local from
+    for s = 1, home - 1 do
+        local i = turtle.getItemDetail(s)
+        if i and i.name == name then from = s; break end
+    end
+    if not from then
+        for s = home + 1, 16 do
+            local i = turtle.getItemDetail(s)
+            if i and i.name == name and i.count >= 2 then from = s; break end
+        end
+    end
+    if from then
+        turtle.select(from)
+        turtle.transferTo(home, 1)
+    end
+    turtle.select(1)
+    local h = turtle.getItemDetail(home)
+    return h ~= nil and h.name == name
 end
 
 -- Every recorded item, at boot. Returns how many came back.

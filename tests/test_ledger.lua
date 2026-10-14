@@ -295,4 +295,43 @@ return {
         assert_eq(naps, 0, "no wait: up needs no facing")
         assert_eq(c.world[key(10, 65, 0)], nil)
     end,
+
+    -- Review #3 (release 2): records that outlive the truth. A reboot between
+    -- the dig and the clear, or a person fetching the chest by hand, left a
+    -- record that raised NEEDS HANDS on every boot, pointing at an empty block.
+    ["a record for a chest already home is cleared without digging"] =
+    function(assert_eq)
+        local base, c, sent = standing(E, { noChest = true, inv = { [16] = { name = EC, count = 1 } } })
+        local ok = base.ledger.recover("fuel_chest")
+        assert_eq(ok, true)
+        assert_eq(base.ledger.get("fuel_chest"), nil, "the record was stale: cleared")
+        assert_eq(said(sent, "needs_hands"), false, "and nobody is sent to an empty block")
+    end,
+
+    ["a chest dug but not yet moved home is moved home and cleared"] =
+    function(assert_eq)
+        local base, c, sent = standing(E, { noChest = true, inv = { [1] = { name = EC, count = 1 } } })
+        local ok = base.ledger.recover("fuel_chest")
+        assert_eq(ok, true)
+        assert_eq(c.inv[16] and c.inv[16].name, EC, "moved home")
+        assert_eq(base.ledger.get("fuel_chest"), nil)
+        assert_eq(said(sent, "needs_hands"), false)
+    end,
+
+    -- Review #2 (release 2): the home slot holding something else (refuel
+    -- itself guards against coal landing in CHEST_SLOT). The chest came aboard
+    -- but the turtle kept the record and raised NEEDS HANDS for ever.
+    ["a home slot holding something else is cleared to make way"] =
+    function(assert_eq)
+        local base, c, sent = standing(E, { inv = { [16] = { name = "minecraft:coal", count = 5 } } })
+        local ok = base.ledger.recover("fuel_chest")
+        local coal = 0
+        for s = 1, 16 do
+            if c.inv[s] and c.inv[s].name == "minecraft:coal" then coal = coal + c.inv[s].count end
+        end
+        assert_eq(ok, true)
+        assert_eq(c.inv[16] and c.inv[16].name, EC, "the chest is home")
+        assert_eq(coal, 5, "and the coal was moved, not lost")
+        assert_eq(base.ledger.get("fuel_chest"), nil)
+    end,
 }
