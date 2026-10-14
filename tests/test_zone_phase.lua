@@ -279,11 +279,29 @@ return {
         for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
             if w.id == A then offered = true end
         end
-        local flag = t.needsHands
+        local flag = t.ledgerNeedsHands
         restore()
         assert_eq(flag, d, "the dashboard shows the item and where")
         assert_eq(n, 1, "said once, not on every report")
         assert_eq(offered, true, "and the turtle still works")
+    end,
+
+    -- Review #4 (release 2): the ledger alert shared needsHands with the hardware
+    -- check, so a miner's next passing check wiped it within seconds, and on
+    -- delivery and support (no hardware check) nothing ever cleared it.
+    ["a ledger alert survives a passing hardware check, and clears when fixed"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local h = T.handlers[proto.MSG.STATUS_UPDATE]
+        local d = "needs_hands: fuel_chest at 10,63,0 -- not_the_item"
+        h({ from = A, payload = { status = proto.STATUS.IDLE, detail = d } })
+        T.registry.applyHardware(A, "ok")
+        local afterCheck = T.state.registry[A].ledgerNeedsHands
+        h({ from = A, payload = { status = proto.STATUS.IDLE, detail = "ledger_ok: fuel_chest" } })
+        local afterFix = T.state.registry[A].ledgerNeedsHands
+        restore()
+        assert_eq(afterCheck, d, "a hardware check passing says nothing about a chest in the world")
+        assert_eq(afterFix, nil, "the turtle saying it recovered it does")
     end,
 
     -- A stuck turtle's report (2026-10-08): node_184 sat boxed in for hours and

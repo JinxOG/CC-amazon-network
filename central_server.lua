@@ -2229,14 +2229,19 @@ end
 -- "needs_hands: <kind> at x,y,z -- <reason>". Shown on the dashboard and logged
 -- once per distinct report. NOT held and NOT benched: the record stays on the
 -- turtle, a person goes for the item, and the turtle keeps working meanwhile.
+--
+-- Its own field (review #4): it shared needsHands with the hardware check, so a
+-- miner's next passing check wiped it within seconds ("back in service (was:
+-- needs_hands: fuel_chest ...)"), and on roles with no hardware check nothing
+-- ever cleared it. Cleared by the turtle's own "ledger_ok" report.
 function registry.flagNeedsHands(id, detail)
     local t = state.registry[id or ""]
     if not t then return end
-    if t.needsHands ~= detail then
+    if t.ledgerNeedsHands ~= detail then
         logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "
             .. "and keeps working; fetch the item by hand.", id, tostring(detail)))
     end
-    t.needsHands = detail
+    t.ledgerNeedsHands = detail
 end
 
 -- verdict is what the turtle's own check said: "ok", a fault reason, or nil
@@ -3140,6 +3145,14 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     -- A ledger recovery that could not finish (recovery layer release 2).
     if type(p.detail) == "string" and p.detail:find("^needs_hands") then
         registry.flagNeedsHands(msg.from, p.detail)
+    end
+    if type(p.detail) == "string" and p.detail:find("^ledger_ok") then
+        local t = state.registry[msg.from]
+        if t and t.ledgerNeedsHands then
+            logInfo(string.format("%s recovered what it had left out -- %s cleared",
+                msg.from, t.ledgerNeedsHands))
+            t.ledgerNeedsHands = nil
+        end
     end
     jobQueue.noteWorking(p.jobId, msg.from)
     jobQueue.progress(p.jobId, p.status, p.detail)
@@ -5166,7 +5179,7 @@ function server.run()
                 blockedUntil = t.dispatchBlockedUntil or nil,
                 -- Set only for a hardware fault: something only a person in the
                 -- world can fix. Distinct from a timed bench, which clears itself.
-                needsHands = t.needsHands or nil,
+                needsHands = t.needsHands or t.ledgerNeedsHands or nil,
                 commsGap = t.commsGap and true or false,
                 -- Scalar, like everything else here. Step 2 of the channel
                 -- rollout is gated on every turtle showing one.
