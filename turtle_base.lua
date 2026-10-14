@@ -2025,6 +2025,16 @@ function fuel.dropFor(suckFn)
     return nil
 end
 
+-- Which face a place function puts its block on, and that block's absolute
+-- position: what the ledger records. Forward uses the facing as it stands.
+function fuel.blockFor(placeFn)
+    local p = _self.pos
+    if placeFn == turtle.placeDown then return "down", p.x, p.y - 1, p.z end
+    if placeFn == turtle.placeUp   then return "up",   p.x, p.y + 1, p.z end
+    local nx, nz = projectStep("forward")
+    return "forward", nx, p.y, nz
+end
+
 function fuel.returnLeftover(dropFn, where)
     if not dropFn then return 0 end
     local back = 0
@@ -2226,6 +2236,12 @@ function base.ledger.recoverAll()
     return n
 end
 
+-- The fuel chest is the ledger's first entry (ruled 2026-10-08): every role
+-- uses one. Its home slot is read when recovering, because base.init moves it
+-- to 15 for delivery turtles after this file has loaded.
+base.ledger.registerKind("fuel_chest", { blockName = CHEST_ITEM,
+                                         homeSlot = function() return CHEST_SLOT end })
+
 -- Deploy the entangled chest, drain coal into slots 1-BURN_MAX, burn it, recover chest.
 -- Before deploying, clears non-fuel debris from slots 1-BURN_MAX to ensure there is
 -- room for coal (support turtles accumulate road debris while following delivery).
@@ -2298,10 +2314,23 @@ function fuel.refuelFromChest()
         return false
     end
 
+    -- RECORDED BEFORE IT GOES DOWN (recovery layer release 2). A reboot between
+    -- this place and the dig below strands the fuel chest in the world, for
+    -- every role; the record is what lets the next boot go back for it.
+    local face, bx, by, bz = fuel.blockFor(placeFn)
+    local recorded, why = base.ledger.record("fuel_chest", {
+        x = bx, y = by, z = bz, face = face, facing = _self.facing,
+        turtleAt = { x = _self.pos.x, y = _self.pos.y, z = _self.pos.z } })
+    if not recorded then
+        logWarn("Fuel chest NOT placed: its record could not be written (" .. tostring(why) .. ")")
+        return false
+    end
+
     -- Place chest
     turtle.select(CHEST_SLOT)
     if not placeFn() then
         logWarn("Failed to place entangled chest.")
+        base.ledger.rollback("fuel_chest")
         return false
     end
     sleep(0.5)  -- wait for peripheral/block to register
@@ -2386,6 +2415,13 @@ function fuel.refuelFromChest()
         end
     end
     turtle.select(1)
+    -- Cleared only once the chest is home. Anything else keeps the record, and
+    -- the next boot goes back for it.
+    if chestAt(CHEST_SLOT) then
+        base.ledger.clear("fuel_chest")
+    else
+        logWarn("Fuel chest not confirmed home -- its ledger record is kept for the next boot")
+    end
 
     return gained > 0
 end

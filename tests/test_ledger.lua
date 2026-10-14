@@ -207,4 +207,68 @@ return {
         assert_eq(ok, true, "and recovered once it could measure")
         assert_eq(c.world[key(11, 64, 0)], nil)
     end,
+
+    -- The fuel chest is entry one (task 3) ----------------------------------
+
+    ["a refuel records the fuel chest before placing it"] = function(assert_eq)
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 0 }, realFuel = true, fuel = 600,
+                                equipped = { left = PICK }, inv = { [16] = { name = EC, count = 1 } },
+                                containers = { [EC] = { { name = "minecraft:coal", count = 64 } } } })
+        base.gpsSync()                                         -- as every turtle has before it refuels
+        local atPlace
+        local place = turtle.placeDown
+        turtle.placeDown = function(...) atPlace = base.ledger.get("fuel_chest"); return place(...) end
+        base.fuel.refuelFromChest()
+        turtle.placeDown = place
+        assert_eq(atPlace ~= nil, true, "on disk before the chest went down")
+        assert_eq(atPlace and atPlace.face, "down")
+        assert_eq(atPlace and (atPlace.x .. "," .. atPlace.y .. "," .. atPlace.z), "10,63,0", "the block, not the turtle")
+        assert_eq(atPlace and atPlace.turtleAt.y, 64)
+    end,
+
+    ["a placement that fails leaves no record"] = function(assert_eq)
+        local base = fresh({ pos = { x = 10, y = 64, z = 0, facing = 0 }, realFuel = true, fuel = 600,
+                             equipped = { left = PICK }, inv = { [16] = { name = EC, count = 1 } } })
+        local place = turtle.placeDown
+        turtle.placeDown = function() return false end
+        local ok = base.fuel.refuelFromChest()
+        turtle.placeDown = place
+        assert_eq(ok, false)
+        assert_eq(base.ledger.get("fuel_chest"), nil, "nothing went down, so nothing is recorded")
+    end,
+
+    ["a finished refuel leaves no record"] = function(assert_eq)
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 0 }, realFuel = true, fuel = 600,
+                                equipped = { left = PICK }, inv = { [16] = { name = EC, count = 1 } },
+                                containers = { [EC] = { { name = "minecraft:coal", count = 64 } } } })
+        base.fuel.refuelFromChest()
+        assert_eq(c.inv[16] and c.inv[16].name, EC, "the chest is home")
+        assert_eq(base.ledger.get("fuel_chest"), nil, "and the record cleared")
+    end,
+
+    ["a reboot mid-refuel leaves the record for boot"] = function(assert_eq)
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 0 }, realFuel = true, fuel = 600,
+                                equipped = { left = PICK }, inv = { [16] = { name = EC, count = 1 } },
+                                containers = { [EC] = { { name = "minecraft:coal", count = 64 } } } })
+        local dig = turtle.digDown
+        turtle.digDown = function() return false end          -- the reboot lands here
+        base.fuel.refuelFromChest()
+        turtle.digDown = dig
+        assert_eq(c.world[key(10, 63, 0)], EC, "the chest is still out there")
+        assert_eq(base.ledger.get("fuel_chest") ~= nil, true, "and the record says so")
+    end,
+
+    ["a fuel chest stranded at the dock is recovered and nothing else is dug"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 0 },
+                                equipped = { left = PICK },
+                                world = { [key(10, 63, 0)] = "minecraft:chest", [key(10, 65, 0)] = EC } })
+        base.ledger.record("fuel_chest", { x = 10, y = 65, z = 0, face = "up",
+                                           turtleAt = { x = 10, y = 64, z = 0 } })
+        local n = base.ledger.recoverAll()
+        assert_eq(n, 1)
+        assert_eq(c.inv[16] and c.inv[16].name, EC, "back in the fuel chest's slot")
+        assert_eq(c.world[key(10, 63, 0)], "minecraft:chest", "the station chest is never touched")
+        assert_eq(base.ledger.get("fuel_chest"), nil)
+    end,
 }

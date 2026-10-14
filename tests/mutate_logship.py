@@ -233,6 +233,11 @@ LR_POS    = "a turtle not where it stood is not trusted"
 LR_ROOM   = "a full pack is never emptied onto the ground"
 LR_PICK   = "a stowed pickaxe is borrowed"
 LR_FRONT  = "a chest in front is dug after turning to the recorded facing"
+FC_REC    = "a refuel records the fuel chest before placing it"
+FC_ROLL   = "a placement that fails leaves no record"
+FC_DONE   = "a finished refuel leaves no record"
+FC_KEEP   = "a reboot mid-refuel leaves the record for boot"
+FC_DOCK   = "a fuel chest stranded at the dock is recovered and nothing else is dug"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1121,6 +1126,22 @@ MUTANTS = [
 
     ('recovery digs forward without turning', 'turtle_base.lua',
      [('            if _self.facing == e.facing then break end\n            move.turnRight()\n', '            if _self.facing == e.facing then break end\n')], LR_FRONT),
+
+    # -- The fuel chest is the ledger's first entry (release 2) ---------------
+    ('the fuel chest goes down unrecorded', 'turtle_base.lua',
+     [('    local recorded, why = base.ledger.record("fuel_chest", {\n', '    local recorded, why = true, nil; local _unused = ({\n')], FC_REC),
+
+    ('a failed placement leaves a false record', 'turtle_base.lua',
+     [('        logWarn("Failed to place entangled chest.")\n        base.ledger.rollback("fuel_chest")\n', '        logWarn("Failed to place entangled chest.")\n')], FC_ROLL),
+
+    ('the fuel chest record is cleared before the chest is home', 'turtle_base.lua',
+     [('    if chestAt(CHEST_SLOT) then\n        base.ledger.clear("fuel_chest")\n    else\n', '    if true then\n        base.ledger.clear("fuel_chest")\n    else\n')], FC_KEEP),
+
+    ('the fuel chest record is never cleared', 'turtle_base.lua',
+     [('    if chestAt(CHEST_SLOT) then\n        base.ledger.clear("fuel_chest")\n', '    if chestAt(CHEST_SLOT) then\n')], FC_DONE),
+
+    ('the fuel chest is not a kind the ledger knows', 'turtle_base.lua',
+     [('base.ledger.registerKind("fuel_chest", { blockName = CHEST_ITEM,\n', 'local _unregistered = ({ blockName = CHEST_ITEM,\n')], FC_DOCK),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',
