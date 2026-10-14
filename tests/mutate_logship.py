@@ -255,6 +255,9 @@ R3_OLD2   = "rebooted_outside_base alone no longer holds"
 R3_REQ    = "a boot-recovering miner's job is requeued at once, not after a timeout"
 R3_DOCK   = "a recovering turtle of any role is released by docked"
 R3_HOLD   = "a recovering turtle that never docks stays held"
+R3_SAY    = "a turtle rebooted outside the base says it is recovering and recovers its ledger before it moves"
+R3_INSIDE = "a turtle inside the base but off its dock does not say it is recovering"
+R3_DOCKED = "a turtle that reaches its dock says docked"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1223,6 +1226,19 @@ MUTANTS = [
 
     ('recovering holds nobody', 'central_server.lua',
      [('    registry.holdUntilDocked(id)\n    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\n', '    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\n')], R3_HOLD),
+
+    # -- Release 3: every role says recovering, recovers first, says docked ---
+    ('a field reboot is never announced', 'turtle_base.lua',
+     [('            pcall(base.sendProgress, string.format("recovering: at %d,%d,%d", p.x, p.y, p.z))\n', '')], R3_SAY),
+
+    ('the ledger is recovered only after flying home', 'turtle_base.lua',
+     [('            local rok, rerr = pcall(base.recoverLedger)\n            if not rok then', '            local rok, rerr = true, nil\n            if not rok then')], R3_SAY),
+
+    ('a taxi home inside the base is announced as a recovery', 'turtle_base.lua',
+     [('        if insideBuilding and not atDock then\n', '        if insideBuilding and not atDock then\n            pcall(base.sendProgress, "recovering: inside")\n')], R3_INSIDE),
+
+    ('reaching the dock from inside is never announced', 'turtle_base.lua',
+     [('    pcall(base.sendProgress, "docked")   -- ends a recovery hold, any role (release 3)\n    if not _self.canDig then base.fuel.dockRefuel() end\n', '    if not _self.canDig then base.fuel.dockRefuel() end\n')], R3_DOCKED),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

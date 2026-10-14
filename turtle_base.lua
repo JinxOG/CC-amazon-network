@@ -1734,6 +1734,7 @@ function base.returnToDock()
     move.face(W.dockFacing(_self.dock))
 
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
+    pcall(base.sendProgress, "docked")   -- ends a recovery hold, any role (release 3)
 
     -- All roles top up fuel at dock (dockRefuel skips at ≥80% so miners at full are unaffected).
     base.fuel.dockRefuel()
@@ -1788,6 +1789,7 @@ function base.returnToDockFromSky()
 
     move.face(W.dockFacing(_self.dock))
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
+    pcall(base.sendProgress, "docked")   -- ends a recovery hold, any role (release 3)
 
     -- All roles top up fuel at dock (dockRefuel skips at ≥80% so miners at full are unaffected).
     base.fuel.dockRefuel()
@@ -1834,6 +1836,7 @@ function base.returnToDockInternal()
     end
     move.face(W.dockFacing(_self.dock))
     logInfo("Docked at bay " .. _self.dock.bay .. " row " .. _self.dock.row)
+    pcall(base.sendProgress, "docked")   -- ends a recovery hold, any role (release 3)
     if not _self.canDig then base.fuel.dockRefuel() end
     return true
 end
@@ -3247,6 +3250,14 @@ function base.homeAfterBoot()
                 _self.dock.x, _self.dock.z, p.x, p.z))
             base.returnToDockInternal()
         elseif not insideBuilding then
+            -- A FIELD REBOOT, ANY ROLE (recovery layer release 3). Say so -- the
+            -- server requeues the job this turtle held and holds it until it
+            -- docks -- and take back what the ledger says it left out, BEFORE
+            -- the first step toward home: the item is beside it now, and every
+            -- later step takes it further away.
+            pcall(base.sendProgress, string.format("recovering: at %d,%d,%d", p.x, p.y, p.z))
+            local rok, rerr = pcall(base.recoverLedger)
+            if not rok then logWarn("Ledger recovery before flying home failed: " .. tostring(rerr)) end
             if _self.role == proto.ROLE.MINER then
                 logInfo(string.format(
                     "Miner rebooted outside building at %d,%d,%d — deferring return to job handler",

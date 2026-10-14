@@ -33,6 +33,55 @@ end
 
 local function key(x, y, z) return x .. "," .. y .. "," .. z end
 
+-- A DELIVERY turtle booting at `pos` (or a few blocks off its real dock when
+-- pos is nil), GPS working, guard armed, every radio message recorded. The
+-- first movement is snapshotted -- and, unless letMove, stopped there, since the
+-- tests care about what happened BEFORE the turtle set off.
+local function bootAt(pos, world, opts)
+    opts = opts or {}
+    stub.install({})
+    package.loaded["waypoints"] = nil
+    local proto = require("protocol")
+    local dock = require("waypoints").assignDock(proto.ROLE.DELIVERY, "node_r3_test")
+    pos = pos or { x = dock.x + (opts.dx or 0), y = dock.y, z = dock.z }
+    local c = stub.install({ pos = { x = pos.x, y = pos.y, z = pos.z, facing = 2 },
+                             equipped = { left = "minecraft:diamond_pickaxe" }, world = world })
+    gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+    package.loaded["turtle_base"] = nil
+    package.loaded["geofence"]    = nil
+    local base = require("turtle_base")
+    local sent = {}
+    peripheral.find = function()
+        return { transmit = function(ch, rr, body) sent[#sent + 1] = tostring(body) end,
+                 open = function() end, isOpen = function() return true end, close = function() end }
+    end
+    base.recoverModem()
+    base.setRoleForTest(proto.ROLE.DELIVERY)
+    base.setDockForTest(dock)
+    base.setBootGuardForTest(true)
+    local r = { base = base, c = c, sent = sent }
+    function r.said(text)
+        for _, b in ipairs(sent) do if b:find(text, 1, true) then return true end end
+        return false
+    end
+    base.gpsSync(); base.detectFacingForTest()          -- measured, as the guard requires
+    local moves = 0
+    for _, f in ipairs({ "forward", "back", "up", "down" }) do
+        local real = turtle[f]
+        turtle[f] = function(...)
+            moves = moves + 1
+            if moves == 1 and not r.atFirstMove then
+                r.atFirstMove = { recovering = r.said("recovering"),
+                                  ledgerEmpty = base.ledger.get("fuel_chest") == nil }
+                if not opts.letMove then error("test: stopped at the first move", 0) end
+            end
+            if moves > 2000 then error("runaway", 0) end
+            return real(...)
+        end
+    end
+    return r
+end
+
 return {
     ["a descending turtle steps out of a shared shaft instead of waiting it out"] =
     function(assert_eq)
@@ -593,5 +642,37 @@ return {
         assert_eq(c.world[below], "minecraft:chest", "its station chest is never dug")
         assert_eq(c.pos.x .. "," .. c.pos.y .. "," .. c.pos.z,
             dock.x .. "," .. dock.y .. "," .. dock.z, "and it never left its dock")
+    end,
+
+    -- Recovery layer release 3: every role, rebooted outside the base, says it
+    -- is recovering and recovers its ledger -- from base.homeAfterBoot, the one
+    -- place they all pass -- before the first step toward home.
+    ["a turtle rebooted outside the base says it is recovering and recovers its ledger before it moves"] =
+    function(assert_eq)
+        local r = bootAt({ x = 500, y = 80, z = 500 }, { [ "500,81,500" ] = "enderstorage:ender_chest" })
+        r.base.ledger.record("fuel_chest", { x = 500, y = 81, z = 500, face = "up",
+                                             turtleAt = { x = 500, y = 80, z = 500 } })
+        pcall(r.base.homeAfterBoot)
+        assert_eq(r.atFirstMove ~= nil, true, "it did set off for home")
+        assert_eq(r.atFirstMove.recovering, true, "it said 'recovering' before its first step")
+        assert_eq(r.atFirstMove.ledgerEmpty, true, "and had taken its chest back first")
+        -- CHEST_SLOT is still the default 16 here: base.init, which moves it to 15
+        -- for delivery, is not run.
+        assert_eq(r.c.inv[16] and r.c.inv[16].name, "enderstorage:ender_chest")
+    end,
+
+    ["a turtle inside the base but off its dock does not say it is recovering"] =
+    function(assert_eq)
+        local r = bootAt(nil, {}, { dx = 2 })
+        pcall(r.base.homeAfterBoot)
+        assert_eq(r.said("recovering"), false, "a taxi home inside the building is not a recovery")
+    end,
+
+    ["a turtle that reaches its dock says docked"] =
+    function(assert_eq)
+        local r = bootAt(nil, {}, { dx = 2, letMove = true })
+        local ok = pcall(r.base.homeAfterBoot)
+        assert_eq(ok, true)
+        assert_eq(r.said("docked"), true, "so the server can release a recovering turtle of any role")
     end,
 }
