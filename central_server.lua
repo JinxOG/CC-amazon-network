@@ -2225,6 +2225,20 @@ function registry.flagStuck(id, detail)
     registry.holdUntilDocked(id)
 end
 
+-- A placed item the turtle could not take back (recovery layer release 2):
+-- "needs_hands: <kind> at x,y,z -- <reason>". Shown on the dashboard and logged
+-- once per distinct report. NOT held and NOT benched: the record stays on the
+-- turtle, a person goes for the item, and the turtle keeps working meanwhile.
+function registry.flagNeedsHands(id, detail)
+    local t = state.registry[id or ""]
+    if not t then return end
+    if t.needsHands ~= detail then
+        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "
+            .. "and keeps working; fetch the item by hand.", id, tostring(detail)))
+    end
+    t.needsHands = detail
+end
+
 -- verdict is what the turtle's own check said: "ok", a fault reason, or nil
 -- when it did not check (busy, or a role with no check).
 function registry.applyHardware(id, verdict)
@@ -3122,6 +3136,10 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     -- with no loader to recover, it flies home and says so. Held the same way.
     if type(p.detail) == "string" and p.detail:find("^rebooted_outside_base") then
         registry.holdUntilDocked(msg.from)
+    end
+    -- A ledger recovery that could not finish (recovery layer release 2).
+    if type(p.detail) == "string" and p.detail:find("^needs_hands") then
+        registry.flagNeedsHands(msg.from, p.detail)
     end
     jobQueue.noteWorking(p.jobId, msg.from)
     jobQueue.progress(p.jobId, p.status, p.detail)

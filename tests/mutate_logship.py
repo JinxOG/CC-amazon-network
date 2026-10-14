@@ -242,6 +242,7 @@ LG_BOOT   = "base.run recovers the ledger before the loop first waits"
 BG_WAIT   = "a booted turtle with no GPS fix does not move until it has one"
 BG_OFF    = "the guard is off until boot arms it"
 BG_FACE   = "a booted turtle that knows where it is but not which way it faces measures first"
+NH_SHOW   = "a needs_hands report is shown once, with where"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1156,6 +1157,16 @@ MUTANTS = [
 
     ('the boot guard trusts a position with no facing', 'turtle_base.lua',
      [('    if _self.bootGuard and not (_self.posFixed and _self.facingKnown) then\n', '    if _self.bootGuard and not _self.posFixed then\n')], BG_FACE),
+
+    # -- A ledger failure raises NEEDS HANDS (release 2) ----------------------
+    ('a needs_hands report is ignored', 'central_server.lua',
+     [('        registry.flagNeedsHands(msg.from, p.detail)\n', '')], NH_SHOW),
+
+    ('a needs_hands report is logged every time', 'central_server.lua',
+     [('    if t.needsHands ~= detail then\n        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "\n', '    if true then\n        logError(string.format("NEEDS HANDS: %s — %s. The turtle keeps its record "\n')], NH_SHOW),
+
+    ('a needs_hands report benches the turtle', 'central_server.lua',
+     [('    t.needsHands = detail\nend\n\n-- verdict is what', '    t.needsHands = detail\n    registry.holdUntilDocked(id)\nend\n\n-- verdict is what')], NH_SHOW),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',

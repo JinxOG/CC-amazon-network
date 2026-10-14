@@ -256,6 +256,36 @@ return {
         assert_eq(line ~= nil, true, "and the decision is logged with the sectors left")
     end,
 
+    -- A ledger recovery that cannot finish (recovery layer release 2): the
+    -- turtle keeps the record and says where the item is. Shown once, with the
+    -- block, and NOT held: a chest it could not dig back is a job for a person,
+    -- not a reason to stop the turtle working.
+    ["a needs_hands report is shown once, with where"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local h = T.handlers[proto.MSG.STATUS_UPDATE]
+        local d = "needs_hands: fuel_chest at 10,63,0 -- not_the_item"
+        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "COMPLETE", nil
+        local t = T.state.registry[A]
+        t.status, t.jobId = proto.STATUS.IDLE, nil
+        for _ = 1, 3 do
+            h({ from = A, payload = { status = proto.STATUS.IDLE, detail = d } })
+        end
+        local n = 0
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("NEEDS HANDS: " .. A, 1, true) and e.msg:find("10,63,0", 1, true) then n = n + 1 end
+        end
+        local offered = false
+        for _, w in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+            if w.id == A then offered = true end
+        end
+        local flag = t.needsHands
+        restore()
+        assert_eq(flag, d, "the dashboard shows the item and where")
+        assert_eq(n, 1, "said once, not on every report")
+        assert_eq(offered, true, "and the turtle still works")
+    end,
+
     -- A stuck turtle's report (2026-10-08): node_184 sat boxed in for hours and
     -- the server only ever said it was offline, then pruned it.
     ["a stuck turtle's report raises NEEDS HANDS with where it is, once"] =
