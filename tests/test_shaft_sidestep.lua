@@ -482,4 +482,71 @@ return {
         assert_eq(auto < fly and fly < failed and failed < idle and idle < phase, true,
             "in that order: never IDLE for a dock it did not reach")
     end,
+
+    -- The boot guard for every role (recovery layer release 2, task 5). Only
+    -- miners ever called waitForPositionFix; delivery and support moved on
+    -- whatever initPosition guessed -- "Facing assumed north" -- the failure
+    -- that lost four miners on 2026-10-05. Now no turtle moves after boot until
+    -- position and facing are measured, and the guard lives in tryMove, so it
+    -- holds however a role first moves.
+    ["a booted turtle with no GPS fix does not move until it has one"] =
+    function(assert_eq)
+        local c = stub.install({ pos = { x = 20, y = 70, z = 20, facing = 1 } })   -- really east
+        local calls, movedBeforeFix = 0, false
+        gps = { locate = function()
+            calls = calls + 1
+            if calls <= 3 then
+                if c.pos.x ~= 20 or c.pos.z ~= 20 then movedBeforeFix = true end
+                return nil
+            end
+            return c.pos.x, c.pos.y, c.pos.z
+        end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"]    = nil
+        local base = require("turtle_base")
+        base.setBootGuardForTest(true)
+        base.move.forward()
+        local p = base.getPos()
+        assert_eq(movedBeforeFix, false, "not one step on a guess")
+        assert_eq(base.hasPositionFix(), true)
+        assert_eq(p.x .. "," .. p.z, "21,20", "and the step it took went east, where it really faces")
+    end,
+
+    -- Position known, facing not: the 10-06 case (node_182, "Assuming north").
+    ["a booted turtle that knows where it is but not which way it faces measures first"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 20, y = 70, z = 20, facing = 1 } })   -- really east
+        assert_eq(base.hasPositionFix(), false, "position fixed, facing never measured")
+        base.setBootGuardForTest(true)
+        base.move.forward()
+        local p = base.getPos()
+        assert_eq(c.pos.x .. "," .. c.pos.z, "21,20", "it really went east")
+        assert_eq(p.x .. "," .. p.z, "21,20", "and knows it went east, not north")
+    end,
+
+    ["a turtle with a measured fix moves at once"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 7, y = 70, z = 7, facing = 0 } })
+        base.detectFacingForTest()
+        base.setBootGuardForTest(true)
+        local calls = 0
+        local real = gps.locate
+        gps.locate = function(...) calls = calls + 1; return real(...) end
+        base.move.forward()
+        assert_eq(calls, 0, "no GPS round trip when the fix is already there")
+        assert_eq(base.getPos().z, 6)
+    end,
+
+    ["the guard is off until boot arms it"] =
+    function(assert_eq)
+        local c = stub.install({ pos = { x = 0, y = 70, z = 0, facing = 0 } })
+        local calls = 0
+        gps = { locate = function() calls = calls + 1; return nil end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"]    = nil
+        local base = require("turtle_base")
+        local ok = base.move.forward()
+        assert_eq(ok, true, "a test, or a tool, that never booted moves as it always did")
+        assert_eq(calls, 0)
+    end,
 }

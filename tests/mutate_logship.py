@@ -239,6 +239,9 @@ FC_DONE   = "a finished refuel leaves no record"
 FC_KEEP   = "a reboot mid-refuel leaves the record for boot"
 FC_DOCK   = "a fuel chest stranded at the dock is recovered and nothing else is dug"
 LG_BOOT   = "base.run recovers the ledger before the loop first waits"
+BG_WAIT   = "a booted turtle with no GPS fix does not move until it has one"
+BG_OFF    = "the guard is off until boot arms it"
+BG_FACE   = "a booted turtle that knows where it is but not which way it faces measures first"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1147,6 +1150,13 @@ MUTANTS = [
     ('a role boots without recovering its ledger', 'turtle_base.lua',
      [('    local lok, lerr = pcall(base.recoverLedger)\n', '    local lok, lerr = true, nil\n')], LG_BOOT),
 
+    # -- No turtle of any role moves after boot on a guess (release 2) --------
+    ('a booted turtle moves on a guessed position', 'turtle_base.lua',
+     [('    if _self.bootGuard and not (_self.posFixed and _self.facingKnown) then\n', '    if false then\n')], BG_WAIT),
+
+    ('the boot guard trusts a position with no facing', 'turtle_base.lua',
+     [('    if _self.bootGuard and not (_self.posFixed and _self.facingKnown) then\n', '    if _self.bootGuard and not _self.posFixed then\n')], BG_FACE),
+
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',
      [('        local updatingOk = not t.pendingUpdate\n            and not', '        local updatingOk = true\n            and not')], UP_FIRST),
@@ -1798,3 +1808,9 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+# Deliberately NOT a mutant: 'the boot guard is armed before boot' (guard always
+# on) makes every test that moves without a GPS fix wait forever, and this
+# harness has no per-mutant timeout. The hang is itself the failure; the test
+# 'the guard is off until boot arms it' pins the behaviour.
+BOOT_GUARD_ALWAYS_ON_HANGS = True

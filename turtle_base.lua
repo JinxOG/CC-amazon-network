@@ -853,6 +853,8 @@ function base.detectFacingForTest() return detectFacing() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
 -- position; 2026-10-06, facing).
+function base.setBootGuardForTest(on) _self.bootGuard = on end
+
 function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end
 
 function base.waitForPositionFix(why)
@@ -1274,6 +1276,14 @@ function base.sidestepOutOfColumn()
 end
 
 local function tryMove(moveFn, digFn, dir)
+    -- NO TURTLE MOVES AFTER BOOT ON A GUESS (recovery layer release 2). Only
+    -- miners ever called waitForPositionFix; delivery and support moved on
+    -- whatever initPosition guessed ("Facing assumed north") -- the failure that
+    -- lost four miners on 2026-10-05. Here, so it holds however a role first
+    -- moves. Armed by base.init; a no-op once position and facing are measured.
+    if _self.bootGuard and not (_self.posFixed and _self.facingKnown) then
+        base.waitForPositionFix("first move after boot")
+    end
     -- Hold position while the server is unreachable so it does not lose track of
     -- us — except during a fixed-path sky return, or an autonomous return, where
     -- the whole point is to get home WITHOUT the server. Blocking there would
@@ -3188,6 +3198,7 @@ function base.init(role)
     end
     print(string.format("=== %s [%s] v%s booting ===", _self.id, role, proto.VERSION))
     comms.init()
+    _self.bootGuard = true   -- tryMove waits for a measured position and facing
     initPosition()
     fuel.refuel()
     -- Miner only: bounded so a field reboot with a placed loader can get to
