@@ -27,6 +27,13 @@ local S1, S2, S3 = { x = 2048, z = -3104 }, { x = 2080, z = -3104 }, { x = 2048,
 
 local function copy(s) return { x = s.x, z = s.z } end
 
+-- What every role sends from base.homeAfterBoot after a field reboot
+-- (recovery layer release 3): the one message that starts the server's hold.
+local function recovering(T, id)
+    T.handlers[proto.MSG.STATUS_UPDATE]({ from = id, payload = {
+        status = proto.STATUS.IDLE, detail = "recovering: at 1704,185,-3095" } })
+end
+
 -- A server with two miners on two live jobs sharing `zone`.
 local function twoMiners(zone)
     stub.install({})
@@ -455,9 +462,72 @@ return {
     -- A miner rebooted mid-job reported "RETRIEVING (boot recovery ...)" and
     -- then flew home with its modem off. The server re-sent it the job, waited
     -- eight minutes, declared it dead halfway home, and only then requeued.
+    -- Release 3: ONE message replaces the two miner-only triggers (ruled
+    -- 2026-10-08: "mutants that restore either old trigger must die").
+    ["an old boot-recovery phase report alone no longer holds or requeues"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
+            jobId = JA, phase = proto.PHASE.RETRIEVING,
+            detail = "boot recovery — loader at 1704,185,-3095" } })
+        local job, t = T.state.jobs[JA], T.state.registry[A]
+        local jobStatus, held = job.status, t.homeAfterReboot
+        restore()
+        assert_eq(jobStatus, "IN_PROGRESS", "only 'recovering' requeues now")
+        assert_eq(held, nil, "and only 'recovering' holds")
+    end,
+
+    ["rebooted_outside_base alone no longer holds"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.status, t.jobId = proto.STATUS.IDLE, nil
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = A, payload = {
+            status = proto.STATUS.IDLE, detail = "rebooted_outside_base: flying home" } })
+        local held = t.homeAfterReboot
+        restore()
+        assert_eq(held, nil)
+    end,
+
+    ["a recovering turtle of any role is released by docked"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.role, t.status, t.jobId = proto.ROLE.DELIVERY, proto.STATUS.IDLE, nil
+        recovering(T, A)
+        local held, grace = t.homeAfterReboot, t.commsGapGraceSec
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = A, payload = {
+            status = proto.STATUS.IDLE, detail = "docked" } })
+        local status, after, graceAfter = t.status, t.homeAfterReboot, t.commsGapGraceSec
+        restore()
+        assert_eq(held, true, "a delivery turtle is held like a miner")
+        assert_eq(grace, T.CFG.BOOT_RECOVERY_GRACE_SEC)
+        assert_eq(status, proto.STATUS.IDLE, "docked: idle and dispatchable")
+        assert_eq(after, nil)
+        assert_eq(graceAfter, nil, "and its next silence is an ordinary one")
+    end,
+
+    ["a recovering turtle that never docks stays held"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local t = T.state.registry[A]
+        t.role, t.status, t.jobId = proto.ROLE.DELIVERY, proto.STATUS.IDLE, nil
+        recovering(T, A)
+        for _ = 1, 5 do
+            T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
+        end
+        local offered = false
+        for _, w in ipairs(T.registry.getIdle(proto.ROLE.DELIVERY)) do
+            if w.id == A then offered = true end
+        end
+        restore()
+        assert_eq(offered, false, "stranded short of its dock: never handed work")
+    end,
+
     ["a boot-recovering miner's job is requeued at once, not after a timeout"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        recovering(T, A)
         T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
             jobId = JA, phase = proto.PHASE.RETRIEVING,
             detail = "boot recovery — loader at 1992,200,-3255" } })
@@ -482,6 +552,7 @@ return {
     ["a miner flying home after a reboot stays RETURNING through its own IDLE heartbeats"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        recovering(T, A)
         T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
             jobId = JA, phase = proto.PHASE.RETRIEVING,
             detail = "boot recovery — loader at 1704,185,-3095" } })
@@ -508,6 +579,7 @@ return {
         local t = T.state.registry[A]
         t.status, t.jobId = proto.STATUS.IDLE, nil              -- requeued by the first reboot
         T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "PENDING", nil
+        recovering(T, A)
         T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
             phase = proto.PHASE.RETRIEVING, detail = "boot recovery — loader at 2344,185,-3095" } })
         T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
@@ -528,6 +600,7 @@ return {
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
         local t = T.state.registry[A]
         t.status, t.jobId = proto.STATUS.IDLE, nil
+        recovering(T, A)
         T.handlers[proto.MSG.STATUS_UPDATE]({ from = A, payload = {
             status = proto.STATUS.IDLE, detail = "rebooted_outside_base: flying home" } })
         T.handlers[proto.MSG.HEARTBEAT]({ from = A, payload = { status = proto.STATUS.IDLE, fuel = 100000 } })
@@ -548,6 +621,7 @@ return {
     ["docking ends it: the miner is idle and dispatchable at once"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        recovering(T, A)
         T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
             jobId = JA, phase = proto.PHASE.RETRIEVING,
             detail = "boot recovery — loader at 1704,185,-3095" } })
@@ -561,6 +635,7 @@ return {
     ["a DOCKED heartbeat ends it too, if the phase report was lost"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        recovering(T, A)
         T.handlers[proto.MSG.MINE_PHASE]({ from = A, payload = {
             jobId = JA, phase = proto.PHASE.RETRIEVING,
             detail = "boot recovery — loader at 1704,185,-3095" } })

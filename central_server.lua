@@ -3137,10 +3137,15 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     if type(p.detail) == "string" and p.detail:find("^stuck_no_fix") then
         registry.flagStuck(msg.from, p.detail)
     end
-    -- The other way home after a reboot (ore_turtle, 1.9.134): outside the base
-    -- with no loader to recover, it flies home and says so. Held the same way.
-    if type(p.detail) == "string" and p.detail:find("^rebooted_outside_base") then
-        registry.holdUntilDocked(msg.from)
+    -- ONE RECOVERY MESSAGE, EVERY ROLE (recovery layer release 3; ruled
+    -- 2026-10-08). base.homeAfterBoot sends it from the one place every role
+    -- passes after a field reboot; it replaces the two miner-only triggers (a
+    -- RETRIEVING "boot recovery" phase report, and "rebooted_outside_base").
+    -- "docked" from any return home ends it, as a miner's DOCKED phase does.
+    if type(p.detail) == "string" and p.detail:find("^recovering") then
+        registry.beginRecovery(msg.from)
+    elseif type(p.detail) == "string" and p.detail:find("^docked") then
+        registry.endRecovery(msg.from)
     end
     -- A ledger recovery that could not finish (recovery layer release 2).
     if type(p.detail) == "string" and p.detail:find("^needs_hands") then
@@ -3707,10 +3712,7 @@ local function handleMinePhase(msg)
         -- Home after a reboot: from here its IDLE means idle. Set to IDLE now
         -- rather than waiting for the next heartbeat, so its zone's requeued
         -- job can go out on this dispatch tick.
-        if t.homeAfterReboot then
-            t.homeAfterReboot = nil
-            if t.status == proto.STATUS.RETURNING then t.status = proto.STATUS.IDLE end
-        end
+        registry.endRecovery(msg.from)
     end
     jobQueue.progress(p.jobId, proto.STATUS.WORKING,
         string.format("phase %s%s", p.phase, p.detail and (" — " .. p.detail) or ""))
@@ -3730,30 +3732,46 @@ local function handleMinePhase(msg)
     -- timeout path uses, and mark the turtle RETURNING -- requeueing sets it
     -- IDLE, and an IDLE turtle gets dispatched, which would hand the job back
     -- to the one turtle that cannot hear it. It reports IDLE itself on docking.
-    local bootRecovery = p.phase == proto.PHASE.RETRIEVING
-        and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) ~= nil
-    t.commsGapGraceSec = bootRecovery and CFG.BOOT_RECOVERY_GRACE_SEC or nil
-    if bootRecovery then
-        local jid = t.jobId
-        local job = jid and state.jobs[jid]
-        if job and job.assignedTo == msg.from
-           and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
-            logInfo(string.format(
-                "%s is recovering from a reboot and flying home with its radio off "
-                .. "by design -- %s requeued now rather than after a timeout",
-                msg.from, jid))
-            jobQueue.reassign(jid, msg.from, "boot_recovery")
-        end
-        -- JOB OR NO JOB (2026-10-08, the double reboot at 22:52 and 22:57). The
-        -- first reboot requeued every miner's job; the second caught them
-        -- recovering again with nothing assigned, this hold was only set when a
-        -- job was, and all seven were sent a job they could not hear -- one a
-        -- minute, every one an ACK timeout. A recovering miner is held whatever
-        -- it was doing.
-        registry.holdUntilDocked(msg.from)
-    end
+    -- The long comms grace belongs to the whole recovery, not to one report:
+    -- the phase reports a recovering miner sends on its way home must not cut
+    -- it back to the 60 s swap grace (recovery layer release 3).
+    if not t.homeAfterReboot then t.commsGapGraceSec = nil end
 end
 handlers[proto.MSG.MINE_PHASE] = handleMinePhase
+
+-- A turtle of any role recovering from a field reboot ("recovering", sent by
+-- base.homeAfterBoot). The job it held is over -- it never resumes, it flies
+-- home, a miner with its radio off -- so it is requeued now, the silence is
+-- given the length of a flight home, and the turtle is held RETURNING until it
+-- docks, job or no job. On 2026-09-30 the server re-sent each miner its job,
+-- waited eight minutes and declared both dead halfway home; on 2026-10-08 a
+-- second reboot caught seven miners with no job left and each was sent one it
+-- could not hear. This is the one place both lessons now live.
+function registry.beginRecovery(id)
+    local t = state.registry[id or ""]
+    if not t then return end
+    local jid = t.jobId
+    local job = jid and state.jobs[jid]
+    if job and job.assignedTo == id
+       and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
+        logInfo(string.format(
+            "%s is recovering from a reboot and flying home -- %s requeued now "
+            .. "rather than after a timeout", id, jid))
+        jobQueue.reassign(jid, id, "boot_recovery")
+    end
+    registry.holdUntilDocked(id)
+    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC
+end
+
+-- Home: from here its IDLE means idle. Set now rather than on the next
+-- heartbeat, so the requeued work can go out on this dispatch tick.
+function registry.endRecovery(id)
+    local t = state.registry[id or ""]
+    if not t or not t.homeAfterReboot then return end
+    t.homeAfterReboot  = nil
+    t.commsGapGraceSec = nil
+    if t.status == proto.STATUS.RETURNING then t.status = proto.STATUS.IDLE end
+end
 
 -- A miner flying home after a reboot is not idle until it reports DOCKED. Its
 -- own heartbeats say IDLE (it runs no job), so registry.update ignores those

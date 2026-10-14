@@ -250,6 +250,11 @@ RV_ABOARD = "a chest dug but not yet moved home is moved home and cleared"
 RV_SLOT   = "a home slot holding something else is cleared to make way"
 RV_FIELD  = "a ledger alert survives a passing hardware check, and clears when fixed"
 RV_THROW  = "a write that throws is reported, never raised"
+R3_OLD1   = "an old boot-recovery phase report alone no longer holds or requeues"
+R3_OLD2   = "rebooted_outside_base alone no longer holds"
+R3_REQ    = "a boot-recovering miner's job is requeued at once, not after a timeout"
+R3_DOCK   = "a recovering turtle of any role is released by docked"
+R3_HOLD   = "a recovering turtle that never docks stays held"
 A_STOP    = "a flight with an abort set stops at the next block once it fires"
 A_AXES    = "the abort is checked on every axis, climbing included"
 A_MINER   = "the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"
@@ -1199,6 +1204,25 @@ MUTANTS = [
 
     ('a throwing ledger write escapes', 'turtle_base.lua',
      [('    local wrote = pcall(function()\n        f.write(textutils.serialise(rec))\n        f.close()\n    end)\n', '    f.write(textutils.serialise(rec))\n    f.close()\n    local wrote = true\n')], RV_THROW),
+
+    # -- Release 3: one recovery message for every role -----------------------
+    ('the old boot-recovery trigger is restored', 'central_server.lua',
+     [('    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n', '    if not t.homeAfterReboot then t.commsGapGraceSec = nil end\n    if p.phase == proto.PHASE.RETRIEVING and type(p.detail) == "string" and p.detail:find("boot recovery", 1, true) then registry.beginRecovery(msg.from) end\nend\nhandlers[proto.MSG.MINE_PHASE] = handleMinePhase\n')], R3_OLD1),
+
+    ('the old rebooted_outside_base trigger is restored', 'central_server.lua',
+     [('    if type(p.detail) == "string" and p.detail:find("^recovering") then\n', '    if type(p.detail) == "string" and (p.detail:find("^recovering") or p.detail:find("^rebooted_outside_base")) then\n')], R3_OLD2),
+
+    ('a recovering turtle keeps its job', 'central_server.lua',
+     [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    ('a recovering turtle gets only the swap grace', 'central_server.lua',
+     [('    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\nend\n', 'end\n')], R3_REQ),
+
+    ('docked releases nothing', 'central_server.lua',
+     [('    elseif type(p.detail) == "string" and p.detail:find("^docked") then\n        registry.endRecovery(msg.from)\n', '    elseif type(p.detail) == "string" and p.detail:find("^docked") then\n')], R3_DOCK),
+
+    ('recovering holds nobody', 'central_server.lua',
+     [('    registry.holdUntilDocked(id)\n    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\n', '    t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC\n')], R3_HOLD),
 
     # -- An update comes before the next job (2026-10-08) ---------------------
     ('a turtle with a queued update is dispatched anyway', 'central_server.lua',
