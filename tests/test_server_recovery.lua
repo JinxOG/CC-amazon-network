@@ -142,6 +142,31 @@ local function heartbeat(T, turtleId, jobId)
     })
 end
 
+-- The miner rebooted (midJob false) and registers again, from its dock.
+local function rebootRegister(T)
+    T.sent = {}
+    T.handlers[proto.MSG.REGISTER]({
+        type = proto.MSG.REGISTER, from = "node_118", to = "server",
+        payload = { role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+                    position = { x = 158, y = 67, z = -2810 }, midJob = false },
+    })
+end
+
+-- A heartbeat from base.run's control loop: a rebooted turtle's own status.
+local function idleBeat(T)
+    T.handlers[proto.MSG.HEARTBEAT]({ from = "node_118", payload = {
+        status = proto.STATUS.IDLE, fuel = 100000, position = { x = 158, y = 67, z = -2810 } } })
+end
+
+local function jobAssignsIn(T)
+    local n = 0
+    for _, m in ipairs(T.sent) do
+        local ok, d = pcall(textutils.unserialise, m.body)
+        if ok and type(d) == "table" and d.type == proto.MSG.JOB_ASSIGN then n = n + 1 end
+    end
+    return n
+end
+
 local function recallsIn(T)
     local n = 0
     for _, m in ipairs(T.sent) do
@@ -818,6 +843,84 @@ return {
         assert_eq(nAssign, 1,
             "no field means an older turtle; stranding it waiting costs more "
             .. "than a repeated sector")
+    end,
+
+    -- ── A rebooted turtle's job, re-sent when it can hear it ──────────────────
+    -- Measured three times: node_178 (10-14 20:04), node_179 (10-15 02:52),
+    -- node_177 (06:05). Each rebooted at or beside its dock holding a live job.
+    -- The server re-sent JOB_ASSIGN the instant after REGISTER_ACK, while the
+    -- turtle was still in base.init -- homing, a GPS fix -- where every yield is
+    -- filtered and an arriving message is destroyed. Each sat "Ready." for 8
+    -- minutes until the idle-stuck check requeued the job. A heartbeat comes only
+    -- from base.run's control loop, which keeps what it is sent: that is when the
+    -- job goes.
+    ["a rebooted turtle's job is not sent with its REGISTER_ACK"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        local n, job = jobAssignsIn(T), T.state.jobs["job_0726"]
+        local status, owner = job.status, job.assignedTo
+        restore()
+        assert_eq(n, 0, "nothing the turtle cannot hear yet")
+        assert_eq(status, "IN_PROGRESS", "but the job stays its own")
+        assert_eq(owner, "node_118")
+    end,
+
+    ["it is sent on the turtle's first heartbeat, once"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        idleBeat(T)
+        local first = jobAssignsIn(T)
+        idleBeat(T)
+        local second = jobAssignsIn(T)
+        restore()
+        assert_eq(first, 1, "its main loop is running: send it now")
+        assert_eq(second, 1, "and only once -- a second copy is a second job start")
+    end,
+
+    ["a job requeued before the first heartbeat is not sent"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = "node_118", payload = {
+            status = proto.STATUS.IDLE, detail = "recovering: at 1704,185,-3095" } })
+        idleBeat(T)
+        local n = jobAssignsIn(T)
+        restore()
+        assert_eq(n, 0, "requeued for another miner: not this turtle's any more")
+    end,
+
+    ["a turtle that re-registers mid-job is not sent the held job"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        -- Before its first beat it loses the server and re-registers with its
+        -- job coroutine alive (midJob): it holds the job already, and a JOB_ASSIGN
+        -- now would be answered "busy".
+        T.handlers[proto.MSG.REGISTER]({
+            type = proto.MSG.REGISTER, from = "node_118", to = "server",
+            payload = { role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+                        position = { x = 158, y = 67, z = -2810 }, midJob = true },
+        })
+        idleBeat(T)
+        local n = jobAssignsIn(T)
+        restore()
+        assert_eq(n, 0)
+    end,
+
+    ["the fuel path's ERROR heartbeat does not take the job"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        T.handlers[proto.MSG.HEARTBEAT]({ from = "node_118", payload = {
+            status = proto.STATUS.ERROR, fuel = 10, position = { x = 158, y = 67, z = -2810 } } })
+        local during = jobAssignsIn(T)
+        idleBeat(T)
+        local after = jobAssignsIn(T)
+        restore()
+        assert_eq(during, 0, "fuel.ensureFuel beats from outside the main loop")
+        assert_eq(after, 1, "the main loop's first beat still gets it")
     end,
 
     ["a dead holder's sector returns to the pool, even on a shared zone"] =

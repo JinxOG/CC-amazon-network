@@ -3043,11 +3043,17 @@ handlers[proto.MSG.REGISTER] = function(msg)
         serverTs = os.epoch("utc"),
         dock     = dock,
     })
-    -- Re-send job to rebooted turtle AFTER the ACK so it has its dock set.
+    -- A rebooted turtle's job is re-sent on its FIRST HEARTBEAT, not here.
+    -- Sent straight after REGISTER_ACK, it reached a turtle still inside
+    -- base.init -- homing, a GPS fix -- where every yield is filtered and an
+    -- arriving message is destroyed: node_178, node_179 and node_177 each sat
+    -- "Ready." 8 minutes until the idle-stuck check requeued (10-14/15). A
+    -- heartbeat comes only from base.run's control loop, which keeps what it
+    -- is sent. registry.reSendOnHeartbeat sends it.
     if reSendJob then
-        sendTo(msg.from, proto.MSG.JOB_ASSIGN,
-            proto.payloadJobAssign(reSendJob.id, reSendJob.type, reSendJob.params))
-        logInfo(string.format("Re-sent job %s to %s (after REGISTER_ACK)", reSendJob.id, msg.from))
+        local rt = state.registry[msg.from]
+        if rt then rt.reSendJobId = reSendJob.id end
+        logInfo(string.format("Re-send of %s to %s held for its first heartbeat", reSendJob.id, msg.from))
     end
     -- Replay last SECTOR_ASSIGN to a mid-job miner so it doesn't time out waiting.
     if reSendSector then
@@ -3070,6 +3076,7 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         jobQueue.noteWorking(p.jobId, msg.from)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
+        registry.reSendOnHeartbeat(msg.from, p.status)
         local t = state.registry[msg.from]
         -- Solo-miner telemetry. nil for every other role, so this is a no-op for them.
         if t then
@@ -3755,8 +3762,8 @@ function registry.beginRecovery(id)
     if not t then return end
     local jid = t.jobId
     local job = jid and state.jobs[jid]
-    -- ONLY A MINER'S. registry.register re-sent a delivery or support turtle
-    -- its job at REGISTER (reSendJob), and it resumes that job once home;
+    -- ONLY A MINER'S. A rebooted delivery or support turtle is re-sent its job
+    -- (reSendJob, on its first heartbeat), and it resumes that job once home;
     -- requeueing it as well hands the same delivery to a second turtle. Until
     -- release 4 brings their cargo home instead, they keep it -- and are still
     -- held below, like a miner.
@@ -3769,6 +3776,26 @@ function registry.beginRecovery(id)
     end
     registry.holdUntilDocked(id)
     t.commsGapGraceSec = CFG.BOOT_RECOVERY_GRACE_SEC
+end
+
+-- The job held at REGISTER for a rebooted turtle, sent on its first heartbeat
+-- (see the REGISTER handler). Once only. Not on an ERROR beat: fuel.ensureFuel
+-- sends those from outside the main loop. Not if the job has since left this
+-- turtle -- a "recovering" requeue, a cancel -- because then it is someone
+-- else's.
+function registry.reSendOnHeartbeat(id, status)
+    local t = state.registry[id or ""]
+    if not t or not t.reSendJobId or status == proto.STATUS.ERROR then return end
+    local jid = t.reSendJobId
+    t.reSendJobId = nil
+    local job = state.jobs[jid]
+    if job and job.assignedTo == id
+       and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
+        sendTo(id, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(job.id, job.type, job.params))
+        logInfo(string.format("Re-sent job %s to %s (first heartbeat)", jid, id))
+    else
+        logInfo(string.format("Held re-send of %s to %s dropped: no longer its job", jid, id))
+    end
 end
 
 -- Home: from here its IDLE means idle. Set now rather than on the next

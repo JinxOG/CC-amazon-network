@@ -257,6 +257,10 @@ R3_DOCK   = "a recovering turtle of any role is released by docked"
 R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
+RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
+RS_ONCE   = "it is sent on the turtle's first heartbeat, once"
+RS_GONE   = "a job requeued before the first heartbeat is not sent"
+RS_ERROR  = "the fuel path's ERROR heartbeat does not take the job"
 R3_SAY    = "a turtle rebooted outside the base says it is recovering and recovers its ledger before it moves"
 R3_INSIDE = "a turtle inside the base but off its dock does not say it is recovering"
 R3_DOCKED = "a turtle that reaches its dock says docked"
@@ -1221,6 +1225,19 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- A rebooted turtle's job, re-sent on its first heartbeat -------------
+    ('the job is re-sent with the REGISTER_ACK again', 'central_server.lua',
+     [('        if rt then rt.reSendJobId = reSendJob.id end\n', '        if rt then rt.reSendJobId = reSendJob.id end\n        sendTo(msg.from, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(reSendJob.id, reSendJob.type, reSendJob.params))\n')], RS_NOTREG),
+
+    ('the held job is re-sent on every heartbeat', 'central_server.lua',
+     [('    t.reSendJobId = nil\n    local job = state.jobs[jid]\n', '    local job = state.jobs[jid]\n')], RS_ONCE),
+
+    ('the held job is sent even when no longer this turtle\'s', 'central_server.lua',
+     [('    if job and job.assignedTo == id\n       and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then\n        sendTo(id, proto.MSG.JOB_ASSIGN', '    if job then\n        sendTo(id, proto.MSG.JOB_ASSIGN')], RS_GONE),
+
+    ('an ERROR heartbeat takes the held job', 'central_server.lua',
+     [('if not t or not t.reSendJobId or status == proto.STATUS.ERROR then return end', 'if not t or not t.reSendJobId then return end')], RS_ERROR),
 
     ('any report starting "recovering" starts a recovery', 'central_server.lua',
      [('p.detail:find("^recovering:") then\n        registry.beginRecovery', 'p.detail:find("^recovering") then\n        registry.beginRecovery')], R3_LOADER),
