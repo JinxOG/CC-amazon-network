@@ -24,6 +24,24 @@ The user's back-to-back reboot test of recovery layer release 3 (1.9.142, pinned
 
 The last line, 21:52:19, is **2 min 23 s before** the first reboot (21:54:42). Its loop baseline at 21:51:49 was healthy, and the four GPS failures came in the 45 s before it stopped. So the reboot may not be what silenced it. It was in travel mode, which per ore_turtle carries chunky on the tool side. Nothing from release 3 ran on it: the "recovering" path never logged.
 
+## Added 10-15 06:55: a second miner, same route, same way
+
+node_177, job_0194 (zone 1792..1856, z -2944):
+- 06:09:30 exited the depot; 06:10:23 TRAVELLING toward sector 1824,-2944.
+- 06:16:58 last line, a healthy loop baseline.
+- About 06:19 the server was stopped (it logged "stopped from outside", last alive 06:19). Restarts followed at 06:21, 06:25, 06:35, 06:42 and 06:54.
+- **From node_177 after any of them: nothing.** No boot line, no REGISTER.
+
+Side by side:
+- node_184: last heard about 10 min into its outbound flight.
+- node_177: last heard 7.5 min in, stopped about 9.5 min in.
+
+Both were outbound from 143,-2813 toward x 1800-1890, z -2944 to -3008.
+
+Contrast, the same night on the same route: every reboot that caught a miner IN the zone or at its dock recovered. node_180 at 02:49, node_179 at 05:09, node_182 at 05:34 and node_180 at 05:49 all said recovering, retrieved their loaders, flew home and docked.
+
+I cancelled job_0194 at 06:54 so no third miner flies that stretch while the reboots continue. Again, no cause offered: what makes a miner on that stretch of the outbound flight stop for good?
+
 ## For comparison
 
 - The same test on 1.9.141 at 20:04: node_180 and node_184 rebooted mid-flight at 1851,200,-3064 and 1770,200,-3064. Both logged their boot within 2 s and flew home.
