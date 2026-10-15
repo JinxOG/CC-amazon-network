@@ -541,15 +541,57 @@ function registry.getIdle(role)
         -- it (bounded, so a turtle that never comes back is not benched for good).
         local updatingOk = not t.pendingUpdate
             and not (t.updateSentAt and now - t.updateSentAt < CFG.UPDATE_REBOOT_MS)
+        -- An operator's hold (registry.hold): until released, whatever else.
+        local heldOk = not (state.operatorHolds and state.operatorHolds[t.id])
         if t.online and t.status == proto.STATUS.IDLE
                     and (role == nil or t.role == role)
-                    and fuelOk and blockedOk and updatingOk then
+                    and fuelOk and blockedOk and updatingOk and heldOk then
             table.insert(result, t)
         end
     end
     -- Prefer highest fuel
     table.sort(result, function(a, b) return a.fuel > b.fuel end)
     return result
+end
+
+-- AN OPERATOR HOLD (2026-10-15). Two computers answered as node_177, and the
+-- one at the dock had the fullest tank, so getIdle would offer it the next job
+-- first. The dispatch bench (dispatchBlockedUntil) clears itself when a turtle
+-- re-registers after going offline and when its hardware check passes; a hold
+-- set by a person must outlast both, and a server restart, so it lives in its
+-- own table and file, keyed by id, until RELEASE_TURTLE.
+function registry.hold(id, reason)
+    if not id then return end
+    state.operatorHolds = state.operatorHolds or {}
+    state.operatorHolds[id] = tostring(reason or "held by operator")
+    registry.saveHolds()
+    logWarn(string.format("HOLD: %s is not offered work until released (%s)",
+        id, state.operatorHolds[id]))
+end
+
+function registry.release(id)
+    if not (id and state.operatorHolds and state.operatorHolds[id]) then return end
+    state.operatorHolds[id] = nil
+    registry.saveHolds()
+    logInfo("Released hold on " .. id)
+end
+
+function registry.saveHolds()
+    local f = fs.open("operator_holds.dat", "w")
+    if not f then logWarn("saveHolds: could not open operator_holds.dat"); return end
+    f.write(textutils.serialise(state.operatorHolds or {})); f.close()
+end
+
+function registry.loadHolds()
+    state.operatorHolds = state.operatorHolds or {}
+    if not fs.exists("operator_holds.dat") then return end
+    local f = fs.open("operator_holds.dat", "r")
+    if not f then return end
+    local data = textutils.unserialise(f.readAll() or ""); f.close()
+    if type(data) ~= "table" then return end
+    local n = 0
+    for id, why in pairs(data) do state.operatorHolds[id] = why; n = n + 1 end
+    if n > 0 then logWarn(string.format("%d turtle(s) held by an operator", n)) end
 end
 
 function registry.markOffline(id)
@@ -4842,6 +4884,14 @@ function server.run()
                 logWarn("RECALL: turtle not found: " .. tostring(tid))
             end
 
+        elseif t == "HOLD_TURTLE" then
+            if p.turtleId then registry.hold(p.turtleId, p.reason)
+            else logWarn("HOLD_TURTLE: no turtleId") end
+
+        elseif t == "RELEASE_TURTLE" then
+            if p.turtleId then registry.release(p.turtleId)
+            else logWarn("RELEASE_TURTLE: no turtleId") end
+
         elseif t == "RE_REGISTER_TURTLE" then
             local tid = p.turtleId
             if tid and state.registry[tid] then
@@ -5274,6 +5324,8 @@ function server.run()
                 -- "only one turtle went out" so hard to explain.
                 blockReason = t.dispatchBlockReason or nil,
                 blockedUntil = t.dispatchBlockedUntil or nil,
+                -- An operator's hold (HOLD_TURTLE), with its reason.
+                held = state.operatorHolds and state.operatorHolds[id] or nil,
                 -- Set only for a hardware fault: something only a person in the
                 -- world can fix. Distinct from a timed bench, which clears itself.
                 needsHands = t.needsHands or t.ledgerNeedsHands or nil,
@@ -5596,6 +5648,7 @@ function server.run()
     migrateZonesToCloud()
     loadMiningZones()
     loadOreThresholds()
+    registry.loadHolds()
     print("Console ready. Type 'help' for commands.")
 
     local dispatchTimer    = os.startTimer(CFG.DISPATCH_INTERVAL)

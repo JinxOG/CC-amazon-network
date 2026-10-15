@@ -258,7 +258,11 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-OW_SECTOR = "a sector request from a turtle the job is not assigned to is refused, and it is recalled"
+HO_HELD   = "a held turtle is not offered work"
+HO_REL    = "a released turtle is offered work again"
+HO_REREG  = "a hold survives the turtle re-registering after it went offline"
+HO_BOOT   = "a hold survives a server restart"
+OW_SECTOR ="a sector request from a turtle the job is not assigned to is refused, and it is recalled"
 OW_DONE   = "a JOB_COMPLETE from a turtle the job is not assigned to does not complete it"
 OW_FAIL   = "a JOB_FAILED from a turtle the job is not assigned to does not fail it"
 OW_OWNER  = "the owner's sector request is still served"
@@ -1232,6 +1236,19 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- An operator hold ---------------------------------------------------
+    ('a held turtle is offered work', 'central_server.lua',
+     [('and fuelOk and blockedOk and updatingOk and heldOk then', 'and fuelOk and blockedOk and updatingOk then')], HO_HELD),
+
+    ('a release does not clear the hold', 'central_server.lua',
+     [('    state.operatorHolds[id] = nil\n    registry.saveHolds()\n', '    registry.saveHolds()\n')], HO_REL),
+
+    ('a hold is kept on the registry entry', 'central_server.lua',
+     [('local heldOk = not (state.operatorHolds and state.operatorHolds[t.id])', 'local heldOk = not t.operatorHold')], HO_REREG),
+
+    ('holds are not read back at boot', 'central_server.lua',
+     [('    for id, why in pairs(data) do state.operatorHolds[id] = why; n = n + 1 end\n', '')], HO_BOOT),
 
     # -- Only the job's owner speaks for it ----------------------------------
     ('a stray turtle is served sectors', 'central_server.lua',

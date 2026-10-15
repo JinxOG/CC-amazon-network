@@ -167,6 +167,22 @@ local function jobAssignsIn(T)
     return n
 end
 
+-- An idle, online, fully fuelled miner: what getIdle offers first.
+local function idleMiner(T, id)
+    T.state.registry[id] = {
+        id = id, role = proto.ROLE.MINER, status = proto.STATUS.IDLE,
+        fuel = 100000, online = true, lastSeen = 1000000,
+        position = { x = 158, y = 67, z = -2810 },
+    }
+end
+
+local function offeredIdle(T, id)
+    for _, t in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
+        if t.id == id then return true end
+    end
+    return false
+end
+
 -- A second miner, node_119, that does not hold job_0726, and a live zone for
 -- the job with one sector waiting.
 local function strayAndZone(T)
@@ -946,6 +962,59 @@ return {
         restore()
         assert_eq(during, 0, "fuel.ensureFuel beats from outside the main loop")
         assert_eq(after, 1, "the main loop's first beat still gets it")
+    end,
+
+    -- ── An operator hold ─────────────────────────────────────────────────────
+    -- 2026-10-15: two computers answered as node_177, and the one at the dock
+    -- had the fullest tank, so getIdle would offer it the next job first. The
+    -- existing bench clears itself on a re-register after going offline and on
+    -- a passing hardware check; an operator's hold must survive both, and a
+    -- server restart.
+    ["a held turtle is not offered work"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        idleMiner(T, "node_119")
+        T.registry.hold("node_119", "two computers share this label")
+        local offered = offeredIdle(T, "node_119")
+        restore()
+        assert_eq(offered, false)
+    end,
+
+    ["a released turtle is offered work again"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        idleMiner(T, "node_119")
+        T.registry.hold("node_119", "x")
+        T.registry.release("node_119")
+        local offered = offeredIdle(T, "node_119")
+        restore()
+        assert_eq(offered, true)
+    end,
+
+    ["a hold survives the turtle re-registering after it went offline"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        idleMiner(T, "node_119")
+        T.registry.hold("node_119", "x")
+        T.state.registry["node_119"].online = false
+        T.handlers[proto.MSG.REGISTER]({ from = "node_119", payload = {
+            role = proto.ROLE.MINER, fuel = 100000, fuelMax = 100000,
+            position = { x = 158, y = 67, z = -2810 } } })
+        T.state.registry["node_119"].status = proto.STATUS.IDLE
+        local offered = offeredIdle(T, "node_119")
+        restore()
+        assert_eq(offered, false, "the bench clears here; a hold must not")
+    end,
+
+    ["a hold survives a server restart"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.registry.hold("node_119", "two computers share this label")
+        T.state.operatorHolds = {}
+        T.registry.loadHolds()
+        local reason = T.state.operatorHolds["node_119"]
+        restore()
+        assert_eq(reason, "two computers share this label")
     end,
 
     -- ── Only the job's owner speaks for it ───────────────────────────────────
