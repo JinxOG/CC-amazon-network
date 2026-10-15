@@ -42,6 +42,22 @@ Contrast, the same night on the same route: every reboot that caught a miner IN 
 
 I cancelled job_0194 at 06:54 so no third miner flies that stretch while the reboots continue. Again, no cause offered: what makes a miner on that stretch of the outbound flight stop for good?
 
+## Added 10-15 12:35: the lost node_177 was frozen in place, and a passing miner woke it
+
+After the 12:09 restart, a turtle labelled node_177 booted at its own dock (170,67,-2810) on 1.9.144 with 99,998 fuel, refuelled to 100,000, and took job_0195 out along the same route.
+
+- 12:20:19 to 12:21:04: four "GPS locate failed" from it, about 10 minutes out, which is the same stretch.
+- 12:21:05: the server logged "Re-registered node_177 ... **fuel=81377**", followed by its "recovering" report. That is not the turtle that left at 12:10 (it had about 98,400; it reported 98,419 at 12:29). It **is** what the original node_177 should hold: 82,932 at 06:05, then about 10 minutes of flight before it went silent at 06:17.
+- 12:21:39: the turtle that left at 12:10 logged "Turtle blocking forward -- attempting intelligent bypass..." and then "Bypass: left lane".
+
+Read together, as measurements: a second computer labelled node_177 started up on that stretch the moment a miner flew past it, and the passing miner found a turtle in its lane at the same moment. The original's flight-home logs should appear when it docks; I will add them.
+
+Questions for you, still not a cause:
+1. What unloads a travelling miner's chunk in flight, given it carries chunky in travel mode? (W3 memory: a loader copied in creative keeps its chunky UUID, so copies share one AP ticket and only the last-placed one holds.)
+2. Are any of the fleet's chunky upgrades copies of each other?
+
+Operational: two computers now answer as node_177. I cancelled job_0195 at 12:29 rather than run a test with two turtles under one ID.
+
 ## For comparison
 
 - The same test on 1.9.141 at 20:04: node_180 and node_184 rebooted mid-flight at 1851,200,-3064 and 1770,200,-3064. Both logged their boot within 2 s and flew home.
