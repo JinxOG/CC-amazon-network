@@ -545,6 +545,56 @@ return {
         assert_eq(status, "IN_PROGRESS", "and nothing requeued")
     end,
 
+    -- A requeued zone forgot its rescan (measured 10-14 20:00). job_0191 was
+    -- rescanning and job_0192 re-mining the ore that rescan found when the
+    -- reboot requeued both. reassign dropped the runtime zone, ensureMineZone
+    -- rebuilt it from the zone store -- which knows only doneSectors -- and the
+    -- resumed jobs logged "0/4 sectors remaining" and closed with the ore left.
+    ["a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "RESCAN",
+            rescanSectors = { copy(S3) }, rescanPending = { copy(S2) }, rescanFound = {},
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = true, jobId = JA } } })
+        T.jobQueue.reassign(JA, A, "boot_recovery")
+        local kept = T.state.miningZones[JA]
+        local phase = kept and kept.phase
+        local rescanKeys = {}
+        for _, s in ipairs(kept and kept.rescanSectors or {}) do rescanKeys[#rescanKeys + 1] = s.x .. "," .. s.z end
+        table.sort(rescanKeys)
+        local pend = kept and #(kept.rescanPending or {}) or -1
+        local held = kept and kept.lastAssignments[A]
+        restore()
+        assert_eq(kept ~= nil, true, "the runtime zone is kept: the store cannot rebuild a rescan")
+        assert_eq(phase, "RESCAN")
+        assert_eq(table.concat(rescanKeys, " "), "2048,-3072 2048,-3104",
+            "the dead holder's rescan sector goes back to the RESCAN list, not to pending")
+        assert_eq(pend, 1, "and the ore the rescan already found is still to be re-mined")
+        assert_eq(held, nil, "its claim is gone")
+    end,
+
+    ["a requeued zone re-mining after its rescan keeps the re-mine list"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", postRescan = true,
+            pending = { copy(S2) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = false, jobId = JA } } })
+        T.jobQueue.reassign(JA, A, "boot_recovery")
+        local kept = T.state.miningZones[JA]
+        local n = kept and #(kept.pending or {}) or -1
+        local post = kept and kept.postRescan
+        restore()
+        assert_eq(n, 2, "S2 still to re-mine, and the sector it was re-mining")
+        assert_eq(post, true)
+    end,
+
+    ["a requeued zone on its first mine pass is still rebuilt from the store"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        T.jobQueue.reassign(JA, A, "boot_recovery")
+        local gone = T.state.miningZones[JA] == nil
+        restore()
+        assert_eq(gone, true, "doneSectors already holds everything a first pass needs")
+    end,
+
     ["a recovering turtle that never docks stays held"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })

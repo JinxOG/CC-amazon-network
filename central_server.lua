@@ -1777,13 +1777,17 @@ local function releaseLease(jobId, minerId, reason)
         return true
     end
 
-    zone.pending = zone.pending or {}
-    for _, s in ipairs(zone.pending) do
+    -- A RESCAN sector goes back to the rescan list. In pending it was lost: the
+    -- end of the rescan overwrites pending with the re-mine list.
+    local listName = (la.isSurvey and zone.phase == "RESCAN") and "rescanSectors" or "pending"
+    zone[listName] = zone[listName] or {}
+    local list = zone[listName]
+    for _, s in ipairs(list) do
         if s.x == la.x and s.z == la.z then return true end   -- already back
     end
-    table.insert(zone.pending, 1, { x = la.x, z = la.z, isSurvey = la.isSurvey or false })
-    logInfo(string.format("Lease on (%d,%d) released by %s (%s) — returned to pending",
-        la.x, la.z, minerId, reason or "?"))
+    table.insert(list, 1, { x = la.x, z = la.z, isSurvey = la.isSurvey or false })
+    logInfo(string.format("Lease on (%d,%d) released by %s (%s) — returned to %s",
+        la.x, la.z, minerId, reason or "?", listName))
     return true
 end
 
@@ -2419,7 +2423,23 @@ function jobQueue.reassign(jobId, fromId, reason)
     job.updatedAt  = os.epoch("utc")
     -- Drop the runtime zone so it shows HISTORICAL while job waits for a new turtle.
     -- ensureMineZone will rebuild cleanly from persistentZones on next dispatch.
-    state.miningZones[jobId] = nil
+    --
+    -- EXCEPT AFTER THE FIRST MINE PASS. The store knows only doneSectors, so a
+    -- rebuilt zone has no rescan and no re-mine list: job_0191 (rescanning) and
+    -- job_0192 (re-mining what that rescan found) were requeued by the 10-14
+    -- 20:00 reboot, resumed as "0/4 sectors remaining" and closed with the ore
+    -- still there. Such a zone is kept, the dead holder's sector returned to
+    -- the list it came from, and ensureMineZone reuses it.
+    local liveZone = state.miningZones[jobId]
+    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then
+        releaseLease(jobId, fromId, "reassign")
+        logInfo(string.format("Job %s keeps its %s zone (%d rescan, %d to mine) for the next miner",
+            jobId, liveZone.postRescan and "re-mine" or "rescan",
+            #(liveZone.rescanSectors or {}), #(liveZone.pending or {})))
+        saveMiningZones()
+    else
+        state.miningZones[jobId] = nil
+    end
     jobQueue._hist(jobId, "reassign", string.format("from=%s reason=%s", fromId, reason or "?"))
     logWarn(string.format("Job %s back to queue (from %s: %s)", jobId, fromId, reason or "?"))
     saveJobs()

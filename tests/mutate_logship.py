@@ -258,6 +258,9 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
+RZ_RESCAN = "a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
+RZ_REMINE = "a requeued zone re-mining after its rescan keeps the re-mine list"
+RZ_FIRST  = "a requeued zone on its first mine pass is still rebuilt from the store"
 RS_ONCE   = "it is sent on the turtle's first heartbeat, once"
 RS_GONE   = "a job requeued before the first heartbeat is not sent"
 RS_ERROR  = "the fuel path's ERROR heartbeat does not take the job"
@@ -1225,6 +1228,19 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- A requeued zone keeps work the store cannot rebuild ------------------
+    ('a requeued rescan zone is dropped again', 'central_server.lua',
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n', '    if false then\n')], RZ_RESCAN),
+
+    ('a requeued re-mine zone is dropped again', 'central_server.lua',
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n', '    if liveZone and liveZone.phase == "RESCAN" then\n')], RZ_REMINE),
+
+    ('every requeued zone is kept', 'central_server.lua',
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n', '    if liveZone then\n')], RZ_FIRST),
+
+    ('a released rescan sector goes to pending', 'central_server.lua',
+     [('local listName = (la.isSurvey and zone.phase == "RESCAN") and "rescanSectors" or "pending"', 'local listName = "pending"')], RZ_RESCAN),
 
     # -- A rebooted turtle's job, re-sent on its first heartbeat -------------
     ('the job is re-sent with the REGISTER_ACK again', 'central_server.lua',
