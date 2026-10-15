@@ -258,7 +258,8 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-HO_HELD   = "a held turtle is not offered work"
+DK_SEED   = "a zone rebuilt from the store does not count its done sectors again"
+HO_HELD   ="a held turtle is not offered work"
 HO_REL    = "a released turtle is offered work again"
 HO_REREG  = "a hold survives the turtle re-registering after it went offline"
 HO_BOOT   = "a hold survives a server restart"
@@ -1236,6 +1237,10 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- A rebuilt zone knows which sectors it already counted ---------------
+    ('a rebuilt zone forgets its counted sectors', 'central_server.lua',
+     [('        doneKeys        = doneKeys,\n', '')], DK_SEED),
 
     # -- An operator hold ---------------------------------------------------
     ('a held turtle is offered work', 'central_server.lua',

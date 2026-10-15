@@ -2775,11 +2775,20 @@ local function ensureMineZone(jobId, params)
     local allSectorsCopy = {}
     for _, s in ipairs(allSectors) do table.insert(allSectorsCopy, { x=s.x, z=s.z }) end
 
+    -- done starts at preDone, so the sectors behind it are already counted.
+    -- Without their keys the re-mine pass counted each one again: job_0196 on
+    -- 10-15 read "4/3" then "5/3", the board card's "7 of 4 after respawns".
+    local doneKeys = {}
+    for _, s in ipairs((pz and pz.doneSectors) or {}) do
+        doneKeys["MINE:" .. s.x .. "," .. s.z] = true
+    end
+
     state.miningZones[jobId] = {
         pending         = params.surveyOnly and {} or sectors,
         allSectors      = allSectorsCopy,
         total           = total,
         done            = preDone,
+        doneKeys        = doneKeys,
         oreFound        = oreFound,
         oreMined        = oreMined,
         startTime       = os.epoch("utc"),

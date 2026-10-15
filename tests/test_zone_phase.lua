@@ -595,6 +595,33 @@ return {
         assert_eq(gone, true, "doneSectors already holds everything a first pass needs")
     end,
 
+    -- The done count overshoots its total (job_0196, 10-15: "4/3", "5/3").
+    -- A zone rebuilt from the store takes done = #doneSectors but an empty
+    -- doneKeys, so the re-mine pass counted every sector finished before the
+    -- rebuild a second time. Same mechanism as the board card's "7 of 4 after
+    -- jobs are respawned".
+    ["a zone rebuilt from the store does not count its done sectors again"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        T.state.miningZones[JA], T.state.miningZones[JB] = nil, nil
+        T.state.jobs[JA].params = { x1 = 1800, z1 = -2816, x2 = 1850, z2 = -2816 }
+        -- First request builds the zone and its store entry.
+        T.handlers[proto.MSG.SECTOR_REQUEST]({ from = A, payload = { jobId = JA } })
+        local pz = T.state.persistentZones[T.state.miningZones[JA].persistentKey]
+        pz.doneSectors = { { x = 1792, z = -2816 }, { x = 1856, z = -2816 } }
+        -- Requeued: dropped, then rebuilt from the store.
+        T.state.miningZones[JA] = nil
+        T.handlers[proto.MSG.SECTOR_REQUEST]({ from = A, payload = { jobId = JA } })
+        local rebuilt = T.state.miningZones[JA]
+        local before = rebuilt.done
+        done(T, A, JA, { x = 1856, z = -2816 })   -- re-mined after a rescan
+        local after, total = rebuilt.done, rebuilt.total
+        restore()
+        assert_eq(before, 2, "precondition: the store's two done sectors")
+        assert_eq(after, 2, "a sector the store already counts is not counted again")
+        assert_eq(after <= total, true)
+    end,
+
     ["a recovering turtle that never docks stays held"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
