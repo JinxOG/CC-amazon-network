@@ -167,6 +167,31 @@ local function jobAssignsIn(T)
     return n
 end
 
+-- A second miner, node_119, that does not hold job_0726, and a live zone for
+-- the job with one sector waiting.
+local function strayAndZone(T)
+    T.state.registry["node_119"] = {
+        id = "node_119", role = proto.ROLE.MINER, status = proto.STATUS.TRAVELLING,
+        fuel = 100000, online = true, lastSeen = 1000000,
+        position = { x = 1400, y = 175, z = -2930 },
+    }
+    T.state.miningZones["job_0726"] = {
+        phase = "MINE", pending = { { x = 1120, z = -2800 } }, done = 0, total = 1,
+        allSectors = { { x = 1120, z = -2800 } }, lastAssignments = {},
+        oreFound = {}, oreMined = {}, surveySectors = {},
+    }
+    T.sent = {}
+end
+
+local function sentOfType(T, mtype)
+    local n = 0
+    for _, m in ipairs(T.sent) do
+        local ok, d = pcall(textutils.unserialise, m.body)
+        if ok and type(d) == "table" and d.type == mtype then n = n + 1 end
+    end
+    return n
+end
+
 local function recallsIn(T)
     local n = 0
     for _, m in ipairs(T.sent) do
@@ -921,6 +946,68 @@ return {
         restore()
         assert_eq(during, 0, "fuel.ensureFuel beats from outside the main loop")
         assert_eq(after, 1, "the main loop's first beat still gets it")
+    end,
+
+    -- ── Only the job's owner speaks for it ───────────────────────────────────
+    -- 2026-10-15 12:21: job_0195 was requeued and given to node_180 while
+    -- node_177, which had held it, was still flying to the zone believing it
+    -- was its job. Nothing checked who was asking: it would have been served
+    -- sectors in node_180's zone, and its JOB_COMPLETE or JOB_FAILED would have
+    -- ended node_180's job.
+    ["a sector request from a turtle the job is not assigned to is refused, and it is recalled"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        strayAndZone(T)
+        T.handlers[proto.MSG.SECTOR_REQUEST]({ from = "node_119", payload = { jobId = "job_0726" } })
+        local assigns, recalls = sentOfType(T, proto.MSG.SECTOR_ASSIGN), recallsIn(T)
+        local left = #T.state.miningZones["job_0726"].pending
+        restore()
+        assert_eq(assigns, 0, "not its job: no sector")
+        assert_eq(recalls, 1, "sent home instead")
+        assert_eq(left, 1, "the owner's sector is still there for the owner")
+    end,
+
+    ["the owner's sector request is still served"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        strayAndZone(T)
+        T.handlers[proto.MSG.SECTOR_REQUEST]({ from = "node_118", payload = { jobId = "job_0726" } })
+        local assigns = sentOfType(T, proto.MSG.SECTOR_ASSIGN)
+        restore()
+        assert_eq(assigns, 1)
+    end,
+
+    ["a JOB_COMPLETE from a turtle the job is not assigned to does not complete it"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        strayAndZone(T)
+        T.handlers[proto.MSG.JOB_COMPLETE]({ from = "node_119", payload = { jobId = "job_0726" } })
+        local status, owner = T.state.jobs["job_0726"].status, T.state.jobs["job_0726"].assignedTo
+        restore()
+        assert_eq(status, "IN_PROGRESS", "node_118's job is still running")
+        assert_eq(owner, "node_118")
+    end,
+
+    ["a JOB_FAILED from a turtle the job is not assigned to does not fail it"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        strayAndZone(T)
+        T.handlers[proto.MSG.JOB_FAILED]({ from = "node_119", payload = {
+            jobId = "job_0726", reason = "recalled", recoverable = true } })
+        local status, owner = T.state.jobs["job_0726"].status, T.state.jobs["job_0726"].assignedTo
+        restore()
+        assert_eq(status, "IN_PROGRESS")
+        assert_eq(owner, "node_118")
+    end,
+
+    ["the owner's JOB_COMPLETE still completes it"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        strayAndZone(T)
+        T.handlers[proto.MSG.JOB_COMPLETE]({ from = "node_118", payload = { jobId = "job_0726" } })
+        local status = T.state.jobs["job_0726"].status
+        restore()
+        assert_eq(status ~= "IN_PROGRESS", true)
     end,
 
     ["a dead holder's sector returns to the pool, even on a shared zone"] =

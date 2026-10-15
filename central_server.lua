@@ -3365,13 +3365,31 @@ handlers[proto.MSG.TURTLE_LOG] = function(msg)
     while #buf > TURTLE_LOG_BUFFER do table.remove(buf, 1) end
 end
 
+-- ONLY THE JOB'S OWNER SPEAKS FOR IT (2026-10-15). job_0195 was requeued and
+-- given to node_180 while node_177, which had held it, still flew to the zone
+-- believing it was its own. Nothing checked who was asking: it would have been
+-- served sectors in node_180's zone, and its JOB_COMPLETE or JOB_FAILED would
+-- have ended node_180's job. Narrow on purpose: only a job assigned to a
+-- DIFFERENT turtle is refused. An unassigned job keeps today's behaviour.
+function jobQueue.ownedByAnother(jobId, from, what)
+    local job = jobId and state.jobs[jobId]
+    if job and job.assignedTo and job.assignedTo ~= from then
+        logWarn(string.format("%s from %s for %s refused: the job is %s's",
+            what, tostring(from), tostring(jobId), job.assignedTo))
+        return true
+    end
+    return false
+end
+
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
+    if jobQueue.ownedByAnother(msg.payload.jobId, msg.from, "JOB_COMPLETE") then return end
     jobQueue.complete(msg.payload.jobId)
     pcall(dispatcher.tick)
 end
 
 handlers[proto.MSG.JOB_FAILED] = function(msg)
     local p = msg.payload
+    if jobQueue.ownedByAnother(p.jobId, msg.from, "JOB_FAILED") then return end
     jobQueue.fail(p.jobId, p.reason, p.recoverable)
     -- Job may have re-queued for retry — try to dispatch right away
     pcall(dispatcher.tick)
@@ -3398,6 +3416,12 @@ end
 
 handlers[proto.MSG.SECTOR_REQUEST] = function(msg)
     local jobId = msg.payload.jobId
+    -- Not its job any more: no sector, and home. Its recall report then meets
+    -- the same refusal in the JOB_FAILED handler, so the owner's job is safe.
+    if jobQueue.ownedByAnother(jobId, msg.from, "SECTOR_REQUEST") then
+        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })
+        return
+    end
     local zone  = state.miningZones[jobId]
     if not zone then
         -- miningZone is only in-memory; it is lost on server restart.

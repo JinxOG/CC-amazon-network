@@ -258,7 +258,11 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-RZ_RESCAN = "a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
+OW_SECTOR = "a sector request from a turtle the job is not assigned to is refused, and it is recalled"
+OW_DONE   = "a JOB_COMPLETE from a turtle the job is not assigned to does not complete it"
+OW_FAIL   = "a JOB_FAILED from a turtle the job is not assigned to does not fail it"
+OW_OWNER  = "the owner's sector request is still served"
+RZ_RESCAN ="a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
 RZ_REMINE = "a requeued zone re-mining after its rescan keeps the re-mine list"
 RZ_FIRST  = "a requeued zone on its first mine pass is still rebuilt from the store"
 RS_ONCE   = "it is sent on the turtle's first heartbeat, once"
@@ -1228,6 +1232,22 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- Only the job's owner speaks for it ----------------------------------
+    ('a stray turtle is served sectors', 'central_server.lua',
+     [('    if jobQueue.ownedByAnother(jobId, msg.from, "SECTOR_REQUEST") then\n', '    if false then\n')], OW_SECTOR),
+
+    ('a stray turtle is refused but not recalled', 'central_server.lua',
+     [('        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })\n', '')], OW_SECTOR),
+
+    ('a stray JOB_COMPLETE completes the job', 'central_server.lua',
+     [('    if jobQueue.ownedByAnother(msg.payload.jobId, msg.from, "JOB_COMPLETE") then return end\n', '')], OW_DONE),
+
+    ('a stray JOB_FAILED fails the job', 'central_server.lua',
+     [('    if jobQueue.ownedByAnother(p.jobId, msg.from, "JOB_FAILED") then return end\n', '')], OW_FAIL),
+
+    ('the owner is refused too', 'central_server.lua',
+     [('    if job and job.assignedTo and job.assignedTo ~= from then\n', '    if job and job.assignedTo then\n')], OW_OWNER),
 
     # -- A requeued zone keeps work the store cannot rebuild ------------------
     ('a requeued rescan zone is dropped again', 'central_server.lua',
