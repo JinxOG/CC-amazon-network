@@ -34,6 +34,21 @@ return {
     -- compares msg.type against it (it's emitted by turtle_base.lua's
     -- depart(), not consumed here), so any check for it here could only
     -- match the name in a comment and would not be discriminating.
+    -- Recovery layer release 4. delivery_turtle.lua cannot run in a test (its
+    -- job runs at load), so its three ledger hooks are pinned in the source;
+    -- the behaviour behind them is tested in test_ledger.lua.
+    ["delivery_turtle.lua records its chest through the ledger (SOURCE-ONLY)"] = function(assert_eq)
+        local f = assert(io.open("delivery_turtle.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        assert_eq(src:find('base%.ledger%.registerKind%("delivery_ec"') ~= nil, true,
+            "the delivery chest is a ledger kind")
+        assert_eq(src:find('base%.ledger%.placeDown%("delivery_ec", EC_SLOT, placeDownClear%)') ~= nil, true,
+            "it is recorded before it goes down")
+        local _, clears = src:gsub('base%.ledger%.clearIfHome%("delivery_ec", EC_SLOT%)', "")
+        assert_eq(clears, 2, "cleared at the abort pickup and at the normal pickup")
+    end,
+
     ["support_turtle.lua still loads and still handles delivery messages"] = function(assert_eq)
         assert_eq(loadfile("support_turtle.lua") ~= nil, true, "support_turtle.lua must still be valid Lua")
         local f = assert(io.open("support_turtle.lua", "r"))

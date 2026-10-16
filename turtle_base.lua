@@ -2195,12 +2195,15 @@ function base.ledger.recover(kind)
     local spec = L._kinds[kind]
     if not spec then return L.needsHands(kind, e, "unknown_kind") end
     local home = type(spec.homeSlot) == "function" and spec.homeSlot() or spec.homeSlot
+    -- The name recorded at placement wins: a role may carry a chest whose
+    -- exact item it only knows when it places it (release 4, delivery).
+    local blockName = e.blockName or spec.blockName
 
     -- ALREADY HOME (review #3): a reboot between the dig and the clear, or a
     -- person fetching it by hand. The record is stale; going to dig would send
     -- someone to an empty block on every boot.
     local inHome = turtle.getItemDetail(home)
-    if inHome and inHome.name == spec.blockName then
+    if inHome and inHome.name == blockName then
         L.clear(kind)
         logInfo("Ledger: the " .. kind .. " is already home -- stale record cleared")
         pcall(base.sendProgress, "ledger_ok: " .. kind)
@@ -2223,9 +2226,9 @@ function base.ledger.recover(kind)
     end
 
     local seen, data = INSPECT[dir]()
-    if not (seen and type(data) == "table" and data.name == spec.blockName) then
+    if not (seen and type(data) == "table" and data.name == blockName) then
         -- Dug before the reboot landed, and still in a working slot (review #3).
-        if L.bringHome(spec.blockName, home) then
+        if L.bringHome(blockName, home) then
             L.clear(kind)
             logInfo("Ledger: the " .. kind .. " was already aboard -- moved home, record cleared")
             pcall(base.sendProgress, "ledger_ok: " .. kind)
@@ -2250,7 +2253,7 @@ function base.ledger.recover(kind)
     end
     if not dug then return L.needsHands(kind, e, "dig_failed") end
 
-    if not L.bringHome(spec.blockName, home) then
+    if not L.bringHome(blockName, home) then
         -- It IS aboard, so the record no longer describes the world: clear it,
         -- and say plainly what is wrong instead (review #2).
         L.clear(kind)
@@ -2300,6 +2303,37 @@ function base.ledger.bringHome(name, home)
     turtle.select(1)
     local h = turtle.getItemDetail(home)
     return h ~= nil and h.name == name
+end
+
+-- Record, then place below; a placement that fails leaves no record (the
+-- contract's order). The entry names the item actually in `slot`, so a role
+-- need not know its chest's exact item in advance. placeFn defaults to
+-- turtle.placeDown; a role passes its own (delivery digs first).
+function base.ledger.placeDown(kind, slot, placeFn)
+    local item = turtle.getItemDetail(slot)
+    local ok, why = base.ledger.record(kind, {
+        x = _self.pos.x, y = _self.pos.y - 1, z = _self.pos.z, face = "down",
+        facing = _self.facing, blockName = item and item.name,
+        turtleAt = { x = _self.pos.x, y = _self.pos.y, z = _self.pos.z } })
+    if not ok then return false, why end
+    turtle.select(slot)
+    local placed, reason = (placeFn or turtle.placeDown)()
+    if not placed then base.ledger.rollback(kind) end
+    return placed, reason
+end
+
+-- Clear the record once its item is back in `slot`; true if there is no
+-- record left. Still out there: the record stays, for boot to recover.
+function base.ledger.clearIfHome(kind, slot)
+    local e = base.ledger.get(kind)
+    if not e then return true end
+    local spec = base.ledger._kinds[kind] or {}
+    local d = turtle.getItemDetail(slot)
+    if d and d.name == (e.blockName or spec.blockName) then
+        base.ledger.clear(kind)
+        return true
+    end
+    return false
 end
 
 -- Every recorded item, at boot. Returns how many came back.

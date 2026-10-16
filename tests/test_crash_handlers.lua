@@ -33,6 +33,7 @@ local function runScript(path, runBehaviour)
     local anything = { __index = function() return noop end }
     local fakeBase = setmetatable({
         fuel      = setmetatable({}, anything),
+        ledger    = setmetatable({}, anything),   -- delivery registers a kind at load (release 4)
         run       = function()
             calls[#calls + 1] = "run"
             if runBehaviour == "crash" then error(BOOM, 0) end

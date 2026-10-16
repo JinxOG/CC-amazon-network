@@ -357,4 +357,69 @@ return {
         assert_eq(r2, "ledger_write_failed")
         assert_eq(base.ledger.get("fuel_chest"), nil)
     end,
+
+    -- Release 4: the delivery chest, through two generic helpers -------------
+    -- delivery_turtle cannot be loaded in a test (its job runs at module load),
+    -- so the record/place/clear logic lives here and the role calls it.
+
+    ["placeDown records the item, with its own name, before it goes down"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 2 },
+                                inv = { [16] = { name = "other:chest", count = 1 } } })
+        base.gpsSync()
+        local atPlace
+        local function place() atPlace = base.ledger.get("delivery_ec"); return turtle.placeDown() end
+        local placed = base.ledger.placeDown("delivery_ec", 16, place)
+        assert_eq(placed, true)
+        assert_eq(atPlace ~= nil, true, "on disk before the chest went down")
+        assert_eq(atPlace and (atPlace.x .. "," .. atPlace.y .. "," .. atPlace.z), "10,63,0")
+        assert_eq(atPlace and atPlace.face, "down")
+        assert_eq(atPlace and atPlace.blockName, "other:chest", "the name it actually placed")
+        assert_eq(c.world[key(10, 63, 0)], "other:chest")
+    end,
+
+    ["a placeDown that fails leaves no record"] =
+    function(assert_eq)
+        local base = fresh({ pos = { x = 10, y = 64, z = 0, facing = 2 },
+                             inv = { [16] = { name = EC, count = 1 } } })
+        base.gpsSync()
+        local placed = base.ledger.placeDown("delivery_ec", 16, function() return false, "blocked" end)
+        assert_eq(placed, false)
+        assert_eq(base.ledger.get("delivery_ec"), nil)
+    end,
+
+    ["clearIfHome clears only once the item is back in its slot"] =
+    function(assert_eq)
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 2 },
+                                equipped = { left = PICK },
+                                inv = { [16] = { name = "other:chest", count = 1 } } })
+        base.gpsSync()
+        base.ledger.placeDown("delivery_ec", 16, turtle.placeDown)
+        local beforeDig = base.ledger.clearIfHome("delivery_ec", 16)
+        local keptWhileOut = base.ledger.get("delivery_ec") ~= nil
+        -- Picked up into its slot. Set directly: the stub's dig fills the first
+        -- free slot, where CC fills the selected one (fidelity gap).
+        c.world[key(10, 63, 0)] = nil
+        c.inv[16] = { name = "other:chest", count = 1 }
+        local afterDig = base.ledger.clearIfHome("delivery_ec", 16)
+        assert_eq(beforeDig, false)
+        assert_eq(keptWhileOut, true, "still out there: the record stays")
+        assert_eq(afterDig, true)
+        assert_eq(base.ledger.get("delivery_ec"), nil, "home: cleared")
+    end,
+
+    ["recovery identifies the item by the name recorded with it"] =
+    function(assert_eq)
+        local entry = { x = 10, y = 63, z = 0, face = "down", turtleAt = { x = 10, y = 64, z = 0 },
+                        blockName = "other:chest" }
+        local base, c = fresh({ pos = { x = 10, y = 64, z = 0, facing = 0 },
+                                equipped = { left = PICK },
+                                world = { [key(10, 63, 0)] = "other:chest" } })
+        base.ledger.registerKind("delivery_ec", { blockName = EC, homeSlot = 16 })
+        base.ledger.record("delivery_ec", entry)
+        local ok = base.ledger.recover("delivery_ec")
+        assert_eq(ok, true, "the kind's default name is only a fallback")
+        assert_eq(c.inv[16] and c.inv[16].name, "other:chest")
+        assert_eq(base.ledger.get("delivery_ec"), nil)
+    end,
 }

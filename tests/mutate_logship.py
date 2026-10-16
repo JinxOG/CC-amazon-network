@@ -258,7 +258,12 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-DK_SEED   = "a zone rebuilt from the store does not count its done sectors again"
+LD_PLACE  = "placeDown records the item, with its own name, before it goes down"
+LD_FAIL   = "a placeDown that fails leaves no record"
+LD_CLEAR  = "clearIfHome clears only once the item is back in its slot"
+LD_NAME   = "recovery identifies the item by the name recorded with it"
+LD_HOOKS  = "delivery_turtle.lua records its chest through the ledger (SOURCE-ONLY)"
+DK_SEED   ="a zone rebuilt from the store does not count its done sectors again"
 HO_HELD   ="a held turtle is not offered work"
 HO_REL    = "a released turtle is offered work again"
 HO_REREG  = "a hold survives the turtle re-registering after it went offline"
@@ -1237,6 +1242,25 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- Release 4: the delivery chest through the ledger ----------------------
+    ('placeDown does not record the item name', 'turtle_base.lua',
+     [('facing = _self.facing, blockName = item and item.name,', 'facing = _self.facing,')], LD_PLACE),
+
+    ('a failed placeDown keeps its record', 'turtle_base.lua',
+     [('    if not placed then base.ledger.rollback(kind) end\n    return placed, reason\n', '    return placed, reason\n')], LD_FAIL),
+
+    ('clearIfHome clears while the item is still out', 'turtle_base.lua',
+     [('    if d and d.name == (e.blockName or spec.blockName) then\n        base.ledger.clear(kind)\n', '    if true then\n        base.ledger.clear(kind)\n')], LD_CLEAR),
+
+    ('recovery ignores the recorded name', 'turtle_base.lua',
+     [('    local blockName = e.blockName or spec.blockName\n', '    local blockName = spec.blockName\n')], LD_NAME),
+
+    ('delivery places its chest without recording it', 'delivery_turtle.lua',
+     [('base.ledger.placeDown("delivery_ec", EC_SLOT, placeDownClear)', 'placeDownClear()')], LD_HOOKS),
+
+    ('delivery never clears its chest record', 'delivery_turtle.lua',
+     [('    base.ledger.clearIfHome("delivery_ec", EC_SLOT)\n', '')], LD_HOOKS),
 
     # -- A rebuilt zone knows which sectors it already counted ---------------
     ('a rebuilt zone forgets its counted sectors', 'central_server.lua',

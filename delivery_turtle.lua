@@ -16,6 +16,12 @@ local MAX_CHESTS = 6
 
 base.init(proto.ROLE.DELIVERY)
 
+-- The delivery chest is a ledger kind (recovery layer release 4): recorded
+-- before it goes down at the destination, cleared once it is back in EC_SLOT,
+-- and recovered by base.homeAfterBoot if a reboot lands while it is out. The
+-- record carries the item's own name; this is only the fallback.
+base.ledger.registerKind("delivery_ec", { blockName = "enderstorage:ender_chest", homeSlot = EC_SLOT })
+
 -- Full refuel using base.fuel.refuelFromChest() — CHEST_SLOT=15 (fuel EC),
 -- handles direction, slot selection, and chest recovery automatically.
 base.setRefuelFn(function()
@@ -71,6 +77,7 @@ local function pickUpECAndVerify()
         print("[DELIVERY] WARNING: EC pickup may have failed — slot " .. EC_SLOT
             .. " does not contain ender chest")
     end
+    base.ledger.clearIfHome("delivery_ec", EC_SLOT)   -- still out: kept for boot
 end
 
 -- Navigate to position and place a chest below
@@ -332,9 +339,9 @@ local ok, err = pcall(base.run, function(job)
         return failDelivery("ec_missing_before_place", true)
     end
 
-    -- Place entangled chest below
-    turtle.select(EC_SLOT)
-    local ecPlaced, ecReason = placeDownClear()
+    -- Place entangled chest below -- recorded first, so a reboot from here on
+    -- can come back for it (recovery layer release 4).
+    local ecPlaced, ecReason = base.ledger.placeDown("delivery_ec", EC_SLOT, placeDownClear)
     if not ecPlaced then
         -- Continue anyway — the batch timeout will catch a stalled handshake.
         print("[DELIVERY] Failed to place entangled chest: " .. (ecReason or "?"))
@@ -553,6 +560,7 @@ local ok, err = pcall(base.run, function(job)
             return failDelivery("ec_not_recovered_after_delivery", true)
         end
     end
+    base.ledger.clearIfHome("delivery_ec", EC_SLOT)
 
     if not base.isRecalled() then
         base.sendToServer(proto.MSG.ITEM_COLLECTED, { jobId = job.id })
