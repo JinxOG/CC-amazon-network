@@ -1155,7 +1155,7 @@ MUTANTS = [
 
     # -- The placed-item ledger: recovery (recovery layer release 2) ----------
     ('recovery digs whatever is there', 'turtle_base.lua',
-     [('    if not (seen and type(data) == "table" and data.name == spec.blockName) then\n', '    if false then\n')], LR_ID),
+     [('    if not (seen and type(data) == "table" and data.name == blockName) then\n', '    if false then\n')], LR_ID),
 
     ('recovery trusts a turtle that has moved', 'turtle_base.lua',
      [('    if _self.pos.x ~= at.x or _self.pos.y ~= at.y or _self.pos.z ~= at.z then\n', '    if false then\n')], LR_POS),
@@ -1216,10 +1216,10 @@ MUTANTS = [
      [('    base.waitForPositionFix("recovering the " .. kind, dir ~= "forward")\n', '    base.waitForPositionFix("recovering the " .. kind)\n')], RV_UPDN),
 
     ('a stale record sends someone to an empty block', 'turtle_base.lua',
-     [('    if inHome and inHome.name == spec.blockName then\n        L.clear(kind)\n', '    if false then\n        L.clear(kind)\n')], RV_STALE),
+     [('    if inHome and inHome.name == blockName then\n        L.clear(kind)\n', '    if false then\n        L.clear(kind)\n')], RV_STALE),
 
     ('a chest already aboard is looked for in the world', 'turtle_base.lua',
-     [('        if L.bringHome(spec.blockName, home) then\n            L.clear(kind)\n', '        if false then\n            L.clear(kind)\n')], RV_ABOARD),
+     [('        if L.bringHome(blockName, home) then\n            L.clear(kind)\n', '        if false then\n            L.clear(kind)\n')], RV_ABOARD),
 
     ('an occupied home slot is never cleared', 'turtle_base.lua',
      [('    if d then\n        for s = 1, 16 do\n            if s ~= home and turtle.getItemCount(s) == 0 then\n', '    if d then\n        for s = 1, 0 do\n            if s ~= home and turtle.getItemCount(s) == 0 then\n')], RV_SLOT),
