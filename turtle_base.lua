@@ -2336,6 +2336,32 @@ function base.ledger.clearIfHome(kind, slot)
     return false
 end
 
+-- WHICH ENDER CHESTS ARE NOT THE PAYLOAD CHEST (2026-10-16). Both chests share
+-- one item name, and with no NBT the delivery turtle locked EVERY chest in
+-- slots 1-15 as "other" -- so node_109, its delivery chest in slot 1, could
+-- never move it home and every dispatch aborted. With the payload chest home in
+-- ecSlot, every other chest is locked, as before. With ecSlot empty, only the
+-- fuel slot is: a lone other chest is the payload chest. Two loose chests and
+-- no fuel chest in its slot cannot be told apart, so all are locked and the
+-- caller aborts as it always did.
+function base.otherChestSlots(ecSlot, fuelSlot)
+    local function isChest(s)
+        local it = turtle.getItemDetail(s)
+        local n = it and it.name:lower() or ""
+        return n:find("ender") ~= nil or n:find("entangled") ~= nil
+    end
+    local others, loose = {}, {}
+    for s = 1, 16 do
+        if s ~= ecSlot and isChest(s) then
+            others[s] = true
+            if s ~= fuelSlot then loose[#loose + 1] = s end
+        end
+    end
+    if isChest(ecSlot) then return others end
+    if isChest(fuelSlot) and #loose == 1 then others[loose[1]] = nil end
+    return others
+end
+
 -- Every recorded item, at boot. Returns how many came back.
 function base.ledger.recoverAll()
     local n = 0

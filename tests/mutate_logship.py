@@ -258,7 +258,11 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-DV_SAVE   = "a dispatched delivery and its support job can both be saved"
+EC_HOME   = "with the delivery chest home, every other chest is locked"
+EC_AWAY   = "with the delivery chest out of place, only the fuel slot is locked"
+EC_AMBIG  = "two loose chests and an empty fuel slot are not guessed between"
+EC_USE    = "delivery_turtle.lua decides its other chests with base.otherChestSlots (SOURCE-ONLY)"
+DV_SAVE   ="a dispatched delivery and its support job can both be saved"
 LD_PLACE  ="placeDown records the item, with its own name, before it goes down"
 LD_FAIL   = "a placeDown that fails leaves no record"
 LD_CLEAR  = "clearIfHome clears only once the item is back in its slot"
@@ -1243,6 +1247,19 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- Which ender chests are not the delivery chest ------------------------
+    ('a wandered delivery chest stays locked', 'turtle_base.lua',
+     [('    if isChest(fuelSlot) and #loose == 1 then others[loose[1]] = nil end\n', '')], EC_AWAY),
+
+    ('a lone chest is unlocked with no fuel chest in its slot', 'turtle_base.lua',
+     [('    if isChest(fuelSlot) and #loose == 1 then others[loose[1]] = nil end\n', '    if #loose >= 1 then others[loose[1]] = nil end\n')], EC_AMBIG),
+
+    ('chests are unlocked even with the delivery chest home', 'turtle_base.lua',
+     [('    if isChest(ecSlot) then return others end\n', '')], EC_HOME),
+
+    ('delivery locks every chest again', 'delivery_turtle.lua',
+     [('    otherECSlots = base.otherChestSlots(EC_SLOT, 15)\n', '    otherECSlots = {}\n    for s = 1, 15 do if isECItem(turtle.getItemDetail(s)) then otherECSlots[s] = true end end\n')], EC_USE),
 
     # -- A delivery's jobs can be saved ----------------------------------------
     ('the support job shares the worker destination table', 'central_server.lua',

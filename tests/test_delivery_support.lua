@@ -49,6 +49,16 @@ return {
         assert_eq(clears, 2, "cleared at the abort pickup and at the normal pickup")
     end,
 
+    -- node_109 (2026-10-16): the rule that finds a delivery chest out of place
+    -- lives in turtle_base (tested in test_ledger.lua); this pins its use.
+    ["delivery_turtle.lua decides its other chests with base.otherChestSlots (SOURCE-ONLY)"] = function(assert_eq)
+        local f = assert(io.open("delivery_turtle.lua", "r"))
+        local src = f:read("*a")
+        f:close()
+        assert_eq(src:find("otherECSlots = base%.otherChestSlots%(EC_SLOT, 15%)") ~= nil, true)
+        assert_eq(src:find("otherECSlots%[s%] = true") == nil, true, "the old lock-everything loop is gone")
+    end,
+
     ["support_turtle.lua still loads and still handles delivery messages"] = function(assert_eq)
         assert_eq(loadfile("support_turtle.lua") ~= nil, true, "support_turtle.lua must still be valid Lua")
         local f = assert(io.open("support_turtle.lua", "r"))

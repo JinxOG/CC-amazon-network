@@ -165,11 +165,16 @@ local function captureECFingerprints()
         deliveryECNBT = nil
         print(string.format("[EC] No NBT for delivery chest — using slot exclusion only"))
     end
-    -- Record all other ender chests
+    -- Record the other ender chests. Slot 15 is the fuel chest's home (base.init
+    -- sets it for delivery); with slot 16 empty, a lone chest anywhere else is
+    -- the delivery chest and must stay findable so checkEC can move it home
+    -- (node_109, 2026-10-16: every dispatch aborted with it in slot 1).
+    otherECSlots = base.otherChestSlots(EC_SLOT, 15)
     for s = 1, 15 do
-        if isECItem(turtle.getItemDetail(s)) then
-            otherECSlots[s] = true
+        if otherECSlots[s] then
             print(string.format("[EC] Other ender chest locked in slot %d (fuel/secondary)", s))
+        elseif isECItem(turtle.getItemDetail(s)) then
+            print(string.format("[EC] Delivery chest found out of place in slot %d -- moving it home", s))
         end
     end
 end

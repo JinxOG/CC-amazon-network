@@ -358,6 +358,35 @@ return {
         assert_eq(base.ledger.get("fuel_chest"), nil)
     end,
 
+    -- Which ender chests are NOT the delivery chest (2026-10-16) --------------
+    -- node_109 docked with its delivery chest in slot 1 and the fuel chest in
+    -- 15. With no NBT to tell them apart, dispatch locked EVERY chest in 1-15 as
+    -- "other", so the delivery chest was never moved home and the job aborted.
+    ["with the delivery chest home, every other chest is locked"] =
+    function(assert_eq)
+        local base = fresh({ inv = { [16] = { name = EC, count = 1 }, [15] = { name = EC, count = 1 },
+                                     [3] = { name = EC, count = 1 } } })
+        local o = base.otherChestSlots(16, 15)
+        assert_eq(o[15] and o[3] and true, true)
+        assert_eq(o[16], nil)
+    end,
+
+    ["with the delivery chest out of place, only the fuel slot is locked"] =
+    function(assert_eq)
+        local base = fresh({ inv = { [1] = { name = EC, count = 1 }, [15] = { name = EC, count = 1 },
+                                     [4] = { name = "minecraft:cobblestone", count = 64 } } })
+        local o = base.otherChestSlots(16, 15)
+        assert_eq(o[15], true, "the fuel chest stays put")
+        assert_eq(o[1], nil, "slot 1 is the delivery chest: findable, so it can be moved home")
+    end,
+
+    ["two loose chests and an empty fuel slot are not guessed between"] =
+    function(assert_eq)
+        local base = fresh({ inv = { [1] = { name = EC, count = 1 }, [2] = { name = EC, count = 1 } } })
+        local o = base.otherChestSlots(16, 15)
+        assert_eq(o[1] and o[2] and true, true, "ambiguous: both locked, so dispatch aborts as before")
+    end,
+
     -- Release 4: the delivery chest, through two generic helpers -------------
     -- delivery_turtle cannot be loaded in a test (its job runs at module load),
     -- so the record/place/clear logic lives here and the role calls it.
