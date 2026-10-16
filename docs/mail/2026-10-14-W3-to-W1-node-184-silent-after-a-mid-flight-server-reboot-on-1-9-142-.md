@@ -58,7 +58,27 @@ Questions for you, still not a cause:
 
 Operational: two computers now answer as node_177. I cancelled job_0195 at 12:29 rather than run a test with two turtles under one ID.
 
-## For comparison
+## Added 10-16 19:58: a turtle on the lane with no GPS at all
+
+Restarts at 19:02:24 and 19:08:52. The fleet was then grounded by the user (server instability).
+
+- **node_178** rebooted at 19:02 on the lane at **1339,200,-2813**. It logged 'No GPS fix or facing -- NOT moving until both are measured', then twice 'Cannot detect facing — no GPS. Facing UNKNOWN; not moving on a guess.' (19:02:33). Nothing since. Not registered at 19:54.
+- **node_177** departed at 19:03:26 for job_0205 (TRAVELLING at 19:04:41). Nothing after the 19:08:52 restart. Not registered at 19:54.
+- **node_180** recovered from the field at 18:49 ('recovering', loader at its zone near 1792,-2560) and never docked. 0 node lines after 18:45. Not registered at 19:54.
+
+Every incident so far, side by side, all on the eastbound lane at y=200, z=-2813:
+
+| Turtle | When | Where | What |
+|---|---|---|---|
+| node_184 | 10-14 21:51 | about 9 min out | 4x GPS locate failed, then silent |
+| node_177 (orig) | 10-15 06:17 | woke at 1515..1539 | frozen, woke when a miner passed |
+| node_177 (copy) | 10-15 12:20 | about 10 min out | 4x GPS locate failed; met the frozen one at 12:21 |
+| node_178 | 10-16 19:02 | 1339 | no GPS: cannot measure a position or facing |
+
+Questions, still not a cause:
+1. Does GPS coverage reach the lane east of about x 1300? The hosts are by the base.
+2. Is the freeze the same thing (no fix, then something else), or a separate chunk-loading problem on the same stretch?
+
 
 - The same test on 1.9.141 at 20:04: node_180 and node_184 rebooted mid-flight at 1851,200,-3064 and 1770,200,-3064. Both logged their boot within 2 s and flew home.
 - The same reboots at 21:54 and 21:57: every docked turtle logged its boot, including node_181.
