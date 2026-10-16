@@ -662,12 +662,26 @@ end
 -- Real textutils.serialise/unserialise round-trip Lua values through a
 -- Lua-literal string. Only the plain-table/string/number/boolean subset
 -- the mining code needs is supported.
-function M._serialise(t)
+-- Tenth fidelity gap (2026-10-16): real CC:Tweaked refuses a table that
+-- appears twice in one value -- "Cannot serialize table with repeated
+-- entries" -- and this stub wrote it happily. A delivery job and its support
+-- job shared one destination table, so saveJobs failed live on every
+-- delivery while every test passed. Mirrors CC's tracking: true while a
+-- table is being written (a cycle), false once written (a repeat).
+function M._serialise(t, tracking)
+    tracking = tracking or {}
     local ty = type(t)
     if ty == "string" then return string.format("%q", t) end
     if ty == "number" or ty == "boolean" then return tostring(t) end
     if ty == "nil" then return "nil" end
     if ty == "table" then
+        if tracking[t] ~= nil then
+            if tracking[t] == false then
+                error("Cannot serialize table with repeated entries", 0)
+            end
+            error("Cannot serialize table with recursive entries", 0)
+        end
+        tracking[t] = true
         local parts = {}
         for k, v in pairs(t) do
             local key
@@ -676,10 +690,11 @@ function M._serialise(t)
             elseif type(k) == "string" and k:match("^[%a_][%w_]*$") then
                 key = k
             else
-                key = "[" .. M._serialise(k) .. "]"
+                key = "[" .. M._serialise(k, tracking) .. "]"
             end
-            table.insert(parts, key .. " = " .. M._serialise(v))
+            table.insert(parts, key .. " = " .. M._serialise(v, tracking))
         end
+        tracking[t] = false
         return "{" .. table.concat(parts, ", ") .. "}"
     end
     error("Cannot serialise type " .. ty, 0)

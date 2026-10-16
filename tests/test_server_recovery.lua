@@ -964,6 +964,35 @@ return {
         assert_eq(after, 1, "the main loop's first beat still gets it")
     end,
 
+    -- ── A delivery's jobs can be saved ───────────────────────────────────────
+    -- 2026-10-16 02:53, the first delivery in weeks: "saveJobs failed: Cannot
+    -- serialize table with repeated entries", three times. The support job's
+    -- params took job.params.destination by reference, so one table sat in two
+    -- jobs and CC refused the whole save. The stub serialiser allowed it, so no
+    -- test saw it (tenth fidelity gap, fixed in stub_cc).
+    ["a dispatched delivery and its support job can both be saved"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.state.registry["node_109"] = { id = "node_109", role = proto.ROLE.DELIVERY,
+            status = proto.STATUS.IDLE, fuel = 100000, online = true, lastSeen = 1000000,
+            position = { x = 150, y = 67, z = -2800 } }
+        T.state.registry["node_94"] = { id = "node_94", role = proto.ROLE.SUPPORT,
+            status = proto.STATUS.IDLE, fuel = 100000, online = true, lastSeen = 1000000,
+            position = { x = 154, y = 67, z = -2793 } }
+        T.state.lastDispatchTime = 0
+        local jid = T.jobQueue.add(proto.JOB.DELIVER, {
+            destination = { x = 327, y = 67, z = -2742 },
+            items = { { name = "minecraft:cobblestone", count = 16 } } }, 5)
+        T.dispatcher.tick()
+        local owner = T.state.jobs[jid] and T.state.jobs[jid].assignedTo
+        local ok, err = pcall(textutils.serialise, T.state.jobs)
+        local healthy = T.state.persistenceHealthy
+        restore()
+        assert_eq(owner, "node_109", "precondition: the pair was dispatched")
+        assert_eq(ok, true, "the jobs serialise: " .. tostring(err))
+        assert_eq(healthy ~= false, true, "and saveJobs did not fail")
+    end,
+
     -- ── An operator hold ─────────────────────────────────────────────────────
     -- 2026-10-15: two computers answered as node_177, and the one at the dock
     -- had the fullest tank, so getIdle would offer it the next job first. The

@@ -258,7 +258,8 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-LD_PLACE  = "placeDown records the item, with its own name, before it goes down"
+DV_SAVE   = "a dispatched delivery and its support job can both be saved"
+LD_PLACE  ="placeDown records the item, with its own name, before it goes down"
 LD_FAIL   = "a placeDown that fails leaves no record"
 LD_CLEAR  = "clearIfHome clears only once the item is back in its slot"
 LD_NAME   = "recovery identifies the item by the name recorded with it"
@@ -1242,6 +1243,10 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- A delivery's jobs can be saved ----------------------------------------
+    ('the support job shares the worker destination table', 'central_server.lua',
+     [('                    destination    = job.params.destination and {\n                        x = job.params.destination.x, y = job.params.destination.y,\n                        z = job.params.destination.z } or nil,\n', '                    destination    = job.params.destination,\n')], DV_SAVE),
 
     # -- Release 4: the delivery chest through the ledger ----------------------
     ('placeDown does not record the item name', 'turtle_base.lua',

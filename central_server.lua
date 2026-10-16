@@ -3043,7 +3043,12 @@ function dispatcher.tick()
                     partnerId      = worker.id,
                     masterJobId    = job.id,
                     fuelManage     = false,
-                    destination    = job.params.destination,
+                    -- A COPY: sharing the worker's table put one table in two
+                    -- jobs, and CC refuses to serialise that -- every delivery
+                    -- made saveJobs fail (2026-10-16 02:53).
+                    destination    = job.params.destination and {
+                        x = job.params.destination.x, y = job.params.destination.y,
+                        z = job.params.destination.z } or nil,
                     travelYOffset  = workerParams.travelYOffset or 0,
                 }
                 supportJobId = jobQueue.add(proto.JOB.SUPPORT_FOLLOW, supportParams, job.priority)
@@ -6354,6 +6359,7 @@ if _G.__CC_SERVER_TEST then
         state    = state,
         registry = registry,
         jobQueue = jobQueue,
+        dispatcher = dispatcher,
         CFG      = CFG,
         -- The message handlers, so a test can drive the real dispatch path
         -- rather than an internal that only the test calls.
