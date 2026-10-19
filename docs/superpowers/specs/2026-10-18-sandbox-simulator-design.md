@@ -291,6 +291,78 @@ one actually changes behaviour.
 fleet's own `math.random` — comes from one seeded generator. The seed is printed
 in every report. Same seed, same run.
 
+## 7.1 Full control of the world (user's requirement, 2026-10-18)
+
+Faults break things on purpose. Engineers also need to **reach in and act**,
+the way an admin with every command could, only deeper: into each computer's
+memory, disk and event queue. Every action below is one call in the control
+API.
+
+**Time and runs**
+
+| Action | What it does |
+|---|---|
+| `pause()` / `resume()` | Stop and start the whole sandbox |
+| `step(n)` / `run_until(t)` / `run_until(condition)` | Advance by n events, to a time, or until something is true (`node_138 refuses a job`) |
+| `set_speed(x)` | `max`, or any multiple of real time |
+| `snapshot(name)` / `restore(name)` | Save and restore **everything**: world, every computer's disk and memory-visible state, inventories, storage, cloud store, clock, the random generator. Rewind and try again |
+| `fork(snapshot)` | Start a new run from a snapshot, leaving the original untouched |
+
+**Turtles and computers**
+
+| Action | What it does |
+|---|---|
+| `teleport(node, x, y, z, facing)` | Move a turtle anywhere |
+| `recover(node)` | Put a stranded turtle back in its dock, as a player would |
+| `set_slot(node, slot, item, count)` / `clear_slot` / `give(node, item, count)` | Fix or break an inventory |
+| `set_fuel(node, n)` | |
+| `equip(node, side, upgrade)` | Pickaxe, modem, chunky, or none |
+| `spawn_turtle({...})` / `spawn_computer({...})` / `remove(node)` | New fleet members, fresh or copied from an existing one. **A copy keeps the original's chunk-loading identity**, as in the real game (the copied-loader incident) |
+| `reboot(node)` / `shutdown(node)` / `start(node)` | |
+| `read_file` / `write_file` / `delete_file(node, path)` | Any computer's disk |
+| `eval(node, lua)` | Run a Lua snippet **inside** a computer's environment and return the result — read its live state, check a variable, set a flag |
+| `output(node)` | Everything the computer has printed, as its screen would show |
+| `queue(node)` | Its event queue right now: length, contents, pending timers, open channels |
+
+**The world**
+
+| Action | What it does |
+|---|---|
+| `get_block` / `set_block(x, y, z, name)` / `fill(area, name)` | Inspect and change terrain, ores included |
+| `load_chunks(area)` / `unload_chunks(area)` | Force chunk loading either way |
+| `send_radio(channel, reply, message, {from=})` | Inject any message, as any sender |
+| `drop_radio(filter)` | Drop specific messages (by type, sender, receiver) |
+| `storage_set(item, count)` / `storage_add` / `storage_remove` | Refined Storage contents |
+| `kv_get` / `kv_set` / `kv_clear` | The cloud store |
+| `ender_set(frequency, contents)` | Ender chest contents |
+| `gps_host(id, on/off)` / `place_gps_host(x, y, z)` | |
+
+**Watching**
+
+| Action | What it does |
+|---|---|
+| `watch(condition, action)` | When something becomes true, pause, snapshot, or log — "break when any turtle leaves the base without a GPS fix" |
+| `trace_radio({filter})` | Record every matching message with send and receive times |
+| `status()` | One table of the whole fleet: position, status, job, fuel, inventory, queue length |
+
+**Two ways to drive it, both required.** From a **scenario file** (scripted,
+repeatable, for tests), and **interactively**: a paused run accepts commands one
+at a time from the command line, so an engineer — an AI working through a shell
+— can look, act, step, and look again. The mechanism is the builder's call;
+it must work from a plain shell, with no window.
+
+**Interventions are part of the evidence.** Every control action that changes
+the world or a computer — teleport, give, set_block, eval that writes, a forced
+reboot — is recorded in the run's report under **INTERVENTIONS**, with its time.
+A card cannot be closed on a run that needed an intervention to pass, unless the
+intervention *is* the test (a scenario that teleports a turtle to test
+recovery). A run where someone quietly fixed a turtle by hand is not evidence
+that the fleet works. `pause`, `step`, `snapshot`, reads and `watch` are not
+interventions.
+
+**None of this exists outside the sandbox.** No control action reaches the real
+server; there is no equivalent in the fleet and none is added.
+
 ## 8. Calibration — how close is close enough
 
 The sandbox earns trust by matching the real server on things that have already
@@ -439,6 +511,9 @@ document:
 4. `gate_check.py` and `ack_loss.py` run against a sandbox run, changed only
    by the bridge-address option (§10.7).
 5. The §10 safety rules are each enforced by a test.
+5a. Every §7.1 control action exists, is tested, and is usable both from a
+    scenario file and interactively from a plain shell. Interventions appear in
+    the report.
 6. The new board column exists.
 7. A short `sandbox/README.md` tells an engineer how to run a scenario in under
    five minutes.
