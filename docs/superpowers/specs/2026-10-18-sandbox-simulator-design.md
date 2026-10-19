@@ -223,16 +223,24 @@ writes a compact sandbox world into `sandbox/worlds/<date>/sim/`:
 | Turtles: position, facing, fuel, inventory, upgrades, label | the turtles' block entities in the region files | So the fleet starts where it really is |
 | Placed loaders, GPS hosts, the server and warehouse computers | block entities | |
 | Refined Storage contents | the live bridge's `/state` → `storage` at import time | The RS data files are internal to the mod; the list the bridge already publishes is the real contents |
-| Cloud KV contents | an export of the CloudSolutions store; otherwise seeded from the live `/state` → `mineZones` | See below. `cloudstore.lua` warns that an empty store can read as total zone loss at boot, so the sandbox **never** starts with an empty store unless a scenario asks for exactly that |
+| Cloud KV contents | **not copied** — the sandbox keeps its own (below) | User's decision, 2026-10-18 |
 
-**The cloud store, as far as it is known (2026-10-18).** It is the
-CloudSolutions mod (`cloudsolutions-forge-1.20.1-0.3.4.jar`), running inside
-the Minecraft server and storing **locally on the server PC**, despite the name.
-It bundles `sqlite-jdbc`, so it is probably a SQLite file; its location is
-unconfirmed. If it is SQLite, the safe live export is `sqlite3 <db> ".backup
-<file>"`, which is consistent while the server runs. The importer's cloud-store
-step is built once the export and its schema are in hand; until then the
-`/state` seed stands in.
+**The cloud store: the sandbox keeps its own (user's decision, 2026-10-18).**
+The real zone history is not copied; it was wiped recently anyway, and nothing
+in a test depends on its contents. The sandbox models the CloudSolutions
+`kv_storage` peripheral as a **working local key-value store**: it persists
+across computer reboots and server crashes within a run, can be saved and
+reloaded between runs, and starts empty unless a scenario loads a saved one. The
+sandbox builds its own zone history by running jobs.
+
+**What still gets tested is the saving, not the contents.** Scenarios check that
+zone history survives a server crash, a world restart and a disk-full server.
+
+**One thing to watch on the first run.** `cloudstore.lua` warns that an empty
+store at boot can read as total zone loss, while the server's own files in the
+world copy may still name zones. If the first sandbox boot trips that path, it
+is a **finding**: the real server would do the same after a wipe. It is reported
+to the file's owner, not smoothed over by the sandbox.
 
 Which Minecraft data formats to parse, and with which library, is the builder's
 call — `nbtlib` or a small hand-written Anvil reader. Paths above are standard
