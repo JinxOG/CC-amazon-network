@@ -201,6 +201,34 @@ The dashboard is at `http://127.0.0.1:3000/`. `tools/gate_check.py` and `tools/a
 
 A verb T2 lacks raises a clear error. It is never faked.
 
+**More control, added 2026-10-20 at the user's request:**
+- **Reading any computer's disk during a run.** The disks are plain folders under the run's world, read
+  without disturbing the computer.
+- **Mid-run save points.** `save-all`, a copy of the world folder and the run folder, and a restore later from
+  that copy.
+- **Single-turtle save and restore:** position, inventory, fuel, upgrades and its disk folder.
+- **A radio listener computer** at the base, logging fleet traffic on the channels it can open, until the test
+  mod (6.10) replaces it.
+
+### 6.10 The test-only mod (planned; spec to be written later)
+
+A small server-side Forge mod, installed **only** in `testserver\server\mods\` and never in the user's
+instance or on the live server. The T2 tool refuses to start if the mod's jar is found anywhere else. It gives
+T2 the control real Minecraft lacks:
+- every radio message logged;
+- radio loss and latency on demand;
+- every event each computer receives, logged;
+- turtles moved without a reboot;
+- single-turtle save and restore;
+- peripheral stalls on demand;
+- pause and single-step;
+- all of it driven by script, with the same verbs as T1.
+
+Running Lua on a computer mid-run is a stretch goal. Exact replay stays impossible.
+
+**The spec owner writes its spec after the simulator's fidelity gaps are closed and the initial T2 server is
+running (phases 0-1), at the user's direction. Nobody designs or builds it before then.**
+
 ### 6.7 Which code runs
 
 The code under test is pushed to GitHub on a branch, and each computer is pinned to that commit through
@@ -248,6 +276,8 @@ Drive, and ask the user before installing anything.
    stop. Test: it refuses rules that allow `$private`.
 2. **Control verbs**, proven one by one (6.6).
 3. **Scenarios and reports** (6.9); T1 scenarios run unchanged where their verbs exist.
+3b. **The test-only mod** (6.10): its spec is written once phases 0-1 and the fidelity gaps are done; then built,
+   and the `radio_loss` / `radio_latency` rows of 6.6 become available on T2.
 4. **The watcher** (section 5). It needs no T2, so it can start in parallel with phase 0:
    `docs/watcher/LOG.md`, the scheduled task, and a dry run against today's board. The spec owner sets up the
    schedule with the user's OK.
