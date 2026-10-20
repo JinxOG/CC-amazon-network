@@ -54,14 +54,39 @@ game-seconds in T2, so a timeout bug can hide); timeout behaviour stays with T1,
 which fleet behaviour is unchanged has not been measured yet; it needs a tick-rate mod (the user's OK is needed) and a
 T1-vs-T2 comparison at 1x, 2x and 4x.
 
+## Tick-rate mod (spec 6.8), with the user's OK, test server only
+
+- **OverClocked: Clockworks 1.0.2** (Modrinth): crashed the server on its first world tick (a recursive tick procedure,
+  StackOverflowError). Removed. Not usable.
+- **Madgique's Tickrate Changer 1.0.0 (1.20.1 Forge)**, sha1 checked: it clashes with **Citadel** (both modify the server's
+  tick length; the mod's own page lists this), and the server refused to start. Citadel is needed only by Alex's Mobs, so
+  both were parked in `server\mods-parked-for-tickrate\`. **Alex's Mobs creatures are therefore missing from T2 at
+  speed**; they go back for runs at 1x. This deviates further from the live mod set.
+- With those two parked, `/tickrate N` works over RCON. Idle server (nobody online, no bridge), sustained 40 s per step:
+
+| tickrate | game ticks per real second | speed | mean tick time | memory |
+|---|---|---|---|---|
+| 20 | 20.0 | 1.0x | 5.8 ms | 7.3 GB |
+| 40 | 40.0 | 2.0x | 4.4 ms | 7.4 GB |
+| 60 | 62.5 | 3.1x | 3.6 ms | 7.3 GB |
+| 100 | 100.0 | 5.0x | 4.1 ms | 7.4 GB |
+| 160 | 166.7 | 8.3x | 3.8 ms | 7.4 GB |
+
+(The mod works in whole milliseconds per tick, so 60 became 16 ms = 62.5 and 160 became 6 ms = 166.7.) The server held every
+step with room to spare (tick time under the budget of 50/N ms), so the ceiling is higher than 8x; about 12x on tick time.
+**The spec's 2x bar is met by the server on an idle world.** What is not yet known: speed with the fleet running a job
+(bridge on, miners flying, chunk loading), and the highest speed at which fleet behaviour is unchanged (see the real-clock
+section: deadlines in `os.epoch` get N times longer in game time, so T2 at speed is for mechanics, not timeouts).
+
 ## Not done / not verified in phase 0
 
 - Whether the fleet computers actually booted and ran: there was no bridge on 127.0.0.1:3000 and nobody logged in; phase 1
   runs the real `server.js`.
-- Any tick-rate mod (Madgique's Tickrate Changer, OverClocked: Clockworks, Tick Changer). Not downloaded.
 - Memory and tick time with the fleet working a job.
 
 ## Where this leaves the go/no-go (the user's call)
 
-The bar in the spec is about 2x. Ticks alone allow about 12x, so 2x is not ruled out by tick time; what decides it is a
-tick-rate mod that works on this modpack and whether the fleet's behaviour holds at 2x. Both need the next step.
+The bar in the spec is about 2x. A tick-rate mod works on this pack (with Citadel and Alex's Mobs parked) and the idle
+server sustains 8.3x, so 2x on tick time is met. What remains is whether the fleet's mechanics hold at 2x with a job
+running; that is phase 1-2 work. A decision for the user: the mod set is now missing 13 server-only mods, 5 client-only mods
+(left out correctly) and, at speed, Alex's Mobs and Citadel.
