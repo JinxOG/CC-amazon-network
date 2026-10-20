@@ -1,6 +1,7 @@
 -- Builds the global environment of one computer: whitelisted Lua plus the CC APIs.
 -- Anything the fleet calls that is not implemented raises a clear error naming it.
 local Rng = require("core.rng")
+local unpack = table.unpack or unpack
 
 local CCEnv = {}
 
@@ -22,9 +23,31 @@ function CCEnv.api(comp, name, tbl)
   return setmetatable(tbl, { __index = CCEnv.unimplemented(comp, name) })
 end
 
+-- A peripheral call that takes game time. The computer yields for a task_complete event with this
+-- call's id, so every other event arriving meanwhile is discarded, as in CC. fn runs at the instant
+-- the call completes, in the scheduler, so its effect on the world happens at that virtual time.
+local next_task_id = 0
+function CCEnv.main_thread_call(comp, duration_ms, fn)
+  next_task_id = next_task_id + 1
+  local id, gen = next_task_id, comp.gen
+  comp.sched:at(comp:now() + duration_ms, function()
+    local r = table.pack(pcall(fn))
+    if comp.gen == gen then comp:queue_event({ "task_complete", id, r }) end
+  end)
+  while true do
+    local ev = { coroutine.yield("task_complete") }
+    if ev[1] == "terminate" then error("Terminated", 0) end
+    if ev[2] == id then
+      local r = ev[3]
+      if not r[1] then error(r[2], 0) end
+      return unpack(r, 2, r.n)
+    end
+  end
+end
+
 local function copy(t) local o = {} for k, v in pairs(t) do o[k] = v end return o end
 
-local INSTALLERS = { "cc.os", "cc.term", "cc.fs", "cc.textutils", "cc.shell", "cc.settings" }
+local INSTALLERS = { "cc.os", "cc.term", "cc.fs", "cc.textutils", "cc.shell", "cc.settings", "cc.parallel", "cc.peripheral" }
 
 function CCEnv.build(comp)
   local E = {}

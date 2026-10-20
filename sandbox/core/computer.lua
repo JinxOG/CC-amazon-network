@@ -19,6 +19,7 @@ function Computer.new(opts)
   self.name = "node_" .. tostring(opts.id)
   self.state, self.filter = "off", nil
   self.queue, self.output = {}, {}
+  self.peripherals = {}  -- hardware: survives reboots
   self.cost_ms = 0
   self.gen = 0       -- bumped on every boot and shutdown; stale callbacks check it
   self.booted_ms = 0
@@ -43,6 +44,13 @@ end
 function Computer:print(text)
   self.output[#self.output + 1] = { t = self:clock(), text = text }
 end
+
+-- Attach hardware by side or network name. `methods` is a table of functions.
+function Computer:attach(name, type_, methods)
+  self.peripherals[name] = { type = type_, methods = methods }
+end
+
+function Computer:detach(name) self.peripherals[name] = nil end
 
 function Computer:boot()
   self.gen = self.gen + 1
