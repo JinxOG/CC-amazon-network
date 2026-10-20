@@ -43,10 +43,16 @@ mechanics are the client set's until then.
 ## Real-clock use in the fleet (spec 6.8)
 
 Counts of `os.epoch`/`os.clock`/`os.time` in the fleet files: central_server 91, turtle_base 23, ore_turtle 17, warehouse 10,
-protocol 3, updater 0. The fleet mostly uses `os.epoch("utc")`, which is real UTC and does not speed up with a tick-rate
-mod, so at N x tick rate every wall-clock deadline (heartbeat misses, timeouts, bridge pushes) is effectively N times
-shorter in game time. The highest speed at which fleet behaviour is unchanged has NOT been measured yet. It needs a
-tick-rate mod (not downloaded; the user's OK is needed) and a T1-vs-T2 comparison at 1x, 2x and 4x.
+protocol 3, updater 0. The fleet mostly uses `os.epoch("utc")`, which is real UTC. CC:Tweaked 1.120.2's timers (`os.startTimer`, `sleep`) follow
+server ticks: the jar's `Environment` class keeps `timers` with a `ticksLeft` count that `tick()` decrements, while
+`OSAPI.epoch` reads the real clock. So at N x tick rate the game runs N times more per real second: a turtle's timers
+fire N times as often per real second, but a deadline written as "30 real seconds" spans 30 x N game-seconds. Deadlines
+therefore get N times LONGER in game time (more lenient), not shorter; the first version of this paragraph said the
+opposite and was wrong (the Head Engineer's check, 2026-10-20, confirmed against the jar). Consequence for the spec:
+T2 at speed proves mechanics, not timeout behaviour (a turtle that live is declared lost at 30 s is not until 30 x N
+game-seconds in T2, so a timeout bug can hide); timeout behaviour stays with T1, or with T2 at 1x. The highest speed at
+which fleet behaviour is unchanged has not been measured yet; it needs a tick-rate mod (the user's OK is needed) and a
+T1-vs-T2 comparison at 1x, 2x and 4x.
 
 ## Not done / not verified in phase 0
 
