@@ -11,7 +11,8 @@ p:close()
 table.sort(files)
 
 -- SANDBOX_SKIP_SLOW=1 leaves out the whole-fleet scenario runs (minutes each); name them in a pattern to run them anyway.
-local SLOW = { ["sandbox/tests/test_scenarios.lua"] = true, ["sandbox/tests/test_speed.lua"] = true, ["sandbox/tests/test_incidents.lua"] = true }
+local SLOW = { ["sandbox/tests/test_scenarios.lua"] = true, ["sandbox/tests/test_speed.lua"] = true, ["sandbox/tests/test_incidents.lua"] = true,
+  ["sandbox/tests/test_determinism_full.lua"] = true }
 local skip_slow = os.getenv("SANDBOX_SKIP_SLOW") == "1"
 
 local pass, fail = 0, 0

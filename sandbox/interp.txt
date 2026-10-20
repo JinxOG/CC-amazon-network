@@ -1,1 +1,1 @@
-G:/TurtleOS-Sandbox/interpreter/lua52.exe
+G:/TurtleOS-Sandbox/interpreter/lua52_det.exe

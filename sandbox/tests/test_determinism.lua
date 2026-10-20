@@ -41,4 +41,19 @@ return {
     t.ok(c.trace and #c.trace > 1000, "seed 7 wrote no trace:\n" .. c.out)
     t.ok(a.trace ~= c.trace, "seeds 42 and 7 gave the same trace")
   end,
+
+  ["tables keyed by tables iterate in the same order in separate processes"] = function(t)
+    local interp = H.read("sandbox/interp.txt"):gsub("%s+$", "")
+    local script = H.tmpdir() .. "/order.lua"
+    local f = assert(io.open(script, "wb"))
+    f:write("local t={} for i=1,200 do t[{}]=i end local o={} for _,v in pairs(t) do o[#o+1]=v end print(table.concat(o,','))")
+    f:close()
+    local seen = {}
+    for i = 1, 3 do
+      local p = io.popen('""' .. interp .. '" "' .. script .. '""')
+      seen[i] = p:read("*a"); p:close()
+    end
+    t.ok(#seen[1] > 100, "no output: " .. seen[1])
+    t.eq(seen[1], seen[2]); t.eq(seen[1], seen[3])
+  end,
 }

@@ -9,7 +9,7 @@
   var cv = document.getElementById('c'), g = cv.getContext('2d');
   var model = { turtles: [], zones: [], depot: null };
   window.__markers = [];
-  var view = null, drag = null;
+  var view = null, drag = null, fitted = false;
   function fit() {
     var xs = [], zs = [];
     model.turtles.forEach(function (t) { xs.push(t.x); zs.push(t.z); });
@@ -32,15 +32,20 @@
       z.cells.forEach(function (c) { g.fillStyle = FILL[c.state]; g.fillRect(sx(c.x1), sz(c.z1), (c.x2 - c.x1) * view.s, (c.z2 - c.z1) * view.s); });
       var b = z.bounds; g.strokeStyle = '#74c0fc'; g.strokeRect(sx(b.x1), sz(b.z1), (b.x2 - b.x1) * view.s, (b.z2 - b.z1) * view.s);
     });
+    var placed = [];
     model.turtles.forEach(function (t) {
       g.fillStyle = t.colour; g.globalAlpha = t.online ? 1 : 0.4;
       g.beginPath(); g.arc(sx(t.x), sz(t.z), 4, 0, 6.2832); g.fill(); g.globalAlpha = 1;
-      g.fillStyle = '#e9ecef'; g.font = '10px sans-serif'; g.fillText(t.id, sx(t.x) + 6, sz(t.z) + 3);
+      var lx = sx(t.x) + 6, lz = sz(t.z) + 3;
+      if (placed.some(function (p) { return Math.abs(p[0] - lx) < 40 && Math.abs(p[1] - lz) < 11; })) return;
+      placed.push([lx, lz]);
+      g.fillStyle = '#e9ecef'; g.font = '10px sans-serif'; g.fillText(t.id, lx, lz);
     });
   }
   function refresh() {
     fetch('/state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) {
       model = buildMapModel(s);
+      if (!fitted && (model.turtles.length || model.zones.length)) { fitted = true; view = null; }
       window.__markers = model.turtles.map(function (t) { return { id: t.id, x: t.x, z: t.z, role: t.role, colour: t.colour }; });
       draw();
     }).catch(function () { /* silent */ });

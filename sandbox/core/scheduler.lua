@@ -55,7 +55,24 @@ end
 
 -- Runs until nothing is left ("idle"), the time limit ("until"), the event limit
 -- ("max_events") or stop() returns true ("stopped").
+--
+-- Garbage collection is part of what makes two runs differ: Lua's collector is driven by bytes allocated, and the
+-- stand-in's wall-clock state flush (and anything else that allocates by real time) moves its steps around, which
+-- shifted instruction counts and so simulated time (review 1: same seed, three different traces). So while a run is
+-- going the collector is stopped and a full collection happens every GC_EVERY events - a point that depends only on
+-- the simulation.
+local GC_EVERY = 50000
+
 function Scheduler:run(opts)
+  local gc_was_running = collectgarbage("isrunning")
+  collectgarbage("stop")
+  local ok, res = pcall(self.run_loop, self, opts)
+  if gc_was_running then collectgarbage("restart") end
+  if not ok then error(res, 0) end
+  return res
+end
+
+function Scheduler:run_loop(opts)
   opts = opts or {}
   local n = 0
   while true do
@@ -73,6 +90,9 @@ function Scheduler:run(opts)
     self.clock:set(t)
     fn()
     n = n + 1
+    self.events_run = (self.events_run or 0) + 1
+    if self.events_run % GC_EVERY == 0 then collectgarbage("collect") end
+    if n % 64 == 0 and self.standin then self.standin:poll_flush() end
     if self.on_step and (t - (self.last_step or 0) >= 100 or n % 64 == 0) then
       self.last_step = t
       self.on_step()

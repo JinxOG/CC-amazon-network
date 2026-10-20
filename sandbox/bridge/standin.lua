@@ -18,7 +18,7 @@ local CC_RESTART_GAP_MS = 20 * 1000
 local LOG_DISPLAY_MAX = 200
 local TURTLE_DISPLAY_MAX = 30
 local LOG_DEDUPE_MAX = 5000
-local FLUSH_WALL_SECONDS = 1.0   -- at most this often in real time, so the live view lags a second but the simulator is not slowed
+local FLUSH_WALL_SECONDS = tonumber(os.getenv("SANDBOX_FLUSH_S")) or 1.0   -- at most this often in real time, so the live view lags a second but the simulator is not slowed
 
 local BRIDGE_OWNED = { locations = true, players = true, updatedAt = true, storageSource = true, storageAt = true }
 local EXPLICITLY_MERGED = { turtles = true, jobs = true, version = true, storage = true, storageTs = true,
@@ -207,9 +207,15 @@ function Standin:flush()
   self.last_flush_wall = os.clock()
 end
 
+-- Called from inside a computer's coroutine, where every VM instruction is charged to that computer as computation
+-- time: deciding to write the file from the wall clock here would make simulated time depend on real time. So this
+-- only marks the state dirty; the scheduler calls poll_flush between events, outside any computer.
 function Standin:maybe_flush()
   self.dirty_state = true
-  if os.clock() - self.last_flush_wall >= FLUSH_WALL_SECONDS then self:flush() end
+end
+
+function Standin:poll_flush()
+  if self.dirty_state and os.clock() - self.last_flush_wall >= FLUSH_WALL_SECONDS then self:flush() end
 end
 
 -- Storage ----------------------------------------------------------------------------------------
