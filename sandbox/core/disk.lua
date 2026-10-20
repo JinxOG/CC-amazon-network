@@ -172,4 +172,16 @@ function Disk:copy(from, to)
   return self:write(to, self:read(from))
 end
 
+-- Copies every file of this disk into `other` (another Disk), replacing what is there.
+function Disk:copy_all_to(other)
+  local function walk(cc)
+    for _, name in ipairs(self:list(cc) or {}) do
+      local child = cc == "" and name or (cc .. "/" .. name)
+      if self:isdir(child) then walk(child)
+      else other:write(child, self:read(child) or "") end
+    end
+  end
+  walk("")
+end
+
 return Disk

@@ -34,6 +34,12 @@ end
 
 function World:meta() return self.meta_t end
 
+-- Turns this world into a copy of `other` (a snapshot restore), keeping the object that everything points at.
+function World:replace_with(other)
+  self.chunks, self.absent, self.meta_t, self.dir = other.chunks, other.absent, other.meta_t, other.dir
+  self.occupants, self.containers, self.block_periph = {}, {}, nil
+end
+
 function World:chunk_of(x, z) return math.floor(x / 16), math.floor(z / 16) end
 
 local function default_block(terrain, y)

@@ -73,6 +73,10 @@ function Scheduler:run(opts)
     self.clock:set(t)
     fn()
     n = n + 1
+    if self.on_step and (t - (self.last_step or 0) >= 100 or n % 64 == 0) then
+      self.last_step = t
+      self.on_step()
+    end
     if self.pace and n % 64 == 0 then
       local target = (t - self.pace.sim0) / 1000 / self.pace.speed
       while os.clock() - self.pace.wall0 < target do end

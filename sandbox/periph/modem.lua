@@ -34,6 +34,12 @@ function M.place(comp, side)
   end
   comp:attach(side, "modem", methods, function() methods.closeAll() end)
   comp.peripherals[side].is_open = function(ch) return open[ch] == true end
+  comp.peripherals[side].channels = function()
+    local out = {}
+    for ch in pairs(open) do out[#out + 1] = ch end
+    table.sort(out)
+    return out
+  end
 end
 
 local MODEM_ITEMS = {

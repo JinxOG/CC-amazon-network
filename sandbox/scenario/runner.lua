@@ -8,6 +8,8 @@ local CodeDir = require("core.code_dir")
 local Synth = require("world.synth")
 local World = require("world.world")
 require("faults.faults") -- adds the fault calls to Sim
+require("control.control") -- ... and the control calls
+require("control.snapshot")
 
 local Runner = {}
 
@@ -74,12 +76,22 @@ function Runner.run(scenario_path, opts)
     Fleet.provision(sim, layout)
     sim.t0 = sim.clock:now()
     if opts.speed then sim.sched:set_pace(opts.speed) end
-    scenario.steps(sim)
+    if not opts.no_steps then scenario.steps(sim) end
   end)
   sim.sim_ms, sim.wall_s = sim.clock:now() - sim0, os.clock() - wall0
   sim.wall_finished = os.date("%Y-%m-%d %H:%M:%S")
   sim:flush()
   return sim, ok, err
+end
+
+-- A sim started from a snapshot folder, for interactive use.
+function Runner.from_snapshot(dir)
+  local run_dir = string.format("%s/run/%s-repl", data_root(), os.date("%Y%m%d-%H%M%S"))
+  require("core.disk").new(run_dir)
+  local sim = Sim.new{ world = World.new_empty(), run_dir = run_dir, code_dir = CodeDir.prepare("worktree:.", run_dir), seed = 1 }
+  sim.scenario_path, sim.code_spec, sim.scenario = dir, "worktree:.", { world = "snapshot" }
+  sim:restore_from(dir)
+  return sim
 end
 
 return Runner

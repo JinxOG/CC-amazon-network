@@ -145,6 +145,8 @@ function Sim:add_computer(spec)
       require("periph.modem").track_equipment(comp)
     end
   end
+  comp.spec = spec
+  if spec.pos and spec.pos.x then comp.home_pos = { x = spec.pos.x, y = spec.pos.y, z = spec.pos.z, facing = spec.pos.facing } end
   self.by_id[spec.id] = comp
   self.by_name[comp.name] = comp
   return comp
@@ -162,25 +164,22 @@ function Sim:expect(cond, message)
   return cond and true or false
 end
 
-function Sim:run_for(ms) return self.sched:run{ until_ms = self.clock:now() + ms } end
-
--- Runs until cond() is true or timeout_ms of simulated time passes. Returns true if cond held.
-function Sim:run_until(cond, timeout_ms)
-  local limit = self.clock:now() + timeout_ms
-  while self.clock:now() < limit do
-    if cond() then return true end
-    local step = math.min(1000, limit - self.clock:now())
-    self.sched:run{ until_ms = self.clock:now() + step }
-  end
-  return cond() and true or false
+function Sim:run_for(ms)
+  if self.paused then return "paused" end
+  return self.sched:run{ until_ms = self.clock:now() + ms, stop = function() return self.paused end }
 end
 
-function Sim:status()
-  local rows = {}
-  for _, c in ipairs(self.sched.computers) do
-    rows[#rows + 1] = { name = c.name, role = c.role, state = c.state, pos = c.pos }
+-- Runs until cond() is true or timeout_ms of simulated time passes. Returns true if cond held.
+-- A number instead of a function means "to that many ms after the scenario started" (timeout_ms is ignored).
+function Sim:run_until(cond, timeout_ms)
+  if type(cond) == "number" then return self:run_until_time(cond) end
+  local limit = self.clock:now() + (timeout_ms or 24 * 3600 * 1000)
+  while self.clock:now() < limit and not self.paused do
+    if cond() then return true end
+    local step = math.min(1000, limit - self.clock:now())
+    self.sched:run{ until_ms = self.clock:now() + step, stop = function() return self.paused end }
   end
-  return rows
+  return cond() and true or false
 end
 
 return Sim

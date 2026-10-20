@@ -130,7 +130,7 @@ end
 function Ender:container(freq, block_name)
   local inv = self:inventory(freq)
   return {
-    freq = freq, inventory = inv,
+    freq = freq, inventory = inv, block_name = block_name or "enderstorage:ender_chest",
     put = function(_, stack) return inv:put(stack) end,
     take = function(_, n, name) return inv:take(n, name) end,
     as_item = function() return { name = block_name or "enderstorage:ender_chest", count = 1, frequency = freq } end,
@@ -141,7 +141,7 @@ end
 function Ender.plain_chest(block_name)
   local inv = Inventory.new(SLOTS)
   return {
-    inventory = inv,
+    inventory = inv, block_name = block_name, plain = true,
     put = function(_, stack) return inv:put(stack) end,
     take = function(_, n, name) return inv:take(n, name) end,
     as_item = function() return { name = block_name, count = 1 } end,

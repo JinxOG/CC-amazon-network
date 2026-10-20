@@ -85,7 +85,9 @@ function Radio:transmit(from_comp, side, channel, reply, msg)
         end
         local label = string.format("%s -> %s ch=%d type=%s", from_comp.name, comp.name, channel, tostring(mtype or "?"))
         sched:trace("radio " .. label .. (drop and " dropped" or " delivered"))
-        for _, fn in ipairs(self.listeners) do fn{ t = now, from = from_comp.name, to = comp.name, channel = channel, type = mtype, dropped = drop } end
+        for _, fn in ipairs(self.listeners) do
+          fn{ t = now, arrive_ms = (not drop) and (now + latency) or nil, from = from_comp.name, to = comp.name, channel = channel, type = mtype, dropped = drop }
+        end
         if not drop then
           local ev = { "modem_message", mname, channel, reply, deep_copy(copy), distance(from_comp, comp) }
           sched:at(now + latency, function() comp:queue_event(ev) end)

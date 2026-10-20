@@ -9,6 +9,6 @@ cmd="$1"; shift
 case "$cmd" in
   test)       exec "$interp" sandbox/tests/run.lua "$@" ;;
   check)      exec "$interp" sandbox/tools/check_interp.lua "$@" ;;
-  run|view)   exec "$interp" sandbox/sim.lua "$cmd" "$@" ;;
+  run|view|repl) exec "$interp" sandbox/sim.lua "$cmd" "$@" ;;
   *)          echo "sim: unknown command '$cmd' (try: run, test, view, check)" >&2; exit 2 ;;
 esac

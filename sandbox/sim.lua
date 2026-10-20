@@ -1,6 +1,7 @@
 -- Command line for the sandbox. Run through the launcher:  sandbox/sim <command> ...
 --   run <scenario.lua> [--seed N] [--speed max|N] [--code worktree:<p>|rev:<r>] [--only a,b] [--world dir]
 --                      [--run-dir dir]
+--   repl <scenario.lua|snapshot-dir>   interactive: one command per line from stdin, starts paused
 --   test [pattern]          the sandbox's own tests
 --   view <run_dir> [port]   the live view: a read-only file server and the dashboard page (default port 3101)
 package.path = "sandbox/?.lua;" .. package.path
@@ -56,6 +57,29 @@ if cmd == "run" then
   for _, e in ipairs(sim.expectations or {}) do print((e.ok and "PASS " or "FAIL ") .. e.message) end
   if not ok then print("scenario error: " .. tostring(err)) end
   os.exit(ok and 0 or 1)
+elseif cmd == "repl" then
+  local target = arg[2]
+  if not target then usage() end
+  Safety.check_config({ unpack(arg) }, "command line")
+  local Runner = require("scenario.runner")
+  local Repl = require("control.repl")
+  local Report = require("report.report")
+  local sim
+  local probe = io.open(target .. "/snapshot.lua", "rb")
+  if probe then
+    probe:close()
+    sim = Runner.from_snapshot(target)
+  else
+    local ok, err
+    sim, ok, err = Runner.run(target, { no_steps = true })
+    if not ok then print("could not start the scenario: " .. tostring(err)); os.exit(1) end
+  end
+  print("run folder: " .. sim.run_dir)
+  Repl.run(sim, io.stdin, io.stdout)
+  sim.sim_ms = sim.clock:now() - (sim.t0 or 0)
+  sim.wall_s = sim.wall_s or 0
+  Report.write(sim, { ok = true }, { skip_tools = true })
+  os.exit(0)
 elseif cmd == "view" then
   local run_dir, port = arg[2], arg[3] or "3101"
   if not run_dir then usage() end
