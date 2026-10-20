@@ -5,10 +5,11 @@ local Computer = {}
 Computer.__index = Computer
 
 Computer.QUEUE_MAX = 256
-Computer.REBOOT_MS = 1000 -- Task 4 takes this from TIMINGS.reboot_ms
+local TIMINGS = require("timings")
+Computer.REBOOT_MS = TIMINGS.reboot_ms
 
--- Replaced by CCEnv.build in Task 4. Tests may pass their own env_builder.
-Computer.default_env_builder = function() return setmetatable({}, { __index = _G }) end
+-- Tests may pass their own env_builder.
+Computer.default_env_builder = function(comp) return require("cc.env").build(comp) end
 
 function Computer.new(opts)
   local self = setmetatable({}, Computer)
@@ -26,6 +27,19 @@ end
 
 function Computer:clock() return self.sched.clock:now() end
 
+-- This computer's own "now": scheduler time plus computation it has run but not yet been charged for.
+function Computer:now() return self.sched.clock:now() + math.floor(self.cost_ms) end
+
+-- A coroutine inside this computer; every one counts instructions toward cost_ms.
+function Computer:new_co(fn)
+  local co = coroutine.create(fn)
+  local every = TIMINGS.instr_hook_every
+  debug.sethook(co, function()
+    self.cost_ms = self.cost_ms + every * TIMINGS.ns_per_instr / 1e6 * (self.cost_factor or 1)
+  end, "", every)
+  return co
+end
+
 function Computer:print(text)
   self.output[#self.output + 1] = { t = self:clock(), text = text }
 end
@@ -41,7 +55,7 @@ function Computer:boot()
   if not fn then
     self.state = "off"; self:print("startup.lua: " .. tostring(err)); return
   end
-  self.co = coroutine.create(fn)
+  self.co = self:new_co(fn)
   self.state = "waiting"
   self.sched:trace(self.name .. " boot")
   self:resume({})
