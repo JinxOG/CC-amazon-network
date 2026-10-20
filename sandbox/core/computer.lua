@@ -99,7 +99,11 @@ end
 function Computer:resume(ev)
   local gen = self.gen
   self.state = "running"
+  local t0 = os.clock()
   local ok, res = coroutine.resume(self.co, (table.unpack or unpack)(ev))
+  local spent = os.clock() - t0
+  self.wall_s = (self.wall_s or 0) + spent       -- real time spent running this computer, for the speed report
+  if spent > (self.max_resume_s or 0) then self.max_resume_s = spent; self.max_resume_at = self.sched.clock:now() end
   if self.gen ~= gen then return end -- shut down or rebooted from inside
   if not ok then
     self:print(tostring(res)); self.state = "off"; self.co = nil
@@ -111,6 +115,7 @@ function Computer:resume(ev)
   end
   self.filter = res
   local cost = math.ceil(self.cost_ms)
+  self.cost_total_ms = (self.cost_total_ms or 0) + cost
   self.cost_ms = 0
   if cost > 0 then
     self.state = "busy"

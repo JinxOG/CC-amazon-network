@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sandbox launcher. Usage: sandbox/sim test [pattern]
+# Sandbox launcher. Usage: sandbox/sim <run|test|view|check> ...
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 export SANDBOX_DATA="${SANDBOX_DATA:-G:/TurtleOS-Sandbox}"
@@ -7,7 +7,8 @@ interp="$(tr -d '\r\n' < "$here/interp.txt")"
 cd "$root" || exit 1
 cmd="$1"; shift
 case "$cmd" in
-  test)  exec "$interp" sandbox/tests/run.lua "$@" ;;
-  check) exec "$interp" sandbox/tools/check_interp.lua "$@" ;;
-  *)     echo "sim: unknown command '$cmd' (try: test, check)" >&2; exit 2 ;;
+  test)       exec "$interp" sandbox/tests/run.lua "$@" ;;
+  check)      exec "$interp" sandbox/tools/check_interp.lua "$@" ;;
+  run|view)   exec "$interp" sandbox/sim.lua "$cmd" "$@" ;;
+  *)          echo "sim: unknown command '$cmd' (try: run, test, view, check)" >&2; exit 2 ;;
 esac

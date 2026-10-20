@@ -64,6 +64,7 @@ function Standin.new(opts)
   self.down = false           -- bridge_down fault
   self.updates = 0
   self.watchers = {}
+  self.job_lines = {}   -- server lines about jobs and zones, for the report (first 500)
   self.state = {
     turtles = OBJ(), jobs = {}, version = JSON.NULL, storage = {}, storageTs = 0, mineZones = OBJ(),
     serverLog = {}, turtleLogs = OBJ(), players = {}, locations = OBJ(), updatedAt = JSON.NULL,
@@ -145,6 +146,9 @@ function Standin:ingest_logs(body)
           self:note_continuity(source, e)
           local line = format_line(source, e)
           lines[#lines + 1] = line
+          if source == "server" and #self.job_lines < 500 and (line:find("Job ", 1, true) or line:find("Zone job_", 1, true)) then
+            self.job_lines[#self.job_lines + 1] = (line:gsub("\n$", ""))
+          end
           for _, w in ipairs(self.watchers) do
             if line:find(w.pattern, 1, true) then w.count = w.count + 1 end
           end

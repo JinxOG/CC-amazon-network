@@ -15,6 +15,11 @@ function Scheduler.new(opts)
   return self
 end
 
+-- Slows the run so simulated time advances at most `speed` times faster than the wall clock.
+function Scheduler:set_pace(speed)
+  self.pace = speed and { speed = speed, wall0 = os.clock(), sim0 = self.clock:now() } or nil
+end
+
 function Scheduler:add(comp) self.computers[#self.computers + 1] = comp; comp.sched = self end
 
 function Scheduler:at(t_ms, fn)
@@ -68,6 +73,10 @@ function Scheduler:run(opts)
     self.clock:set(t)
     fn()
     n = n + 1
+    if self.pace and n % 64 == 0 then
+      local target = (t - self.pace.sim0) / 1000 / self.pace.speed
+      while os.clock() - self.pace.wall0 < target do end
+    end
   end
 end
 

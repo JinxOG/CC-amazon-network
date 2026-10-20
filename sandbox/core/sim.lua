@@ -52,6 +52,8 @@ function Sim.new(opts)
   self.by_id, self.by_name = {}, {}
   self.interventions = {}
   self.faults = {}
+  self.initial_storage = {}
+  for k, v in pairs(sched.storage.amounts) do self.initial_storage[k] = v end
 
   -- turtles carried as items can be placed in the world and picked up again
   local previous_place = sched.hooks.place
