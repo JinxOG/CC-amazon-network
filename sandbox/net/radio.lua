@@ -32,6 +32,7 @@ function Radio.new(opts)
   self.rng = opts.rng:fork("radio")
   self.rules, self.next_rule = {}, 0
   self.listeners = {}   -- trace_radio taps: function(record)
+  self.batches = {}     -- arrival time -> deliveries waiting for it
   return self
 end
 
@@ -90,7 +91,19 @@ function Radio:transmit(from_comp, side, channel, reply, msg)
         end
         if not drop then
           local ev = { "modem_message", mname, channel, reply, deep_copy(copy), distance(from_comp, comp) }
-          sched:at(now + latency, function() comp:queue_event(ev) end)
+          -- One scheduler event per arrival time, not one per receiver: a broadcast reaches a dozen computers at once.
+          local when = now + latency
+          local batch = self.batches[when]
+          if not batch then
+            batch = { n = 0 }
+            self.batches[when] = batch
+            sched:at(when, function()
+              self.batches[when] = nil
+              for i = 1, batch.n, 2 do batch[i]:queue_event(batch[i + 1]) end
+            end)
+          end
+          batch[batch.n + 1], batch[batch.n + 2] = comp, ev
+          batch.n = batch.n + 2
         end
       end
     end

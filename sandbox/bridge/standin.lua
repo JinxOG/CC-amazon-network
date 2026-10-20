@@ -150,7 +150,10 @@ function Standin:ingest_logs(body)
             self.job_lines[#self.job_lines + 1] = (line:gsub("\n$", ""))
           end
           for _, w in ipairs(self.watchers) do
-            if line:find(w.pattern, 1, true) then w.count = w.count + 1 end
+            if line:find(w.pattern, 1, true) then
+              w.count = w.count + 1
+              if w.lines and #w.lines < 2000 then w.lines[#w.lines + 1] = (line:gsub("\n$", "")) end
+            end
           end
         end
       end
@@ -214,14 +217,16 @@ end
 function Standin:accept_storage(payload, source)
   local list, ts = payload.storage, payload.storageTs
   local st = self.state
-  if type(list) ~= "table" then return { ok = false, reason = "storage is not an array" } end
+  if getmetatable(list) == JSON.RAW then
+    if list.text:sub(1, 1) ~= "[" then return { ok = false, reason = "storage is not an array" } end
+  elseif type(list) ~= "table" then return { ok = false, reason = "storage is not an array" } end
   if type(ts) ~= "number" or ts ~= ts or ts <= 0 then return { ok = false, reason = "missing or unusable storageTs" } end
   if type(st.storageTs) == "number" and st.storageTs > 0 and ts < st.storageTs then
     return { ok = false, reason = "older than the snapshot already held" }
   end
   st.storage, st.storageTs, st.storageSource = list, ts, source
   st.storageAt = self.sched.clock:now()
-  return { ok = true, items = #list, source = source }
+  return { ok = true, items = (getmetatable(list) == JSON.RAW) and 0 or #list, source = source }
 end
 
 -- Commands ---------------------------------------------------------------------------------------
@@ -248,8 +253,8 @@ end
 
 -- Counts server/turtle log lines containing `pattern` (plain text) from now on. Returns a table whose
 -- .count grows; scenarios use it to wait for "Job complete".
-function Standin:watch_log(pattern)
-  local w = { pattern = pattern, count = 0 }
+function Standin:watch_log(pattern, store)
+  local w = { pattern = pattern, count = 0, lines = store and {} or nil }
   self.watchers[#self.watchers + 1] = w
   return w
 end
@@ -263,10 +268,14 @@ end
 
 -- Requests ---------------------------------------------------------------------------------------
 
+-- Members that are carried as text and never parsed: the storage list is about 500 items, re-sent every few
+-- seconds, and nothing here needs to look inside it.
+local RAW_KEYS = { storage = true }
+
 local function decode_body(body)
   if body == nil or body == "" then return OBJ() end
-  local v, err = JSON.decode(body, nil, true)
-  if v == nil and err then return nil end
+  local v, err = JSON.decode_object(body, RAW_KEYS, nil, true)
+  if v == nil then return nil end
   return v
 end
 

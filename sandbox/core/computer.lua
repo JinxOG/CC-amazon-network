@@ -36,8 +36,10 @@ function Computer:now() return self.sched.clock:now() + math.floor(self.cost_ms)
 function Computer:new_co(fn)
   local co = coroutine.create(fn)
   local every = TIMINGS.instr_hook_every
+  local profile = Computer.profile
   debug.sethook(co, function()
     self.cost_ms = self.cost_ms + every * TIMINGS.ns_per_instr / 1e6 * (self.cost_factor or 1)
+    if profile then profile(self) end
   end, "", every)
   return co
 end
@@ -118,14 +120,32 @@ function Computer:resume(ev)
   self.cost_total_ms = (self.cost_total_ms or 0) + cost
   self.cost_ms = 0
   if cost > 0 then
+    -- Busy for `cost` ms of virtual time. No wake-up event is scheduled unless something is waiting for it: an
+    -- event that arrives meanwhile asks for one (see queue_event). Most busy periods pass with nobody calling.
     self.state = "busy"
-    self.sched:after(cost, function()
-      if self.gen ~= gen then return end
-      self.state = "waiting"; self:drain()
-    end)
+    self.busy_until = self.sched.clock:now() + cost
+    if #self.queue > 0 then self:schedule_wake() end
   else
     self.state = "waiting"; self:drain()
   end
+end
+
+-- At busy_until, if still the same boot and still busy, go back to listening and take what queued up.
+function Computer:schedule_wake()
+  if self.wake_pending then return end
+  self.wake_pending = true
+  local gen = self.gen
+  self.sched:at(self.busy_until, function()
+    self.wake_pending = false
+    if self.gen ~= gen or self.state ~= "busy" then return end
+    self.state = "waiting"; self:drain()
+  end)
+end
+
+-- "busy" is only a claim until the clock passes busy_until; this is what the computer is really doing now.
+function Computer:effective_state()
+  if self.state == "busy" and self.sched.clock:now() >= self.busy_until then return "waiting" end
+  return self.state
 end
 
 function Computer:drain()
@@ -152,7 +172,16 @@ function Computer:queue_event(ev)
     return false
   end
   self.queue[#self.queue + 1] = ev
-  if self.state == "waiting" then self:drain() end
+  local st = self.state
+  if st == "waiting" then
+    self:drain()
+  elseif st == "busy" then
+    if self.sched.clock:now() >= self.busy_until then
+      self.state = "waiting"; self:drain()
+    else
+      self:schedule_wake()
+    end
+  end
   return true
 end
 

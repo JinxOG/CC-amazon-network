@@ -89,6 +89,7 @@ function Sim:restore_from(dir)
   for _, c in ipairs(sched.computers) do if c.state ~= "off" then c:shutdown() end end
   sched.computers, self.by_id, self.by_name = {}, {}, {}
   sched.heap = Heap.new()
+  sched.radio.batches = {}
   sched.hooks.pickup_cleanup = nil
 
   -- world

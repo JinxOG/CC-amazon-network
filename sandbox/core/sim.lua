@@ -52,6 +52,7 @@ function Sim.new(opts)
   self.by_id, self.by_name = {}, {}
   self.t0 = self.clock:now()   -- fault times count from here; the runner moves it to the start of the scenario
   self.interventions = {}
+  self.results = {}   -- values a scenario wants to hand to the test or report that ran it
   self.faults = {}
   self.initial_storage = {}
   for k, v in pairs(sched.storage.amounts) do self.initial_storage[k] = v end
@@ -155,6 +156,9 @@ end
 function Sim:dispatch(cmd) return self.sched.standin:dispatch(cmd) end
 
 function Sim:watch_log(pattern) return self.sched.standin:watch_log(pattern) end
+
+-- Like watch_log, but keeps the matching lines (the first 2000) in .lines.
+function Sim:capture_log(pattern) return self.sched.standin:watch_log(pattern, true) end
 
 -- A scenario's own check. A failed expectation is recorded (and shown in the report), not thrown.
 function Sim:expect(cond, message)

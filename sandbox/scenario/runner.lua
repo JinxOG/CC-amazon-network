@@ -7,6 +7,7 @@ local Fleet = require("core.fleet")
 local CodeDir = require("core.code_dir")
 local Synth = require("world.synth")
 local World = require("world.world")
+local Import = require("core.import_layout")
 require("faults.faults") -- adds the fault calls to Sim
 require("control.control") -- ... and the control calls
 require("control.snapshot")
@@ -60,12 +61,16 @@ function Runner.run(scenario_path, opts)
   if world_spec == nil or world_spec == "synthetic" then world = Synth.generate(scenario.world_seed or seed)
   else world = World.open(world_spec) end
 
+  local imported = world_spec and world_spec ~= "synthetic" and Import.is_import(world_spec)
   local sim = Sim.new{ world = world, run_dir = run_dir, code_dir = code_dir, seed = seed,
-    start_ms = scenario.start_ms, storage = scenario.storage, config = { scenario = scenario_path, code = opts.code } }
+    start_ms = scenario.start_ms or world:meta().start_ms, storage = scenario.storage or (imported and Import.storage(world_spec)) or nil,
+    config = { scenario = scenario_path, code = opts.code } }
+  if imported then Import.install_chests(sim, world_spec) end
   sim.scenario, sim.scenario_path, sim.code_spec = scenario, scenario_path, opts.code or "worktree:."
 
   local layout = scenario.layout
   if type(layout) == "function" then layout = layout(load_waypoints(code_dir)) end
+  if not layout and imported then layout, sim.skipped_computers = Import.layout(world_spec, world) end
   layout = layout or Synth.layout(load_waypoints(code_dir), { miners = scenario.miners, workers = scenario.workers })
   if opts.only then layout = apply_only(layout, opts.only); sim.only = opts.only end
   sim.layout = layout

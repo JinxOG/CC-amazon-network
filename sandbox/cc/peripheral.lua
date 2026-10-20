@@ -4,6 +4,7 @@ local CCEnv = require("cc.env")
 local Blocks = require("periph.blocks")
 require("periph.geo_scanner")
 require("periph.rs_bridge")
+require("periph.kv_storage")
 
 local M = {}
 

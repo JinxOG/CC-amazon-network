@@ -19,6 +19,13 @@ function Loading.new(opts)
   for _, a in ipairs((self.world:meta().base_loaded) or {}) do
     self.base[#self.base + 1] = { math.floor(a[1] / 16), math.floor(a[2] / 16), math.floor(a[3] / 16), math.floor(a[4] / 16) }
   end
+  -- chunks kept loaded one by one (the world's chunk-loader tickets): a lookup table, not a rectangle list
+  self.base_cols = {}
+  for _, c in ipairs(self.world:meta().base_loaded_chunks or {}) do
+    local col = self.base_cols[c[1]]
+    if not col then col = {}; self.base_cols[c[1]] = col end
+    col[c[2]] = true
+  end
   return self
 end
 
@@ -28,6 +35,8 @@ function Loading:is_loaded(cx, cz)
   for _, r in ipairs(self.forced_unload) do if in_rect(r, cx, cz) then return false end end
   for _, r in ipairs(self.forced_load) do if in_rect(r, cx, cz) then return true end end
   for _, r in ipairs(self.base) do if in_rect(r, cx, cz) then return true end end
+  local col = self.base_cols[cx]
+  if col and col[cz] then return true end
   for _, t in pairs(self.tickets) do
     if math.abs(cx - t.cx) <= t.r and math.abs(cz - t.cz) <= t.r then return true end
   end

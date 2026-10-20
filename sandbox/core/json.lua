@@ -10,6 +10,11 @@ JSON.NULL = setmetatable({}, { __tostring = function() return "null" end })
 
 function JSON.object(t) return setmetatable(t or {}, JSON.OBJECT) end
 
+-- A piece of JSON text carried through untouched: encode writes it back as it is. For big fields nobody needs
+-- to look inside (the storage list), so they are never parsed into tables.
+JSON.RAW = { __json = "raw" }
+function JSON.raw(text) return setmetatable({ text = text }, JSON.RAW) end
+
 local find, sub, byte, format = string.find, string.sub, string.byte, string.format
 
 local ESC = { ['"'] = '\\"', ["\\"] = "\\\\", ["\b"] = "\\b", ["\f"] = "\\f", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t" }
@@ -21,50 +26,78 @@ end
 
 local floor = math.floor
 
-local function encode(v, seen)
+-- Appends the JSON for v to buf (a list of string pieces) after position n and returns the new n. One shared
+-- buffer and one table.concat at the end: no intermediate string per table. This runs inside the computers
+-- (it is textutils.serialiseJSON) and in the stand-in, thousands of times a simulated hour.
+local function encode(v, buf, n, seen)
   local t = type(v)
-  if t == "string" then return '"' .. escape(v) .. '"'
+  if t == "string" then
+    n = n + 1
+    if find(v, '[%c"\\]') then buf[n] = '"' .. escape(v) .. '"' else buf[n] = '"' .. v .. '"' end
+    return n
   elseif t == "number" then
+    n = n + 1
     if v ~= v or v == math.huge or v == -math.huge then error("Unserializable number: " .. tostring(v), 0) end
-    if v == floor(v) and v < 1e15 and v > -1e15 then return format("%.0f", v) end
-    return tostring(v)
-  elseif t == "boolean" then return tostring(v)
-  elseif t == "nil" then return "null"
+    if v < 1e15 and v > -1e15 and v % 1 == 0 then buf[n] = format("%.0f", v) else buf[n] = tostring(v) end
+    return n
+  elseif t == "boolean" then
+    n = n + 1; buf[n] = v and "true" or "false"; return n
+  elseif t == "nil" then
+    n = n + 1; buf[n] = "null"; return n
   elseif t == "table" then
-    if v == JSON.NULL then return "null" end
+    if v == JSON.NULL then n = n + 1; buf[n] = "null"; return n end
+    local mt = getmetatable(v)
+    if mt == JSON.RAW then n = n + 1; buf[n] = v.text; return n end
     if seen[v] then error("Cannot serialize table with repeated entries", 0) end
     seen[v] = true
-    local forced_object = getmetatable(v) == JSON.OBJECT
-    local n, count = 0, 0
-    for k in pairs(v) do
-      count = count + 1
-      if type(k) == "number" and k == floor(k) and k >= 1 and k > n then n = k end
+    local forced_object = mt == JSON.OBJECT
+    local len = #v
+    local is_array = false
+    if len > 0 and not forced_object and next(v, len) == nil then
+      -- a sequence 1..len and nothing else
+      is_array = true
+      for k in pairs(v) do
+        if type(k) ~= "number" or k < 1 or k > len or k % 1 ~= 0 then is_array = false; break end
+      end
     end
-    local out
-    if count == 0 then out = forced_object and "{}" or "[]"
-    elseif n == count and not forced_object then
-      local items = {}
-      for i = 1, n do items[i] = encode(v[i], seen) end
-      out = "[" .. table.concat(items, ",") .. "]"
+    if is_array then
+      n = n + 1; buf[n] = "["
+      for i = 1, len do
+        if i > 1 then n = n + 1; buf[n] = "," end
+        n = encode(v[i], buf, n, seen)
+      end
+      n = n + 1; buf[n] = "]"
+    elseif next(v) == nil then
+      n = n + 1; buf[n] = forced_object and "{}" or "[]"
     else
-      local items, m = {}, 0
+      n = n + 1; buf[n] = "{"
+      local first = true
       for k, item in pairs(v) do
         local kt = type(k)
         if kt ~= "string" and kt ~= "number" then
           error("Tables with keys of type " .. kt .. " cannot be serialized as JSON", 0)
         end
-        m = m + 1
-        items[m] = '"' .. escape(kt == "string" and k or tostring(k)) .. '":' .. encode(item, seen)
+        if first then first = false else n = n + 1; buf[n] = "," end
+        if kt == "string" and not find(k, '[%c"\\]') then
+          n = n + 1; buf[n] = '"' .. k .. '":'
+        else
+          n = n + 1; buf[n] = '"' .. escape(kt == "string" and k or tostring(k)) .. '":'
+        end
+        n = encode(item, buf, n, seen)
       end
-      out = "{" .. table.concat(items, ",") .. "}"
+      n = n + 1; buf[n] = "}"
     end
     seen[v] = nil
-    return out
+    return n
   end
   error("Unserializable type " .. t, 0)
 end
 
-function JSON.encode(v) return encode(v, {}) end
+function JSON.encode(v)
+  local buf = {}
+  local n = encode(v, buf, 0, {})
+  return table.concat(buf, "", 1, n)
+end
 
 local function utf8_char(cp)
   if cp < 0x80 then return string.char(cp)
@@ -74,6 +107,90 @@ local function utf8_char(cp)
 end
 
 local UNESCAPE = { b = "\b", f = "\f", n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["/"] = "/" }
+
+-- The end of the JSON value that starts at `pos` (the index just after it), found without building anything:
+-- strings are hopped over, brackets counted. Returns nil if the text is cut off.
+local function skip_value(s, pos)
+  local c = byte(s, pos)
+  if c == 34 then -- string
+    local i = pos + 1
+    while true do
+      local q = find(s, '["\\]', i)
+      if not q then return nil end
+      if byte(s, q) == 34 then return q + 1 end
+      i = q + 2
+    end
+  elseif c == 123 or c == 91 then -- object or array
+    -- Fast path: Lua's own balanced-bracket matcher runs in C. It cannot tell a bracket inside a string from a
+    -- real one, so the result is accepted only if the quotes inside pair up and what follows is a JSON separator;
+    -- otherwise the careful scan below decides.
+    local s0, e0 = find(s, c == 91 and "%b[]" or "%b{}", pos)
+    if s0 == pos then
+      -- Take the strings out (escaped characters first, then whole strings): what is left must be exactly one
+      -- balanced group. A bracket hiding inside a string would have fooled the match above and fails this.
+      local flat = sub(s, pos, e0):gsub("\\.", ""):gsub('"[^"]*"', "")
+      if not find(flat, '"', 1, true) then -- every string was whole
+        local _, open_b = flat:gsub("{", "")
+        local _, close_b = flat:gsub("}", "")
+        local _, open_a = flat:gsub("%[", "")
+        local _, close_a = flat:gsub("%]", "")
+        if open_b == close_b and open_a == close_a then return e0 + 1 end
+      end
+    end
+    local depth, i = 0, pos
+    while true do
+      local q = find(s, '[%[%]{}"]', i)
+      if not q then return nil end
+      local b = byte(s, q)
+      if b == 34 then
+        local e = skip_value(s, q)
+        if not e then return nil end
+        i = e
+      else
+        if b == 123 or b == 91 then depth = depth + 1 else depth = depth - 1 end
+        i = q + 1
+        if depth == 0 then return i end
+      end
+    end
+  end
+  local e = find(s, "[,}%]%s]", pos)
+  return e or #s + 1
+end
+
+-- Decodes a JSON object, except that the members named in `raw_keys` stay unparsed (as JSON.raw). The body is
+-- scanned once at the top level only. Returns the table, or nil and a message.
+function JSON.decode_object(s, raw_keys, null_value, mark_objects)
+  local pos = find(s, "[^ \t\r\n]", 1)
+  if not pos or byte(s, pos) ~= 123 then return nil, "not a JSON object" end
+  local out = mark_objects and setmetatable({}, JSON.OBJECT) or {}
+  pos = pos + 1
+  while true do
+    pos = find(s, "[^ \t\r\n]", pos)
+    if not pos then return nil, "cut off" end
+    local c = byte(s, pos)
+    if c == 125 then return out end
+    if c == 44 then pos = pos + 1
+    elseif c == 34 then
+      local kend = skip_value(s, pos)
+      if not kend then return nil, "cut off" end
+      local key = JSON.decode(sub(s, pos, kend - 1))
+      pos = find(s, "[^ \t\r\n]", kend)
+      if not pos or byte(s, pos) ~= 58 then return nil, "expected ':'" end
+      pos = find(s, "[^ \t\r\n]", pos + 1)
+      if not pos then return nil, "cut off" end
+      local vend = skip_value(s, pos)
+      if not vend then return nil, "cut off" end
+      local text = sub(s, pos, vend - 1)
+      if raw_keys and raw_keys[key] then out[key] = JSON.raw(text)
+      else
+        local v, err = JSON.decode(text, null_value, mark_objects)
+        if v == nil and err then return nil, err end
+        out[key] = v
+      end
+      pos = vend
+    else return nil, "unexpected character in object" end
+  end
+end
 
 -- Returns the value, or nil and a message. null becomes null_value (nil by default).
 -- Hot path (the stand-in decodes every push the server makes): scans with string.find, not char by char.

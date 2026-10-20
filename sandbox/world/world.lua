@@ -62,8 +62,15 @@ local function load_chunk(self, cx, cz)
     local f = io.open(chunk_path(self, cx, cz), "rb")
     if f then
       c = { blocks = {} }
-      for idx, name in f:read("*a"):gmatch("(%d+)\t([^\n]*)\n") do
+      local text = f:read("*a")
+      -- "<index>\t<name>" is one block ("-" = air dug out of default terrain);
+      -- "r\t<lx>\t<lz>\t<y0>\t<y1>\t<name>" is a run of the same block up a column (what the importer writes)
+      for idx, name in text:gmatch("(%d+)\t([^\n]*)\n") do
         if name == "-" then c.blocks[tonumber(idx)] = false else c.blocks[tonumber(idx)] = name end
+      end
+      for lx, lz, y0, y1, name in text:gmatch("r\t(%d+)\t(%d+)\t(%-?%d+)\t(%-?%d+)\t([^\n]*)\n") do
+        local base = lz * 16 + lx
+        for y = tonumber(y0), tonumber(y1) do c.blocks[(y - MIN_Y) * 256 + base] = name end
       end
       f:close()
       self.chunks[key] = c

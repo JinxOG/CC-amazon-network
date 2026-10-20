@@ -255,7 +255,7 @@ function Sim:queue(node)
     if p.channels then for _, ch in ipairs(p.channels()) do channels[#channels + 1] = ch end end
   end
   table.sort(channels)
-  return { state = c.state, length = #c.queue, events = events, timers = timers, channels = channels, filter = c.filter }
+  return { state = c:effective_state(), length = #c.queue, events = events, timers = timers, channels = channels, filter = c.filter }
 end
 
 -- The world ------------------------------------------------------------------------------------------
@@ -398,7 +398,7 @@ function Sim:status()
   local rows = {}
   local st = self.sched.standin.state
   for _, c in ipairs(self.sched.computers) do
-    local row = { name = c.name, role = c.role, kind = c.kind, state = c.state, queue = #c.queue,
+    local row = { name = c.name, role = c.role, kind = c.kind, state = c:effective_state(), queue = #c.queue,
       pos = c.pos and c.pos.x and { x = c.pos.x, y = c.pos.y, z = c.pos.z, facing = c.pos.facing } or nil }
     if c.tstate then
       row.fuel = c.tstate.fuel

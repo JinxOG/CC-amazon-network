@@ -78,4 +78,9 @@ end
 -- Wire a kv_storage peripheral straight onto a computer (the block name is not needed for this).
 function KV.attach(comp, side) comp:attach(side or "back", "kv_storage", KV.methods(comp)) end
 
+-- The CloudSolutions block beside a computer is a kv_storage peripheral too.
+require("periph.blocks").register("cloudsolutions:kv_storage", function(comp)
+  return { type = "kv_storage", methods = KV.methods(comp) }
+end)
+
 return KV

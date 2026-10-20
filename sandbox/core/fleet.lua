@@ -18,15 +18,28 @@ end
 -- with `installed = true` already have their disk (an imported world).
 function Fleet.provision(sim, layout, opts)
   opts = opts or {}
-  local installing = {}
+  local installing, from_disk = {}, {}
   for _, spec in ipairs(layout) do
     local comp = sim:add_computer(spec)
+    if spec.installed then
+      -- an imported computer arrives with its own disk, exactly as the world had it
+      if spec.disk_from then
+        local Disk = require("core.disk")
+        Disk.new(spec.disk_from):copy_all_to(Disk.new(comp.disk, comp.quota))
+      end
+      if spec.on ~= false and not spec.carried then from_disk[#from_disk + 1] = comp end
+    end
     if spec.role and not spec.installed then
       if not INSTALL_ROLES[spec.role] then error("unknown role " .. tostring(spec.role) .. " for computer " .. spec.id, 0) end
       comp.disk_obj = comp.disk_obj or require("core.disk").new(comp.disk, comp.quota)
       comp.disk_obj:write("startup.lua", bootstrap(spec.role))
       installing[#installing + 1] = { comp = comp, spec = spec }
     end
+  end
+
+  for _, comp in ipairs(from_disk) do
+    sim.sched.loading:apply(comp)
+    if comp.state == "off" and not comp.frozen then comp:boot() end
   end
 
   -- let every installer run; carried turtles are only booted for this and then put back in the pack

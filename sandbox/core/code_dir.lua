@@ -20,7 +20,8 @@ function CodeDir.prepare(spec, run_dir, repo)
     if not value:match("^[%w%^~._/-]+$") then error("bad git revision: " .. value, 0) end
     local dest = run_dir .. "/code"
     Disk.new(dest)
-    local cmd = string.format("git -C %s archive %s | tar -x -C %s", sh_quote(repo or "."), value, sh_quote(dest))
+    -- the revision is quoted: ^ means "parent" to git but "escape" to the Windows shell
+    local cmd = string.format("git -C %s archive %s | tar -x -C %s", sh_quote(repo or "."), sh_quote(value), sh_quote(dest))
     local ok = os.execute(cmd)
     if ok ~= 0 and ok ~= true then error("git archive failed for " .. value, 0) end
     local probe = io.open(dest .. "/install.lua", "rb")
