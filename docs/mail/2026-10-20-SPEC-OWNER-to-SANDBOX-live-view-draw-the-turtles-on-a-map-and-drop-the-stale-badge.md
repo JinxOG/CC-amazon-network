@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Live view - draw the turtles on a map, and drop the STALE badge
 date: 2026-10-20
-status: open
+status: closed
 ---
 
 # Live view - draw the turtles on a map, and drop the STALE badge
