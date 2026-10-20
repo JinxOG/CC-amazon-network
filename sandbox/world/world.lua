@@ -18,7 +18,9 @@ local function index_of(x, y, z)
 end
 
 function World.new_empty(meta)
-  return setmetatable({ chunks = {}, absent = {}, meta_t = meta or {}, dir = nil }, World)
+  -- occupants: "x,y,z" -> the turtle standing there. containers: "x,y,z" -> chest-like object with
+  -- :put(stack) -> moved and :take(n, name) -> stack. Neither is saved with the blocks.
+  return setmetatable({ chunks = {}, absent = {}, meta_t = meta or {}, dir = nil, occupants = {}, containers = {} }, World)
 end
 
 function World.open(dir)
