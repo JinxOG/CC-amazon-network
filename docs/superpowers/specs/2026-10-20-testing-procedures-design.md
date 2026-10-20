@@ -2,6 +2,9 @@
 
 - **Status:** design. Written 2026-10-20 by the spec owner and revised the same day to the user's three-layer
   procedure.
+- **Not in force yet** (user, 2026-10-20): no card moves on simulator evidence until all three layers exist.
+  Until then the simulator is used to investigate and is made more accurate (the fidelity-gaps card), and
+  layer 2 is built next. Cards keep moving as they do today.
 - **Origin:** the user, 2026-10-20.
   1. An engineer tests the change and the simulator proves it.
   2. A sped-up local test server proves it in real Minecraft, and the card moves to
