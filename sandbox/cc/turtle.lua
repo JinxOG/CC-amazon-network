@@ -115,17 +115,29 @@ function M.install(comp, E)
   -- inventory --------------------------------------------------------------------------------
   local function max_count(s) return s.maxCount or 64 end
 
+  -- two stacks merge only when they are the same item with the same data (an ender chest's frequency,
+  -- a turtle's identity), not merely the same name
+  local function same_item(a, b)
+    return a.name == b.name and a.frequency == b.frequency and a.computer_id == b.computer_id
+      and a.displayName == b.displayName
+  end
+
+  -- Picked-up items go into the inventory starting at the SELECTED slot and wrapping round: first onto
+  -- matching stacks, then into empty slots (this is why a dug-up chest lands where the turtle was pointing).
   local function store(stack)  -- returns the part that did not fit
     local left = stack.count
-    for s = 1, 16 do
-      local i = st.inv[s]
-      if left > 0 and i and i.name == stack.name and i.count < max_count(i) then
-        local n = math.min(left, max_count(i) - i.count); i.count = i.count + n; left = left - n
-      end
-    end
-    for s = 1, 16 do
-      if left > 0 and not st.inv[s] then
-        local n = math.min(left, max_count(stack)); st.inv[s] = copy_stack(stack, n); left = left - n
+    local start = st.selected
+    for pass = 1, 2 do
+      for k = 0, 15 do
+        local s = (start - 1 + k) % 16 + 1
+        local i = st.inv[s]
+        if left > 0 then
+          if pass == 1 and i and same_item(i, stack) and i.count < max_count(i) then
+            local n = math.min(left, max_count(i) - i.count); i.count = i.count + n; left = left - n
+          elseif pass == 2 and not i then
+            local n = math.min(left, max_count(stack)); st.inv[s] = copy_stack(stack, n); left = left - n
+          end
+        end
       end
     end
     return left
@@ -172,7 +184,7 @@ function M.install(comp, E)
       n = n or src.count
       if n <= 0 then return true end
       local d = st.inv[dest]
-      if d and d.name ~= src.name then return false end
+      if d and not same_item(d, src) then return false end
       n = math.min(n, src.count)
       local space = max_count(src) - (d and d.count or 0)
       if space <= 0 then return false end
@@ -281,7 +293,14 @@ function M.install(comp, E)
       local b = block_at(x, y, z)
       if not b then return false, "Nothing to dig here" end
       if b == "minecraft:bedrock" or protected(x, y, z) then return false, "Cannot break block" end
-      if world.occupants and world.occupants[key(x, y, z)] then return false, "Cannot break block" end
+      local occupant = world.occupants and world.occupants[key(x, y, z)]
+      if occupant then
+        local picked = sched.hooks and sched.hooks.pickup and sched.hooks.pickup(comp, occupant)
+        if not picked then return false, "Cannot break block" end
+        local left = store(picked)
+        if left > 0 then st.dropped[#st.dropped + 1] = { name = picked.name, count = left } end
+        return true
+      end
       local container = world.containers and world.containers[key(x, y, z)]
       local drop
       if container and container.as_item then drop = container:as_item() else drop = { name = DROPS[b] or b, count = 1 } end
@@ -308,11 +327,11 @@ function M.install(comp, E)
       if sched.hooks and sched.hooks.place then
         local handled, hname, herr = sched.hooks.place(comp, copy_stack(i, 1), x, y, z, dir)
         if handled then
-          if not hname then return false, herr or "Cannot place block here" end
+          if hname == nil then return false, herr or "Cannot place block here" end
           placed_name = hname
         end
       end
-      world:set(x, y, z, placed_name)
+      if placed_name then world:set(x, y, z, placed_name) end
       i.count = i.count - 1
       if i.count <= 0 then st.inv[st.selected] = nil end
       return true

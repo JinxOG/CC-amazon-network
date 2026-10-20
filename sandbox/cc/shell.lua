@@ -30,7 +30,10 @@ function M.install(comp, E)
       running[#running + 1] = file
       local args = { ... }
       local n = select("#", ...)
+      local saved_arg = E.arg
+      E.arg = args -- programs read their arguments from `arg` as well as `...`
       local ok, res = pcall(fn, unpack(args, 1, n))
+      E.arg = saved_arg
       running[#running] = nil
       if not ok then
         if res == "Terminated" then error(res, 0) end

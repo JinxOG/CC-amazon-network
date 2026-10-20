@@ -63,6 +63,7 @@ function Standin.new(opts)
   self.extra_latency_ms = 0   -- bridge_slow fault
   self.down = false           -- bridge_down fault
   self.updates = 0
+  self.watchers = {}
   self.state = {
     turtles = OBJ(), jobs = {}, version = JSON.NULL, storage = {}, storageTs = 0, mineZones = OBJ(),
     serverLog = {}, turtleLogs = OBJ(), players = {}, locations = OBJ(), updatedAt = JSON.NULL,
@@ -142,7 +143,11 @@ function Standin:ingest_logs(body)
         self:note_seq(source, e)
         if not self:already_written(dedupe_key(source, e)) then
           self:note_continuity(source, e)
-          lines[#lines + 1] = format_line(source, e)
+          local line = format_line(source, e)
+          lines[#lines + 1] = line
+          for _, w in ipairs(self.watchers) do
+            if line:find(w.pattern, 1, true) then w.count = w.count + 1 end
+          end
         end
       end
     end
@@ -235,6 +240,14 @@ function Standin:command(type_, params)
   end
   self.pending[#self.pending + 1] = OBJ({ type = type_, params = params or OBJ(), ts = now })
   return 200, { ok = true }
+end
+
+-- Counts server/turtle log lines containing `pattern` (plain text) from now on. Returns a table whose
+-- .count grows; scenarios use it to wait for "Job complete".
+function Standin:watch_log(pattern)
+  local w = { pattern = pattern, count = 0 }
+  self.watchers[#self.watchers + 1] = w
+  return w
 end
 
 -- For scenarios: same effect as POST /command.

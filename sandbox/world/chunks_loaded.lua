@@ -80,6 +80,14 @@ function Loading:recompute()
   for _, comp in ipairs(self.sched.computers) do self:apply(comp) end
 end
 
+-- A turtle was picked up: its ticket goes with it.
+function Loading:release(comp)
+  for identity, t in pairs(self.tickets) do
+    if t.owner == comp then self.tickets[identity] = nil end
+  end
+  self:recompute()
+end
+
 -- Called when a computer moved (or changed equipment). A chunky turtle's ticket follows it.
 function Loading:update_pos(comp, equipment_changed)
   local st = comp.tstate

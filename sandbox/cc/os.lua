@@ -103,9 +103,22 @@ function M.install(comp, E)
       comp:print(partial .. text:sub(1, nl - 1)); partial = ""; text = text:sub(nl + 1)
     end
   end
+  -- Reading a line waits for typed characters. Nothing types in a sandbox run, so it waits for ever,
+  -- eating every event it is offered, exactly as CC's read does.
+  local function read_line()
+    local buf = {}
+    while true do
+      local ev = pack(O.pullEvent())
+      if ev[1] == "char" then buf[#buf + 1] = ev[2]
+      elseif ev[1] == "key" and ev[2] == 257 then return table.concat(buf) end
+    end
+  end
+  E.read = function() return read_line() end
   E.io = CCEnv.api(comp, "io", {
     write = function(...) for i = 1, select("#", ...) do E.write((select(i, ...))) end end,
+    read = function() return read_line() end,
   })
+  E.keys = { enter = 257, backspace = 259, tab = 258, space = 32, up = 265, down = 264, left = 263, right = 262 }
 end
 
 return M

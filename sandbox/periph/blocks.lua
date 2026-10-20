@@ -31,12 +31,18 @@ local function neighbour(comp, side)
   return p.x + DX[d], p.y, p.z + DZ[d]
 end
 
+Blocks.neighbour = neighbour
+
 local function block_descriptor(comp, side)
   local world = comp.sched.world
   if not world then return nil end
   local x, y, z = neighbour(comp, side)
   if not x then return nil end
   local key = x .. "," .. y .. "," .. z
+  local occupant = world.occupants and world.occupants[key]
+  if occupant and occupant ~= comp and Blocks.occupant_descriptor then
+    return Blocks.occupant_descriptor(comp, occupant)
+  end
   local name = world:get(x, y, z)
   if not name then return nil end
 

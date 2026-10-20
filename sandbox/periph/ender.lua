@@ -31,7 +31,7 @@ function Inventory:put(stack)
   local left = stack.count
   for s = 1, self.n do
     local i = self.slots[s]
-    if left > 0 and i and i.name == stack.name and i.count < STACK then
+    if left > 0 and i and i.name == stack.name and i.frequency == stack.frequency and i.count < STACK then
       local m = math.min(left, STACK - i.count); i.count = i.count + m; left = left - m
     end
   end

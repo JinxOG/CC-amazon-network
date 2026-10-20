@@ -91,12 +91,15 @@ function M.install(comp, E)
     end)
   end
 
+  -- like CC, returns true once the request is under way (the answer arrives as an event)
   function H.request(url, body, headers, binary)
     if type(url) == "table" then
       local t = url
-      return request(t.url, t.body, t.headers, t.binary, t.method)
+      request(t.url, t.body, t.headers, t.binary, t.method)
+      return true
     end
-    return request(url, body, headers, binary)
+    request(url, body, headers, binary)
+    return true
   end
 
   -- get blocks like CC's: it waits for the answer and every other event meanwhile is lost
@@ -122,8 +125,9 @@ function M.install(comp, E)
   E.http = CCEnv.api(comp, "http", H)
 
   -- wget, as the updater and installer call it: shell.run("wget", url, dest)
+  -- (the builtin table is shared by every computer, so it must use the CALLER's environment, E2)
   require("cc.shell").builtins.wget = function(c, E2, url, dest)
-    local res, err = H.get(url)
+    local res, err = E2.http.get(url)
     if not res then c:print("Failed to download " .. tostring(url) .. ": " .. tostring(err)); return false end
     local content = res.readAll() or ""
     res.close()

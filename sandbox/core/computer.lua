@@ -90,7 +90,9 @@ end
 
 function Computer:reboot()
   self:shutdown()
-  self.sched:after(Computer.REBOOT_MS, function() self:boot() end)
+  local gen = self.gen
+  -- a shutdown in the meantime (the chunk unloaded, a player switched it off) cancels the reboot
+  self.sched:after(Computer.REBOOT_MS, function() if self.gen == gen then self:boot() end end)
 end
 
 -- Runs the coroutine with an event until it yields, then charges its computation cost.

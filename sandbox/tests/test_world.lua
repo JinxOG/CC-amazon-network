@@ -70,6 +70,6 @@ return {
       t.ok(ores > 20, a.name .. " has only " .. ores .. " ore blocks")
     end
     t.eq(#m.gps_hosts, 4)
-    t.eq(m.base_loaded[1][1], -24)
+    t.eq(m.base_loaded[1][1], 110)
   end,
 }

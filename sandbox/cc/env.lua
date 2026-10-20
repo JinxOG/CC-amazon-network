@@ -7,9 +7,9 @@ local CCEnv = {}
 
 -- Global names that exist in CC but are not built yet: touching one is an error, not nil.
 local KNOWN_CC_GLOBALS = {
-  "term", "colors", "colours", "keys", "window", "paintutils", "vector", "rednet",
+  "term", "colors", "colours", "window", "paintutils", "vector", "rednet",
   "redstone", "rs", "multishell", "disk", "help", "pocket", "commands", "fs", "textutils",
-  "shell", "settings", "http", "gps", "parallel", "peripheral", "turtle", "read", "printError",
+  "shell", "settings", "http", "gps", "parallel", "peripheral", "turtle", "printError",
 }
 
 function CCEnv.unimplemented(comp, api)
