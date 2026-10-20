@@ -36,7 +36,7 @@ for _ in $(seq 1 50); do
 done
 [ -n "$up" ] && ok "server starts" || { fail "server starts"; cat "$tmp/server.out"; exit 1; }
 
-curl -s "http://127.0.0.1:$port/state" | grep -q '"serverTime":1790067600000' && ok "state returns the fixture" || fail "state returns the fixture"
+curl -s "http://127.0.0.1:$port/state" | grep -q '"node_1":{"status":"IDLE"}' && ok "state returns the fixture" || fail "state returns the fixture"
 
 n="$(curl -s "http://127.0.0.1:$port/logs/2026-09-22?contains=marker&limit=10" | python -c 'import json,sys; d=json.load(sys.stdin); print(d["returned"])')"
 [ "$n" = "3" ] && ok "logs contains filter" || fail "logs contains filter (got $n)"
@@ -53,6 +53,20 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$port/u
 [ "$code" = "405" ] && ok "writes are refused" || fail "writes are refused (got $code)"
 
 curl -s "http://127.0.0.1:$port/" | grep -qi "<html" && ok "dashboard page is served" || fail "dashboard page is served"
+
+# the dashboard's STALE badge compares updatedAt with the browser's clock: a freshly written state must read fresh
+cat > "$tmp/state.json" <<'EOT'
+{"turtles":{"node_1":{"role":"MINER","x":1950,"y":70,"z":-2620,"lastSeen":1790067590000},"node_2":{"role":"DELIVERY","x":160,"y":64,"z":-2800},"node_3":{"role":"SUPPORT","x":1960,"y":70,"z":-2615}},"jobs":[],"mineZones":{"j1":{"bounds":{"x1":1904,"z1":-2640,"x2":2000,"z2":-2608},"phase":"SURVEY","surveyDone":1,"surveyTotal":3}},"updatedAt":1790067599000,"serverTime":1790067600000}
+EOT
+age="$(curl -s "http://127.0.0.1:$port/state" | python -c 'import json,sys,time; d=json.load(sys.stdin); print(int(abs(time.time()*1000-d["updatedAt"])/1000), int(abs(time.time()*1000-d["turtles"]["node_1"]["lastSeen"])/1000))')"
+set -- $age
+[ "$1" -le 8 ] && [ "$2" -le 12 ] && ok "state timestamps read fresh while being written" || fail "state timestamps read fresh while being written (age $age)"
+
+code="$(curl -s -o "$tmp/frame.html" -w '%{http_code}' "http://127.0.0.1:$port/dynmap-frame")"
+if [ "$code" = "200" ] && grep -qi "<html" "$tmp/frame.html" && grep -q "not Dynmap" "$tmp/frame.html"; then ok "dynmap-frame is served"; else fail "dynmap-frame is served (got $code)"; fi
+
+n="$(curl -s "http://127.0.0.1:$port/state" | node -e 'const m=require("./sandbox/bridge/map_model.js");let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const r=m.buildMapModel(JSON.parse(b));console.log(r.turtles.length,r.zones.length,r.zones[0].cells.filter(c=>c.state==="done").length)})')"
+[ "$n" = "3 1 1" ] && ok "map model has one marker per turtle" || fail "map model has one marker per turtle (got $n)"
 
 # loopback only
 listen="$(netstat -ano 2>/dev/null | grep ":$port " | grep -i LISTEN | head -1)"

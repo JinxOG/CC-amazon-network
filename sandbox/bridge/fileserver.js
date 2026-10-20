@@ -165,6 +165,22 @@ function serveStatic(res, urlPath) {
     });
 }
 
+// The dashboard's "synced Ns ago / STALE" badge compares the state's updatedAt (simulated time) with the browser's wall
+// clock, so a sandbox run would always read stale. Shift every timestamp by (file written - serverTime): a run being
+// written reads fresh, and ages normally once writing stops. The file on disk is untouched.
+const SHIFT_KEYS = ['updatedAt', 'storageTs', 'storageAt']; // serverTime stays simulated: gate_check and ack_loss date their windows from it
+function shiftToWallClock(data, mtimeMs) {
+    try {
+        const s = JSON.parse(data.toString('utf8'));
+        if (!s || typeof s.serverTime !== 'number' || !mtimeMs) return data;
+        const delta = Math.round(mtimeMs - s.serverTime);
+        for (const k of SHIFT_KEYS) if (typeof s[k] === 'number') s[k] += delta;
+        for (const t of Object.values(s.turtles || {})) if (t && typeof t.lastSeen === 'number') t.lastSeen += delta;
+        s.sandboxTimeShiftMs = delta;
+        return JSON.stringify(s);
+    } catch { return data; }
+}
+
 const server = http.createServer((req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'the sandbox file server is read-only' });
@@ -172,9 +188,24 @@ const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://127.0.0.1');
     const p = u.pathname;
     if (p === '/state') {
-        fs.readFile(path.join(runDir, 'state.json'), (err, data) => {
+        const file = path.join(runDir, 'state.json');
+        fs.readFile(file, (err, data) => {
             if (err) return sendJson(res, 503, { error: 'no state yet' });
             res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            let mtime = 0;
+            try { mtime = fs.statSync(file).mtimeMs; } catch { /* keep raw */ }
+            res.end(shiftToWallClock(data, mtime));
+        });
+    } else if (p === '/dynmap-frame') {
+        fs.readFile(path.join(__dirname, 'map_page.html'), (err, data) => {
+            if (err) return sendJson(res, 404, { error: 'not found' });
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+            res.end(data);
+        });
+    } else if (p === '/dynmap-model.js') {
+        fs.readFile(path.join(__dirname, 'map_model.js'), (err, data) => {
+            if (err) return sendJson(res, 404, { error: 'not found' });
+            res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' });
             res.end(data);
         });
     } else if (p === '/ping') {

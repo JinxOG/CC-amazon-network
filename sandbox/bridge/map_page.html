@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Sandbox map</title>
+<style>html,body{margin:0;height:100%;background:#1b1e24;overflow:hidden}canvas{display:block;width:100%;height:100%}
+#note{position:fixed;right:6px;bottom:4px;font:11px sans-serif;color:#9aa0aa;pointer-events:none}</style></head>
+<body><canvas id="c"></canvas><div id="note">Sandbox map - simulated world, not Dynmap</div>
+<script src="/dynmap-model.js"></script>
+<script>
+(function () {
+  var cv = document.getElementById('c'), g = cv.getContext('2d');
+  var model = { turtles: [], zones: [], depot: null };
+  window.__markers = [];
+  var view = null, drag = null;
+  function fit() {
+    var xs = [], zs = [];
+    model.turtles.forEach(function (t) { xs.push(t.x); zs.push(t.z); });
+    model.zones.forEach(function (z) { xs.push(z.bounds.x1, z.bounds.x2); zs.push(z.bounds.z1, z.bounds.z2); });
+    if (model.depot) { xs.push(model.depot.x1, model.depot.x2); zs.push(model.depot.z1, model.depot.z2); }
+    if (!xs.length) return { cx: 0, cz: 0, s: 1 };
+    var x1 = Math.min.apply(0, xs) - 40, x2 = Math.max.apply(0, xs) + 40, z1 = Math.min.apply(0, zs) - 40, z2 = Math.max.apply(0, zs) + 40;
+    return { cx: (x1 + x2) / 2, cz: (z1 + z2) / 2, s: Math.min(cv.width / (x2 - x1), cv.height / (z2 - z1)) };
+  }
+  function sx(x) { return cv.width / 2 + (x - view.cx) * view.s; }
+  function sz(z) { return cv.height / 2 + (z - view.cz) * view.s; }
+  var FILL = { pending: 'rgba(255,255,255,0.06)', assigned: 'rgba(255,159,67,0.35)', done: 'rgba(105,219,124,0.35)' };
+  function draw() {
+    cv.width = innerWidth; cv.height = innerHeight;
+    if (!view) view = fit();
+    g.clearRect(0, 0, cv.width, cv.height);
+    if (model.depot) { var d = model.depot; g.strokeStyle = '#ffd43b'; g.strokeRect(sx(d.x1), sz(d.z1), (d.x2 - d.x1) * view.s, (d.z2 - d.z1) * view.s);
+      g.fillStyle = '#ffd43b'; g.font = '11px sans-serif'; g.fillText('base / depot', sx(d.x1) + 3, sz(d.z1) - 4); }
+    model.zones.forEach(function (z) {
+      z.cells.forEach(function (c) { g.fillStyle = FILL[c.state]; g.fillRect(sx(c.x1), sz(c.z1), (c.x2 - c.x1) * view.s, (c.z2 - c.z1) * view.s); });
+      var b = z.bounds; g.strokeStyle = '#74c0fc'; g.strokeRect(sx(b.x1), sz(b.z1), (b.x2 - b.x1) * view.s, (b.z2 - b.z1) * view.s);
+    });
+    model.turtles.forEach(function (t) {
+      g.fillStyle = t.colour; g.globalAlpha = t.online ? 1 : 0.4;
+      g.beginPath(); g.arc(sx(t.x), sz(t.z), 4, 0, 6.2832); g.fill(); g.globalAlpha = 1;
+      g.fillStyle = '#e9ecef'; g.font = '10px sans-serif'; g.fillText(t.id, sx(t.x) + 6, sz(t.z) + 3);
+    });
+  }
+  function refresh() {
+    fetch('/state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) {
+      model = buildMapModel(s);
+      window.__markers = model.turtles.map(function (t) { return { id: t.id, x: t.x, z: t.z, role: t.role, colour: t.colour }; });
+      draw();
+    }).catch(function () { /* silent */ });
+  }
+  cv.addEventListener('wheel', function (e) { e.preventDefault(); if (!view) return; view.s *= e.deltaY < 0 ? 1.15 : 1 / 1.15; draw(); }, { passive: false });
+  cv.addEventListener('mousedown', function (e) { drag = [e.clientX, e.clientY]; });
+  addEventListener('mouseup', function () { drag = null; });
+  addEventListener('mousemove', function (e) { if (!drag || !view) return; view.cx -= (e.clientX - drag[0]) / view.s; view.cz -= (e.clientY - drag[1]) / view.s; drag = [e.clientX, e.clientY]; draw(); });
+  addEventListener('resize', function () { view = null; draw(); });
+  refresh(); setInterval(refresh, 2000);
+})();
+</script></body></html>
