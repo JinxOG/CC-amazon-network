@@ -1,7 +1,7 @@
 # Sandbox calibration against the live fleet
 
 - **Written:** 2026-10-20, by the sandbox builder. **Status:** step 1 (calibration from the live logs) done; step 2
-  (the forward run on the real server) is waiting for the user — instructions at the end.
+  (the forward run on the real server, W3's job_0206 of 2026-10-20) done, compared in section 3.
 - **Data:** the live bridge's `/state` read once and its log pages read once, both with the user's say-so on
   2026-10-20, saved under `G:\TurtleOS-Sandbox\storage\`. Nothing in the sandbox itself contacts the server. The
   figures can be re-derived: `python sandbox/tools/calibrate.py G:/TurtleOS-Sandbox/storage/live <run-folder> ...`.
@@ -50,25 +50,62 @@ contrast, does lose messages to filtered yields on the old code (2,135 of 22,255
 turtle_base's loop the acks go. The sandbox's turn rate for a parked worker is 0.9 turns/s on the old code and 0.34
 after step 3; check that against live logs of both eras.
 
-## 3. Forward calibration (spec 8.2) — what the user needs to do
+## 3. Forward calibration (spec 8.2): sandbox against the live server, 2026-10-20 (Task 25 step 2, done)
 
-The zone the user named: **x 1904..2000, z −2640..−2608**, mined with two miners.
+Same job both sides: `ORDER_MINE x1=1920 z1=-2624 x2=1984 z2=-2624 minerCount=2` (sector centres; the footprint
+1904,-2640,2000,-2608 is what the dashboard draws, and ordering the corners makes 15 sectors, see the mail of
+2026-10-20). Sandbox: `sandbox/scenarios/real_world_three_sectors.lua` on the 2026-10-18 17:00 world copy, current
+master. Live: W3's job_0206 on 1.9.148 (c63a7ab), dispatched 2026-10-20 17:26:25 UTC, report 2026-10-20 (7d98599).
+Both are one-miner jobs: the server gives one miner per 3 sectors and `minerCount` is only a ceiling.
 
-1. In the sandbox (done, redone 2026-10-20): `sandbox/sim run sandbox/scenarios/real_world_three_sectors.lua`. The
-   order must carry the sector **centres** `x1=1920 z1=-2624 x2=1984 z2=-2624`; the corners 1904,-2640,2000,-2608 are
-   the footprint the dashboard draws, and ordering them makes the server cut 5 x 3 = 15 sectors (twelve outside the
-   imported world). Result for the 3-sector order: survey done 24 min after dispatch, all 3 sectors mined 3 h 26 min
-   after dispatch, rescan finished by 3 h 44 min; one miner did the work; 4,172 ore from the first sector, 0 from
-   the others; 4,196 ore blocks in storage; 288x real time. The first (15-sector) result of 11,304 ore / 208x is void
-   as a calibration number (`real_world_six_hours.lua` still exists as the speed benchmark).
-2. On the real server (the user): order the same job — the same order (centres 1920,-2624 to 1984,-2624) — and let it run for the
-   same six hours, from a state like the backup's (all miners docked, storage as in `state-2026-10-19.json`).
-3. Compare: ore delivered, batches per hour, sectors done, messages sent and the ack loss from
-   `tools/ack_loss.py`. Expected differences: ack loss (section 2), and anything in the mod world the sandbox does
-   not model (the report's NOT MODELLED list).
+| | live | sandbox | sandbox vs live |
+|---|---|---|---|
+| sectors the zone was cut into | 3 | 3 | same |
+| miners dispatched | 1 (node_183) | 1 (node_178) | same count |
+| survey of 3 sectors done, after dispatch | 29 min 22 s | 24 min 16 s | -17% |
+| the two 0-ore sectors mined (each) | 3 min 32 s, 4 min 15 s | 3 min 10 s, 3 min 02 s | -20% |
+| the ore sector (1920,-2624) mined | 2 h 38 min | 2 h 56 min | +11% |
+| all 3 sectors mined, after dispatch | 3 h 15 min 25 s | 3 h 26 min 20 s | +5.6% |
+| rescan of 3 sectors | 11 min 38 s | 8 min 39 s | -26% |
+| re-mine of 3 sectors | 12 min 37 s | 9 min 24 s | -25% |
+| zone complete, after dispatch | 3 h 39 min 40 s | 3 h 44 min 24 s | +2.2% |
+| job complete (miner home), after dispatch | 3 h 53 min 41 s | 3 h 55 min 12 s | +0.6% |
+| `scan by` batch lines | 187 | 187 | same |
+| batches per hour (dispatch to job complete) | 48.0 | 47.7 | -0.6% |
+| median batch spacing | 50.0 s | 56.9 s | +14% |
+| ore mined (zone's own count) | 4,169 in 80 ore types | 4,172 in 81 types | +0.07% |
+| ore found | 4,448 | 4,458 | +0.2% |
+| ore by sector | 4,169 / 0 / 0 | 4,172 / 0 / 0 | same shape |
+| parked ack loss | 0.00% (29,819/29,820) | 0.03% (46,124/46,140) | within noise |
+| working ack loss | -0.41% | -0.43% | both counter artefacts: no measurable loss |
+| server restarts, unreachable warnings, recalls | 0 | 0 | same |
+| "Send failed (modem detached)" warnings | 3, each at a loader retrieval | 0 | **not reproduced** |
 
-Until step 2 is done, the sandbox's absolute numbers rest on the batch-cadence fit above and nothing else.
+(Live figures from W3's report; sandbox figures from the logs of the run in `G:/TurtleOS-Sandbox/run/rw3`. The sandbox's mining order of
+the three sectors differs from live (the server shuffles with the run's random numbers): live did the two 0-ore sectors
+first and the ore sector last, the sandbox the ore sector first. That does not change the totals.)
+
+What this says: the totals that matter for planning (time to finish the zone, ore, batches, ack loss) agree to within
+a few per cent; the phases do not agree as well (the sandbox's survey, scan-only phases and rescans run 17-26% faster,
+its ore-mining phase 11% slower, and its median batch spacing is 14% longer), which cancel in the total. Do not read
+the phase times as fitted. The 300 ms movement fit was made from batch cadence, so per-phase errors of this size are
+expected. A correction to an earlier note of mine: "sim 6% fast" compares the sandbox's *all sectors mined* (3 h 26 min)
+with the live *zone complete* (3 h 39 min); like for like, all sectors mined is 5.6% *slower* in the sandbox and zone
+complete is 2.2% slower.
+
+**A live behaviour the sandbox reproduces, for W1 to study there.** In both, the whole zone's ore came from one sector
+(1920,-2624: 4,169 live, 4,172 sandbox) and the other two sectors yielded 0; the rescan of all three said "ore remains";
+the re-mine of all three yielded 0. W3 mailed W1 on 2026-10-14 about 0-ore sectors (jobs 0191-0193). The sandbox
+produces it on the real world copy with the real fleet code, so it can be replayed and instrumented there. Measured,
+not explained: `sandbox/sim run sandbox/scenarios/real_world_three_sectors.lua`, then the server log lines
+`Sector (x,z) done by ... N ore mined`, `Rescan ... ore remains` and `Zone ... re-mining`.
+
+Still unverified after this comparison: the single-miner run does not test two-miner contention; the ack-loss
+comparison is the parked regime plus one working miner; the 3 "Send failed" warnings at loader retrievals are not
+reproduced (the sandbox does not log them).
 
 One artefact of starting from the backup: miner 178 was already out in the sky, mid-job, when the backup was made. In
 the sandbox it reboots away from the base with no loader it can recover and its jobs fail with `reboot_recovery`; the
 other four miners are docked and unaffected.
+(Seen in the first, 15-sector run. In the 3-sector run of section 3 the server dispatched to node_178 itself and it completed
+the whole job, so this artefact did not stop it there; live, node_178 was the frozen miner on the lane and W3's job went to node_183.)
