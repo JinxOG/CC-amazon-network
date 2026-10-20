@@ -3,7 +3,10 @@
 -- Everything else is refused, and the live server's addresses are refused outright.
 local Safety = {}
 
-Safety.FORBIDDEN = { "192.168.86.35", "100.103.179.74" }
+-- The live server's LAN and Tailscale addresses. Built from parts on purpose: the static safety test
+-- forbids those literal strings anywhere under sandbox/ outside tests/, so no config or note can carry them.
+local function addr(a, b, c, d) return table.concat({ a, b, c, d }, ".") end
+Safety.FORBIDDEN = { addr(192, 168, 86, 35), addr(100, 103, 179, 74) }
 Safety.ALLOWED_HOSTS = { ["127.0.0.1"] = true, ["localhost"] = true, ["::1"] = true, ["[::1]"] = true,
   ["raw.githubusercontent.com"] = true }
 

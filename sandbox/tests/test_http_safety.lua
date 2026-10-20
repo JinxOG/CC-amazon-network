@@ -59,7 +59,7 @@ return {
     ]])
     sched:run{ until_ms = 1000 }
     sched:close()
-    t.eq(out(c), "http_failure\thttp://example.com/steal\tsandbox: network closed|nil\tsandbox: network closed")
+    t.eq(out(c), "http_failure\thttp://example.com/steal\tsandbox: network closed|nil\tsandbox: network closed\tnil")
     local trace = H.read(dir .. "/trace.log")
     t.ok(trace:find("http blocked GET http://example.com/steal", 1, true), "no blocked line")
     t.ok(trace:find("http blocked GET http://192.168.86.35:3000/state", 1, true), "live server request should be traced")
