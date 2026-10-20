@@ -51,7 +51,7 @@ Map and STALE request: both in (d25ca99).
 2. Every section 7 fault exists, tested, test can fail: **met.** `tests/test_faults.lua`: each fault has a no-op counterpart that must fail; all in the 217.
 3. Forward calibration on the real server: **NOT met** (needs the user). Incidents reproduce on old code and not on the fix: **met**, `tests/test_incidents.lua` (slow set).
 4. gate_check and ack_loss against a sandbox run, changed only by the bridge-address option: **met.** `test_fileserver.sh` "gate_check/ack_loss completes against the fixture" and "default address unchanged"; the report runs both.
-5. Section 10 safety rules each tested: **met** (`tests/test_safety.lua`, static tests).
+5. Section 10 safety rules each tested: **met** (`tests/test_safety_static.lua`, `tests/test_http_safety.lua`).
 5a. Every 7.1 control action exists, tested, usable from a scenario and a plain shell: **met** (`tests/test_control.lua`; `printf ... | sandbox/sim repl` works). Interventions listed in the report.
 6. New board column: the spec owner's. The card moves to it at the end of each task I close.
 7. README, run in under five minutes: **met** (`sandbox/README.md`).
