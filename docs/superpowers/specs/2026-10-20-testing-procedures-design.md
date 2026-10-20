@@ -1,198 +1,257 @@
-# Testing procedures: simulator, local test server, live server
+# Testing procedures: three layers and a watcher
 
-- **Status:** design, written 2026-10-20 by the spec owner at the user's direction.
-- **Origin:** the user's proposal, 2026-10-20. Prove a change in the simulator first. Then prove it on a sped-up
-  test server on this PC, a real Minecraft copy of the live server. Only then does its card move to
-  "Done - not yet seen on the real server", and the live server has the final word.
-- **Builds on:** `2026-10-18-sandbox-simulator-design.md` (the simulator, called **T1** here) and
-  `2026-10-20-sandbox-calibration.md` (how far T1 matches the live fleet).
+- **Status:** design. Written 2026-10-20 by the spec owner and revised the same day to the user's three-layer
+  procedure.
+- **Origin:** the user, 2026-10-20.
+  1. An engineer tests the change and the simulator proves it.
+  2. A sped-up local test server proves it in real Minecraft, and the card moves to
+     **"Done - not server validated"**.
+  3. A **watcher** reads the live server's logs on a loop and validates each such card against conditions
+     the engineer wrote on it. If it worked, the card goes to Done. If not, it goes back to the engineer, who
+     works out with the simulator builder why layers 1 and 2 let it through.
+- **User decisions, 2026-10-20:**
+  - The local test server is a dedicated server; single player is only for watching.
+  - Code under test reaches it as a pinned GitHub commit.
+  - The modpack is the user's Modrinth instance, `SakuraPack 1.0.0`. It is kept identical to the server's
+    (mods, data packs, resources) by the sync program, so no pack download is needed.
+  - The 2026-10-18 world backup is current, because nobody has played since.
+- **Builds on:** `2026-10-18-sandbox-simulator-design.md` (the simulator, **T1**) and
+  `2026-10-20-sandbox-calibration.md` (T1 against the live fleet: within 1% on job time and ore on a live
+  three-sector job).
 
 ## 1. Why
 
 The live server is the bottleneck. One mining job takes hours, there is one fleet, and deploys need it idle.
-T1 cut a six-hour job to about a minute and matched a live three-sector job to within 1% on job time and ore.
-But T1 only knows the Minecraft rules someone wrote into it. It cannot find a bug that lives in a mechanic
-it does not model: drops, full inventories, liquids, falling blocks, item entities, mod peripherals.
-A real Minecraft server finds those, but runs only a few times faster than real time.
+T1 runs a six-hour job in about a minute, but it only knows the Minecraft rules someone wrote into it. A real
+Minecraft copy (**T2**) finds mechanics bugs, but runs only a few times faster than real time. And only the
+live server (**T3**) is the truth.
 
-So there are three tiers. Each proves what it is good at, and a card cannot skip a tier that its kind of
-change needs.
+So a change climbs the layers. Its final validation comes from the live logs, read by a watcher, against
+conditions written down before the change shipped.
 
-## 2. The three tiers
+## 2. The layers
 
-| Tier | What it is | Speed | Same result every run? | Good at | Blind to |
+| Layer | Where | Who runs it | Speed | Repeatable? | Proves |
 |---|---|---|---|---|---|
-| **T1 Simulator** | `sandbox/`: the real fleet files on a simulated world and clock | ~200-400x | Yes (same seed, same trace) | Messages, timing, dispatch, recovery, faults on demand, updates, long soaks, replaying incidents | Everything in its report's NOT MODELLED list |
-| **T2 Local test server** | A copy of the live modded server, running on this PC from a world backup | Unknown: measure first (section 6.8); expected a few times real time | No; comparable only by starting fresh each run (6.3) | Real Minecraft and mod mechanics, real peripherals, real `server.js`, real OTA install | Faults Minecraft cannot stage (6.6); real players; the server PC's own hardware and load |
-| **T3 Live server** | The real server and fleet | 1x | No | The truth | Nothing, but every test costs real hours and the fleet |
+| **1. Engineer + simulator (T1)** | `sandbox/` on this PC | the engineer who made the change | ~200-400x | yes, same seed gives the same trace | logic, messages, timing, dispatch, recovery, faults on demand, updates, long soaks |
+| **2. Local test server (T2)** | a dedicated copy of the live server on this PC (section 6) | the same engineer | measured first (6.8) | comparable when started fresh (6.3) | real Minecraft and mod mechanics, real peripherals, real `server.js`, real update path |
+| **3. Live validation (T3)** | the live server's logs | the **watcher** (section 5) | real time | no | that the fix worked where it matters |
 
-## 3. Which tier proves what
+## 3. What each layer must show
 
-A card's change is classified by **what could go wrong**, not by which file it touches. If it fits several rows,
-the strictest row applies.
+A change is classified by **what could go wrong**, not by which file it touches. If it fits several rows,
+the strictest applies.
 
-| Kind of change | Minimum proof before "Done - not yet seen on the real server" | Notes |
+| Kind of change | Layer 1 | Layer 2 |
 |---|---|---|
-| Messaging, timing, dispatch, job lifecycle, recovery after crash/restart/reboot, GPS handling, update/install logic | **T1 pass, then a T2 smoke run** | The T2 run proves it boots and works in real Minecraft. The faults themselves are proven in T1 |
-| A fix whose only trigger is a fault T2 cannot stage (radio loss, radio latency, see 6.6) | **T1 alone**, with the fault scenario in the evidence | The card says which fault and why T2 cannot stage it |
-| Mining, digging, ore handling, inventory, fuel, item transfer, chests, ender chests | **T2 pass** (T1 first if useful) | T1 guesses here; see its ASSUMPTIONS |
-| Movement through real terrain, pathing, flight lanes, chunk loading | **T2 pass** | |
-| Peripherals: Refined Storage bridge, geo scanner, cloud store, chunk loader mod | **T2 pass** | |
-| Performance or speed claims ("faster", "less CPU") | **T2 or T3 measurement** | T1's cost model is calibrated in total, not per function |
-| Bridge or dashboard (`server.js`, `public/`) | **T2 pass**: the real `server.js` runs locally against T2 (6.5) | UI changes also need a person to look at the page |
-| The simulator itself (`sandbox/`) | Its own tests + determinism check | Plus a T2 comparison when it changes a modelled mechanic |
-| Docs, tools that never touch the fleet | None | |
-| **Emergency** (fleet stranded, data at risk) | T3 directly, **with the user's OK** | The T1/T2 evidence is added afterwards, and the card says so |
+| Messaging, timing, dispatch, job lifecycle, crash/restart/reboot recovery, GPS handling, update/install logic | full proof, including the faults | a smoke run: boots, works in real Minecraft |
+| A fix whose only trigger is a fault T2 cannot stage (radio loss or latency, 6.6) | full proof, fault scenario attached | smoke run; the card names the fault left to T1 |
+| Mining, digging, ore, inventory, fuel, item transfer, chests, ender chests | optional, if it helps | **full proof** |
+| Movement through real terrain, pathing, flight lanes, chunk loading | optional | **full proof** |
+| Peripherals: Refined Storage bridge, geo scanner, cloud store, chunk loader | optional | **full proof** |
+| Performance or speed claims | indicative only | **measurement** (or a live measurement) |
+| Bridge or dashboard (`server.js`, `public/`) | contract tests | **full proof** with the real `server.js` (6.5); UI changes also need a person to look |
+| The simulator itself (`sandbox/`) | its tests and determinism check | a T2 comparison when it changes a modelled mechanic |
+| Docs, tools that never touch the fleet | none | none |
+| **Emergency** (fleet stranded, data at risk) | **with the user's OK**, straight to live; layers 1 and 2 added afterwards, and the card says so | |
 
-**A T1 pass alone never moves a card past In progress**, except for the fault-only row above.
+**Only layer 2 moves a card to "Done - not server validated".**
 
-## 4. Card flow
+## 4. The card
+
+### 4.1 Flow
 
 ```
-To do -> In progress -> (T1 pass) -> (T2 pass) -> Done - not yet seen on the real server -> (T3 seen) -> Done
-                         \_ T1 fail or T2 fail: back to In progress; a T1/T2 disagreement also opens a simulator card (section 7)
+To do -> In progress -> layer 1 -> layer 2 -> Done - not server validated -> (watcher: VALIDATED) -> Done
+                                                    |
+                                                    +-- (watcher: FAILED) -> In progress, back to the engineer,
+                                                         who mails SANDBOX: why did layers 1 and 2 pass it? (section 7)
 ```
 
-- **Needs measuring** stays for work waiting on live evidence that T2 cannot give, such as live ack-loss
-  regimes or long-run behaviour of the real server PC.
-- **"T3 seen"** means the change ran on the live fleet in the situation it is about, and the engineer quotes the
-  live log lines or the measurement. "Deployed and nothing broke" is not "seen".
+**Needs measuring** keeps its meaning (fixed, waiting for a live measurement). Those cards get the same
+validation block (4.2) when their owner next touches them, and from then on the watcher validates them too.
 
-## 5. Evidence: what every tier's proof contains
+### 4.2 The validation block: written by the engineer, before the card leaves layer 2
 
-Attached to the card (comment or mail linked from it). Without it, the tier does not count.
+The card body ends with this block. Without it, the card cannot enter "Done - not server validated".
 
-1. **Tier, code and date:** commit sha of the fleet code under test; for T1 also the sandbox commit.
-2. **Starting point:** T1 scenario file and seed; T2 world copy name (6.3) and the run folder.
-3. **What was checked,** stated so it can fail: the expected result *and* what a failure would have looked
-   like (see `feedback-checks-must-be-able-to-fail`). A check whose pass looks like "no data" does not count.
-4. **The report:** T1 `report.md`; T2 run report (6.9). Both carry **INTERVENTIONS**. A run with an
-   intervention is not proof unless the intervention is the test.
-5. **NOT MODELLED / not stageable:** for T1, confirm the change does not depend on anything in that list; for
-   T2, name any fault that had to be left to T1.
+```
+VALIDATION
+Code:        <release / commit sha the fix shipped in>
+Layer 1:     <scenario + seed, report path, one-line result>
+Layer 2:     <run folder, report path, one-line result>
+Situation:   <what must happen live for a verdict, e.g. "a miner reboots mid-flight">
+Worked if:   <log lines or measurement that prove it worked, exact text or pattern, and the count needed>
+Failed if:   <log lines or measurement that prove it did not>
+Not before:  <the deploy time; older logs do not count>
+Wait up to:  <days, default 7>
+```
 
-## 6. T2, the local test server
+**Worked if** and **Failed if** must be checkable from the bridge's `/logs` and `/state` (or a tool in `tools/`
+that reads them), and must be able to disagree. A condition whose pass looks like "no matching lines" is not
+allowed on its own; it needs a positive count of the situation occurring
+(`feedback-checks-must-be-able-to-fail`).
+
+## 5. The watcher
+
+### 5.1 What it is
+
+A Sonnet instance run on a schedule, **every 6 hours**. Mail name `WATCHER`. It reads, judges and reports. It
+changes nothing on the server or in the code.
+
+### 5.2 Each run
+
+1. List the cards in **Done - not server validated** (and **Needs measuring** cards that have a validation
+   block).
+2. For each card:
+   - read its validation block;
+   - fetch the live logs from **Not before** to now (`/logs/<date>` per day; see the two traps in
+     `reference-system-access`);
+   - count the **Situation**, **Worked if** and **Failed if** matches.
+3. Give one verdict per card:
+   - **VALIDATED.** The situation occurred at least the required number of times, every occurrence matched
+     *Worked if*, and none matched *Failed if*. Move the card to **Done**. Mail the engineer with the counts and
+     two example log lines.
+   - **FAILED.** Any *Failed if* match. Move the card to **In progress**. Mail the engineer and SPEC-OWNER with
+     the matching lines, their times and the node.
+   - **NOT YET.** The situation has not occurred often enough. Append a dated line with the counts to the card;
+     no move.
+   - **TIMED OUT.** *Wait up to* has passed with no verdict. Mail the engineer and SPEC-OWNER. The engineer
+     arranges a deliberate live test, and with the fleet involved, that goes through the user.
+   - **CAN'T JUDGE.** The block is missing, or a condition cannot be checked from the logs. Mail the engineer;
+     no move.
+4. Append a one-line summary of the run to `docs/watcher/LOG.md`, with the number of cards per verdict.
+
+### 5.3 Rules
+
+- **Read-only on the live system.** It uses `GET /logs`, `GET /logs/<date>` and `GET /state` only. It never
+  sends a `/command`, never deploys, and never touches the server PC.
+- **Every verdict carries its evidence count.** "0 failures" means nothing without "situation seen N times".
+- **It does not interpret causes.** On FAILED, it reports the lines; the engineer works out why
+  (`feedback-ask-dont-guess`).
+- **It moves cards only** between "Done - not server validated", "Needs measuring", "In progress" and "Done",
+  and only as above. Card bodies are drafts, edited through their draft-issue id (`reference-project-board`).
+- **It runs on this PC and reaches the bridge on the LAN,** as the engineers' tools already do.
+- **Cost:** one short run every 6 hours; nothing to do means a one-line log entry and stop.
+
+### 5.4 When a fix fails live
+
+The engineer owns the fix and the follow-up:
+1. fix the code, and climb the layers again;
+2. mail SANDBOX with the failing live lines and ask why layers 1 and 2 passed it. The answer becomes either a
+   simulator or test-server fidelity card, or a better layer-2 scenario. Either way the gap is written down, so
+   the next change of the same kind is caught before it ships.
+
+## 6. Layer 2, the local test server
 
 ### 6.1 Form
 
-A **dedicated Minecraft server** (no game window) running the live server's exact modpack, on this PC.
-It runs without anyone at the keyboard, can be started and stopped by a tool, and leaves the gaming PC usable.
-**Single player** is kept only as a *watch mode*: the user opens a T2 world copy in their own game to look at
-something. It is never the proof run.
+A **dedicated Minecraft server** (no game window) running the live modpack on this PC, started and stopped by
+a tool. **Single player** is a watch mode only: the user opens a run's world copy in their own game to look.
 
 ### 6.2 Where it lives
 
-`G:\TurtleOS-Sandbox\testserver\`:
-- `pack\` is the server files: Forge, mods and configs, matching the live server's mod list exactly;
-- `worlds\` holds world copies, read-only;
-- `runs\<run-id>\` holds one disposable working copy per run, plus logs and the report.
+`G:\TurtleOS-Sandbox\testserver\` holds three folders:
+- `server\` is the Forge 1.20.1 dedicated server, with mods, configs, KubeJS scripts and data packs copied from
+  the instance `C:\Users\shama\AppData\Roaming\ModrinthApp\profiles\SakuraPack 1.0.0`, read-only;
+- `worlds\` holds read-only world copies;
+- `runs\<run-id>\` holds a disposable working copy, logs and a report per run.
 
-Nothing goes in the repo; the code that drives T2 lives in the repo under `sandbox/t2/`.
+The code that drives it lives in the repo under `sandbox/t2/`. **The user's instance is never written to.**
+A client instance may hold client-only mods (sounds, shaders, minimaps) that a dedicated server refuses. Phase 0
+lists any it has to leave out of `server\`, and the report names them.
 
 ### 6.3 Every run starts fresh
 
-Each run unpacks a named, read-only world copy into a new run folder. Today that copy is
-`worlds\unpacked\2026-10-18_1700`. Real Minecraft does not repeat itself, so comparability comes from the
-same world, same code and same scenario. A timing claim needs at least two runs, and the report gives both.
+Each run unpacks a named world copy into a new run folder. Today that copy is
+`worlds\unpacked\2026-10-18_1700`, the current world per the user. Comparability comes from the same world,
+same code and same scenario. A timing claim needs at least two runs, and the report gives both.
 
 ### 6.4 Safety: cannot touch the live server, by construction
 
-- **The run's `computercraft-server.toml` HTTP rules are rewritten before first start.** Allow
-  `127.0.0.1:3000` (the local bridge, 6.5) and the code source (6.7); **deny everything else, including `$private`**.
-  The live copy allows all private addresses today, so this rewrite is mandatory. The T2 tool refuses to
-  start a run whose rules do not match.
-- **The fleet code itself never names the live server.** The server pushes to `http://127.0.0.1:3000/update`,
-  same machine, and `updater.lua` fetches from GitHub. Checked 2026-10-20 (`central_server.lua:96`). The
-  rule above still applies, because turtles carry other files on their disks.
-- **Own ports, own RCON password**, local-only. T2 never runs `/self-update`, `/command` or anything else
-  against the live bridge or server.
-- **Server-side mods with outside connections** (for example Dynmap, the CloudSolutions store) run in local
-  mode or are switched off, and the run report lists which.
+- **Each run's `computercraft-server.toml` HTTP rules are rewritten before first start.** Allow `127.0.0.1:3000`
+  (the local bridge) and `raw.githubusercontent.com` (the code, 6.7); **deny everything else, including
+  `$private`**. The live copy allows all private addresses today. The tool refuses to start a run whose rules
+  differ.
+- **The fleet code itself never names the live server.** The server pushes to `http://127.0.0.1:3000/update`
+  (`central_server.lua:96`), and `updater.lua` fetches from GitHub. The rule still applies, because turtles
+  carry other files.
+- **Own ports, own RCON password**, local only. Server-side mods with outside connections run locally or are
+  off, and the report lists which.
 
 ### 6.5 The bridge and dashboard
 
-The **real `server.js`** runs locally on `127.0.0.1:3000`, with its logs going to the run folder, so the
-fleet's pushes arrive exactly as live. The dashboard opens at `http://127.0.0.1:3000/`.
-`tools/gate_check.py` and `tools/ack_loss.py` read it through `BRIDGE_URL`. Dynmap works if the pack
-includes it; it does not need to for a run to count.
+The **real `server.js`** runs on `127.0.0.1:3000` with logs in the run folder, so pushes arrive exactly as live.
+The dashboard is at `http://127.0.0.1:3000/`. `tools/gate_check.py` and `tools/ack_loss.py` use `BRIDGE_URL`.
 
 ### 6.6 Control: the same verbs as T1 where Minecraft allows
 
-Test scripts use one vocabulary (T1 design section 7.1) and run against either tier. Where T2 cannot do a
-verb, it says so loudly. It never fakes the verb.
-
-| Verb | T1 | T2 (via server console / RCON / ComputerCraft's own commands; exact commands confirmed in phase 2) |
+| Verb | T1 | T2 (exact commands proven in phase 2) |
 |---|---|---|
-| `snapshot` / `restore` | yes | restore = start a fresh run from a world copy; mid-run snapshot not offered |
-| `teleport` a turtle, `spawn` a turtle, set inventory / fuel | yes | via block and NBT commands; to be proven per verb |
-| `server_crash`, `world_restart` | yes | yes: kill or stop the server process, start it again |
-| `server_lag`, `tps_drop` | yes | yes: tick-rate control (6.8) |
-| `gps_down` | yes | yes: shut down the GPS host computers |
+| `snapshot` / `restore` | yes | restore = a fresh run from a world copy |
+| `teleport`, `spawn` a turtle, set inventory / fuel | yes | block and NBT commands, proven per verb |
+| `server_crash`, `world_restart` | yes | yes: stop or kill the process, start again |
+| `server_lag`, `tps_drop` | yes | yes: tick-rate control |
+| `gps_down` | yes | yes: shut the GPS hosts down |
 | chunk unload | yes | yes: remove the force-load |
-| `radio_loss`, `radio_latency` | yes | **no**; T1 only (section 3, fault-only row) |
-| `eval` on a computer | yes | limited; via the computer's own shell if needed |
+| `radio_loss`, `radio_latency` | yes | **no**, T1 only |
+
+A verb T2 lacks raises a clear error. It is never faked.
 
 ### 6.7 Which code runs
 
-Default: the real OTA path. The code under test is pushed to GitHub on a branch, and each computer is pinned to
-that commit through `update_ref.txt` (`updater.lua` already supports a pinned 40-character sha). This also
-tests the installer for free. Open decision 10.2 is whether to also allow serving a local worktree without pushing.
+The code under test is pushed to GitHub on a branch, and each computer is pinned to that commit through
+`update_ref.txt`. `updater.lua` already supports a pinned 40-character sha, so the real update path is
+tested too.
 
 ### 6.8 Speed: measured before anyone relies on it
 
-Phase 0 (section 9) measures **how long one server tick takes** with the base and the fleet's chunks loaded,
-and nobody logged in. The ceiling is roughly 50 ms divided by that figure. A Forge 1.20.1 tick-rate mod is then
-added and the speed actually reached is measured. Candidates: Madgique's Tickrate Changer, OverClocked:
-Clockworks, Tick Changer. Pick by measurement, not description.
+Phase 0 measures one server tick's time with the base and fleet chunks loaded and nobody logged in. The
+ceiling is about 50 ms divided by that. It then tries Forge 1.20.1 tick-rate mods (Madgique's Tickrate
+Changer, OverClocked: Clockworks, Tick Changer) **on the T2 copy only, never the live server or the user's
+instance**, and records the speed reached. It also lists the fleet's real-clock (`os.epoch`) timing and states
+the highest speed at which fleet behaviour is unchanged.
 
-**Clock risk to check in phase 0:** some fleet timing uses the real wall clock (`os.epoch`) rather than game
-ticks. At high speed-ups those timeouts stretch relative to game time. Phase 0 lists every wall-clock use and
-states the highest speed at which fleet behaviour is unchanged. The run report records the speed used.
+### 6.9 The run report
 
-### 6.9 The T2 run report
+The same sections as T1's report: code sha, world copy, speed, CHECKS, INTERVENTIONS, tool output, jobs, ore
+and problems. **NOT STAGED** takes the place of NOT MODELLED, and lists the faults left to T1 and the mods
+left out.
 
-The same headings as T1's: what ran (code sha, world copy, speed), CHECKS, INTERVENTIONS, the tools' output,
-jobs, ore, problems. It adds **NOT STAGED** in place of NOT MODELLED: faults left to T1, mods switched off.
+## 7. The layers keep each other honest
 
-## 7. T1 and T2 keep each other honest
+- A layer-2 proof of a change that layer 1 also tested includes the same scenario's T1 headline figures (job
+  time, ore, batches, problems, ack loss) beside T2's. A gap beyond **±10%**, or a behaviour present in one and
+  absent in the other, opens a simulator fidelity card. The change itself is judged on T2.
+- Every T1 assumption marked "unverified - needs the local test server" gets a T2 check once T2 exists.
+- A live FAILED (5.4) is the strongest signal of all. It always produces a written-down gap.
 
-- Every T2 proof run of a T1-tested change also runs the same scenario in T1 and compares the headline figures.
-  Those are job time, ore, batches, problems and ack loss.
-- **A disagreement beyond a stated tolerance opens a simulator card** for the sandbox builder.
-  The starting tolerance is ±10% on job time and ore, and any behaviour present in one tier and absent in the
-  other. The change under test is then judged on T2.
-- Every T1 assumption marked "unverified - needs the local test server" gets a T2 check when T2 exists. The
-  result goes back into the sandbox. That is the second half of the open fidelity-gaps card.
+## 8. Live deploys
 
-## 8. T3, the live server
+Unchanged:
+- deploy only with the fleet idle (`feedback-ask-before-self-update`);
+- wait for GitHub's cache (`feedback-wait-after-push`);
+- verify the deploy landed (`feedback-verify-deploy-landed`).
 
-Unchanged rules: deploy only with the fleet idle (`feedback-ask-before-self-update`), wait for GitHub's cache
-(`feedback-wait-after-push`), verify the deploy landed (`feedback-verify-deploy-landed`). What changes is that
-a change reaches T3 already proven in T1 and T2, so a live run confirms rather than discovers.
+## 9. Building it: phases
 
-## 9. Building T2: phases
+Owner: the sandbox builder (mail `SANDBOX`), under the `sandbox/` rules: no fleet file edits, data on the Game
+Drive, and ask the user before installing anything.
 
-0. **Measure.** Get the live pack (10.3). Start it once on this PC, with safe HTTP rules (6.4), on the world
-   copy, nobody logged in. Record tick time, memory and start-up time. Try the tick-rate mods; record the speed
-   each reaches. List the wall-clock uses (6.8). **Stop here and report to the user before building anything
-   else**: if T2 is under about 2x, the plan is re-weighed.
-1. **A safe run.** A tool creates a run folder from a world copy, rewrites the HTTP rules, starts the local
-   `server.js` and the server, pins the code (6.7), and stops it all cleanly. Test: the tool refuses a run whose
-   rules allow `$private`.
-2. **Control verbs.** Each verb in 6.6, proven one by one; the unavailable ones raise a clear error.
-3. **Scenarios and reports.** A T1 scenario file runs on T2 unchanged where its verbs exist; the report as 6.9.
-4. **First real proof.** One open card goes T1, then T2, then "Done - not yet seen", following this document;
-   the user picks which. Then the T1-assumption checks (7).
+0. **Measure T2.** Build `server\` from the instance (6.2), start it once with safe HTTP rules on the world copy,
+   and record tick time, memory and start-up. Try the tick-rate mods, list the real-clock uses (6.8), and
+   **report to the user before building further**. If T2 cannot reach about 2x, the plan is re-weighed.
+1. **A safe run tool.** Run folder from a world copy, HTTP rules rewritten, local `server.js`, pinned code, clean
+   stop. Test: it refuses rules that allow `$private`.
+2. **Control verbs**, proven one by one (6.6).
+3. **Scenarios and reports** (6.9); T1 scenarios run unchanged where their verbs exist.
+4. **The watcher** (section 5). It needs no T2, so it can start in parallel with phase 0:
+   `docs/watcher/LOG.md`, the scheduled task, and a dry run against today's board. The spec owner sets up the
+   schedule with the user's OK.
+5. **First full climb.** One open card goes through all three layers; the user picks which.
 
-Owner: the sandbox builder (mail `SANDBOX`), under the same rules as `sandbox/`. That means no fleet file edits,
-data on the Game Drive, and asking the user before installing anything.
+## 10. Remaining open points
 
-## 10. Open decisions
-
-1. **Dedicated server vs single player:** recommended dedicated (6.1); the user has not ruled.
-2. **Code delivery:** pinned GitHub commit only (recommended, it is the real path), or also local serving.
-3. **Where the pack comes from.** The server's `/mnt/backup/archive/pre-deploy-tar/` holds a 5.6 GB pack
-   tarball from 2026-10-04, which may predate later mod changes. The safest source is a fresh copy of the
-   live server's `mods/` and `config/`, fetched the same way as the world (the user runs a script; nothing
-   here holds the password). The server PC engineer confirms the current mod list.
-4. **Tolerance** for T1/T2 disagreements (7), starting at ±10%: tune after the first few comparisons.
+1. Tolerance for T1/T2 disagreements (7), starting at ±10%; tune after the first comparisons.
+2. Whether the watcher also chases the 23 **Needs measuring** cards from day one, or only as their owners add
+   validation blocks (4.1). Default: only with blocks.
