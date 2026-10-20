@@ -78,6 +78,7 @@ function M.install(comp, E)
     comp.tstate = st
     if world and world.occupants then world.occupants[key(comp.pos.x, comp.pos.y, comp.pos.z)] = comp end
   end
+  require("periph.modem").track_equipment(comp)
   local T = {}
 
   local function scale() return sched.action_scale or 1 end

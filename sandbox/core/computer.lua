@@ -46,8 +46,9 @@ function Computer:print(text)
 end
 
 -- Attach hardware by side or network name. `methods` is a table of functions.
-function Computer:attach(name, type_, methods)
-  self.peripherals[name] = { type = type_, methods = methods }
+-- `on_shutdown` (optional) runs when the computer goes down, e.g. a modem closing its channels.
+function Computer:attach(name, type_, methods, on_shutdown)
+  self.peripherals[name] = { type = type_, methods = methods, on_shutdown = on_shutdown }
 end
 
 function Computer:detach(name) self.peripherals[name] = nil end
@@ -70,6 +71,7 @@ function Computer:boot()
 end
 
 function Computer:shutdown()
+  for _, p in pairs(self.peripherals) do if p.on_shutdown then p.on_shutdown() end end
   self.gen = self.gen + 1
   self.state, self.co, self.filter = "off", nil, nil
   self.queue = {}
