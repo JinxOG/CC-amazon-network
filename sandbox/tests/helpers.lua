@@ -27,4 +27,27 @@ function H.raises(fn, pattern)
   end
 end
 
+local tmp_n = 0
+-- A fresh empty directory for one test (under the system temp folder).
+function H.tmpdir()
+  tmp_n = tmp_n + 1
+  local base = (os.getenv("TEMP") or "/tmp"):gsub("\\", "/")
+  local dir = string.format("%s/sbx_%d_%d_%d", base, os.time(), math.floor(os.clock() * 1000000), tmp_n)
+  if package.config:sub(1, 1) == "\\" then
+    os.execute('mkdir "' .. dir:gsub("/", "\\") .. '" >nul 2>nul')
+  else
+    os.execute('mkdir -p "' .. dir .. '"')
+  end
+  return dir
+end
+
+function H.write(path, text)
+  local f = assert(io.open(path, "wb")); f:write(text); f:close()
+end
+
+function H.read(path)
+  local f = io.open(path, "rb"); if not f then return nil end
+  local s = f:read("*a"); f:close(); return s
+end
+
 return H
