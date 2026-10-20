@@ -16,7 +16,9 @@
 - **No CC:Tweaked ROM code is copied** — it is CCPL and barred from non-mod projects (spec §5). Reimplement from https://tweaked.cc documentation.
 - **CC:Tweaked version to match: 1.120.2** (Minecraft 1.20.1, Forge).
 - **Network closed by default** (spec §10): only `127.0.0.1:3000/*` (to the run's stand-in) and `raw.githubusercontent.com/...` (served from the code under test) are answered; everything else is refused and logged. Forbidden hosts, refused at startup if present in any config or argument: `192.168.86.35`, `100.103.179.74`, and any non-loopback address.
-- **Nothing under `sandbox/` ships to the fleet**; `sandbox/worlds/` and `sandbox/run/` are git-ignored.
+- **Nothing under `sandbox/` ships to the fleet**; all sandbox data lives under `$SANDBOX_DATA`, outside the repo; `sandbox/worlds/` and `sandbox/run/` are git-ignored anyway as a safety net.
+- **All sandbox data lives on the Game Drive** (user's instruction, 2026-10-19): `SANDBOX_DATA`, default **`G:\TurtleOS-Sandbox`** (in Bash: `/g/TurtleOS-Sandbox`). World copies in `$SANDBOX_DATA/worlds/`, runs and snapshots in `$SANDBOX_DATA/run/`, the interpreter in `$SANDBOX_DATA/interpreter/`, saved storage lists in `$SANDBOX_DATA/storage/`. **Never in the repo**: it sits in OneDrive and would sync gigabytes to the cloud. The code stays in the repo under `sandbox/`. `sandbox/sim` reads `SANDBOX_DATA` and falls back to the default.
+- **The first world backup is already on its way** to `$SANDBOX_DATA/worlds/incoming/latest-backup.download`, pulled by the user with `G:\TurtleOS-Sandbox\get-backup.cmd`. Task 22 starts from it.
 - **Every computer's disk quota defaults to 1,000,000 bytes** (measured `computer_space_limit`).
 - **Event queue cap: 256 per computer**; overflow drops the new event and logs it.
 - **Speed bar: a six-hour two-miner job in ≤72 s wall clock**, whole fleet booted (spec §9, §13).
@@ -45,7 +47,7 @@
 
 **Interfaces:**
 - Produces: `sandbox/sim test [pattern]` runs every `sandbox/tests/test_*.lua` under the chosen interpreter. Each test file returns `{ ["name"] = function(t) ... end }`. `helpers.lua` gives `t.eq(actual, expected, msg)`, `t.ok(v, msg)`, `t.raises(fn, lua_pattern)`, `t.near(a, b, tol, msg)`. The runner prints `PASS name` / `FAIL name: msg` and exits non-zero on any failure.
-- Produces: `sandbox/interp.txt` — one line, the absolute path of the chosen interpreter. `sandbox/sim` reads it.
+- Produces: `sandbox/interp.txt` — one line, the absolute path of the chosen interpreter, installed under `$SANDBOX_DATA/interpreter/`. `sandbox/sim` reads it.
 
 - [ ] **Step 1: Get the user's OK, then install an interpreter.** Nothing suitable is on this PC (only Lua 5.4, no C compiler). Ask the user in your session before downloading anything. Preferred: install Zig (`winget install zig.zig`) and build Lua 5.2.4 from the official lua.org tarball with `-D'luai_makeseed()=0'` (or the equivalent edit in `lstate.c`) so string hashing is fixed. Fallback: an official LuaJIT 2.1 build.
 - [ ] **Step 2: Write `sandbox/tools/check_interp.lua`.** It must print three verdicts:
@@ -54,7 +56,7 @@
   - `ORDER <hex digest>` — insert 1,000 string keys (`"k"..i`) into a table, concatenate `pairs` order, print a short checksum.
 - [ ] **Step 3: Run it five times as separate processes.** All five must print `PARSE ok`, `NUMBER ok`, and the **same** `ORDER` digest. If no candidate passes, stop and mail the spec owner with the output — do not continue.
 - [ ] **Step 4: Write `sandbox/tests/test_safety_static.lua`** with these tests:
-  - `gitignore lists sandbox/worlds and sandbox/run` — reads `.gitignore`, asserts both lines `sandbox/worlds/` and `sandbox/run/` present.
+  - `gitignore lists sandbox/worlds and sandbox/run` — reads `.gitignore`, asserts both lines `sandbox/worlds/` and `sandbox/run/` present (a safety net in case anyone points `SANDBOX_DATA` inside the repo).
   - `nothing under sandbox ships to the fleet` — reads `install.lua` and `updater.lua`, asserts neither contains the string `sandbox/`.
   - `no file under sandbox names a forbidden host` — scans every file under `sandbox/` except `sandbox/tests/` for `192.168.86.35` and `100.103.179.74`; asserts zero hits.
 - [ ] **Step 5: Run `sandbox/sim test`** — expect the gitignore test to FAIL. Append `sandbox/worlds/` and `sandbox/run/` to `.gitignore`. Re-run: all PASS.
@@ -248,7 +250,7 @@
 - `geo_scanner`: `scan(radius) -> list` of `{name=, tags=, x=, y=, z=}` **relative** to the scanner, from the world; yielding, `scan_ms`. Fields the fleet reads: `name tags x y z`.
 - `Storage` (`sandbox/periph/storage.lua`): `Storage.new(items) -> storage` where `items` is a list of `{name=, amount=, displayName=}`; `storage:list()`; `storage:add(name, n)`; `storage:remove(name, n) -> removed`. One instance per run, seeded by the scenario (synthetic) or from the importer's `storage.json` (Task 22).
 - `rsBridge` (type `"rsBridge"`): `listItems() -> list` of `{name=, amount=, count=, displayName=}` (the fleet reads all four), `listCraftableItems()`, `craftItem(spec)`, `getItem(spec)`; yielding, `rs_list_ms`; contents from the run's `Storage`.
-- `kv_storage` (type `"kv_storage"`): `get(key)`, `put(key, value)`, `delete(key)`, `list(prefix)` — read `cloudstore.lua` for the exact argument and return shapes it expects and match them; yielding, `kv_call_ms`; backed by `KV.new(path) -> kv` (in `kv_storage.lua`), which persists to `sandbox/run/<id>/kv.json`, survives every reboot within a run, and starts empty unless a scenario loads a saved file (spec §6).
+- `kv_storage` (type `"kv_storage"`): `get(key)`, `put(key, value)`, `delete(key)`, `list(prefix)` — read `cloudstore.lua` for the exact argument and return shapes it expects and match them; yielding, `kv_call_ms`; backed by `KV.new(path) -> kv` (in `kv_storage.lua`), which persists to `$SANDBOX_DATA/run/<id>/kv.json`, survives every reboot within a run, and starts empty unless a scenario loads a saved file (spec §6).
 - Ender chests: inventories keyed by frequency (`{colors}` triple). Frequency config per scenario: the fuel chest is an endless coal source; the ore chest drains into `Storage` after `ore_chest_delay_ms` (default 5000).
 
 - [ ] **Step 1: Failing tests:** `scan returns relative positions within radius`, `scan yields for scan_ms`, `listItems returns the storage contents with all four fields`, `kv survives a server reboot`, `kv list returns only matching keys`, `fuel ender chest never runs out`, `ore dropped in the ore chest arrives in storage after the delay`.
@@ -308,7 +310,7 @@
 **Files:** Create `sandbox/core/fleet.lua`, `sandbox/core/code_dir.lua`, `sandbox/scenarios/smoke_two_miners.lua`; Test `sandbox/tests/test_end_to_end.lua`
 
 **Interfaces:**
-- Produces: `CodeDir.prepare(spec) -> abs_path` — `spec` is `"worktree:<path>"` (use files as they are) or `"rev:<git-rev>"` (materialise with `git archive <rev> | tar -x` into `sandbox/run/<id>/code/`; never touches `HEAD`).
+- Produces: `CodeDir.prepare(spec) -> abs_path` — `spec` is `"worktree:<path>"` (use files as they are) or `"rev:<git-rev>"` (materialise with `git archive <rev> | tar -x` into `$SANDBOX_DATA/run/<id>/code/`; never touches `HEAD`).
 - Produces: `Fleet.provision(world, code_dir, layout) -> {computers}` — `layout` lists `{id=, kind=, role=, pos=}`; each computer's disk is created by **running the real `install.lua <role>`** inside that computer with `http.get` served from `code_dir` (roles from `install.lua`: `server`, `miner`, `delivery`, `support`, `loader`, plus `warehouse` and `admin` — read its `PROFILES`).
 - The synthetic layout: dispatch server, warehouse, 2 miners with loaders, 2 delivery, 2 support, 4 GPS hosts, plus idle turtles to reach 15 workers (spec §13: whole fleet by default).
 - `smoke_two_miners.lua` dispatches `ORDER_MINE` on one synthetic mining area through `standin:dispatch` and runs until both jobs are COMPLETE or 8 simulated hours pass.
@@ -323,7 +325,7 @@
 **Files:** Create `sandbox/scenario/runner.lua`, `sandbox/sim.lua` (CLI entry); Modify `sandbox/sim`; Test `sandbox/tests/test_determinism.lua`
 
 **Interfaces:**
-- Produces the CLI: `sandbox/sim run <scenario.lua> [--seed N] [--speed max|N] [--code worktree:<p>|rev:<r>] [--only <nodes>] [--world <dir>] [--port N]`. Each run gets `sandbox/run/<YYYYMMDD-HHMMSS>-<scenario>-<seed>/` containing `trace.log`, `state.json`, `logs/`, `kv.json`, `report.md`, `report.json`.
+- Produces the CLI: `sandbox/sim run <scenario.lua> [--seed N] [--speed max|N] [--code worktree:<p>|rev:<r>] [--only <nodes>] [--world <dir>] [--port N]`. Each run gets `$SANDBOX_DATA/run/<YYYYMMDD-HHMMSS>-<scenario>-<seed>/` containing `trace.log`, `state.json`, `logs/`, `kv.json`, `report.md`, `report.json`.
 - Scenario file shape (syntax your call, spec §14): returns a table with `world`, `layout` (optional), `seed` (optional), `start_ms` (optional), `steps = function(sim) ... end` where `sim` exposes the fault API (Task 19) and the control API (Task 20), plus `sim:dispatch(cmd)`, `sim:run_for(ms)`, `sim:run_until(cond, timeout_ms)`, `sim:expect(cond, message)`.
 - `--speed N` paces the scheduler so simulated time advances at most N× wall time; `max` does not pace.
 
@@ -363,7 +365,7 @@
 
 **Interfaces:**
 - Produces, on the scenario's `sim` and in interactive mode, every action in spec §7.1 with those names: `pause resume step run_until set_speed snapshot restore fork teleport recover set_slot clear_slot give set_fuel equip spawn_turtle spawn_computer remove reboot shutdown start read_file write_file delete_file eval output queue get_block set_block fill load_chunks unload_chunks send_radio drop_radio storage_set storage_add storage_remove kv_get kv_set kv_clear ender_set gps_host place_gps_host watch trace_radio status`.
-- `snapshot(name)` serialises the whole sandbox (world deltas, every computer's disk, inventories, positions, equipment, fuel, storage, KV, clock, every rng state, the scheduler heap) to `sandbox/run/<id>/snapshots/<name>/`. **Coroutines cannot be serialised**, so `restore` reboots every computer that was on, from its restored disk — document this in the README and in the report's ASSUMPTIONS when a restore happened.
+- `snapshot(name)` serialises the whole sandbox (world deltas, every computer's disk, inventories, positions, equipment, fuel, storage, KV, clock, every rng state, the scheduler heap) to `$SANDBOX_DATA/run/<id>/snapshots/<name>/`. **Coroutines cannot be serialised**, so `restore` reboots every computer that was on, from its restored disk — document this in the README and in the report's ASSUMPTIONS when a restore happened.
 - **Interventions** (spec §7.1): every action that changes the world or a computer (`teleport recover set_slot clear_slot give set_fuel equip spawn_* remove reboot shutdown start write_file delete_file set_block fill load_chunks unload_chunks send_radio drop_radio storage_* kv_set kv_clear ender_set gps_host place_gps_host`, and `eval` whose code assigns) is appended to the run's intervention list with time and arguments. Reads, `pause`, `step`, `snapshot`, `watch`, `status` are not.
 - Interactive mode: `sandbox/sim repl <scenario.lua|snapshot-dir>` starts paused and reads one command per line from stdin (`status`, `step 100`, `teleport node_138 10 64 5 north`, `eval node_138 return _self.busy`, `run_until 3600000`, `quit`), printing results as plain text. It must work when driven by a script piping commands in (`printf 'status\nquit\n' | sandbox/sim repl ...`).
 
@@ -393,7 +395,7 @@
 **Files:** Create `sandbox/tools/import_world.py`, `sandbox/tools/requirements.txt` (`nbtlib==<pinned>`); Test `sandbox/tests/test_import_world.py`
 
 **Interfaces:**
-- Produces: `python sandbox/tools/import_world.py <unpacked_world_dir> --storage <state.json> --out sandbox/worlds/<date>/sim [--area x1,z1,x2,z2 ...]`.
+- Produces: `python sandbox/tools/import_world.py <unpacked_world_dir> --storage <state.json> --out $SANDBOX_DATA/worlds/<date>/sim [--area x1,z1,x2,z2 ...]`.
   - Reads region files for the base (`base_loaded` areas from the server's config or `--area`), the depot and every area given; writes the World format from Task 7.
   - Copies `computercraft/computer/<id>/` disks into `out/disks/<id>/`.
   - Reads CC turtle and computer block entities: id, label, position, facing, fuel, inventory, left/right upgrades; writes `out/fleet.json` (the layout `Fleet.provision` accepts, but with `disk = existing` instead of running the installer).
@@ -401,7 +403,7 @@
   - **Makes no network call of any kind.**
 - First run on the real copy: **inspect before parsing** — list the folder, find where CC stores computers and how turtle block entities are laid out in NBT, and record what you found at the top of the script as comments. Paths in spec §6 are to be verified, not assumed.
 
-- [ ] **Step 1:** Wait for the world copy (a person transfers it; see spec §6 — never use SSH yourself). Unpack it under `sandbox/worlds/<date>/raw/` (git-ignored).
+- [ ] **Step 1:** Wait for the world copy (a person transfers it; see spec §6 — never use SSH yourself). Unpack it under `$SANDBOX_DATA/worlds/<date>/raw/` (git-ignored).
 - [ ] **Step 2: Failing tests** against a small fixture you cut from the real copy (one region, one computer folder, git-ignored or synthetic if the real cut is too large): `importer finds every turtle`, `importer copies every computer disk`, `importer reads a turtle's inventory and upgrades`, `importer makes no network call` (run it with networking disabled via an env flag that makes any socket raise).
 - [ ] **Step 3–4:** FAIL, implement, PASS.
 - [ ] **Step 5: Commit** `sandbox/tools/import_world.py sandbox/tools/requirements.txt sandbox/tests/test_import_world.py` — `feat(sandbox): world importer from a server backup`.

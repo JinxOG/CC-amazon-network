@@ -209,9 +209,14 @@ timers, and FTB Backups 2. **The sandbox imports from the latest backup.** A
 current world instead needs a `save-off` / `save-all flush` / copy / `save-on`
 cycle on the server, scheduled by the server engineer; it is never required.
 
-Plan for **5-6 GB compressed** per copy. It lands in `sandbox/worlds/<date>/` on
-this PC. **That folder is git-ignored**: it is the user's world, it is large,
-and the repo is public.
+Plan for **5-6 GB compressed** per copy. **All sandbox data lives on the Game
+Drive** (user's instruction, 2026-10-19): `G:\TurtleOS-Sandbox`, with world
+copies under `worlds/`, runs and snapshots under `run/`, and the interpreter
+under `interpreter/`. Never in the repo: it is the user's world, it is large, the
+repo is public, and the project folder sits in OneDrive, which would sync
+gigabytes to the cloud. The code stays in the repo. The first copy is pulled by
+the user with `G:\TurtleOS-Sandbox\get-backup.cmd`, which fetches the newest
+finished backup from `~/sakura/backups` and checks it reads to the end.
 
 **The transfer is done by a person, not by the sandbox.** The server accepts SSH
 with a password; the sandbox and its tooling never hold, request or store SSH
@@ -438,7 +443,7 @@ document:
 
 ## 11. What a run produces
 
-`sandbox/run/<run-id>/report.md` and `report.json`, with:
+`G:\TurtleOS-Sandbox\run\<run-id>\report.md` and `report.json`, with:
 
 - scenario, seed, code version (git commit of the worktree), world copy date;
 - **speed achieved**;
