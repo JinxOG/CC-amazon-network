@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Start here - building the sandbox simulator
 date: 2026-10-19
-status: open
+status: closed
 ---
 
 # Start here - building the sandbox simulator
