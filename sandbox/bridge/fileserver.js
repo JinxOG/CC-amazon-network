@@ -65,7 +65,17 @@ function serveLog(res, dateParam, q) {
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) return sendJson(res, 400, { error: 'date must be YYYY-MM-DD' });
     const file = path.join(logDir, dateParam + '.txt');
-    if (!fs.existsSync(file)) return sendJson(res, 404, { error: 'no log for that date' });
+    if (!fs.existsSync(file)) {
+        // A run has no history before it began. The analysis tools look back a day or more, so an earlier day answers
+        // "nothing logged" rather than 404 (the live bridge keeps older days; a sandbox run does not). Days after the
+        // run's last log stay 404.
+        const first = all.length ? all[0].slice(0, 10) : null;
+        if (!first || dateParam < first) {
+            return sendJson(res, 200, { file: dateParam + '.txt', matched: 0, returned: 0, truncated: false,
+                order: 'tail', lines: [], note: 'sandbox: this run has no log for that earlier day' });
+        }
+        return sendJson(res, 404, { error: 'no log for that date' });
+    }
 
     const get = k => q.get(k);
     const source = get('node') ? String(get('node')) : null;

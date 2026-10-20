@@ -58,13 +58,14 @@ return {
   ["late GPS: 1.9.134 (f437535, no moving on a guessed facing) does not lose it and recovers"] = function(t)
     local r = run("incident_gps_late_restart", "f437535")
     t.eq(r.lost_miners, 0, "positions: " .. table.concat(r.miner_positions, "; "))
-    t.ok(r.not_moving_logged, "the miners should say they are not moving until they have a fix")
-    t.ok(r.can_go_ahead_logged, "and say they can go ahead once it arrives")
   end,
 
   ["late GPS: the current code does not lose it either"] = function(t)
     local sim, ok, err = Runner.run("sandbox/scenarios/incident_gps_late_restart.lua", { run_dir = H.tmpdir(), code = "worktree:." })
     t.ok(ok, tostring(err))
     t.eq(sim.results.lost_miners, 0, table.concat(sim.results.miner_positions, "; "))
+    -- current code says so out loud: not moving until a fix, then "can go ahead"
+    t.ok(sim.results.not_moving_logged, "the miners should say they are not moving until they have a fix")
+    t.ok(sim.results.can_go_ahead_logged, "and say they can go ahead once it arrives")
   end,
 }

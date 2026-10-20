@@ -1,7 +1,7 @@
 -- Every place the sandbox guesses. Reports print this list under ASSUMPTIONS (spec section 11).
 -- Add a line whenever a behaviour is chosen without evidence from the real game or the live fleet.
 return {
-  "TIMINGS: every entry in sandbox/timings.lua is unverified until calibrated against the live fleet (Task 25).",
+  "TIMINGS: the movement and digging times, ns_per_instr and the RS list time were fitted to the live fleet on 2026-10-20 (see the calibration note); every entry still marked unverified in sandbox/timings.lua (scan, reboot, turtle commands, cloud store calls) is a guess. rsBuildMs comes out about 3x too low: the CC ROM serialiseJSON costs more than ours.",
   "In-game time is real time x72 (20-minute day); os.date is UTC.",
   "fs handle readAll() returns nil at end of file (tweaked.cc); unverified in game.",
   "textutils.serialise with compact=true is not implemented; the fleet never uses it.",

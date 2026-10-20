@@ -179,6 +179,10 @@ function Report.render(r)
     o[#o + 1] = ""
     if t then
       o[#o + 1] = "exit code " .. tostring(t.exit)
+      if (t.output or ""):find("Traceback", 1, true) then
+        o[#o + 1] = ""
+        o[#o + 1] = "**THIS TOOL CRASHED. Its output below is not a verdict on the run.**"
+      end
       o[#o + 1] = ""
       o[#o + 1] = "```"
       o[#o + 1] = t.output or ""
