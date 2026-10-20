@@ -16,6 +16,7 @@ function Computer.new(opts)
   self.id, self.label, self.kind = opts.id, opts.label, opts.kind or "computer"
   self.disk, self.sched, self.pos = opts.disk, opts.sched, opts.pos
   self.env_builder = opts.env_builder
+  self.native = opts.native -- {on_boot=fn(comp), on_event=fn(comp, ev)} for computers that run no Lua program
   self.name = "node_" .. tostring(opts.id)
   self.state, self.filter = "off", nil
   self.queue, self.output = {}, {}
@@ -54,6 +55,15 @@ end
 function Computer:detach(name) self.peripherals[name] = nil end
 
 function Computer:boot()
+  if self.native then
+    self.gen = self.gen + 1
+    self.queue, self.filter, self.cost_ms = {}, nil, 0
+    self.booted_ms = self:clock()
+    self.state = "waiting"
+    self.sched:trace(self.name .. " boot")
+    if self.native.on_boot then self.native.on_boot(self) end
+    return
+  end
   self.gen = self.gen + 1
   self.queue, self.filter, self.cost_ms = {}, nil, 0
   self.booted_ms = self:clock()
@@ -126,6 +136,10 @@ end
 
 function Computer:queue_event(ev)
   if self.state == "off" then return false end
+  if self.native then
+    if self.native.on_event then self.native.on_event(self, ev) end
+    return true
+  end
   if #self.queue >= Computer.QUEUE_MAX then
     self.sched:trace(self.name .. " overflow " .. tostring(ev[1]))
     return false
