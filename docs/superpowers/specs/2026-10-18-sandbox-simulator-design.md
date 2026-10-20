@@ -175,12 +175,16 @@ smooths them over would pass the very code that failed in the world.
 | **`os.reboot()` restarts the computer from `startup.lua`; files on disk survive; memory does not** | Every restart-recovery card |
 | **Timers fire as `timer` events with their id; `os.cancelTimer` cancels** | The guaranteed-wakeup fix |
 | **A turtle refuses to act when it lacks fuel, when the block is protected, or when another turtle is in the way** | The 120-second mutual block |
-| **Computers in unloaded chunks do not run.** Time passes; they are frozen | Lost miners; the chunk-loading invariant |
+| **A computer in an unloaded chunk is shut down, and boots again from `startup.lua` when the chunk reloads** (CC:Tweaked's behaviour; listed under assumptions in every report until confirmed in the world) | Lost miners; the chunk-loading invariant |
 
-**Method for faithfulness — the builder's call, within one rule.** The
-`parallel` API and `os.pullEvent` should be the real CC:Tweaked implementations
-if their licence allows them to be copied into the repo; otherwise reimplemented
-to match their documented behaviour, with a test per row of the table above. The
+**Method for faithfulness: rebuilt, not copied (settled 2026-10-18).** The
+server runs CC:Tweaked 1.120.2. Its Lua ROM (`bios.lua`, `parallel`, `gps`,
+`textutils` and the rest) is under the ComputerCraft Public License, whose
+section 7 allows its code in other Minecraft mods but **not in other
+non-game projects**. The sandbox is not a mod, so none of that code is copied
+into it. Each API is reimplemented to match CC:Tweaked's documented behaviour
+(tweaked.cc), with a test per row of the table above. Reading the source to
+understand behaviour is permitted by the licence's section 4; pasting it is not. The
 existing `tests/stub_cc.lua` encodes a long list of hard-won turtle-inventory
 fidelity fixes (display names, `drop()` onto nothing, `inspectUp`, real fuel
 values). **Reuse it, don't re-derive it.**
@@ -222,7 +226,7 @@ writes a compact sandbox world into `sandbox/worlds/<date>/sim/`:
 | Computer and turtle disks | `computercraft/computer/<id>/` | Every computer boots from its real files: `startup.lua`, `jobs.dat`, zone files, ledgers |
 | Turtles: position, facing, fuel, inventory, upgrades, label | the turtles' block entities in the region files | So the fleet starts where it really is |
 | Placed loaders, GPS hosts, the server and warehouse computers | block entities | |
-| Refined Storage contents | the live bridge's `/state` → `storage` at import time | The RS data files are internal to the mod; the list the bridge already publishes is the real contents |
+| Refined Storage contents | a saved copy of the live bridge's `/state` (its `storage` list), fetched by an engineer with `curl` and passed to the importer as a file | The RS data files are internal to the mod; the list the bridge already publishes is the real contents. The importer reads a file and makes no network call, so no sandbox code contacts the live server |
 | Cloud KV contents | **not copied** — the sandbox keeps its own (below) | User's decision, 2026-10-18 |
 
 **The cloud store: the sandbox keeps its own (user's decision, 2026-10-18).**
@@ -462,14 +466,19 @@ document:
 
 ## 13. Constraints
 
-- **The simulator runs on Lua 5.2 (spec owner's call).** CC runs a Lua
+- **The interpreter must meet three tests (spec owner's call).** CC runs a Lua
   5.2-flavoured VM with no integer subtype: in CC `3/1` prints as `3`; in Lua
   5.4 it prints as `3.0`. Those numbers go into files, radio messages and
-  coordinate keys, so 5.4 would make the sandbox disagree with the world in ways
-  no fleet change could fix. **First task of the build:** install a Lua 5.2
-  interpreter and run `luac -p` over every fleet file. If any fleet file uses
-  syntax 5.2 cannot parse, stop and report it to the spec owner before
-  continuing. (The existing test suite stays on 5.4; it is separate.)
+  coordinate keys. And stock Lua 5.2 and 5.4 randomise string hashing per
+  process, so `pairs` visits keys in a different order on every run; the fleet
+  has 106 `pairs` loops, which would break same-seed-same-run. So the
+  interpreter must: (1) parse every fleet file (the fleet is Lua 5.2: one
+  `goto`, no 5.3 operators); (2) print `3/1` as `3`; (3) give the same `pairs`
+  order across separate processes. Candidates, in order: Lua 5.2.4 built from
+  lua.org source with a fixed hash seed; LuaJIT 2.1. **Nothing suitable is
+  installed** (only Lua 5.4, and no C compiler), so installing one needs the
+  user's OK. If no candidate passes all three, the build stops and reports to
+  the spec owner. (The existing test suite stays on 5.4; it is separate.)
 - **Python 3.14** for the world importer; **Node 24** runs the local bridge.
 - No changes to fleet files to make the sandbox work. If the fleet code truly
   cannot run in the sandbox without a change, that is a mail to the file's
