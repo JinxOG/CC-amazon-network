@@ -28,9 +28,9 @@ one window alone can read as negative loss. This tool only reports totals.
 
 Usage:  python tools/ack_loss.py <since-ISO> [until-ISO]
 """
-import json, urllib.request, re, sys, statistics, collections, datetime
+import json, urllib.request, re, sys, statistics, collections, datetime, os
 
-B = "http://192.168.86.35:3000"
+B = os.environ.get("BRIDGE_URL", "http://192.168.86.35:3000")
 
 def get(u):
     with urllib.request.urlopen(u, timeout=90) as r:

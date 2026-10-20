@@ -11,7 +11,7 @@ Every check prints its EVIDENCE COUNT, not just a pass. A check that found
 nothing because it looked at nothing must not read like a pass -- that is the
 failure this project keeps repeating.
 """
-import json, urllib.request, re, sys, collections, datetime, math
+import json, urllib.request, re, sys, collections, datetime, math, os
 
 # NO CHARACTER MAY CRASH THE GATE. The server's lines carry arrows and dashes;
 # the Windows console is cp1252. Until 2026-10-01 the first "Auto-respawn: x →"
@@ -23,7 +23,7 @@ try:
 except Exception:
     pass
 
-B = "http://192.168.86.35:3000"
+B = os.environ.get("BRIDGE_URL", "http://192.168.86.35:3000")
 
 def get(u):
     with urllib.request.urlopen(u, timeout=90) as r:
