@@ -1,15 +1,20 @@
--- Incident 2026-10-05: the world restarted before the GPS hosts were up. Every turtle booted with "No GPS fix",
--- and the miners mid-job ran boot recovery from that guess, flying off toward loaders 1,700-2,800 blocks away
--- (fixed in 1.9.132, 390cb52: a miner never flies on a guessed position). The scenario restarts the world 45
--- minutes into a two-miner job with the GPS hosts ten minutes late, and records into sim.results:
---   moved_during_outage   how far (blocks) the farthest miner travelled while the GPS was still down
---   not_moving_logged     whether any turtle logged "NOT moving until one arrives"
---   fix_logged            whether any turtle later logged "can go ahead" (it recovered once the fix came back)
+-- Incident 2026-10-05: the world restarted before the GPS hosts were up. The miners mid-job rebooted with
+-- "No GPS fix. Tracking from (0,0,0)" and then ran boot recovery on a wrong picture of where they were and
+-- which way they faced, flying off toward their loaders thousands of blocks away in the wrong direction. All four
+-- were lost. 1.9.132 (390cb52) added waitForPositionFix; this scenario asks whether a miner still gets lost.
+--
+-- The world restarts 45 minutes into a two-miner job and the GPS hosts come back `gps_delay` later (default 60 s,
+-- inside the miners' two-minute boot wait). It hands its verdict to the test in sim.results:
+--   lost_miners          miners that end up neither at the depot nor anywhere near the mining area
+--   miner_positions      where each miner ended up
+--   not_moving_logged    some turtle logged "NOT moving"        (the wait-for-a-fix messages)
+--   can_go_ahead_logged  some turtle logged "can go ahead"     (it got its fix and carried on)
 return {
   world = "synthetic",
   seed = 1,
   miners = 2,
   workers = 6,
+  gps_delay = 60000,
   steps = function(sim)
     local waiting = sim:capture_log("NOT moving")
     local resumed = sim:capture_log("can go ahead")
@@ -17,32 +22,23 @@ return {
     local area = sim.world:meta().areas[1]
     sim:dispatch{ type = "ORDER_MINE", params = { x1 = area.x1, z1 = area.z1, x2 = area.x2, z2 = area.z2 } }
     local restart_at = 45 * 60000
-    local outage = 60000
-    sim:world_restart(restart_at, { gps_delay = outage })
+    local delay = sim.scenario.gps_delay
+    sim:world_restart(restart_at, { gps_delay = delay })
+    sim:run_until_time(restart_at + delay + 15 * 60000)  -- the GPS is back; give them time to recover or get lost
 
-    local function miners_at()
-      local out = {}
-      for _, id in ipairs({ 11, 12 }) do
-        local c = sim.by_id[id]
-        out[id] = { x = c.pos.x or 0, y = c.pos.y or 0, z = c.pos.z or 0 }
-      end
-      return out
+    local function near(x, z, box) return x >= box[1] and x <= box[3] and z >= box[2] and z <= box[4] end
+    local depot = { 100, -2850, 260, -2750 }
+    local zone = { area.x1 - 150, area.z1 - 150, area.x2 + 150, area.z2 + 150 }
+    local lost, where = 0, {}
+    for _, id in ipairs({ 11, 12 }) do
+      local c = sim.by_id[id]
+      local x, y, z = c.pos.x or 0, c.pos.y or 0, c.pos.z or 0
+      where[#where + 1] = string.format("node_%d at %d,%d,%d", id, x, y, z)
+      if not near(x, z, depot) and not near(x, z, zone) then lost = lost + 1 end
     end
-    -- let the restart happen and the miners come back up, then watch them while the GPS is still down
-    sim:run_until_time(restart_at + 90000)
-    local before = miners_at()
-    sim:run_until_time(restart_at + outage - 30000)
-    local after = miners_at()
-    local far = 0
-    for id, b in pairs(before) do
-      local a = after[id]
-      local d = math.abs(a.x - b.x) + math.abs(a.y - b.y) + math.abs(a.z - b.z)
-      if d > far then far = d end
-    end
-    sim.results.moved_during_outage = far
-    sim:run_until_time(restart_at + outage + 15 * 60000)   -- the GPS is back; give them time to recover
+    sim.results.lost_miners = lost
+    sim.results.miner_positions = where
     sim.results.not_moving_logged = waiting.count > 0
-    sim.results.fix_logged = resumed.count > 0
-    sim.results.not_moving_lines = waiting.lines
+    sim.results.can_go_ahead_logged = resumed.count > 0
   end,
 }
