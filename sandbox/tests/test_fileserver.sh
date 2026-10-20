@@ -68,6 +68,10 @@ if [ "$code" = "200" ] && grep -qi "<html" "$tmp/frame.html" && grep -q "not Dyn
 n="$(curl -s "http://127.0.0.1:$port/state" | node -e 'const m=require("./sandbox/bridge/map_model.js");let b="";process.stdin.on("data",d=>b+=d).on("end",()=>{const r=m.buildMapModel(JSON.parse(b));console.log(r.turtles.length,r.zones.length,r.zones[0].cells.filter(c=>c.state==="done").length)})')"
 [ "$n" = "3 1 1" ] && ok "map model has one marker per turtle" || fail "map model has one marker per turtle (got $n)"
 
+# zones: a 3-sector order (centres in rawBounds) gives 3 cells in the footprint, the active zone lists its miners
+m="$(node -e 'const m=require("./sandbox/bridge/map_model.js");const r=m.buildMapModel({turtles:{node_9:{role:"MINER",x:1950,z:-2625}},jobs:[{id:"job_1",assignedTo:"node_9",zoneKey:"1904,-2640,2000,-2608"}],mineZones:{job_1:{status:"ACTIVE",phase:"MINE",done:1,bounds:{x1:1904,z1:-2640,x2:2000,z2:-2608},rawBounds:{x1:1920,z1:-2624,x2:1984,z2:-2624}}}});const z=r.zones[0];console.log(z.cells.length,z.cells.map(c=>c.state).join("/"),z.active,z.minerIds.join(","),z.cells[0].x1,z.cells[0].z1)')"
+[ "$m" = "3 done/assigned/pending true node_9 1904 -2640" ] && ok "map model cuts a 3-sector zone into 3 cells" || fail "map model cuts a 3-sector zone into 3 cells (got $m)"
+
 # loopback only
 listen="$(netstat -ano 2>/dev/null | grep ":$port " | grep -i LISTEN | head -1)"
 if echo "$listen" | grep -q "127.0.0.1:$port"; then ok "listens on 127.0.0.1 only"; else fail "listens on 127.0.0.1 only ($listen)"; fi

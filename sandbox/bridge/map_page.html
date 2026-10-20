@@ -9,18 +9,41 @@
   var cv = document.getElementById('c'), g = cv.getContext('2d');
   var model = { turtles: [], zones: [], depot: null };
   window.__markers = [];
-  var view = null, drag = null, fitted = false;
-  function fit() {
+  var view = null, drag = null, fitKey = null, userMoved = false;
+  var PAD = { l: 24, r: 24, t: 24, b: 44 };       // keeps the fitted area clear of the corner note and the dashboard's hint
+  // What to fit: the active zones and the miners working them; the base only when no zone is active. The page is
+  // exactly the visible map (the dashboard's side panel is a flex sibling of the frame, not an overlay).
+  function fitPoints() {
     var xs = [], zs = [];
-    model.turtles.forEach(function (t) { xs.push(t.x); zs.push(t.z); });
-    model.zones.forEach(function (z) { xs.push(z.bounds.x1, z.bounds.x2); zs.push(z.bounds.z1, z.bounds.z2); });
-    if (model.depot) { xs.push(model.depot.x1, model.depot.x2); zs.push(model.depot.z1, model.depot.z2); }
-    if (!xs.length) return { cx: 0, cz: 0, s: 1 };
-    var x1 = Math.min.apply(0, xs) - 40, x2 = Math.max.apply(0, xs) + 40, z1 = Math.min.apply(0, zs) - 40, z2 = Math.max.apply(0, zs) + 40;
-    return { cx: (x1 + x2) / 2, cz: (z1 + z2) / 2, s: Math.min(cv.width / (x2 - x1), cv.height / (z2 - z1)) };
+    var active = model.zones.filter(function (z) { return z.active; });
+    if (active.length) {
+      active.forEach(function (z) {
+        xs.push(z.bounds.x1, z.bounds.x2); zs.push(z.bounds.z1, z.bounds.z2);
+        model.turtles.forEach(function (t) {
+          if (z.minerIds.indexOf(t.id) < 0) return;
+          // a miner still queued at the base would stretch the view over 1900 blocks; only those near the zone count
+          if (t.x > z.bounds.x1 - 300 && t.x < z.bounds.x2 + 300 && t.z > z.bounds.z1 - 300 && t.z < z.bounds.z2 + 300) { xs.push(t.x); zs.push(t.z); }
+        });
+      });
+    } else {
+      model.turtles.forEach(function (t) { xs.push(t.x); zs.push(t.z); });
+      if (model.depot) { xs.push(model.depot.x1, model.depot.x2); zs.push(model.depot.z1, model.depot.z2); }
+    }
+    return { xs: xs, zs: zs, key: active.map(function (z) { return z.jobId; }).sort().join('|') || (xs.length ? 'base' : '') };
+  }
+  function fit() {
+    var f = fitPoints();
+    if (!f.xs.length) return { cx: 0, cz: 0, s: 1 };
+    var x1 = Math.min.apply(0, f.xs) - 16, x2 = Math.max.apply(0, f.xs) + 16, z1 = Math.min.apply(0, f.zs) - 16, z2 = Math.max.apply(0, f.zs) + 16;
+    var w = Math.max(cv.width - PAD.l - PAD.r, 50), h = Math.max(cv.height - PAD.t - PAD.b, 50);
+    var s = Math.min(w / (x2 - x1), h / (z2 - z1));
+    // centre of the usable rectangle, not of the whole canvas
+    return { cx: (x1 + x2) / 2 - (PAD.l - PAD.r) / 2 / s, cz: (z1 + z2) / 2 - (PAD.t - PAD.b) / 2 / s, s: s };
   }
   function sx(x) { return cv.width / 2 + (x - view.cx) * view.s; }
   function sz(z) { return cv.height / 2 + (z - view.cz) * view.s; }
+  var LABEL = { pending: 'pending', assigned: 'working', done: 'done' };
+  var LINE = { pending: '#8f98a3', assigned: '#ffa94d', done: '#69db7c' };
   var FILL = { pending: 'rgba(255,255,255,0.06)', assigned: 'rgba(255,159,67,0.35)', done: 'rgba(105,219,124,0.35)' };
   function draw() {
     cv.width = innerWidth; cv.height = innerHeight;
@@ -29,8 +52,16 @@
     if (model.depot) { var d = model.depot; g.strokeStyle = '#ffd43b'; g.strokeRect(sx(d.x1), sz(d.z1), (d.x2 - d.x1) * view.s, (d.z2 - d.z1) * view.s);
       g.fillStyle = '#ffd43b'; g.font = '11px sans-serif'; g.fillText('base / depot', sx(d.x1) + 3, sz(d.z1) - 4); }
     model.zones.forEach(function (z) {
-      z.cells.forEach(function (c) { g.fillStyle = FILL[c.state]; g.fillRect(sx(c.x1), sz(c.z1), (c.x2 - c.x1) * view.s, (c.z2 - c.z1) * view.s); });
-      var b = z.bounds; g.strokeStyle = '#74c0fc'; g.strokeRect(sx(b.x1), sz(b.z1), (b.x2 - b.x1) * view.s, (b.z2 - b.z1) * view.s);
+      z.cells.forEach(function (c) {
+        var px = sx(c.x1), pz = sz(c.z1), pw = (c.x2 - c.x1) * view.s, ph = (c.z2 - c.z1) * view.s;
+        g.fillStyle = FILL[c.state]; g.fillRect(px, pz, pw, ph);
+        g.strokeStyle = LINE[c.state]; g.lineWidth = 1; g.strokeRect(px + 0.5, pz + 0.5, pw - 1, ph - 1);
+        g.font = '11px sans-serif';
+        var full = LABEL[c.state] + ' (' + Math.round((c.x1 + c.x2) / 2) + ',' + Math.round((c.z1 + c.z2) / 2) + ')';
+        var txt = g.measureText(full).width <= pw - 8 ? full : (g.measureText(LABEL[c.state]).width <= pw - 8 ? LABEL[c.state] : '');
+        if (txt && ph >= 20) { g.fillStyle = LINE[c.state]; g.fillText(txt, px + 5, pz + 14); }
+      });
+      var b = z.bounds; g.strokeStyle = '#74c0fc'; g.lineWidth = 2; g.strokeRect(sx(b.x1), sz(b.z1), (b.x2 - b.x1) * view.s, (b.z2 - b.z1) * view.s);
     });
     var placed = [];
     model.turtles.forEach(function (t) {
@@ -45,16 +76,17 @@
   function refresh() {
     fetch('/state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) {
       model = buildMapModel(s);
-      if (!fitted && (model.turtles.length || model.zones.length)) { fitted = true; view = null; }
+      var fk = fitPoints().key;
+      if (fk && fk !== fitKey && !userMoved) { fitKey = fk; view = null; } else if (fk && fk !== fitKey) { fitKey = fk; }
       window.__markers = model.turtles.map(function (t) { return { id: t.id, x: t.x, z: t.z, role: t.role, colour: t.colour }; });
       draw();
     }).catch(function () { /* silent */ });
   }
-  cv.addEventListener('wheel', function (e) { e.preventDefault(); if (!view) return; view.s *= e.deltaY < 0 ? 1.15 : 1 / 1.15; draw(); }, { passive: false });
+  cv.addEventListener('wheel', function (e) { e.preventDefault(); if (!view) return; userMoved = true; view.s *= e.deltaY < 0 ? 1.15 : 1 / 1.15; draw(); }, { passive: false });
   cv.addEventListener('mousedown', function (e) { drag = [e.clientX, e.clientY]; });
   addEventListener('mouseup', function () { drag = null; });
-  addEventListener('mousemove', function (e) { if (!drag || !view) return; view.cx -= (e.clientX - drag[0]) / view.s; view.cz -= (e.clientY - drag[1]) / view.s; drag = [e.clientX, e.clientY]; draw(); });
-  addEventListener('resize', function () { view = null; draw(); });
+  addEventListener('mousemove', function (e) { if (!drag || !view) return; userMoved = true; view.cx -= (e.clientX - drag[0]) / view.s; view.cz -= (e.clientY - drag[1]) / view.s; drag = [e.clientX, e.clientY]; draw(); });
+  addEventListener('resize', function () { if (!userMoved) view = null; draw(); });
   refresh(); setInterval(refresh, 2000);
 })();
 </script></body></html>
