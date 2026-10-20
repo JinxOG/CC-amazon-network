@@ -10,21 +10,26 @@ JSON.NULL = setmetatable({}, { __tostring = function() return "null" end })
 
 function JSON.object(t) return setmetatable(t or {}, JSON.OBJECT) end
 
+local find, sub, byte, format = string.find, string.sub, string.byte, string.format
+
 local ESC = { ['"'] = '\\"', ["\\"] = "\\\\", ["\b"] = "\\b", ["\f"] = "\\f", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t" }
 
 local function escape(s)
-  return (s:gsub('[%c"\\]', function(c) return ESC[c] or string.format("\\u%04x", c:byte()) end))
+  if not find(s, '[%c"\\]') then return s end
+  return (s:gsub('[%c"\\]', function(c) return ESC[c] or format("\\u%04x", byte(c)) end))
 end
+
+local floor = math.floor
 
 local function encode(v, seen)
   local t = type(v)
-  if t == "nil" then return "null"
-  elseif t == "boolean" then return tostring(v)
+  if t == "string" then return '"' .. escape(v) .. '"'
   elseif t == "number" then
     if v ~= v or v == math.huge or v == -math.huge then error("Unserializable number: " .. tostring(v), 0) end
-    if v == math.floor(v) and math.abs(v) < 1e15 then return string.format("%.0f", v) end
+    if v == floor(v) and v < 1e15 and v > -1e15 then return format("%.0f", v) end
     return tostring(v)
-  elseif t == "string" then return '"' .. escape(v) .. '"'
+  elseif t == "boolean" then return tostring(v)
+  elseif t == "nil" then return "null"
   elseif t == "table" then
     if v == JSON.NULL then return "null" end
     if seen[v] then error("Cannot serialize table with repeated entries", 0) end
@@ -33,7 +38,7 @@ local function encode(v, seen)
     local n, count = 0, 0
     for k in pairs(v) do
       count = count + 1
-      if type(k) == "number" and k == math.floor(k) and k >= 1 then n = math.max(n, k) end
+      if type(k) == "number" and k == floor(k) and k >= 1 and k > n then n = k end
     end
     local out
     if count == 0 then out = forced_object and "{}" or "[]"
@@ -42,12 +47,14 @@ local function encode(v, seen)
       for i = 1, n do items[i] = encode(v[i], seen) end
       out = "[" .. table.concat(items, ",") .. "]"
     else
-      local items = {}
+      local items, m = {}, 0
       for k, item in pairs(v) do
-        if type(k) ~= "string" and type(k) ~= "number" then
-          error("Tables with keys of type " .. type(k) .. " cannot be serialized as JSON", 0)
+        local kt = type(k)
+        if kt ~= "string" and kt ~= "number" then
+          error("Tables with keys of type " .. kt .. " cannot be serialized as JSON", 0)
         end
-        items[#items + 1] = '"' .. escape(tostring(k)) .. '":' .. encode(item, seen)
+        m = m + 1
+        items[m] = '"' .. escape(kt == "string" and k or tostring(k)) .. '":' .. encode(item, seen)
       end
       out = "{" .. table.concat(items, ",") .. "}"
     end
@@ -61,82 +68,95 @@ function JSON.encode(v) return encode(v, {}) end
 
 local function utf8_char(cp)
   if cp < 0x80 then return string.char(cp)
-  elseif cp < 0x800 then return string.char(0xC0 + math.floor(cp / 64), 0x80 + cp % 64)
-  elseif cp < 0x10000 then return string.char(0xE0 + math.floor(cp / 4096), 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64) end
-  return string.char(0xF0 + math.floor(cp / 262144), 0x80 + math.floor(cp / 4096) % 64, 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64)
+  elseif cp < 0x800 then return string.char(0xC0 + floor(cp / 64), 0x80 + cp % 64)
+  elseif cp < 0x10000 then return string.char(0xE0 + floor(cp / 4096), 0x80 + floor(cp / 64) % 64, 0x80 + cp % 64) end
+  return string.char(0xF0 + floor(cp / 262144), 0x80 + floor(cp / 4096) % 64, 0x80 + floor(cp / 64) % 64, 0x80 + cp % 64)
 end
 
+local UNESCAPE = { b = "\b", f = "\f", n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["/"] = "/" }
+
 -- Returns the value, or nil and a message. null becomes null_value (nil by default).
+-- Hot path (the stand-in decodes every push the server makes): scans with string.find, not char by char.
 function JSON.decode(s, null_value, mark_objects)
   local pos = 1
   local function fail(msg) error({ msg = msg .. " at position " .. pos }, 0) end
-  local function ws() pos = s:find("[^ \t\r\n]", pos) or #s + 1 end
   local value
-  local function str()
-    pos = pos + 1
+
+  local function str() -- pos is at the opening quote
+    local start = pos + 1
+    local q = find(s, '["\\]', start)
+    if not q then pos = #s + 1; fail("Unterminated string") end
+    if byte(s, q) == 34 then pos = q + 1; return sub(s, start, q - 1) end
+    -- escapes present: the slow path
     local out = {}
+    pos = start
     while true do
-      local c = s:sub(pos, pos)
+      local run = s:match('^[^"\\]+', pos)
+      if run then out[#out + 1] = run; pos = pos + #run end
+      local c = sub(s, pos, pos)
       if c == "" then fail("Unterminated string") end
       if c == '"' then pos = pos + 1; return table.concat(out) end
-      if c == "\\" then
-        local e = s:sub(pos + 1, pos + 1)
-        local map = { b = "\b", f = "\f", n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["/"] = "/" }
-        if map[e] then out[#out + 1] = map[e]; pos = pos + 2
-        elseif e == "u" then
-          local cp = tonumber(s:sub(pos + 2, pos + 5), 16) or fail("Bad unicode escape")
-          pos = pos + 6
-          if cp >= 0xD800 and cp < 0xDC00 and s:sub(pos, pos + 1) == "\\u" then
-            local lo = tonumber(s:sub(pos + 2, pos + 5), 16) or fail("Bad unicode escape")
-            cp = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00); pos = pos + 6
-          end
-          out[#out + 1] = utf8_char(cp)
-        else fail("Bad escape") end
-      else
-        local run = s:match('^[^"\\]+', pos)
-        out[#out + 1] = run; pos = pos + #run
-      end
+      local e = sub(s, pos + 1, pos + 1)
+      if UNESCAPE[e] then out[#out + 1] = UNESCAPE[e]; pos = pos + 2
+      elseif e == "u" then
+        local cp = tonumber(sub(s, pos + 2, pos + 5), 16) or fail("Bad unicode escape")
+        pos = pos + 6
+        if cp >= 0xD800 and cp < 0xDC00 and sub(s, pos, pos + 1) == "\\u" then
+          local lo = tonumber(sub(s, pos + 2, pos + 5), 16) or fail("Bad unicode escape")
+          cp = 0x10000 + (cp - 0xD800) * 1024 + (lo - 0xDC00); pos = pos + 6
+        end
+        out[#out + 1] = utf8_char(cp)
+      else fail("Bad escape") end
     end
   end
+
   function value()
-    ws()
-    local c = s:sub(pos, pos)
-    if c == "{" then
+    pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+    local c = byte(s, pos)
+    if c == 123 then -- {
       pos = pos + 1
       local o = mark_objects and setmetatable({}, JSON.OBJECT) or {}
-      ws()
-      if s:sub(pos, pos) == "}" then pos = pos + 1; return o end
+      pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+      if byte(s, pos) == 125 then pos = pos + 1; return o end
       while true do
-        ws(); if s:sub(pos, pos) ~= '"' then fail("Expected string key") end
-        local k = str(); ws()
-        if s:sub(pos, pos) ~= ":" then fail("Expected ':'") end
+        pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+        if byte(s, pos) ~= 34 then fail("Expected string key") end
+        local k = str()
+        pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+        if byte(s, pos) ~= 58 then fail("Expected ':'") end
         pos = pos + 1
-        o[k] = value(); ws()
-        local d = s:sub(pos, pos); pos = pos + 1
-        if d == "}" then return o elseif d ~= "," then fail("Expected ',' or '}'") end
+        o[k] = value()
+        pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+        local d = byte(s, pos); pos = pos + 1
+        if d == 125 then return o elseif d ~= 44 then fail("Expected ',' or '}'") end
       end
-    elseif c == "[" then
-      pos = pos + 1; local a, n = {}, 0
-      ws()
-      if s:sub(pos, pos) == "]" then pos = pos + 1; return a end
+    elseif c == 91 then -- [
+      pos = pos + 1
+      local a, n = {}, 0
+      pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+      if byte(s, pos) == 93 then pos = pos + 1; return a end
       while true do
-        n = n + 1; a[n] = value(); ws()
-        local d = s:sub(pos, pos); pos = pos + 1
-        if d == "]" then return a elseif d ~= "," then fail("Expected ',' or ']'") end
+        n = n + 1; a[n] = value()
+        pos = find(s, "[^ \t\r\n]", pos) or #s + 1
+        local d = byte(s, pos); pos = pos + 1
+        if d == 93 then return a elseif d ~= 44 then fail("Expected ',' or ']'") end
       end
-    elseif c == '"' then return str()
-    elseif s:sub(pos, pos + 3) == "true" then pos = pos + 4; return true
-    elseif s:sub(pos, pos + 4) == "false" then pos = pos + 5; return false
-    elseif s:sub(pos, pos + 3) == "null" then pos = pos + 4; return null_value
+    elseif c == 34 then return str()
+    elseif c == 116 and sub(s, pos, pos + 3) == "true" then pos = pos + 4; return true
+    elseif c == 102 and sub(s, pos, pos + 4) == "false" then pos = pos + 5; return false
+    elseif c == 110 and sub(s, pos, pos + 3) == "null" then pos = pos + 4; return null_value
     else
-      local num = s:match("^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
-      if not num or num == "" then fail("Unexpected character '" .. c .. "'") end
-      pos = pos + #num
-      return tonumber(num) or fail("Bad number")
+      local e = find(s, "[^%d%.eE+%-]", pos) or #s + 1
+      if e == pos then fail("Unexpected character '" .. sub(s, pos, pos) .. "'") end
+      local num = tonumber(sub(s, pos, e - 1)) or fail("Bad number")
+      pos = e
+      return num
     end
   end
+
   local ok, res = pcall(function()
-    local v = value(); ws()
+    local v = value()
+    pos = find(s, "[^ \t\r\n]", pos) or #s + 1
     if pos <= #s then fail("Unexpected trailing characters") end
     return v
   end)

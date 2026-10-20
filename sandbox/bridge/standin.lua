@@ -18,7 +18,7 @@ local CC_RESTART_GAP_MS = 20 * 1000
 local LOG_DISPLAY_MAX = 200
 local TURTLE_DISPLAY_MAX = 30
 local LOG_DEDUPE_MAX = 5000
-local FLUSH_WALL_SECONDS = 0.25
+local FLUSH_WALL_SECONDS = 1.0   -- at most this often in real time, so the live view lags a second but the simulator is not slowed
 
 local BRIDGE_OWNED = { locations = true, players = true, updatedAt = true, storageSource = true, storageAt = true }
 local EXPLICITLY_MERGED = { turtles = true, jobs = true, version = true, storage = true, storageTs = true,

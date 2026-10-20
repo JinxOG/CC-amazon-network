@@ -9,6 +9,7 @@ local M = {}
 
 M.MAX_RADIUS = 16
 local ORE_TAGS = { ["forge:ores"] = true, ["c:ores"] = true }
+local NO_TAGS = {}
 
 Blocks.register("advancedperipherals:geo_scanner", function(comp, bx, by, bz)
   local methods = {}
@@ -17,17 +18,11 @@ Blocks.register("advancedperipherals:geo_scanner", function(comp, bx, by, bz)
     if radius > M.MAX_RADIUS then error("Radius is bigger than the maximum", 2) end
     local world = comp.sched.world
     return CCEnv.main_thread_call(comp, TIMINGS.scan_ms * (comp.sched.action_scale or 1), function()
-      local out, n = {}, 0
-      for x = -radius, radius do
-        for y = -radius, radius do
-          for z = -radius, radius do
-            local name = world:get(bx + x, by + y, bz + z)
-            if name and not (x == 0 and y == 0 and z == 0) then
-              n = n + 1
-              out[n] = { name = name, tags = name:find("ore", 1, true) and ORE_TAGS or {}, x = x, y = y, z = z }
-            end
-          end
-        end
+      local names, xs, ys, zs, n = world:scan_cube(bx, by, bz, radius)
+      local out = {}
+      for i = 1, n do
+        local name = names[i]
+        out[i] = { name = name, tags = name:find("ore", 1, true) and ORE_TAGS or NO_TAGS, x = xs[i], y = ys[i], z = zs[i] }
       end
       return out
     end)

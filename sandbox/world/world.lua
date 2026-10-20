@@ -38,6 +38,7 @@ function World:meta() return self.meta_t end
 function World:replace_with(other)
   self.chunks, self.absent, self.meta_t, self.dir = other.chunks, other.absent, other.meta_t, other.dir
   self.occupants, self.containers, self.block_periph = {}, {}, nil
+  self.last_cx = nil
 end
 
 function World:chunk_of(x, z) return math.floor(x / 16), math.floor(z / 16) end
@@ -73,22 +74,59 @@ local function load_chunk(self, cx, cz)
   return nil
 end
 
-function World:get(x, y, z)
-  local cx, cz = self:chunk_of(x, z)
+-- the chunk at (cx, cz), remembering the last one asked for: neighbouring lookups (scans, walks) stay in a chunk
+local function chunk_at(self, cx, cz)
+  if cx == self.last_cx and cz == self.last_cz then return self.last_chunk or nil end
   local c = load_chunk(self, cx, cz)
+  self.last_cx, self.last_cz, self.last_chunk = cx, cz, c or false
+  return c
+end
+
+function World:get(x, y, z)
+  local c = chunk_at(self, math.floor(x / 16), math.floor(z / 16))
   if c then
-    local v = c.blocks[index_of(x, y, z)]
+    local v = c.blocks[(y - MIN_Y) * 256 + (z % 16) * 16 + (x % 16)]
     if v ~= nil then return v or nil end
   end
   return default_block(self.meta_t.terrain, y)
 end
 
+-- Every non-air block within `r` of (bx, by, bz), as parallel arrays of name and offsets from the centre (the
+-- centre itself is left out), in column order. The geo scanner's workhorse: one chunk lookup per column.
+function World:scan_cube(bx, by, bz, r)
+  local names, xs, ys, zs, n = {}, {}, {}, {}, 0
+  local terrain = self.meta_t.terrain
+  local ylo, yhi = by - r, by + r
+  local defaults = {}
+  for y = ylo, yhi do defaults[y - ylo] = default_block(terrain, y) end
+  local floor = math.floor
+  for x = bx - r, bx + r do
+    local cx, lx = floor(x / 16), x % 16
+    for z = bz - r, bz + r do
+      local c = chunk_at(self, cx, floor(z / 16))
+      local blocks = c and c.blocks
+      local base = (z % 16) * 16 + lx - MIN_Y * 256
+      for y = ylo, yhi do
+        local v
+        if blocks then v = blocks[y * 256 + base] end
+        if v == nil then v = defaults[y - ylo] elseif v == false then v = nil end
+        if v and not (x == bx and y == by and z == bz) then
+          n = n + 1
+          names[n], xs[n], ys[n], zs[n] = v, x - bx, y - by, z - bz
+        end
+      end
+    end
+  end
+  return names, xs, ys, zs, n
+end
+
 function World:set(x, y, z, name)
   local cx, cz = self:chunk_of(x, z)
-  local c = load_chunk(self, cx, cz)
+  local c = chunk_at(self, cx, cz)
   if not c then
     c = { blocks = {} }
     self.chunks[chunk_key(cx, cz)] = c
+    self.last_cx = nil -- a chunk now exists where the cache may have remembered none
   end
   local idx = index_of(x, y, z)
   if name == nil then
