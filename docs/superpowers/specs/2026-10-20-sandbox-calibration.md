@@ -36,10 +36,14 @@ disconnects should not be closed on a sandbox run until this gap is understood. 
 
 The zone the user named: **x 1904..2000, z −2640..−2608**, mined with two miners.
 
-1. In the sandbox (done): `sandbox/sim run sandbox/scenarios/real_world_six_hours.lua` — six simulated hours from the
-   2026-10-18 17:00 backup. Result on 2026-10-20: **11,304 ore blocks delivered to storage in six hours** by two
-   miners, a batch every 55 s, 208× real time. The two jobs did not finish in six hours; the zone has 15 sectors.
-2. On the real server (the user): order the same job — two miners on the same four corners — and let it run for the
+1. In the sandbox (done, redone 2026-10-20): `sandbox/sim run sandbox/scenarios/real_world_three_sectors.lua`. The
+   order must carry the sector **centres** `x1=1920 z1=-2624 x2=1984 z2=-2624`; the corners 1904,-2640,2000,-2608 are
+   the footprint the dashboard draws, and ordering them makes the server cut 5 x 3 = 15 sectors (twelve outside the
+   imported world). Result for the 3-sector order: survey done 24 min after dispatch, all 3 sectors mined 3 h 26 min
+   after dispatch, rescan finished by 3 h 44 min; one miner did the work; 4,172 ore from the first sector, 0 from
+   the others; 4,196 ore blocks in storage; 288x real time. The first (15-sector) result of 11,304 ore / 208x is void
+   as a calibration number (`real_world_six_hours.lua` still exists as the speed benchmark).
+2. On the real server (the user): order the same job — the same order (centres 1920,-2624 to 1984,-2624) — and let it run for the
    same six hours, from a state like the backup's (all miners docked, storage as in `state-2026-10-19.json`).
 3. Compare: ore delivered, batches per hour, sectors done, messages sent and the ack loss from
    `tools/ack_loss.py`. Expected differences: ack loss (section 2), and anything in the mod world the sandbox does

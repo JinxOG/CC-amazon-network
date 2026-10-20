@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Forward calibration - run the 1904,-2640,2000,-2608 two-miner job on the live server
 date: 2026-10-20
-status: open
+status: W3=open,SANDBOX=closed
 ---
 
 # Forward calibration - run the 1904,-2640,2000,-2608 two-miner job on the live server
