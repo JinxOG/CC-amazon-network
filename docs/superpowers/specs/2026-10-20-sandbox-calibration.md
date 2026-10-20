@@ -25,12 +25,30 @@ moves. It makes the cadence right; it does not prove 300 ms is what a move takes
 Geo scan time (1 s), reboot time (1 s), the cost of a turtle command such as `detect` (one tick), cloud-store calls
 (50 ms), attack time, and — more important — the **radio and mailbox behaviour behind ack loss**.
 
-**Ack loss is not reproduced.** On the live fleet, turtles parked at the dock lose a noticeable share of server
-acknowledgements (W1/W3 measured about 11%, 18% with the fleet idle; a working miner about 1%). In the sandbox every
-parked turtle shows 0.0% and the miners about 0% (a few percent *negative*: duplicate deliveries). The sandbox models
-the events that destroy messages — filtered yields, the 256-event queue cap, busy computers — so the mechanism that
-costs the live fleet its acks is not (or not fully) in the model. `radio_loss` can imitate the rate, but a card about
-disconnects should not be closed on a sandbox run until this gap is understood. This is a finding for W3.
+**Ack loss: compared against the right figure, and the old fault is reproduced.** The 11-18% parked loss was the
+fleet *before* the per-turtle private channel (23f5a97 step 1, 105d104 step 3 = 1.9.112, which the live 1.9.148
+contains). The live parked loss now is **0.02%** (182,728 acks of 182,760 beats over 24 h, 16 parked nodes; W3,
+f817162). Replay in the sandbox, whole fleet parked at the base, no job, 8 simulated hours, synthetic world,
+`sandbox/scenarios/ack_loss_parked.lua --code rev:<sha>`, `tools/ack_loss.py` through `BRIDGE_URL`:
+
+| code | parked ack loss |
+|---|---|
+| before 23f5a97 (1.9.107) | **9.08%** (per node 2.1-12.3%; live: 11% parked, 18% idle) |
+| 23f5a97 (step 1, listens on both channels) | 9.16% |
+| 105d104 (step 3, 1.9.112) | 1.15% (live today: 0.02%) |
+| current master | **0.03%** (live today: 0.02%) |
+
+So the sandbox shows the old fault, a little smaller than live (9% against 11-18%), shows it gone after step 3, and
+matches the live figure on current code. It does not match the live figure at 1.9.112 (1.15% against 0.02%): the
+remaining 1% went away between 105d104 and master. The sandbox's own message-loss counters for the old code show that
+**the acks are not lost at the event queue**: for each parked worker every ack addressed to it was queued (about
+3,400 over 8 h, matching the beats) and every one was handed to its program; none was dropped by the 256-event queue
+(0 overflows anywhere) or by a filtered yield (0 acks; 1-7 of 22,000 messages per worker). The turtle's own counter
+still reads 9% fewer acks than beats, so the loss is after the hand-off, inside the program's receive/handling
+(consistent with the "drain-first" behaviour of `base.receive`, not confirmed here). The server computer, by
+contrast, does lose messages to filtered yields on the old code (2,135 of 22,255, 9.6%). Open question for W3: where in
+turtle_base's loop the acks go. The sandbox's turn rate for a parked worker is 0.9 turns/s on the old code and 0.34
+after step 3; check that against live logs of both eras.
 
 ## 3. Forward calibration (spec 8.2) — what the user needs to do
 

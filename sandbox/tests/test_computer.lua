@@ -106,4 +106,16 @@ return {
     t.eq(comp.state, "off")
     t.ok(comp.output[#comp.output].text:find("boom"), "error not printed")
   end,
+
+  ["lost events and heartbeat acks are counted by stage (message-loss scenarios read these)"] = function(t)
+    local comp, sched = rig([[ local e = yield("modem_message"); print("got") ]])
+    comp:boot(); sched:run{ until_ms = 0 }
+    local ack = 'type = "HEARTBEAT_ACK", to = "node_1", from = "server"'
+    sched:post(1, comp, { "timer", 1 })                                   -- eaten by the filtered yield
+    sched:post(2, comp, { "modem_message", "top", 1032, 1032, ack, 0 })   -- delivered
+    sched:run{ until_ms = 10 }
+    t.eq(comp.stats.discarded.timer, 1)
+    t.eq(comp.stats.delivered.modem_message, 1)
+    t.eq(comp.stats.acks.queued, 1); t.eq(comp.stats.acks.delivered, 1); t.eq(comp.stats.acks.discarded, nil)
+  end,
 }

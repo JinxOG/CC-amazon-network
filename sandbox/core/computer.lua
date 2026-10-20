@@ -148,15 +148,39 @@ function Computer:effective_state()
   return self.state
 end
 
+-- Events lost on the way to a program, by cause ("discarded": a filtered yield was waiting for something else;
+-- "overflowed": the 256-event queue was full) and by event name. Read by scenarios that measure message loss.
+function Computer:count(kind, name)
+  local st = self.stats
+  if not st then st = { discarded = {}, overflowed = {}, delivered = {}, acks = {} }; self.stats = st end
+  st[kind][name] = (st[kind][name] or 0) + 1
+end
+
+-- Heartbeat acknowledgements addressed to this computer, counted at each stage on the way to the program, so a
+-- scenario can say where acks are lost: "arrived" (the queue was asked to take it), "overflowed", "queued", "discarded"
+-- (dropped by a filtered yield) and "delivered" (handed to the program). Only the stage counts; nothing changes.
+function Computer:ack_stage(ev, stage)
+  local m = ev[5]
+  -- on the air a message is serialised text: {   type = "HEARTBEAT_ACK",   to = "node_32", ...
+  if ev[1] == "modem_message" and type(m) == "string" and m:find('type = "HEARTBEAT_ACK"', 1, true)
+     and m:find('to = "' .. self.name .. '"', 1, true) then
+    self:count("acks", stage)
+  end
+end
+
 function Computer:drain()
   while self.state == "waiting" and #self.queue > 0 do
     local ev = table.remove(self.queue, 1)
     local name = tostring(ev[1])
     if self.filter == nil or self.filter == ev[1] or ev[1] == "terminate" then
       self.sched:trace(self.name .. " deliver " .. name)
+      if name == "modem_message" then self:count("delivered", name) end
+      self:ack_stage(ev, "delivered")
       self:resume(ev)
     else
       self.sched:trace(self.name .. " discard " .. name)
+      self:count("discarded", name)
+      self:ack_stage(ev, "discarded")
     end
   end
 end
@@ -169,9 +193,12 @@ function Computer:queue_event(ev)
   end
   if #self.queue >= Computer.QUEUE_MAX then
     self.sched:trace(self.name .. " overflow " .. tostring(ev[1]))
+    self:count("overflowed", tostring(ev[1]))
+    self:ack_stage(ev, "overflowed")
     return false
   end
   self.queue[#self.queue + 1] = ev
+  self:ack_stage(ev, "queued")
   local st = self.state
   if st == "waiting" then
     self:drain()
