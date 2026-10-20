@@ -116,6 +116,7 @@ turtles) is not reproduced (calibration note, section 2).
 - Speed on the real world copy is about 200×, not 300×: most of the time is the fleet's own Lua (the miners sort their
   ore list after every ore).
 - A faster Lua was tried (LuaJIT 2.1, built and kept in `G:\TurtleOS-Sandbox\interpreter\`, about 8x faster on pure Lua) but its `pairs` order differs between processes, which breaks reproducible runs; see `BUILD-NOTES.txt` there. The default stays Lua 5.2.4.
+- Digging drops come from loot tables derived from the SakuraPack client instance (`sandbox/data/drops_sakurapack.json`, `sandbox/tools/derive_drops.py`, read-only on the jars); unverified until a local test server confirms them. Ore in storage is now counted by what ore blocks drop (raw_iron, diamond, ...), not by block name.
 - Ack loss is not reproduced; the CC radio and mailbox behaviour behind it is only partly modelled.
 - Timings marked `unverified` in `sandbox/timings.lua` are guesses; the movement time is fitted to the live ore-batch
   cadence, not measured per action.

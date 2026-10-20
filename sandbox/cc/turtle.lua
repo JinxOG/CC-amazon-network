@@ -22,6 +22,7 @@ local UPGRADES = {
   ["computercraft:wireless_modem_normal"] = true,
   ["advancedperipherals:chunk_controller"] = true,
 }
+local Drops = require("world.drops")
 local DROPS = {
   ["minecraft:stone"] = "minecraft:cobblestone",
   ["minecraft:grass_block"] = "minecraft:dirt",
@@ -301,6 +302,7 @@ function M.install(comp, E)
   end
 
   -- digging and placing ----------------------------------------------------------------------
+  local dig_rng
   local function dig(dir)
     return timed(TIMINGS.dig_ms, function()
       if not is_pickaxe(st.equipped.left) and not is_pickaxe(st.equipped.right) then return false, "No tool to dig with" end
@@ -317,12 +319,18 @@ function M.install(comp, E)
         return true
       end
       local container = world.containers and world.containers[key(x, y, z)]
-      local drop
-      if container and container.as_item then drop = container:as_item() else drop = { name = DROPS[b] or b, count = 1 } end
+      local drops
+      if container and container.as_item then drops = { container:as_item() }
+      else
+        dig_rng = dig_rng or sched.rng:fork("dig:" .. comp.name)
+        drops = Drops.roll(b, dig_rng) or { { name = DROPS[b] or b, count = 1 } }
+      end
       world:set(x, y, z, nil)
       if world.containers then world.containers[key(x, y, z)] = nil end
-      local left = store(drop)
-      if left > 0 then st.dropped[#st.dropped + 1] = { name = drop.name, count = left } end
+      for _, drop in ipairs(drops) do
+        local left = store(drop)
+        if left > 0 then st.dropped[#st.dropped + 1] = { name = drop.name, count = left } end
+      end
       return true
     end)
   end

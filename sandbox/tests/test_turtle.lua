@@ -67,10 +67,10 @@ return {
     t.eq(out(comp), "false\tOut of fuel")
   end,
 
-  ["dig puts the block in the inventory"] = function(t)
+  ["dig puts what the block drops in the inventory (iron ore gives raw iron)"] = function(t)
     local comp, sched, world = rig([[ print(turtle.dig(), turtle.getItemCount(1), turtle.getItemDetail(1).name) ]], function(c, w) PICK(c); w:set(0, 64, -1, "minecraft:iron_ore") end)
     sched:run{ until_ms = 5000 }
-    t.eq(out(comp), "true\t1\tminecraft:iron_ore")
+    t.eq(out(comp), "true\t1\tminecraft:raw_iron")
     t.eq(world:get(0, 64, -1), nil)
   end,
 

@@ -43,11 +43,12 @@ local function code_label(sim)
   return spec
 end
 
+local Drops = require("world.drops")
 local function ore_summary(sim)
   local by, total = {}, 0
   local final, initial = sim.sched.storage.amounts, sim.initial_storage or {}
   for name, n in pairs(final) do
-    if name:find("ore", 1, true) then
+    if Drops.is_ore_item(name) then
       local gained = n - (initial[name] or 0)
       if gained > 0 then by[name] = gained; total = total + gained end
     end

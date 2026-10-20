@@ -1,6 +1,7 @@
 -- The real fleet files, unchanged, on the synthetic world. Slow on purpose: it is the whole point.
 package.path = "sandbox/?.lua;" .. package.path
 local Runner = require("scenario.runner")
+local Drops = require("world.drops")
 local H = dofile("sandbox/tests/helpers.lua")
 
 local result -- one run, shared by every check below
@@ -20,11 +21,11 @@ return {
     t.ok(#(r.sim.expectations or {}) > 0, "the scenario made no expectations")
   end,
 
-  ["ore from the job reaches storage"] = function(t)
+  ["ore from the job reaches storage (as blocks or as what they drop)"] = function(t)
     local r = run()
     local st = r.sim.sched.storage
     local ore = 0
-    for name, n in pairs(st.amounts) do if name:find("_ore") then ore = ore + n end end
+    for name, n in pairs(st.amounts) do if name:find("_ore") or Drops.is_ore_item(name) then ore = ore + n end end
     t.ok(ore > 100, "only " .. ore .. " ore blocks reached storage")
   end,
 

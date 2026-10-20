@@ -2,6 +2,8 @@
 -- the sector CENTRES (1920..1984, z -2624); the footprint 1904..2000 x -2640..-2608 is what the dashboard draws around
 -- them. real_world_six_hours passes the footprint corners as the order, which the server pads to 5 x 3 = 15 sectors,
 -- twelve of them outside the imported world.
+package.path = "sandbox/?.lua;" .. package.path
+local Drops = require("world.drops")
 local DATA = (os.getenv("SANDBOX_DATA") or "G:/TurtleOS-Sandbox"):gsub("\\", "/")
 return {
   world = DATA .. "/worlds/2026-10-18_1700/sim",
@@ -12,7 +14,7 @@ return {
     sim:run_until(6 * 3600 * 1000)
     local mined = 0
     for name, n in pairs(sim.sched.storage.amounts) do
-      if name:find("ore", 1, true) then mined = mined + n - (sim.initial_storage[name] or 0) end
+      if Drops.is_ore_item(name) then mined = mined + n - (sim.initial_storage[name] or 0) end
     end
     sim.results.ore_gained = mined
     sim:expect(mined > 1000, "the two miners brought in ore from the zone (" .. mined .. " blocks)")

@@ -1,0 +1,4238 @@
+{
+ "about": "Derived by sandbox/tools/derive_drops.py from the loot tables of a CLIENT instance; no mod code is copied. Drops are for a plain pickaxe (no silk touch, no fortune). Unverified until a local test server confirms them.",
+ "blocks": {
+  "advancedperipherals:chunk_controller": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "advancedperipherals:geo_scanner": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "advancedperipherals:geo_scanner",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "AdvancedPeripherals-1.20.1-0.7.46r.jar"
+  },
+  "advancedperipherals:rs_bridge": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "advancedperipherals:rs_bridge",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "AdvancedPeripherals-1.20.1-0.7.46r.jar"
+  },
+  "bigreactors:deepslate_yellorite_ore": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "bigreactors:yellorite_ore": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "biomesoplenty:hanging_cobweb": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomesoplenty:hanging_cobweb",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar",
+   "unhandled": [
+    "match_tool on items {\"tag\": \"biomesoplenty:shears\"}",
+    "treated as true: minecraft:match_tool"
+   ]
+  },
+  "biomesoplenty:hanging_cobweb_strand": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomesoplenty:hanging_cobweb",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar",
+   "unhandled": [
+    "match_tool on items {\"tag\": \"biomesoplenty:shears\"}",
+    "treated as true: minecraft:match_tool"
+   ]
+  },
+  "biomesoplenty:redwood_leaves": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomesoplenty:redwood_leaves",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 0.02,
+     "item": "minecraft:stick",
+     "max": 2,
+     "min": 1
+    }
+   ],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:any_of",
+    "treated as true: minecraft:inverted"
+   ]
+  },
+  "biomesoplenty:redwood_log": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomesoplenty:redwood_log",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar"
+  },
+  "biomesoplenty:redwood_wood": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomesoplenty:redwood_wood",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar"
+  },
+  "biomesoplenty:spider_egg": {
+   "drops": [],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar"
+  },
+  "biomesoplenty:stringy_cobweb": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "biomesoplenty:webbing": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomesoplenty:webbing",
+     "max": 6,
+     "min": 6
+    }
+   ],
+   "source": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "match_tool on items {\"tag\": \"biomesoplenty:shears\"}",
+    "treated as true: minecraft:block_state_property",
+    "treated as true: minecraft:match_tool"
+   ]
+  },
+  "biomeswevegone:clover_patch": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomeswevegone:clover_patch",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Oh-The-Biomes-Weve-Gone-Forge-1.7.5.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:match_tool"
+   ]
+  },
+  "biomeswevegone:florus_stem": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomeswevegone:florus_stem",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Oh-The-Biomes-Weve-Gone-Forge-1.7.5.jar"
+  },
+  "biomeswevegone:pink_anemone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "biomeswevegone:pink_anemone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Oh-The-Biomes-Weve-Gone-Forge-1.7.5.jar"
+  },
+  "born_in_chaos_v1:black_argillite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "born_in_chaos_v1:black_argillite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "born_in_chaos_[Forge]1.20.1_1.7.5.jar"
+  },
+  "born_in_chaos_v1:infected_deepslate_diamond_ore": {
+   "drops": [],
+   "source": "born_in_chaos_[Forge]1.20.1_1.7.5.jar"
+  },
+  "born_in_chaos_v1:infected_diamond_ore": {
+   "drops": [],
+   "source": "born_in_chaos_[Forge]1.20.1_1.7.5.jar"
+  },
+  "cfm:oak_table": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "cfm:oak_table",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "cfm-forge-1.20.1-7.0.0-pre36.jar"
+  },
+  "chipped:checkered_andesite_tiles": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "chunkloaders:ultimate_chunk_loader": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "chunkloaders:ultimate_chunk_loader",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "chunkloaders-1.2.9-forge-mc1.20.1.jar"
+  },
+  "cloudsolutions:kv_storage": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "cloudsolutions:kv_storage",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "cloudsolutions-forge-1.20.1-0.3.4.jar"
+  },
+  "computercraft:computer_advanced": {
+   "drops": [],
+   "source": "cc-tweaked-1.20.1-forge-1.120.2.jar",
+   "unhandled": [
+    "condition computercraft:block_named",
+    "condition computercraft:has_id",
+    "condition computercraft:player_creative",
+    "entry minecraft:dynamic",
+    "treated as true: minecraft:any_of"
+   ]
+  },
+  "computercraft:computer_normal": {
+   "drops": [],
+   "source": "cc-tweaked-1.20.1-forge-1.120.2.jar",
+   "unhandled": [
+    "condition computercraft:block_named",
+    "condition computercraft:has_id",
+    "condition computercraft:player_creative",
+    "entry minecraft:dynamic",
+    "treated as true: minecraft:any_of"
+   ]
+  },
+  "computercraft:monitor_advanced": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "computercraft:monitor_advanced",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "cc-tweaked-1.20.1-forge-1.120.2.jar"
+  },
+  "computercraft:turtle_advanced": {
+   "drops": [],
+   "source": "cc-tweaked-1.20.1-forge-1.120.2.jar",
+   "unhandled": [
+    "condition computercraft:block_named",
+    "condition computercraft:has_id",
+    "condition computercraft:player_creative",
+    "entry minecraft:dynamic",
+    "treated as true: minecraft:any_of"
+   ]
+  },
+  "computercraft:wireless_modem_advanced": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "computercraft:wireless_modem_advanced",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "cc-tweaked-1.20.1-forge-1.120.2.jar"
+  },
+  "cookingforblockheads:black_kitchen_floor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "cookingforblockheads:black_kitchen_floor",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "cookingforblockheads-forge-1.20.1-16.0.15.jar"
+  },
+  "cookingforblockheads:gray_kitchen_floor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "cookingforblockheads:gray_kitchen_floor",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "cookingforblockheads-forge-1.20.1-16.0.15.jar"
+  },
+  "create:andesite_belt_funnel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:andesite_funnel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:asurine": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:asurine",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:belt": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:belt_connector",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:brass_belt_funnel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:brass_funnel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:crimsite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:crimsite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:deepslate_zinc_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:raw_zinc",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:depot": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:depot",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:encased_fan": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:encased_fan",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:gearbox": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:gearbox",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:limestone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:limestone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:mechanical_press": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:mechanical_press",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:mechanical_saw": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:mechanical_saw",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:scoria": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:scoria",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:shaft": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:shaft",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:veridium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:veridium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:water_wheel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:water_wheel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create:zinc_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create:raw_zinc",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-1.20.1-6.0.8.jar"
+  },
+  "create_new_age:magnetite_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create_new_age:magnetite_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-new-age-1.1.7f+forge-mc1.20.1.jar"
+  },
+  "create_new_age:thorium_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "create_new_age:thorium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "create-new-age-1.1.7f+forge-mc1.20.1.jar"
+  },
+  "createdeco:industrial_iron_catwalk": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "createdeco:industrial_iron_catwalk",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "createdeco-2.0.3-1.20.1-forge.jar"
+  },
+  "createdeco:industrial_iron_catwalk_railing": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "createdeco:industrial_iron_catwalk_railing",
+     "max": 4,
+     "min": 4
+    }
+   ],
+   "source": "createdeco-2.0.3-1.20.1-forge.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "createdeco:industrial_iron_catwalk_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "createdeco:industrial_iron_catwalk_stairs",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 1.0,
+     "item": "createdeco:industrial_iron_catwalk_railing",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "createdeco-2.0.3-1.20.1-forge.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "createdeco:industrial_iron_support": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "createdeco:industrial_iron_support",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "createdeco-2.0.3-1.20.1-forge.jar"
+  },
+  "directgpu:gpu_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "directgpu:gpu_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "DirectGPU-1.0.19Forge.jar"
+  },
+  "electrodynamics:deepslateorechromium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworechromium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateorefluorite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworefluorite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateorelead": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworelead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateorelithium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworelepidolite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoremonazite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworethorium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoreniter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:dustniter",
+     "max": 3,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoresilver": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworesilver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoresulfur": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:dustsulfur",
+     "max": 5,
+     "min": 3
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoresylvite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:crystalpotassiumchloride",
+     "max": 3,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateorethorium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworethorium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoretin": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworetin",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoretitanium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworetitanium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateoreuranium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworeuranium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:deepslateorevanadium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworevanadinite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orealuminum": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:orealuminum",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orechromium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworechromium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orefluorite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworefluorite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orelead": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworelead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orelithium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworelepidolite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oremolybdenum": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:oremolybdenum",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oremonazite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworethorium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oreniter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:dustniter",
+     "max": 3,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oresalt": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:crystalhalite",
+     "max": 3,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oresilver": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworesilver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oresulfur": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:dustsulfur",
+     "max": 5,
+     "min": 3
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oresylvite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:crystalpotassiumchloride",
+     "max": 3,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orethorium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworethorium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:oretin": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworetin",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "electrodynamics:orevanadium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "electrodynamics:raworevanadinite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  "enderstorage:ender_chest": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "fluxnetworks:flux_controller": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "fluxnetworks:flux_controller",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "FluxNetworks-1.20.1-7.2.1.15.jar"
+  },
+  "fluxnetworks:flux_point": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "fluxnetworks:flux_point",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "FluxNetworks-1.20.1-7.2.1.15.jar"
+  },
+  "fluxnetworks:herculean_flux_storage": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "fluxnetworks:herculean_flux_storage",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "FluxNetworks-1.20.1-7.2.1.15.jar"
+  },
+  "furenikusroads:concrete16_16": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "furenikusroads:concrete8_16": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "immersiveengineering:deepslate_ore_aluminum": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_aluminum",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:deepslate_ore_lead": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_lead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:deepslate_ore_nickel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_nickel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:deepslate_ore_silver": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_silver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:deepslate_ore_uranium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_uranium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:ore_aluminum": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_aluminum",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:ore_lead": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_lead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:ore_nickel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_nickel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:ore_silver": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_silver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "immersiveengineering:ore_uranium": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "immersiveengineering:raw_uranium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  "ironchest:obsidian_chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "ironchest:obsidian_chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "ironchest-1.20.1-14.4.4.jar"
+  },
+  "londonunderground:morden_steps_left": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "londonunderground:morden_steps_right": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "lootr:lootr_barrel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:barrel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "lootr-forge-1.20-0.7.35.94.jar"
+  },
+  "mdm:white_modern_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mdm:white_modern_stairs",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "mdm-26.5.0-forge-1.20.1.jar"
+  },
+  "mekanism:deepslate_fluorite_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:fluorite_gem",
+     "max": 4,
+     "min": 2
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:deepslate_lead_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_lead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:deepslate_osmium_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_osmium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:deepslate_tin_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_tin",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:deepslate_uranium_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_uranium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:fluorite_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:fluorite_gem",
+     "max": 4,
+     "min": 2
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:lead_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_lead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:osmium_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_osmium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:tin_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_tin",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "mekanism:uranium_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "mekanism:raw_uranium",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  "minecraft:amethyst_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:amethyst_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:amethyst_cluster": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:amethyst_shard",
+     "max": 4,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "match_tool on items {\"tag\": \"minecraft:cluster_max_harvestables\"}",
+    "treated as true: minecraft:match_tool"
+   ]
+  },
+  "minecraft:andesite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:andesite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:anvil": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:anvil",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:barrel": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:barrel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:bedrock": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "minecraft:birch_leaves": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:birch_leaves",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 0.02,
+     "item": "minecraft:stick",
+     "max": 2,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:any_of",
+    "treated as true: minecraft:inverted"
+   ]
+  },
+  "minecraft:birch_log": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:birch_log",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:birch_planks": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:birch_planks",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:birch_slab": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:birch_slab",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:birch_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:birch_stairs",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:black_stained_glass_pane": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:brown_mushroom": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:brown_mushroom",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:brown_mushroom_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:brown_mushroom",
+     "max": 2,
+     "min": 0
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:budding_amethyst": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:calcite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:calcite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:campfire": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:charcoal",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:candle": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:candle",
+     "max": 4,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:cauldron": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:cauldron",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:coal_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:coal",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:coarse_dirt": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:coarse_dirt",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:cobbled_deepslate": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:cobbled_deepslate",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:cobblestone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:cobblestone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:cobweb": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:cobweb",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:any_of"
+   ]
+  },
+  "minecraft:copper_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:raw_copper",
+     "max": 5,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:crafting_table": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:crafting_table",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:dark_oak_leaves": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dark_oak_leaves",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 0.02,
+     "item": "minecraft:stick",
+     "max": 2,
+     "min": 1
+    },
+    {
+     "chance": 0.005,
+     "item": "minecraft:apple",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:any_of",
+    "treated as true: minecraft:inverted"
+   ]
+  },
+  "minecraft:dark_oak_log": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dark_oak_log",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:dark_oak_slab": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dark_oak_slab",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:deepslate": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:cobbled_deepslate",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_coal_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:coal",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_copper_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:raw_copper",
+     "max": 5,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_diamond_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:diamond",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_gold_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:raw_gold",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_iron_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:raw_iron",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_lapis_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:lapis_lazuli",
+     "max": 9,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:deepslate_redstone_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:redstone",
+     "max": 5,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:diamond_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:diamond",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:diamond_pickaxe": {
+   "note": "no block loot table found in the jars",
+   "source": null
+  },
+  "minecraft:diorite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:diorite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:dirt": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dirt",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:dirt_path": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dirt",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:dripstone_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dripstone_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:end_rod": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:end_rod",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:fletching_table": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:fletching_table",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:furnace": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:furnace",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:glass": {
+   "also_in": [
+    "Quark-4.0-462.jar"
+   ],
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:clear_shard",
+     "max": 4,
+     "min": 2
+    }
+   ],
+   "source": "Quark-4.0-462.jar",
+   "unhandled": [
+    "condition quark:flag",
+    "treated as true: quark:flag"
+   ]
+  },
+  "minecraft:glass_pane": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:glow_lichen": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:glow_lichen",
+     "max": 6,
+     "min": 6
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:block_state_property",
+    "treated as true: minecraft:match_tool"
+   ]
+  },
+  "minecraft:glowstone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:glowstone_dust",
+     "max": 4,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:gold_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:raw_gold",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:granite": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:granite",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:grass_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dirt",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:gravel": {
+   "drops": [
+    {
+     "chance": 0.1,
+     "item": "minecraft:flint",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:gray_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:gray_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:gray_stained_glass_pane": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:gray_wool": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:gray_wool",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:iron_bars": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:iron_bars",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:iron_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:iron_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:iron_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:raw_iron",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:iron_trapdoor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:iron_trapdoor",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:lapis_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:lapis_lazuli",
+     "max": 9,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:large_amethyst_bud": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:light_blue_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:light_blue_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:light_gray_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:light_gray_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:light_gray_stained_glass_pane": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:light_gray_terracotta": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:light_gray_terracotta",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:lightning_rod": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:lightning_rod",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:lilac": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:lilac",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:magenta_bed": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:magenta_bed",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:medium_amethyst_bud": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:moss_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:moss_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:moss_carpet": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:moss_carpet",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:mossy_cobblestone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:mossy_cobblestone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:mushroom_stem": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:nether_brick_slab": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:nether_brick_slab",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:nether_brick_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:nether_brick_stairs",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:nether_bricks": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:nether_bricks",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:nether_portal": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:oak_leaves": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:oak_leaves",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 0.02,
+     "item": "minecraft:stick",
+     "max": 2,
+     "min": 1
+    },
+    {
+     "chance": 0.005,
+     "item": "minecraft:apple",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:any_of",
+    "treated as true: minecraft:inverted"
+   ]
+  },
+  "minecraft:oak_log": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:oak_log",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:oak_planks": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:oak_planks",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:oak_slab": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:oak_slab",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:oak_trapdoor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:oak_trapdoor",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:obsidian": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:obsidian",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:orange_wool": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:orange_wool",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:peony": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:peony",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:podzol": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:dirt",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:pointed_dripstone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:pointed_dripstone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:potted_bamboo": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:flower_pot",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 1.0,
+     "item": "minecraft:bamboo",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:potted_dead_bush": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:flower_pot",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 1.0,
+     "item": "minecraft:dead_bush",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:potted_warped_fungus": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:flower_pot",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 1.0,
+     "item": "minecraft:warped_fungus",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:quartz_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:quartz_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:quartz_slab": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:quartz_slab",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:quartz_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:quartz_stairs",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:red_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:red_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:red_mushroom_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:red_mushroom",
+     "max": 2,
+     "min": 0
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:redstone_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:redstone",
+     "max": 5,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:sand": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:sand",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:sculk": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:sculk_catalyst": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:sculk_sensor": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:sculk_shrieker": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:sculk_vein": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:small_amethyst_bud": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:smoker": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:smoker",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:smooth_basalt": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:smooth_basalt",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:smooth_quartz": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:smooth_quartz",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:smooth_quartz_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:smooth_quartz_stairs",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:smooth_stone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:smooth_stone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:snow_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:snowball",
+     "max": 4,
+     "min": 4
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:spawner": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:spruce_leaves": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:spruce_leaves",
+     "max": 1,
+     "min": 1
+    },
+    {
+     "chance": 0.02,
+     "item": "minecraft:stick",
+     "max": 2,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "match_tool on items {\"items\": [\"minecraft:shears\"]}",
+    "treated as true: minecraft:any_of",
+    "treated as true: minecraft:inverted"
+   ]
+  },
+  "minecraft:spruce_log": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:spruce_log",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:spruce_wood": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:spruce_wood",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:stone": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:cobblestone",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:stone_brick_stairs": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:stone_brick_stairs",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:stone_brick_wall": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:stone_brick_wall",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:stone_bricks": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:stone_bricks",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:stone_pressure_plate": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:stone_pressure_plate",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:stone_slab": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:stone_slab",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:tuff": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:tuff",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:white_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:white_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:white_stained_glass": {
+   "also_in": [
+    "Quark-4.0-462.jar"
+   ],
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:white_shard",
+     "max": 4,
+     "min": 2
+    }
+   ],
+   "source": "Quark-4.0-462.jar",
+   "unhandled": [
+    "condition quark:flag",
+    "treated as true: quark:flag"
+   ]
+  },
+  "minecraft:white_stained_glass_pane": {
+   "drops": [],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "minecraft:yellow_bed": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:yellow_bed",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "minecraft:yellow_wool": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "minecraft:yellow_wool",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "1.20.1-47.4.20.jar"
+  },
+  "pointblank:printer": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "pointblank:printer",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "pointblank-forge-1.20.1-1.11.1.jar"
+  },
+  "powah:deepslate_uraninite_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "powah:uraninite_raw",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "Powah-5.0.11.jar"
+  },
+  "powah:deepslate_uraninite_ore_dense": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "powah:uraninite_raw",
+     "max": 4,
+     "min": 4
+    }
+   ],
+   "source": "Powah-5.0.11.jar"
+  },
+  "powah:deepslate_uraninite_ore_poor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "powah:uraninite_raw",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Powah-5.0.11.jar"
+  },
+  "powah:uraninite_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "powah:uraninite_raw",
+     "max": 2,
+     "min": 2
+    }
+   ],
+   "source": "Powah-5.0.11.jar"
+  },
+  "powah:uraninite_ore_dense": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "powah:uraninite_raw",
+     "max": 4,
+     "min": 4
+    }
+   ],
+   "source": "Powah-5.0.11.jar"
+  },
+  "powah:uraninite_ore_poor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "powah:uraninite_raw",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Powah-5.0.11.jar"
+  },
+  "quark:grate": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:grate",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Quark-4.0-462.jar"
+  },
+  "quark:lootr_birch_chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:birch_chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Quark-4.0-462.jar"
+  },
+  "quark:lootr_blossom_chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:blossom_chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Quark-4.0-462.jar"
+  },
+  "quark:lootr_jungle_chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:jungle_chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Quark-4.0-462.jar"
+  },
+  "quark:lootr_warped_chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:warped_chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Quark-4.0-462.jar"
+  },
+  "quark:monster_box": {
+   "drops": [],
+   "source": "Quark-4.0-462.jar"
+  },
+  "quark:oak_chest": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "quark:oak_chest",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "Quark-4.0-462.jar"
+  },
+  "refinedstorage:black_crafting_grid": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:black_crafting_grid",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:cable": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:cable",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:crafter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:crafter",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar",
+   "unhandled": [
+    "function refinedstorage:crafter"
+   ]
+  },
+  "refinedstorage:disk_drive": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:disk_drive",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:exporter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:exporter",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:gray_network_receiver": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:gray_network_receiver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:importer": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:importer",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:magenta_controller": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:magenta_controller",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar",
+   "unhandled": [
+    "function refinedstorage:controller"
+   ]
+  },
+  "refinedstorage:magenta_network_transmitter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:magenta_network_transmitter",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:purple_crafter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:purple_crafter",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar",
+   "unhandled": [
+    "function refinedstorage:crafter"
+   ]
+  },
+  "refinedstorage:purple_crafter_manager": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:purple_crafter_manager",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:purple_crafting_grid": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:purple_crafting_grid",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:purple_crafting_monitor": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:purple_crafting_monitor",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:purple_fluid_grid": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:purple_fluid_grid",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:purple_pattern_grid": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:purple_pattern_grid",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "refinedstorage:wireless_transmitter": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "refinedstorage:wireless_transmitter",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "refinedstorage-1.12.4.jar"
+  },
+  "supplementaries:urn": {
+   "drops": [],
+   "source": "supplementaries-1.20-3.1.43-forge.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "entry minecraft:loot_table",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "thermal:cinnabar_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:cinnabar",
+     "max": 2,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_cinnabar_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:cinnabar",
+     "max": 2,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_lead_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_lead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_nickel_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_nickel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_niter_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:niter",
+     "max": 5,
+     "min": 3
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_silver_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_silver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_sulfur_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:sulfur",
+     "max": 5,
+     "min": 3
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:deepslate_tin_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_tin",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:lead_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_lead",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:nickel_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_nickel",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:niter_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:niter",
+     "max": 5,
+     "min": 3
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:silver_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_silver",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:sulfur_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:sulfur",
+     "max": 5,
+     "min": 3
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "thermal:tin_ore": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "thermal:raw_tin",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  "trashcans:item_trash_can": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "trashcans:item_trash_can",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "trashcans-1.0.18b-forge-mc1.20.jar"
+  },
+  "trashcans:liquid_trash_can": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "trashcans:liquid_trash_can",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "trashcans-1.0.18b-forge-mc1.20.jar"
+  },
+  "upgrade_aquatic:glass_door": {
+   "drops": [],
+   "source": "upgrade_aquatic-1.20.1-6.0.3.jar"
+  },
+  "xkdeco:factory_block": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:factory_block",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:factory_block_rusting": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:factory_block_rusting",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:factory_danger": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:factory_danger",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:factory_vent_fan": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:factory_vent_fan",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:factory_vent_fan_big": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:factory_vent_fan_big",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:factory_warning_lamp": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:factory_warning_lamp",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:glass_door": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:glass_door",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar",
+   "unhandled": [
+    "condition minecraft:block_state_property",
+    "treated as true: minecraft:block_state_property"
+   ]
+  },
+  "xkdeco:hollow_steel_beam": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:hollow_steel_beam",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "xkdeco:steel_ladder": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "xkdeco:steel_ladder",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  "yuushya:iron_ladder": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "yuushya:iron_ladder",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "yuushya-1.20.1-forge-2.3.0.jar"
+  },
+  "yuushya:iron_ladder_top": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "yuushya:iron_ladder_top",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "yuushya-1.20.1-forge-2.3.0.jar"
+  },
+  "yuushya:mink_worn_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "yuushya:mink_worn_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "yuushya-1.20.1-forge-2.3.0.jar"
+  },
+  "yuushya:white_worn_concrete": {
+   "drops": [
+    {
+     "chance": 1.0,
+     "item": "yuushya:white_worn_concrete",
+     "max": 1,
+     "min": 1
+    }
+   ],
+   "source": "yuushya-1.20.1-forge-2.3.0.jar"
+  }
+ },
+ "instance": "SakuraPack 1.0.0",
+ "jars_read": [
+  {
+   "bytes": 23028853,
+   "jar": "1.20.1-47.4.20.jar"
+  },
+  {
+   "bytes": 1051803,
+   "jar": "AdditionalEnchantedMiner-1.20.1-1201.1.136.jar"
+  },
+  {
+   "bytes": 3157057,
+   "jar": "additionallanterns-1.1.2-forge-mc1.20.2.jar"
+  },
+  {
+   "bytes": 889945,
+   "jar": "AdvancedPeripherals-1.20.1-0.7.46r.jar"
+  },
+  {
+   "bytes": 208850,
+   "jar": "AdvancementPlaques-1.20.1-forge-1.6.9.jar"
+  },
+  {
+   "bytes": 26350793,
+   "jar": "alexsmobs-1.22.9.jar"
+  },
+  {
+   "bytes": 53429226,
+   "jar": "AmbientSounds_FORGE_v6.3.8_mc1.20.1.jar"
+  },
+  {
+   "bytes": 1301022,
+   "jar": "amendments-1.20-2.2.5.jar"
+  },
+  {
+   "bytes": 47428,
+   "jar": "appleskin-forge-mc1.20.1-2.5.1.jar"
+  },
+  {
+   "bytes": 601839,
+   "jar": "Aquaculture-1.20.1-2.5.7.jar"
+  },
+  {
+   "bytes": 2538637,
+   "jar": "Architects-Palette-1.20.1-1.3.6.1.jar"
+  },
+  {
+   "bytes": 580602,
+   "jar": "architectury-9.2.14-forge.jar"
+  },
+  {
+   "bytes": 850974,
+   "jar": "artifacts-forge-9.5.19.jar"
+  },
+  {
+   "bytes": 1301789,
+   "jar": "Assembly Line-1.20.1-0.8.1.jar"
+  },
+  {
+   "bytes": 91808,
+   "jar": "athena-forge-1.20.1-3.1.2.jar"
+  },
+  {
+   "bytes": 19499,
+   "jar": "AttributeFix-Forge-1.20.1-21.0.5.jar"
+  },
+  {
+   "bytes": 10425,
+   "jar": "BadMobs-1.20.1-19.0.4.jar"
+  },
+  {
+   "bytes": 591398,
+   "jar": "balm-forge-1.20.1-7.3.38-all.jar"
+  },
+  {
+   "bytes": 69974,
+   "jar": "betterbiomeblend-forge-1.20.1-1.4.0.jar"
+  },
+  {
+   "bytes": 468517,
+   "jar": "BetterF3-7.0.2-Forge-1.20.1.jar"
+  },
+  {
+   "bytes": 19917,
+   "jar": "betterfpsdist-1.20.1-6.0.jar"
+  },
+  {
+   "bytes": 22381010,
+   "jar": "BiomesOPlenty-forge-1.20.1-19.0.0.96.jar"
+  },
+  {
+   "bytes": 1165189,
+   "jar": "blueprint-1.20.1-7.1.4.jar"
+  },
+  {
+   "bytes": 343925,
+   "jar": "Bookshelf-Forge-1.20.1-20.2.15.jar"
+  },
+  {
+   "bytes": 11839865,
+   "jar": "born_in_chaos_[Forge]1.20.1_1.7.5.jar"
+  },
+  {
+   "bytes": 1050211,
+   "jar": "BotanyPots-Forge-1.20.1-13.0.43.jar"
+  },
+  {
+   "bytes": 868071,
+   "jar": "BotanyPotsTiers-Forge-1.20.1-6.0.2.jar"
+  },
+  {
+   "bytes": 261756,
+   "jar": "BotanyTrees-Forge-1.20.1-9.0.20.jar"
+  },
+  {
+   "bytes": 42293,
+   "jar": "brightnessslider-forge-1.0-1.20.jar"
+  },
+  {
+   "bytes": 3833683,
+   "jar": "buildinggadgets2-1.0.8.jar"
+  },
+  {
+   "bytes": 40125,
+   "jar": "caelus-forge-3.2.0+1.20.1.jar"
+  },
+  {
+   "bytes": 439457,
+   "jar": "carryon-forge-1.20.1-2.1.2.7.jar"
+  },
+  {
+   "bytes": 3094970,
+   "jar": "cc-tweaked-1.20.1-forge-1.120.2.jar"
+  },
+  {
+   "bytes": 2613393,
+   "jar": "cfm-forge-1.20.1-7.0.0-pre36.jar"
+  },
+  {
+   "bytes": 67599,
+   "jar": "charginggadgets-1.11.0.jar"
+  },
+  {
+   "bytes": 169487,
+   "jar": "charmofundying-forge-6.5.0+1.20.1.jar"
+  },
+  {
+   "bytes": 722579,
+   "jar": "chat_heads-0.15.1-forge-1.20.jar"
+  },
+  {
+   "bytes": 15060263,
+   "jar": "chipped-forge-1.20.1-3.0.7.jar"
+  },
+  {
+   "bytes": 8265809,
+   "jar": "chisel-forge-2.0.0+mc1.20.1.jar"
+  },
+  {
+   "bytes": 2104697,
+   "jar": "chisels-and-bits-forge-20.1.20.jar"
+  },
+  {
+   "bytes": 155478,
+   "jar": "chunkloaders-1.2.9-forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 341451,
+   "jar": "Chunky-1.3.146.jar"
+  },
+  {
+   "bytes": 3185275,
+   "jar": "citadel-2.6.3-1.20.1.jar"
+  },
+  {
+   "bytes": 7726,
+   "jar": "clientcrafting-1.20.1-2.1.jar"
+  },
+  {
+   "bytes": 1181413,
+   "jar": "cloth-config-11.1.136-forge.jar"
+  },
+  {
+   "bytes": 15418330,
+   "jar": "cloudsolutions-forge-1.20.1-0.3.4.jar"
+  },
+  {
+   "bytes": 20300,
+   "jar": "Clumps-forge-1.20.1-12.0.0.4.jar"
+  },
+  {
+   "bytes": 43309,
+   "jar": "CobbleForDays-1.8.0.jar"
+  },
+  {
+   "bytes": 1472390,
+   "jar": "CodeChickenLib-1.20.1-4.4.0.516-universal.jar"
+  },
+  {
+   "bytes": 1509649,
+   "jar": "cofh_core-1.20.1-11.0.2.56.jar"
+  },
+  {
+   "bytes": 662615,
+   "jar": "collective-1.20.1-8.22.jar"
+  },
+  {
+   "bytes": 41718,
+   "jar": "computerized_vehicles-0.2.3.jar"
+  },
+  {
+   "bytes": 418929,
+   "jar": "configured-forge-1.20.1-2.2.3.jar"
+  },
+  {
+   "bytes": 120598,
+   "jar": "connectivity-1.20.1-7.6.jar"
+  },
+  {
+   "bytes": 210312,
+   "jar": "constructionwand-1.20.1-2.11.jar"
+  },
+  {
+   "bytes": 115280,
+   "jar": "Controlling-forge-1.20.1-12.0.2.jar"
+  },
+  {
+   "bytes": 837809,
+   "jar": "cookingforblockheads-forge-1.20.1-16.0.15.jar"
+  },
+  {
+   "bytes": 360700,
+   "jar": "Corgilib-Forge-1.20.1-4.0.3.4.jar"
+  },
+  {
+   "bytes": 64187,
+   "jar": "coroutil-forge-1.20.1-1.3.7.jar"
+  },
+  {
+   "bytes": 102791269,
+   "jar": "Craftspeed 1.7.4 (1.16+).jar"
+  },
+  {
+   "bytes": 19170905,
+   "jar": "create-1.20.1-6.0.8.jar"
+  },
+  {
+   "bytes": 407561,
+   "jar": "create-deco-additions-1.3.2.jar"
+  },
+  {
+   "bytes": 1145493,
+   "jar": "create-new-age-1.1.7f+forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 421417,
+   "jar": "create_hypertube-0.4.0-FORGE.jar"
+  },
+  {
+   "bytes": 1577313,
+   "jar": "createaddition-1.20.1-1.3.3.jar"
+  },
+  {
+   "bytes": 4047334,
+   "jar": "createbigcannons-5.11.3+mc.1.20.1-forge.jar"
+  },
+  {
+   "bytes": 3509013,
+   "jar": "createdeco-2.0.3-1.20.1-forge.jar"
+  },
+  {
+   "bytes": 432699,
+   "jar": "createoreexcavation-1.20-1.6.5.jar"
+  },
+  {
+   "bytes": 1389952,
+   "jar": "createpropulsion-0.3.2.jar"
+  },
+  {
+   "bytes": 1144037,
+   "jar": "CreativeCore_FORGE_v2.12.37_mc1.20.1.jar"
+  },
+  {
+   "bytes": 133781,
+   "jar": "cryonicconfig-forge-1.0.0+mc1.20.1.jar"
+  },
+  {
+   "bytes": 243895,
+   "jar": "CTM-1.20.1-1.1.10.jar"
+  },
+  {
+   "bytes": 19180,
+   "jar": "ctrl-q-1.9.1-forge.jar"
+  },
+  {
+   "bytes": 31643,
+   "jar": "cupboard-1.20.1-3.7.jar"
+  },
+  {
+   "bytes": 398066,
+   "jar": "curios-forge-5.14.1+1.20.1.jar"
+  },
+  {
+   "bytes": 573928,
+   "jar": "decorative_blocks-forge-1.20.1-4.1.3.jar"
+  },
+  {
+   "bytes": 371269,
+   "jar": "DirectGPU-1.0.19Forge.jar"
+  },
+  {
+   "bytes": 29467253,
+   "jar": "DistantHorizons-3.0.3-b-1.20.1-fabric-forge.jar"
+  },
+  {
+   "bytes": 46932,
+   "jar": "doespotatotick-1.20.1-5.6.3.jar"
+  },
+  {
+   "bytes": 1172058,
+   "jar": "domum_ornamentum-1.20.1-1.0.300-snapshot-universal.jar"
+  },
+  {
+   "bytes": 984988,
+   "jar": "duplicationless-1.20.1-1.1.6.jar"
+  },
+  {
+   "bytes": 415067,
+   "jar": "DustrialDecor-1.3.5-1.20.jar"
+  },
+  {
+   "bytes": 354048,
+   "jar": "Dynamic Electricity-1.20.1-1.1.1-1.jar"
+  },
+  {
+   "bytes": 11607303,
+   "jar": "Dynmap-3.7-beta-4-forge-1.20.jar"
+  },
+  {
+   "bytes": 22525,
+   "jar": "dynview-1.20.1-4.0.jar"
+  },
+  {
+   "bytes": 103614,
+   "jar": "EasierSleeping-1.20.1-2.1.3.jar"
+  },
+  {
+   "bytes": 2326090,
+   "jar": "effortlessbuilding-1.20.1-3.11.jar"
+  },
+  {
+   "bytes": 14559893,
+   "jar": "Electrodynamics-1.20.1-1.0.2.jar"
+  },
+  {
+   "bytes": 100660,
+   "jar": "elytraslot-forge-6.4.4+1.20.1.jar"
+  },
+  {
+   "bytes": 1320675,
+   "jar": "embeddium-0.3.31+mc1.20.1.jar"
+  },
+  {
+   "bytes": 246017,
+   "jar": "EnderStorage-1.20.1-2.11.0.188-universal.jar"
+  },
+  {
+   "bytes": 1587585,
+   "jar": "entityculling-forge-1.10.2-mc1.20.1.jar"
+  },
+  {
+   "bytes": 31704,
+   "jar": "EquipmentCompare-1.20.1-forge-1.3.7.jar"
+  },
+  {
+   "bytes": 462827,
+   "jar": "eureka-1201-1.6.3.jar"
+  },
+  {
+   "bytes": 80765,
+   "jar": "expandability-9.0.4.jar"
+  },
+  {
+   "bytes": 3065813,
+   "jar": "fabric-api-0.92.6+1.11.14+1.20.1.jar"
+  },
+  {
+   "bytes": 10408,
+   "jar": "fast-ip-ping-v1.0.11-mc1.20.4-forge.jar"
+  },
+  {
+   "bytes": 26600,
+   "jar": "FastSuite-1.20.1-5.1.2.jar"
+  },
+  {
+   "bytes": 123034,
+   "jar": "ferritecore-6.0.1-forge.jar"
+  },
+  {
+   "bytes": 515573,
+   "jar": "FluxNetworks-1.20.1-7.2.1.15.jar"
+  },
+  {
+   "bytes": 1159090,
+   "jar": "ftb-chunks-forge-2001.3.7.jar"
+  },
+  {
+   "bytes": 780523,
+   "jar": "ftb-library-forge-2001.2.12.jar"
+  },
+  {
+   "bytes": 252579,
+   "jar": "ftb-teams-forge-2001.3.2.jar"
+  },
+  {
+   "bytes": 1954591,
+   "jar": "ftbbackups2-forge-1.20-1.0.23.jar"
+  },
+  {
+   "bytes": 32685821,
+   "jar": "furenikusroads-1.1.jar"
+  },
+  {
+   "bytes": 544586,
+   "jar": "fusion-1.2.12-forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 1039047,
+   "jar": "geckolib-forge-1.20.1-4.8.3.jar"
+  },
+  {
+   "bytes": 87551,
+   "jar": "GlitchCore-forge-1.20.1-0.0.1.1.jar"
+  },
+  {
+   "bytes": 19818838,
+   "jar": "gtcraft-2.0.1(1.20.1).jar"
+  },
+  {
+   "bytes": 29438,
+   "jar": "Highlighter-1.20.1-forge-1.1.9.jar"
+  },
+  {
+   "bytes": 504888,
+   "jar": "hqspeaker-1.0.0.jar"
+  },
+  {
+   "bytes": 134551,
+   "jar": "Iceberg-1.20.1-forge-1.1.25.jar"
+  },
+  {
+   "bytes": 538992,
+   "jar": "ImmediatelyFast-Forge-1.5.4+1.20.4.jar"
+  },
+  {
+   "bytes": 6254897,
+   "jar": "Immersive Vehicles-1.20.1-24.0.0.jar"
+  },
+  {
+   "bytes": 187191438,
+   "jar": "Immersive-Flight-Simulator 2.0.1ALPHA16-20 r2.jar"
+  },
+  {
+   "bytes": 4855090,
+   "jar": "immersive_paintings-0.6.11+1.20.1-forge.jar"
+  },
+  {
+   "bytes": 12129396,
+   "jar": "ImmersiveEngineering-1.20.1-10.2.0-183.jar"
+  },
+  {
+   "bytes": 489265,
+   "jar": "interiors-1.20.1-forge-0.6.0.jar"
+  },
+  {
+   "bytes": 311290,
+   "jar": "ironchest-1.20.1-14.4.4.jar"
+  },
+  {
+   "bytes": 20832,
+   "jar": "ItemBorders-1.20.1-forge-1.2.2.jar"
+  },
+  {
+   "bytes": 552486,
+   "jar": "Jade-1.20.1-Forge-11.13.2.jar"
+  },
+  {
+   "bytes": 24806297,
+   "jar": "JCM-forge-2.2.0-beta.4+1.20.1.jar"
+  },
+  {
+   "bytes": 1409705,
+   "jar": "jei-1.20.1-forge-15.20.0.130.jar"
+  },
+  {
+   "bytes": 176296347,
+   "jar": "Kaminari Motor Work 2.6.1 16-20 r2.jar"
+  },
+  {
+   "bytes": 1677051,
+   "jar": "Kiwi-1.20.1-Forge-11.10.1.jar"
+  },
+  {
+   "bytes": 7442998,
+   "jar": "kotlinforforge-4.12.0-all.jar"
+  },
+  {
+   "bytes": 30960,
+   "jar": "kubejs-create-forge-2001.3.0-build.8.jar"
+  },
+  {
+   "bytes": 1658792,
+   "jar": "kubejs-forge-2001.6.5-build.26.jar"
+  },
+  {
+   "bytes": 55258,
+   "jar": "LegendaryTooltips-1.20.1-forge-1.4.5.jar"
+  },
+  {
+   "bytes": 463485,
+   "jar": "lootr-forge-1.20-0.7.35.94.jar"
+  },
+  {
+   "bytes": 530022,
+   "jar": "macawsroofsbop-1.20-1.1.jar"
+  },
+  {
+   "bytes": 1625005,
+   "jar": "Mantle-1.20.1-1.11.104.jar"
+  },
+  {
+   "bytes": 218417,
+   "jar": "mcef-forge-2.1.6-1.20.1.jar"
+  },
+  {
+   "bytes": 708634,
+   "jar": "mcw-mcwfences-1.2.1-mc1.20.1forge.jar"
+  },
+  {
+   "bytes": 1320692,
+   "jar": "mcw-mcwwindows-2.4.2-mc1.20.1forge.jar"
+  },
+  {
+   "bytes": 1864023,
+   "jar": "mcw-roofs-2.3.2-mc1.20.1forge.jar"
+  },
+  {
+   "bytes": 2681762,
+   "jar": "mdm-26.5.0-forge-1.20.1.jar"
+  },
+  {
+   "bytes": 12558456,
+   "jar": "Mekanism-1.20.1-10.4.16.80.jar"
+  },
+  {
+   "bytes": 1054586,
+   "jar": "MekanismGenerators-1.20.1-10.4.16.80.jar"
+  },
+  {
+   "bytes": 227925,
+   "jar": "memoryleakfix-forge-1.17+-1.1.5.jar"
+  },
+  {
+   "bytes": 951173,
+   "jar": "modernfix-forge-5.27.22+mc1.20.1.jar"
+  },
+  {
+   "bytes": 12662,
+   "jar": "modnametooltip-1.20.1-1.20.0.jar"
+  },
+  {
+   "bytes": 1163834,
+   "jar": "modular-routers-12.1.1+mc1.20.1.jar"
+  },
+  {
+   "bytes": 1393038,
+   "jar": "moonlight-1.20-2.16.32-forge.jar"
+  },
+  {
+   "bytes": 76237,
+   "jar": "MouseTweaks-forge-mc1.20.1-2.25.1.jar"
+  },
+  {
+   "bytes": 333266,
+   "jar": "movingelevators-1.4.12-forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 85240261,
+   "jar": "MTR-forge-4.0.4+1.20.1.jar"
+  },
+  {
+   "bytes": 63836024,
+   "jar": "MTR-London-Underground-Addon-forge-2.2.4+1.20.1.jar"
+  },
+  {
+   "bytes": 89590985,
+   "jar": "MTS Official Pack-1.20.1-V28.2.jar"
+  },
+  {
+   "bytes": 3793857,
+   "jar": "naturalist-5.0pre2+forge-1.20.1.jar"
+  },
+  {
+   "bytes": 58748,
+   "jar": "NoFog-1.3.6+1.20.1-forge.jar"
+  },
+  {
+   "bytes": 1942586,
+   "jar": "notenoughanimations-forge-1.12.3-mc1.20.1.jar"
+  },
+  {
+   "bytes": 117226,
+   "jar": "oculus-flywheel-compat-Forge-2.0.3.jar"
+  },
+  {
+   "bytes": 2851119,
+   "jar": "oculus-mc1.20.1-1.8.0.jar"
+  },
+  {
+   "bytes": 19308698,
+   "jar": "Oh-The-Biomes-Weve-Gone-Forge-1.7.5.jar"
+  },
+  {
+   "bytes": 168345,
+   "jar": "Oh-The-Trees-Youll-Grow-forge-1.20.1-1.6.0.jar"
+  },
+  {
+   "bytes": 16100,
+   "jar": "out_of_sight-1.20.1-1.0.3.jar"
+  },
+  {
+   "bytes": 1257968,
+   "jar": "particlerain-4.0.2+1.20.1-forge.jar"
+  },
+  {
+   "bytes": 642732,
+   "jar": "Patchouli-1.20.1-85-FORGE.jar"
+  },
+  {
+   "bytes": 2056446,
+   "jar": "peripheralworks-forge-1.20.1-1.8.0.jar"
+  },
+  {
+   "bytes": 282474,
+   "jar": "Placebo-1.20.1-8.6.3.jar"
+  },
+  {
+   "bytes": 17452885,
+   "jar": "pointblank-forge-1.20.1-1.11.1.jar"
+  },
+  {
+   "bytes": 1343694,
+   "jar": "polylib-forge-2000.0.3-build.143.jar"
+  },
+  {
+   "bytes": 299601,
+   "jar": "polymorph-forge-0.49.10+1.20.1.jar"
+  },
+  {
+   "bytes": 10025,
+   "jar": "potionidpacketfixer-1.20.1-v1.0.1.jar"
+  },
+  {
+   "bytes": 2393933,
+   "jar": "Powah-5.0.11.jar"
+  },
+  {
+   "bytes": 2152378,
+   "jar": "PrettyPipes-1.15.0-all.jar"
+  },
+  {
+   "bytes": 52205,
+   "jar": "Prism-1.20.1-forge-1.0.5.jar"
+  },
+  {
+   "bytes": 14935230,
+   "jar": "Quark-4.0-462.jar"
+  },
+  {
+   "bytes": 28114264,
+   "jar": "R.A.G.E-V2.3_1.20.1.jar"
+  },
+  {
+   "bytes": 11860511,
+   "jar": "rechiseled-1.2.4-forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 182898,
+   "jar": "rechiseled_chipped-2.0-1.20.1.jar"
+  },
+  {
+   "bytes": 143116,
+   "jar": "refinedcooking-4.0.0.jar"
+  },
+  {
+   "bytes": 3300191,
+   "jar": "refinedstorage-1.12.4.jar"
+  },
+  {
+   "bytes": 33771,
+   "jar": "refinedstorageaddons-0.10.0.jar"
+  },
+  {
+   "bytes": 233207,
+   "jar": "replanter-1.4.0.jar"
+  },
+  {
+   "bytes": 136923,
+   "jar": "resourcefulconfig-forge-1.20.1-2.1.3.jar"
+  },
+  {
+   "bytes": 432753,
+   "jar": "resourcefullib-forge-1.20.1-2.1.29.jar"
+  },
+  {
+   "bytes": 1798244,
+   "jar": "rhino-forge-2001.2.3-build.10.jar"
+  },
+  {
+   "bytes": 78625,
+   "jar": "ritchiesprojectilelib-2.1.1+mc.1.20.1-forge.jar"
+  },
+  {
+   "bytes": 33622,
+   "jar": "RSInfinityBooster-1.20.1-1.0+41.jar"
+  },
+  {
+   "bytes": 62933,
+   "jar": "rsrequestify-1.20.1-2.3.3.jar"
+  },
+  {
+   "bytes": 568608,
+   "jar": "rubidium-extra-0.5.4.4+mc1.20.1-build.131.jar"
+  },
+  {
+   "bytes": 54864057,
+   "jar": "SaltyFishVehicle_mc121_Beta_V1.3.5_iconfix r2.jar"
+  },
+  {
+   "bytes": 15852918,
+   "jar": "ScalableCatsForce-3.3.1-build-0-with-library.jar"
+  },
+  {
+   "bytes": 77732,
+   "jar": "Searchables-forge-1.20.1-1.0.3.jar"
+  },
+  {
+   "bytes": 541024,
+   "jar": "sebastrnlib-4.0.0.jar"
+  },
+  {
+   "bytes": 103637,
+   "jar": "ServerTabInfo-1.20-1.3.8.jar"
+  },
+  {
+   "bytes": 140496,
+   "jar": "simplemagnets-1.1.12-forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 2344532,
+   "jar": "simplycats-1.20.1-0.3.0.jar"
+  },
+  {
+   "bytes": 1816687,
+   "jar": "smallships-forge-1.20.1-2.0.0-b1.4.jar"
+  },
+  {
+   "bytes": 104185,
+   "jar": "solcarrot-1.20.1-1.15.1.jar"
+  },
+  {
+   "bytes": 1048030,
+   "jar": "sophisticatedbackpacks-1.20.1-3.24.39.1743.jar"
+  },
+  {
+   "bytes": 1553124,
+   "jar": "sophisticatedcore-1.20.1-1.3.35.1851.jar"
+  },
+  {
+   "bytes": 3114590,
+   "jar": "spark-1.10.53-forge.jar"
+  },
+  {
+   "bytes": 108802,
+   "jar": "speedometer-5.2.jar"
+  },
+  {
+   "bytes": 16819720,
+   "jar": "Steam_Rails-1.7.2+forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 1143622,
+   "jar": "StorageDrawers-forge-1.20.1-12.14.3.jar"
+  },
+  {
+   "bytes": 206584,
+   "jar": "supermartijn642configlib-1.1.8-forge-mc1.20.jar"
+  },
+  {
+   "bytes": 554977,
+   "jar": "supermartijn642corelib-1.1.21-forge-mc1.20.1.jar"
+  },
+  {
+   "bytes": 13667742,
+   "jar": "supplementaries-1.20-3.1.43-forge.jar"
+  },
+  {
+   "bytes": 21572031,
+   "jar": "TConstruct-1.20.1-3.11.2.166.jar"
+  },
+  {
+   "bytes": 107533,
+   "jar": "TerraBlender-forge-1.20.1-3.0.1.10.jar"
+  },
+  {
+   "bytes": 133037,
+   "jar": "TES-forge-1.20.1-1.6.1.jar"
+  },
+  {
+   "bytes": 574141,
+   "jar": "thermal_expansion-1.20.1-11.0.1.29.jar"
+  },
+  {
+   "bytes": 4549423,
+   "jar": "thermal_foundation-1.20.1-11.0.6.70.jar"
+  },
+  {
+   "bytes": 622073,
+   "jar": "titanium-1.20.1-3.8.34.jar"
+  },
+  {
+   "bytes": 22193,
+   "jar": "ToolStats-Forge-1.20.1-16.0.10.jar"
+  },
+  {
+   "bytes": 119348,
+   "jar": "torchmaster-20.1.9.jar"
+  },
+  {
+   "bytes": 158164,
+   "jar": "trashcans-1.0.18b-forge-mc1.20.jar"
+  },
+  {
+   "bytes": 228191,
+   "jar": "TravelersTitles-1.20-Forge-4.0.2.jar"
+  },
+  {
+   "bytes": 1324481,
+   "jar": "turtlematic-forge-1.20.1-1.4.10.jar"
+  },
+  {
+   "bytes": 43879,
+   "jar": "universalgrid-1.20.1-1.1.jar"
+  },
+  {
+   "bytes": 126471022,
+   "jar": "UNU Civilian Pack [MTS] 1.20.1-22.18.0-6.7.1.jar"
+  },
+  {
+   "bytes": 21470963,
+   "jar": "UNU Military Pack [MTS] 1.20.1-22.18.0-6.0.3.jar"
+  },
+  {
+   "bytes": 32034767,
+   "jar": "UNU Parts Pack [MTS] 1.20.1-22.18.0-6.7.3.jar"
+  },
+  {
+   "bytes": 4981396,
+   "jar": "upgrade_aquatic-1.20.1-6.0.3.jar"
+  },
+  {
+   "bytes": 27752937,
+   "jar": "valkyrienskies-120-2.4.11.jar"
+  },
+  {
+   "bytes": 1829267,
+   "jar": "Voltaic-1.20.1-1.0.2-0.jar"
+  },
+  {
+   "bytes": 1512980,
+   "jar": "watermedia-3.0.0.16.jar"
+  },
+  {
+   "bytes": 435496,
+   "jar": "watut-forge-1.20.1-1.2.3.jar"
+  },
+  {
+   "bytes": 811968,
+   "jar": "webdisplays-2.0.2-1.20.1.jar"
+  },
+  {
+   "bytes": 179378119,
+   "jar": "wm_binaries-3.0.0-rc.1.jar"
+  },
+  {
+   "bytes": 2337020,
+   "jar": "XeKr's Decoration-1.20.1-Forge-0.9.6.jar"
+  },
+  {
+   "bytes": 370524,
+   "jar": "YungsApi-1.20-Forge-4.0.6.jar"
+  },
+  {
+   "bytes": 28166084,
+   "jar": "yuushya-1.20.1-forge-2.3.0.jar"
+  },
+  {
+   "bytes": 692976,
+   "jar": "yuushya_modelling-1.20.1-2.4.1.jar"
+  },
+  {
+   "bytes": 1006518,
+   "jar": "Zeta-1.0-31.jar"
+  }
+ ],
+ "overrides_found": {
+  "datapack_files": [],
+  "global_loot_modifiers": [
+   "Architects-Palette-1.20.1-1.3.6.1.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "ImmersiveEngineering-1.20.1-10.2.0-183.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "Oh-The-Biomes-Weve-Gone-Forge-1.7.5.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "TConstruct-1.20.1-3.11.2.166.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "alexsmobs-1.22.9.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "artifacts-forge-9.5.19.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "effortlessbuilding-1.20.1-3.11.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "sophisticatedbackpacks-1.20.1-3.24.39.1743.jar:data/forge/loot_modifiers/global_loot_modifiers.json",
+   "supplementaries-1.20-3.1.43-forge.jar:data/forge/loot_modifiers/global_loot_modifiers.json"
+  ],
+  "kubejs_files": [
+   "kubejs/server_scripts/example.js"
+  ]
+ },
+ "overrides_reviewed": [
+  "kubejs/server_scripts/example.js is the stock example (console.info only); kubejs/data, datapacks/ and moonlight-global-datapacks/ are empty.",
+  "Global loot modifiers in 9 jars: none changes the drop of a block broken by a plain turtle pickaxe. TConstruct's 'lustrous' and chrysophilite add ore entries only for a tool carrying that Tinkers modifier; Artifacts' pickaxe heater needs the artifact worn; the others touch chests, mobs, leaves, grass, fishing, flax or archaeology.",
+  "Quark's jar also carries a loot table for glass and stained glass (clear shards behind a config flag); those blocks are marked unhandled.",
+  "The instance is the CLIENT pack (packwiz); the server's mod set may differ."
+ ]
+}
