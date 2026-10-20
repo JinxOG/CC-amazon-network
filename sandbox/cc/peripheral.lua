@@ -1,5 +1,9 @@
--- peripheral: lookups over the hardware attached to this computer (Computer:attach).
+-- peripheral: lookups over the hardware attached to this computer (Computer:attach) and the peripheral
+-- blocks standing next to it (periph/blocks.lua).
 local CCEnv = require("cc.env")
+local Blocks = require("periph.blocks")
+require("periph.geo_scanner")
+require("periph.rs_bridge")
 
 local M = {}
 
@@ -7,24 +11,17 @@ function M.install(comp, E)
   local P = {}
   local names_of = setmetatable({}, { __mode = "k" }) -- wrapped table -> its name
 
-  local function sorted_names()
-    local out = {}
-    for name in pairs(comp.peripherals) do out[#out + 1] = name end
-    table.sort(out)
-    return out
-  end
-
-  function P.getNames() return sorted_names() end
-  function P.isPresent(name) return comp.peripherals[name] ~= nil end
+  function P.getNames() return Blocks.names(comp) end
+  function P.isPresent(name) return Blocks.lookup(comp, name) ~= nil end
 
   function P.getType(p)
     if type(p) == "table" then p = names_of[p] end
-    local d = comp.peripherals[p]
+    local d = Blocks.lookup(comp, p)
     return d and d.type or nil
   end
 
   function P.getMethods(name)
-    local d = comp.peripherals[name]
+    local d = Blocks.lookup(comp, name)
     if not d then return nil end
     local out = {}
     for m in pairs(d.methods) do out[#out + 1] = m end
@@ -35,7 +32,7 @@ function M.install(comp, E)
   function P.getName(wrapped) return names_of[wrapped] end
 
   function P.call(name, method, ...)
-    local d = comp.peripherals[name]
+    local d = Blocks.lookup(comp, name)
     if not d then error("No peripheral attached", 2) end
     local fn = d.methods[method]
     if not fn then error("No such method " .. tostring(method), 2) end
@@ -43,7 +40,7 @@ function M.install(comp, E)
   end
 
   function P.wrap(name)
-    local d = comp.peripherals[name]
+    local d = Blocks.lookup(comp, name)
     if not d then return nil end
     local w = {}
     for m, fn in pairs(d.methods) do w[m] = fn end
@@ -54,9 +51,9 @@ function M.install(comp, E)
   -- find(type [, filter]) returns every matching peripheral, wrapped.
   function P.find(type_, filter)
     local out = {}
-    for _, name in ipairs(sorted_names()) do
-      local d = comp.peripherals[name]
-      if d.type == type_ then
+    for _, name in ipairs(Blocks.names(comp)) do
+      local d = Blocks.lookup(comp, name)
+      if d and d.type == type_ then
         local w = P.wrap(name)
         if not filter or filter(name, w) then out[#out + 1] = w end
       end
