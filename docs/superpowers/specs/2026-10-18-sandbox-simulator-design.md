@@ -204,19 +204,24 @@ the function** — never return a plausible default.
 engineer, 2026-10-18: copying `world_live/` while the server runs gives a torn
 snapshot — region files written mid-copy, corrupt in ways that surface later.
 Finished backups already exist and are consistent: the `mc-sync` pre-deploy
-tarballs in `~/sakura/backups/` (5.7 GB on Oct 4), the hourly and daily backup
-timers, and FTB Backups 2. **The sandbox imports from the latest backup.** A
+tarballs, the hourly and daily backup timers, and FTB Backups 2. **The sandbox
+imports from the latest backup.** Where they actually are (searched read-only on
+2026-10-19; `~/sakura/backups` does not exist): FTB Backups 2 zips in
+`/mnt/backup/ftb/` (about 1.7 GB each), older ones in `/mnt/backup/archive/`,
+and the Oct 4 pre-deploy tarball (5.6 GB) in `/mnt/backup/archive/pre-deploy-tar/`.
+`/mnt/backup/corrupt/` holds a known-truncated zip: never import from it. A
 current world instead needs a `save-off` / `save-all flush` / copy / `save-on`
 cycle on the server, scheduled by the server engineer; it is never required.
 
-Plan for **5-6 GB compressed** per copy. **All sandbox data lives on the Game
+Plan for **2-6 GB compressed** per copy. **All sandbox data lives on the Game
 Drive** (user's instruction, 2026-10-19): `G:\TurtleOS-Sandbox`, with world
 copies under `worlds/`, runs and snapshots under `run/`, and the interpreter
 under `interpreter/`. Never in the repo: it is the user's world, it is large, the
 repo is public, and the project folder sits in OneDrive, which would sync
 gigabytes to the cloud. The code stays in the repo. The first copy is pulled by
 the user with `G:\TurtleOS-Sandbox\get-backup.cmd`, which fetches the newest
-finished backup from `~/sakura/backups` and checks it reads to the end.
+finished zip in `/mnt/backup/ftb` (skipping any touched in the last 5 minutes)
+and checks it reads to the end.
 
 **The transfer is done by a person, not by the sandbox.** The server accepts SSH
 with a password; the sandbox and its tooling never hold, request or store SSH
