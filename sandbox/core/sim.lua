@@ -50,6 +50,7 @@ function Sim.new(opts)
   sched.loading = Loading.new{ world = opts.world, sched = sched }
   self.world = opts.world
   self.by_id, self.by_name = {}, {}
+  self.t0 = self.clock:now()   -- fault times count from here; the runner moves it to the start of the scenario
   self.interventions = {}
   self.faults = {}
   self.initial_storage = {}

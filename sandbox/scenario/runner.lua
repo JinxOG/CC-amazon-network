@@ -7,6 +7,7 @@ local Fleet = require("core.fleet")
 local CodeDir = require("core.code_dir")
 local Synth = require("world.synth")
 local World = require("world.world")
+require("faults.faults") -- adds the fault calls to Sim
 
 local Runner = {}
 
@@ -71,6 +72,7 @@ function Runner.run(scenario_path, opts)
   sim.wall_started = os.date("%Y-%m-%d %H:%M:%S")
   local ok, err = pcall(function()
     Fleet.provision(sim, layout)
+    sim.t0 = sim.clock:now()
     if opts.speed then sim.sched:set_pace(opts.speed) end
     scenario.steps(sim)
   end)

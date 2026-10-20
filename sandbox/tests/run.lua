@@ -10,9 +10,15 @@ for f in p:lines() do files[#files + 1] = f end
 p:close()
 table.sort(files)
 
+-- SANDBOX_SKIP_SLOW=1 leaves out the whole-fleet scenario runs (minutes each); name them in a pattern to run them anyway.
+local SLOW = { ["sandbox/tests/test_scenarios.lua"] = true }
+local skip_slow = os.getenv("SANDBOX_SKIP_SLOW") == "1"
+
 local pass, fail = 0, 0
 for _, file in ipairs(files) do
-  if not pattern or file:find(pattern, 1, true) then
+  if SLOW[file] and skip_slow and not pattern then
+    print("SKIP " .. file .. " (SANDBOX_SKIP_SLOW=1)")
+  elseif not pattern or file:find(pattern, 1, true) then
     local ok, tests = pcall(dofile, file)
     if not ok then
       print("FAIL " .. file .. ": " .. tostring(tests)); fail = fail + 1

@@ -88,7 +88,22 @@ function M.install(comp, E)
 
   local function scale() return sched.action_scale or 1 end
   -- an action that takes game time: other events arriving meanwhile are lost, as in CC
-  local function timed(ms, fn) return CCEnv.main_thread_call(comp, ms * scale(), fn) end
+  -- the name of the API function being called, so the turtle_reboot fault can hit a chosen action
+  local current_action
+  local function timed(ms, fn)
+    local action = current_action
+    return CCEnv.main_thread_call(comp, ms * scale(), function()
+      local r = table.pack(fn())
+      local armed = comp.reboot_on_action
+      if armed and action and action:sub(1, #armed) == armed then
+        -- the action's effect has happened, but the program never hears of it: the nastiest moment to reboot
+        comp.reboot_on_action = nil
+        sched:trace(comp.name .. " fault: reboot during " .. action)
+        comp:reboot()
+      end
+      return (table.unpack or unpack)(r, 1, r.n)
+    end)
+  end
 
   local function pos_ahead(dir)
     local p = comp.pos
@@ -386,6 +401,10 @@ function M.install(comp, E)
   function T.suck(n) return suck("forward", n) end
   function T.suckUp(n) return suck("up", n) end
   function T.suckDown(n) return suck("down", n) end
+
+  for name, fn in pairs(T) do
+    T[name] = function(...) current_action = name; return fn(...) end
+  end
 
   E.turtle = CCEnv.api(comp, "turtle", T)
 end
