@@ -24,7 +24,7 @@ end
 
 local function copy(t) local o = {} for k, v in pairs(t) do o[k] = v end return o end
 
-local INSTALLERS = { "cc.os", "cc.term" }
+local INSTALLERS = { "cc.os", "cc.term", "cc.fs", "cc.textutils", "cc.shell", "cc.settings" }
 
 function CCEnv.build(comp)
   local E = {}
