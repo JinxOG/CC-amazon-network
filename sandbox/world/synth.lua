@@ -64,15 +64,18 @@ function Synth.generate(seed)
   return world
 end
 
--- The computers of the synthetic fleet. `opts.miners` workers (each carrying a loader) and the shared
--- infrastructure. waypoints supplies the dock positions, so the fleet starts where the depot expects it.
+-- The computers of the synthetic fleet: GPS hosts, the dispatch server, the warehouse, and `workers` worker
+-- turtles in all (opts.workers, default 15; opts.miners of them mine, each carrying a loader). The others are
+-- delivery and support turtles, which sit idle at their docks unless the scenario gives them work. Docks come
+-- from waypoints.lua, in the order the server hands them out (registration order), so the fleet starts
+-- where the depot expects it.
 function Synth.layout(waypoints, opts)
   opts = opts or {}
   local n_miners = opts.miners or 2
+  local workers = opts.workers or 15
   local L = {}
   local function add(spec) L[#L + 1] = spec; return spec end
 
-  -- GPS hosts
   local hosts = { { 150, 120, -2800 }, { 235, 120, -2800 }, { 150, 120, -2780 }, { 235, 110, -2820 } }
   for i, h in ipairs(hosts) do add{ id = 100 + i, kind = "gps_host", pos = { x = h[1], y = h[2], z = h[3] } } end
 
@@ -87,24 +90,44 @@ function Synth.layout(waypoints, opts)
     blocks = { { side = "right", block = "advancedperipherals:rs_bridge" },
                { side = "top", block = "enderstorage:ender_chest", freq = "delivery" } } }
 
+  local MODEM, PICK = "computercraft:wireless_modem_advanced", "minecraft:diamond_pickaxe"
+  local worker_docks, support_docks = waypoints.docks.DELIVERY, waypoints.docks.SUPPORT
+  local next_worker, next_support = 1, 1
+
   -- miners and the loaders they carry
-  local docks = waypoints.docks.DELIVERY
   for i = 1, n_miners do
-    local d = docks[i]
-    local miner_id, loader_id = 10 + i, 20 + i
-    local loader_label = "loader_" .. i
+    local d = worker_docks[next_worker]; next_worker = next_worker + 1
+    local loader_id, loader_label = 20 + i, "loader_" .. i
     add{ id = loader_id, kind = "turtle", role = "loader", label = loader_label, carried = true,
-      turtle = { equipped = { left = "computercraft:wireless_modem_advanced", right = "advancedperipherals:chunk_controller" } } }
-    add{ id = miner_id, kind = "turtle", role = "miner", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
+      turtle = { equipped = { left = MODEM, right = "advancedperipherals:chunk_controller" } } }
+    add{ id = 10 + i, kind = "turtle", role = "miner", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
       turtle = {
-        equipped = { left = "computercraft:wireless_modem_advanced", right = "advancedperipherals:chunk_controller" },
+        equipped = { left = MODEM, right = "advancedperipherals:chunk_controller" },
         inv = {
           [1] = { name = "advancedperipherals:geo_scanner", count = 1 },
           [2] = { name = "computercraft:turtle_advanced", count = 1, displayName = loader_label, computer_id = loader_id },
-          [3] = { name = "minecraft:diamond_pickaxe", count = 1 }, -- the stowed tool; chunky is equipped while flying
+          [3] = { name = PICK, count = 1 }, -- the stowed tool; chunky is equipped while flying
           [15] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" },
           [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "ore" },
         } } }
+  end
+
+  -- the rest of the fleet: delivery turtles take worker docks, support turtles take support docks
+  local remaining = workers - n_miners
+  local n_delivery = opts.delivery or math.ceil(remaining / 2)
+  local n_support = opts.support or (remaining - n_delivery)
+  for i = 1, n_delivery do
+    local d = worker_docks[next_worker]; next_worker = next_worker + 1
+    add{ id = 30 + i, kind = "turtle", role = "delivery", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
+      turtle = { equipped = { left = MODEM, right = PICK }, inv = {
+        [15] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" },
+        [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "delivery" } } } }
+  end
+  for i = 1, n_support do
+    local d = support_docks[next_support]; next_support = next_support + 1
+    add{ id = 50 + i, kind = "turtle", role = "support", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
+      turtle = { equipped = { left = MODEM, right = PICK }, inv = {
+        [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" } } } }
   end
   return L
 end
