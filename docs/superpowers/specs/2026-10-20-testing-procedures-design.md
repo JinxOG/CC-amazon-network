@@ -243,6 +243,13 @@ Changer, OverClocked: Clockworks, Tick Changer) **on the T2 copy only, never the
 instance**, and records the speed reached. It also lists the fleet's real-clock (`os.epoch`) timing and states
 the highest speed at which fleet behaviour is unchanged.
 
+**Measured 2026-10-20 (phase 0 report).** CC:Tweaked 1.120.2 timers (`os.startTimer`, `sleep`) count server
+ticks, while `os.epoch` reads real time, and the fleet times most deadlines with `os.epoch`. So at N times speed,
+a deadline of D real seconds spans N x D game-seconds. **Timeouts become more lenient, and timeout bugs can hide.**
+
+Rule: **T2 at speed proves mechanics, not timeout behaviour.** A change whose risk is a timeout, a heartbeat
+or a deadline is proven in T1, or in T2 at 1x.
+
 ### 6.9 The run report
 
 The same sections as T1's report: code sha, world copy, speed, CHECKS, INTERVENTIONS, tool output, jobs, ore
