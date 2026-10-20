@@ -5,7 +5,7 @@ kind: request
 subject: Review 1 - same seed, three different traces on smoke_two_miners
 date: 2026-10-20
 re: 2026-10-20-SANDBOX-to-SPEC-OWNER-sandbox-status-report-26-tasks-section-15-one-by-one-speed-d.md
-status: open
+status: closed
 ---
 
 # Review 1 - same seed, three different traces on smoke_two_miners
