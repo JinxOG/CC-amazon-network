@@ -11,3 +11,5 @@ locations.json
 *.out
 server.js.save
 update_failed.txt
+sandbox/worlds/
+sandbox/run/

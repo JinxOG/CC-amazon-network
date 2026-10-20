@@ -1,0 +1,1 @@
+G:/TurtleOS-Sandbox/interpreter/lua52.exe
