@@ -9,4 +9,8 @@ return {
   "turtle.refuel with a full tank still returns true and burns nothing (as tests/stub_cc.lua does).",
   "Digging gives the block itself as the drop, except stone, grass and deepslate (a small table).",
   "Turtle facing: 0 = north (-z), 1 = east (+x), 2 = south (+z), 3 = west (-x).",
+  "Chunk loading: a turtle with the chunky upgrade loads 3x3 chunks around itself (radius 1, as loader_state.dat records); a computer in an unloaded chunk shuts down and boots from startup.lua when the chunk loads again. Unconfirmed in the world.",
+  "Two turtles sharing one chunk identity (a copied loader) hold one ticket between them; the last placed wins.",
+  "Wireless modems are all treated as the advanced kind: unlimited range, no dimension limit.",
+  "gps.locate: four hosts at one height leave a mirror position and return nil; hosts reply with an {x,y,z} array; the reply channel is 50000 + id % 10000.",
 }

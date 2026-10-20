@@ -55,6 +55,7 @@ function M.track_equipment(comp)
   end
   comp.on_equipment_changed = sync
   sync(comp)
+  return sync
 end
 
 return M

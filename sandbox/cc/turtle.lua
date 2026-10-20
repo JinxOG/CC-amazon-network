@@ -65,6 +65,7 @@ function M.set_pos(comp, x, y, z, facing)
   end
   p.x, p.y, p.z = x, y, z
   if facing ~= nil then p.facing = facing end
+  if comp.sched.loading then comp.sched.loading:update_pos(comp) end
 end
 
 function M.install(comp, E)
@@ -78,7 +79,11 @@ function M.install(comp, E)
     comp.tstate = st
     if world and world.occupants then world.occupants[key(comp.pos.x, comp.pos.y, comp.pos.z)] = comp end
   end
-  require("periph.modem").track_equipment(comp)
+  local sync_modem = require("periph.modem").track_equipment(comp)
+  comp.on_equipment_changed = function(c)
+    sync_modem(c)
+    if sched.loading then sched.loading:update_pos(c, true) end
+  end
   local T = {}
 
   local function scale() return sched.action_scale or 1 end
