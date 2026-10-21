@@ -80,62 +80,60 @@ def bridge_post(path, obj, timeout=20):
         return r.read().decode("utf8", "replace")
 
 
-def start(run_id, world=None, tickrate=None, ram="6G"):
-    run = prepare_run.prepare(run_id, world or phase0.WORLD, ram=ram)
-    prepare_bridge(run)
-    host, port, pw = open(os.path.join(run, "rcon.txt")).read().split()
-    pids = {"run": run, "started": time.time()}
-    pids["bridge"] = start_bridge(run, port, pw)
-    for _ in range(30):
-        try:
-            bridge_get("/ping", 2)
-            break
-        except Exception:
-            time.sleep(1)
-    else:
-        raise SystemExit("the bridge did not come up; see " + os.path.join(run, "bridge", "bridge.out"))
-    proc, log = phase0.start(run)
-    pids["server"] = proc.pid
-    json.dump(pids, open(pids_path(run), "w"))
-    t0 = time.time()
+def wait_done(run, proc, since_bytes=0, limit=900):
+    """Waits for the server's "Done" line written after `since_bytes` of console output; returns the seconds taken."""
     console = os.path.join(run, "console.log")
-    while time.time() - t0 < 900:
+    t0 = time.time()
+    while time.time() - t0 < limit:
         time.sleep(2)
         if proc.poll() is not None:
             raise SystemExit("the server exited during start-up; see " + console)
-        if re.search(r"Done \([\d.]+s\)!", open(console, encoding="utf8", errors="replace").read()):
-            break
-    else:
-        raise SystemExit("the server did not finish starting in 15 minutes")
-    pids["startup_s"] = round(time.time() - t0, 1)
+        with open(console, "rb") as f:
+            f.seek(since_bytes)
+            if re.search(rb"Done \([\d.]+s\)!", f.read()):
+                return round(time.time() - t0, 1)
+    raise SystemExit("the server did not finish starting in %d s" % limit)
+
+
+def launch(run, with_bridge=True, tickrate=None, append=False):
+    """Starts the bridge (unless it is already up) and the Minecraft server on an existing run folder."""
+    host, port, pw = open(os.path.join(run, "rcon.txt")).read().split()
+    pids = json.load(open(pids_path(run))) if os.path.exists(pids_path(run)) else {"run": run}
+    if with_bridge:
+        pids["bridge"] = start_bridge(run, port, pw)
+        for _ in range(30):
+            try:
+                bridge_get("/ping", 2)
+                break
+            except Exception:
+                time.sleep(1)
+        else:
+            raise SystemExit("the bridge did not come up; see " + os.path.join(run, "bridge", "bridge.out"))
+    console = os.path.join(run, "console.log")
+    since = os.path.getsize(console) if (append and os.path.exists(console)) else 0
+    proc, log = phase0.start(run, append=append)
+    pids["server"] = proc.pid
+    pids["started"] = time.time()
+    json.dump(pids, open(pids_path(run), "w"))
+    pids["startup_s"] = wait_done(run, proc, since)
     json.dump(pids, open(pids_path(run), "w"))
     if tickrate:
         rc = Rcon(host, int(port), pw, timeout=120)
         rc.command("tickrate %d" % tickrate)
         rc.close()
+    return pids
+
+
+def start(run_id, world=None, tickrate=None, ram="6G"):
+    run = prepare_run.prepare(run_id, world or phase0.WORLD, ram=ram)
+    prepare_bridge(run)
+    launch(run, True, tickrate)
     return run
 
 
-def stop(run_id):
-    run = run_dir(run_id)
-    pids = json.load(open(pids_path(run)))
-    host, port, pw = open(os.path.join(run, "rcon.txt")).read().split()
-    try:
-        rc = Rcon(host, int(port), pw, timeout=120)
-        rc.command("tickrate 20")
-        rc.command("stop")
-        rc.close()
-    except Exception as e:
-        print("rcon stop failed:", e)
-    for _ in range(90):
-        if not alive(pids["server"]):
-            break
-        time.sleep(2)
-    else:
-        subprocess.run(["taskkill", "/F", "/PID", str(pids["server"])], capture_output=True)
-    subprocess.run(["taskkill", "/F", "/PID", str(pids["bridge"])], capture_output=True)
-    pids["stopped"] = time.time()
-    json.dump(pids, open(pids_path(run), "w"))
+def relaunch(run_id, tickrate=None):
+    """Starts the Minecraft server again on the same run folder (after a crash or stop); the bridge keeps running."""
+    return launch(run_dir(run_id), with_bridge=False, tickrate=tickrate, append=True)
 
 
 def fleet_versions():

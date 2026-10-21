@@ -35,12 +35,12 @@ def working_set_mb(pid):
         return None
 
 
-def start(run):
+def start(run, append=False):
     cc = os.path.join(run, "world", "serverconfig", "computercraft-server.toml")
     with open(cc, encoding="utf8") as f:
         if not prepare_run.rules_are_safe(f.read()):
             raise SystemExit("refusing to start: unsafe HTTP rules in " + cc)
-    log = open(os.path.join(run, "console.log"), "wb")
+    log = open(os.path.join(run, "console.log"), "ab" if append else "wb")
     args = [java17(), "@user_jvm_args.txt", "@libraries/net/minecraftforge/forge/1.20.1-47.4.20/win_args.txt", "nogui"]
     return subprocess.Popen(args, cwd=run, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL), log
 
