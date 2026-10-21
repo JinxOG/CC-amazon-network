@@ -136,6 +136,28 @@ def relaunch(run_id, tickrate=None):
     return launch(run_dir(run_id), with_bridge=False, tickrate=tickrate, append=True)
 
 
+def stop(run_id):
+    run = run_dir(run_id)
+    pids = json.load(open(pids_path(run)))
+    host, port, pw = open(os.path.join(run, "rcon.txt")).read().split()
+    try:
+        rc = Rcon(host, int(port), pw, timeout=120)
+        rc.command("tickrate 20")
+        rc.command("stop")
+        rc.close()
+    except Exception as e:
+        print("rcon stop failed:", e)
+    for _ in range(90):
+        if not alive(pids["server"]):
+            break
+        time.sleep(2)
+    else:
+        subprocess.run(["taskkill", "/F", "/PID", str(pids["server"])], capture_output=True)
+    subprocess.run(["taskkill", "/F", "/PID", str(pids["bridge"])], capture_output=True)
+    pids["stopped"] = time.time()
+    json.dump(pids, open(pids_path(run), "w"))
+
+
 def fleet_versions():
     """({node: version}, the server's version) from the local bridge's /state."""
     d = json.loads(bridge_get("/state"))

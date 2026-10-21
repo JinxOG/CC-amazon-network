@@ -63,6 +63,11 @@ class Rules(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 run.pin("none", bad)
 
+    def test_the_run_tool_has_every_command_its_cli_offers(self):
+        import run
+        for name in ("start", "stop", "pin", "relaunch", "launch", "bridge_post", "code_version"):
+            self.assertTrue(callable(getattr(run, name, None)), name)
+
     def test_the_start_function_checks_before_starting(self):
         import phase0
         import tempfile
