@@ -226,8 +226,8 @@ T2 the control real Minecraft lacks:
 
 Running Lua on a computer mid-run is a stretch goal. Exact replay stays impossible.
 
-**The spec owner writes its spec after the simulator's fidelity gaps are closed and the initial T2 server is
-running (phases 0-1), at the user's direction. Nobody designs or builds it before then.**
+**Spec: `2026-10-20-t2-control-mod-design.md`** (written 2026-10-20 at the user's direction). It is built in phases
+M0-M7 there, each reported before the next.
 
 ### 6.7 Which code runs
 
