@@ -48,6 +48,6 @@ the Modrinth app has). The live server's Forge version is not known to me.
 - The live server runs **Forge 47.4.10** for Minecraft 1.20.1 (`forge-1.20.1-47.4.10`), as the pack file pins. The user
   confirmed the download to me directly: official installer `forge-1.20.1-47.4.10-installer.jar` from Forge's maven, sha1
   `66bfea9963bfa60d88bab6b2750e74a958392715` (matches Forge's published sha1), installed into
-  `G:\TurtleOS-Sandbox	estserver\server-47410\` (libraries only so far). The switch (new folder with the 227 client mods minus
+  `G:/TurtleOS-Sandbox/testserver/server-47410/` (libraries only so far). The switch (new folder with the 227 client mods minus
   the 5 client-only, plus the 8 matched server-only mods) happens after the running 1x reference run finishes; every
   run report records the Forge version.

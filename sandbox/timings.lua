@@ -2,7 +2,7 @@
 -- Each entry says where its value comes from. "measured <date>" entries were fitted to the live fleet in Task 25
 -- (docs/superpowers/specs/2026-10-20-sandbox-calibration.md); "unverified" entries are still guesses and are listed
 -- as such in every report.
-return {
+local T = {
   tick_ms          = 50,    -- Minecraft 20 TPS
   -- The six movement-class actions share one value, fitted so that a miner delivers a 25-ore batch every ~50 s, as the
   -- live fleet does (7,871 intervals over 2026-10-08/09/14/15/16: median 50.6 s). With 400 ms the sandbox gave 59-70 s.
@@ -26,3 +26,12 @@ return {
   ns_per_instr     = 150,   -- measured 2026-10-20 (live /state pushBuildMs, live loop rollups)
   instr_hook_every = 1000,  -- instructions between cost charges
 }
+
+-- For fitting runs only (sandbox/tools/phase_fit.py): SANDBOX_TIMINGS="move_ms=350,dig_ms=200" overrides entries. The
+-- override string is kept in T.fitting_override so a fitting run can never pass for a default one.
+local override = os.getenv("SANDBOX_TIMINGS")
+if override then
+  for k, v in override:gmatch("([%w_]+)=([%d%.]+)") do T[k] = tonumber(v) end
+  T.fitting_override = override
+end
+return T
