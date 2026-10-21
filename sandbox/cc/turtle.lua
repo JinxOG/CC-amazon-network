@@ -128,6 +128,32 @@ function M.install(comp, E)
     return false
   end
 
+  -- gravity: when a block is removed, sand, gravel and concrete powder above it fall until they rest on something (a
+  -- turtle counts as solid). Instant here; in the game it takes a couple of ticks. Unverified - needs the local test server.
+  local function gravity_block(name)
+    return name ~= nil and (name == "minecraft:sand" or name == "minecraft:red_sand" or name == "minecraft:gravel"
+      or name:find("concrete_powder$") ~= nil)
+  end
+  local function settle(x, y, z)
+    local yy = y + 1
+    while true do
+      local n = world:get(x, yy, z)
+      if (world.occupants and world.occupants[key(x, yy, z)]) or not gravity_block(n) then break end
+      world:set(x, yy, z, nil)
+      local land = yy
+      while land - 1 >= -64 and block_at(x, land - 1, z) == nil do land = land - 1 end
+      world:set(x, land, z, n)
+      yy = yy + 1
+    end
+  end
+
+  -- item entities lying on the ground (overflow from a dig, drops with no inventory to receive them)
+  local function ground_put(x, y, z, stack)
+    local list = world.items[key(x, y, z)]
+    if not list then list = {}; world.items[key(x, y, z)] = list end
+    list[#list + 1] = { name = stack.name, count = stack.count }
+  end
+
   -- inventory --------------------------------------------------------------------------------
   local function max_count(s) return s.maxCount or 64 end
 
@@ -329,8 +355,12 @@ function M.install(comp, E)
       if world.containers then world.containers[key(x, y, z)] = nil end
       for _, drop in ipairs(drops) do
         local left = store(drop)
-        if left > 0 then st.dropped[#st.dropped + 1] = { name = drop.name, count = left } end
+        if left > 0 then
+          st.dropped[#st.dropped + 1] = { name = drop.name, count = left }
+          ground_put(x, y, z, { name = drop.name, count = left })   -- the overflow lies where the block was
+        end
       end
+      settle(x, y, z)
       return true
     end)
   end
@@ -380,8 +410,9 @@ function M.install(comp, E)
         moved = container:put(copy_stack(i, moved))
         if moved <= 0 then return false, "No space for items" end
       else
-        -- no inventory there: the items hit the ground and are lost to the fleet
+        -- no inventory there: the items hit the ground (item entities a later suck can pick up)
         st.dropped[#st.dropped + 1] = { name = i.name, count = moved }
+        ground_put(x, y, z, { name = i.name, count = moved })
       end
       i.count = i.count - moved
       if i.count <= 0 then st.inv[st.selected] = nil end
@@ -396,7 +427,20 @@ function M.install(comp, E)
     return timed(TIMINGS.turtle_cmd_ms, function()
       local x, y, z = pos_ahead(dir)
       local container = world.containers and world.containers[key(x, y, z)]
-      if not container then return false, "No items to take" end
+      if not container then
+        -- item entities in the cell in front
+        local list = world.items[key(x, y, z)]
+        local dest = st.inv[st.selected]
+        if not list or #list == 0 then return false, "No items to take" end
+        local room = (dest and max_count(dest) or 64) - (dest and dest.count or 0)
+        local first = list[1]
+        if room <= 0 or (dest and dest.name ~= first.name) then return false, "No space for items" end
+        local take = math.min(n or 64, room, first.count)
+        first.count = first.count - take
+        if first.count <= 0 then table.remove(list, 1) end
+        if dest then dest.count = dest.count + take else st.inv[st.selected] = { name = first.name, count = take } end
+        return true
+      end
       local dest = st.inv[st.selected]
       local room = (dest and max_count(dest) or 64) - (dest and dest.count or 0)
       if room <= 0 then return false, "No space for items" end

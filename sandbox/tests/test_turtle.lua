@@ -137,4 +137,59 @@ return {
     t.eq(out(comp), "false\ttrue|1")
     t.eq(world:get(0, 64, -1), "minecraft:chest")
   end,
+
+  ["gravity: digging under a column of gravel brings it down into the hole"] = function(t)
+    local comp, sched, world = rig([[ print(turtle.digDown()) ]], function(c, w)
+      PICK(c)
+      c.pos.y = 66
+      w:set(0, 65, 0, "minecraft:stone")   -- under the turtle: stone, then gravel, gravel stacked above the dug cell
+      w:set(0, 64, 0, "minecraft:stone")
+    end)
+    sched:run{ until_ms = 5000 }
+    t.eq(out(comp), "true")
+    t.eq(world:get(0, 65, 0), nil, "the dug cell is air")
+
+    local c2, s2, w2 = rig([[ turtle.dig() ]], function(c, w)
+      PICK(c)
+      w:set(0, 64, -1, "minecraft:stone")      -- in front: stone, with sand on top of it and gravel above that
+      w:set(0, 65, -1, "minecraft:sand")
+      w:set(0, 66, -1, "minecraft:gravel")
+    end)
+    s2:run{ until_ms = 5000 }
+    t.eq(w2:get(0, 64, -1), "minecraft:sand", "the sand fell into the dug cell")
+    t.eq(w2:get(0, 65, -1), "minecraft:gravel", "and the gravel after it")
+    t.eq(w2:get(0, 66, -1), nil)
+  end,
+
+  ["gravity: a turtle under the column is solid, the gravel stays above it"] = function(t)
+    local comp, sched, world = rig([[ turtle.digUp() ]], function(c, w)
+      PICK(c)
+      w:set(0, 65, 0, "minecraft:gravel")
+    end)
+    sched:run{ until_ms = 5000 }
+    t.eq(world:get(0, 65, 0), nil, "the gravel above was dug")
+  end,
+
+  ["a dig with a full inventory still succeeds and the overflow lies where the block was"] = function(t)
+    local comp, sched, world = rig([[ print(turtle.dig()) ]], function(c, w)
+      PICK(c)
+      for i = 1, 16 do c.tstate.inv[i] = { name = "minecraft:cobblestone", count = 64 } end
+      w:set(0, 64, -1, "minecraft:iron_ore")   -- drops raw iron; no slot can take it
+    end)
+    sched:run{ until_ms = 10000 }
+    t.eq(out(comp), "true")
+    t.ok(#comp.tstate.dropped >= 1, "the sandbox's own record of what was dropped")
+    local lying = world.items["0,64,-1"]
+    t.ok(lying and lying[1] and lying[1].name == "minecraft:raw_iron", "the raw iron should lie where the ore was")
+  end,
+
+  ["items dropped onto the ground can be sucked up again"] = function(t)
+    local comp, sched, world = rig([[ turtle.select(1); print(turtle.drop(10)); print(turtle.suck(4)); print(turtle.getItemCount(1)) ]], function(c, w)
+      PICK(c)
+      c.tstate.inv[1] = { name = "minecraft:cobblestone", count = 20 }
+    end)
+    sched:run{ until_ms = 10000 }
+    t.eq(out(comp), "true|true|14")
+    t.eq(world.items["0,64,-1"][1].count, 6)
+  end,
 }

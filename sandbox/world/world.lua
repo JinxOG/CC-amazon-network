@@ -19,8 +19,9 @@ end
 
 function World.new_empty(meta)
   -- occupants: "x,y,z" -> the turtle standing there. containers: "x,y,z" -> chest-like object with
-  -- :put(stack) -> moved and :take(n, name) -> stack. Neither is saved with the blocks.
-  return setmetatable({ chunks = {}, absent = {}, meta_t = meta or {}, dir = nil, occupants = {}, containers = {} }, World)
+  -- :put(stack) -> moved and :take(n, name) -> stack. Neither is saved with the blocks. items: "x,y,z" -> a list of
+  -- item stacks lying there as item entities (a dig that overflowed, a drop onto the ground); not saved either.
+  return setmetatable({ chunks = {}, absent = {}, meta_t = meta or {}, dir = nil, occupants = {}, containers = {}, items = {} }, World)
 end
 
 function World.open(dir)
@@ -37,7 +38,7 @@ function World:meta() return self.meta_t end
 -- Turns this world into a copy of `other` (a snapshot restore), keeping the object that everything points at.
 function World:replace_with(other)
   self.chunks, self.absent, self.meta_t, self.dir = other.chunks, other.absent, other.meta_t, other.dir
-  self.occupants, self.containers, self.block_periph = {}, {}, nil
+  self.occupants, self.containers, self.block_periph, self.items = {}, {}, nil, {}
   self.last_cx = nil
 end
 

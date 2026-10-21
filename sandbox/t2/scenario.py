@@ -75,6 +75,7 @@ class Ctx:
         self.checks = []
         self.notes = []
         self.samples = []      # (real seconds, game ticks, mean tick ms, tickrate)
+        self.build = []        # (tickrate, pushBuildMs, rsBuildMs) from /state
         self.rate = 20
         self.t0_real = time.time()
         self.g0 = None
@@ -98,6 +99,11 @@ class Ctx:
         tps = self._raw.command("forge tps")
         m = re.search(r"Overall: Mean tick time: ([\d.]+) ms", tps)
         self.samples.append((time.time(), self.gametime(), float(m.group(1)) if m else None, self.rate))
+        try:   # the server computer's own timings, published in /state (compared with the simulator's timings table)
+            st = json.loads(runmod.bridge_get("/state", 5))
+            self.build.append((self.rate, st.get("pushBuildMs"), st.get("rsBuildMs")))
+        except Exception:  # noqa: BLE001
+            pass
 
     def wait_until(self, cond, game_seconds, poll=10):
         start = self.gametime()
@@ -201,6 +207,12 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
             rep["speed_steps"].append({"tickrate": r, "speed_x": round(dg / dt / 20, 2) if dt > 0 else None,
                                        "mean_tick_ms": round(sum(mss) / len(mss), 2) if mss else None,
                                        "max_tick_ms": max(mss) if mss else None, "samples": len(rows)})
+    def median(xs):
+        xs = sorted(x for x in xs if isinstance(x, (int, float)) and x >= 0)
+        return xs[len(xs) // 2] if xs else None
+    rep["server_build_ms"] = {str(r): {"pushBuildMs_median": median([b[1] for b in ctx.build if b[0] == r]),
+                                       "rsBuildMs_median": median([b[2] for b in ctx.build if b[0] == r]),
+                                       "samples": sum(1 for b in ctx.build if b[0] == r)} for r in sorted({b[0] for b in ctx.build})}
     with open(os.path.join(ctx.run, "report.json"), "w") as f:
         json.dump(rep, f, indent=1)
     o = ["# T2 run report: %s" % scenario.NAME, "",
@@ -214,6 +226,9 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
     o += ["## Speed per tick-rate step", "", "| tick rate | speed | mean tick ms | max tick ms | samples |", "|---|---|---|---|---|"]
     for s in rep["speed_steps"]:
         o.append("| %s | %sx | %s | %s | %s |" % (s["tickrate"], s["speed_x"], s["mean_tick_ms"], s["max_tick_ms"], s["samples"]))
+    if rep["server_build_ms"]:
+        o += ["", "## Server computer timings (from /state; compare the simulator's timings table)", "", "| tick rate | pushBuildMs median | rsBuildMs median | samples |", "|---|---|---|---|"]
+        o += ["| %s | %s | %s | %s |" % (r, v["pushBuildMs_median"], v["rsBuildMs_median"], v["samples"]) for r, v in rep["server_build_ms"].items()]
     o += ["", "## CHECKS", ""]
     o += ["- %s %s" % ("PASS" if c["ok"] else "FAIL", c["message"]) for c in ctx.checks] or ["(none)"]
     o += ["", "## INTERVENTIONS", ""]

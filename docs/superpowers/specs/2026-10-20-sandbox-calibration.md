@@ -50,6 +50,23 @@ contrast, does lose messages to filtered yields on the old code (2,135 of 22,255
 turtle_base's loop the acks go. The sandbox's turn rate for a parked worker is 0.9 turns/s on the old code and 0.34
 after step 3; check that against live logs of both eras.
 
+**The 1.9.112 loose end, bisected (2026-10-20).** At 1.9.112 the sandbox still showed 1.15% parked ack loss where live shows
+0.02%. `ack_loss_parked.lua` (4 simulated hours, fleet parked) over all 78 commits that touch `turtle_base.lua`,
+`protocol.lua` or `central_server.lua` between 105d104 and master gives two steps and nothing else:
+
+| from | to | parked loss | what the commit is |
+|---|---|---|---|
+| 105d104 .. 678580c (1.9.112-1.9.115) | | 1.1-1.65% | |
+| **3aabd51** (1.9.116, 2026-09-22) | | **0.53%** | `proto.encode` defaults `to` to "server": the warehouse's log batches, keepalives and storage digests had been rejected at the server's door for nine days |
+| 3aabd51 .. 92f7d34 (1.9.116-1.9.140) | | 0.50-0.56% | |
+| **59ccebd** (1.9.140, 2026-10-12) | | **0.05%** | `refreshCraftable` stands down while the warehouse is alive: the server computer no longer calls `listCraftableItems` every 60 s (a 588 ms stall per W6's measurement) |
+| 59ccebd .. master | | 0.05% | live today 0.02% |
+
+Both steps are the server computer being busy (peripheral stalls, work on messages that could not be handled), i.e. the
+server missing acks, which is the mechanism the sandbox models (a busy computer queues events and a filtered yield discards
+them). Master now agrees with live (0.05% against 0.02%) and the 1.15% was code that no longer exists; nothing is left to
+fix in the model for this. Run folders: `G:\TurtleOS-Sandboxunis-<sha>\`.
+
 ## 3. Forward calibration (spec 8.2): sandbox against the live server, 2026-10-20 (Task 25 step 2, done)
 
 Same job both sides: `ORDER_MINE x1=1920 z1=-2624 x2=1984 z2=-2624 minerCount=2` (sector centres; the footprint
