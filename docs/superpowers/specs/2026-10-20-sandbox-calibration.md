@@ -65,7 +65,8 @@ after step 3; check that against live logs of both eras.
 Both steps are the server computer being busy (peripheral stalls, work on messages that could not be handled), i.e. the
 server missing acks, which is the mechanism the sandbox models (a busy computer queues events and a filtered yield discards
 them). Master now agrees with live (0.05% against 0.02%) and the 1.15% was code that no longer exists; nothing is left to
-fix in the model for this. Run folders: `G:\TurtleOS-Sandboxunis-<sha>\`.
+fix in the model for this. Run folders: `G:/TurtleOS-Sandbox/run/bis-<sha>/`.
+unis-<sha>\`.
 
 ## 3. Forward calibration (spec 8.2): sandbox against the live server, 2026-10-20 (Task 25 step 2, done)
 
