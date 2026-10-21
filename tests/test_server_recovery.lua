@@ -1065,6 +1065,25 @@ return {
         assert_eq(left, 1, "the owner's sector is still there for the owner")
     end,
 
+    -- Found by the sandbox (w3_stray_owner, 2026-10-21): the stray, back on the
+    -- air, finished the sector it was already in and reported SECTOR_DONE --
+    -- and that handler, which also hands out the next sector, had no owner
+    -- check. It was served the next sector of node_12's job.
+    ["a SECTOR_DONE from a turtle the job is not assigned to is not served a next sector, and it is recalled"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        strayAndZone(T)
+        T.handlers[proto.MSG.SECTOR_DONE]({ from = "node_119", payload = {
+            jobId = "job_0726", sectorX = 1152, sectorZ = -2800, oreCount = 0 } })
+        local assigns, recalls = sentOfType(T, proto.MSG.SECTOR_ASSIGN), recallsIn(T)
+        local left, done = #T.state.miningZones["job_0726"].pending, T.state.miningZones["job_0726"].done
+        restore()
+        assert_eq(assigns, 0, "no next sector for a job that is not its own")
+        assert_eq(recalls, 1, "sent home instead")
+        assert_eq(left, 1, "the owner's pending sector is untouched")
+        assert_eq(done, 0, "and the stray's report is not counted against the owner's zone")
+    end,
+
     ["the owner's sector request is still served"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()

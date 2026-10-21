@@ -3548,6 +3548,14 @@ end
 -- SECTOR_REQUEST after the first one; SECTOR_DONE IS the implicit request).
 handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local p    = msg.payload
+    -- The fourth door (found by the sandbox, 2026-10-21): this handler also
+    -- hands out the next sector, and a stray back on the air after its job was
+    -- given away finished its sector and was served the next one. Not counted
+    -- against the owner's zone, no next sector, and home.
+    if jobQueue.ownedByAnother(p.jobId, msg.from, "SECTOR_DONE") then
+        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })
+        return
+    end
     local zone = state.miningZones[p.jobId]
     if not zone then
         -- miningZone lost on restart — recreate so this sector is recorded and

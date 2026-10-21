@@ -276,7 +276,8 @@ HO_BOOT   = "a hold survives a server restart"
 OW_SECTOR ="a sector request from a turtle the job is not assigned to is refused, and it is recalled"
 OW_DONE   = "a JOB_COMPLETE from a turtle the job is not assigned to does not complete it"
 OW_FAIL   = "a JOB_FAILED from a turtle the job is not assigned to does not fail it"
-OW_OWNER  = "the owner's sector request is still served"
+OW_SDONE  = "a SECTOR_DONE from a turtle the job is not assigned to is not served a next sector, and it is recalled"
+OW_OWNER  ="the owner's sector request is still served"
 RZ_RESCAN ="a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
 RZ_REMINE = "a requeued zone re-mining after its rescan keeps the re-mine list"
 RZ_FIRST  = "a requeued zone on its first mine pass is still rebuilt from the store"
@@ -1307,6 +1308,9 @@ MUTANTS = [
 
     ('a stray turtle is refused but not recalled', 'central_server.lua',
      [('        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })\n', '')], OW_SECTOR),
+
+    ('a stray SECTOR_DONE is served the next sector', 'central_server.lua',
+     [('    if jobQueue.ownedByAnother(p.jobId, msg.from, "SECTOR_DONE") then\n', '    if false then\n')], OW_SDONE),
 
     ('a stray JOB_COMPLETE completes the job', 'central_server.lua',
      [('    if jobQueue.ownedByAnother(msg.payload.jobId, msg.from, "JOB_COMPLETE") then return end\n', '')], OW_DONE),
