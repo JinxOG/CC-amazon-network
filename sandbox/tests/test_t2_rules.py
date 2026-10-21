@@ -52,6 +52,17 @@ class Rules(unittest.TestCase):
             '[[http.rules]]\n\t\thost = "$private"', '[[http.rules]]\n\t\thost = "192.168.0.0/16"\n\t\taction = "allow"\n\n\t[[http.rules]]\n\t\thost = "$private"', 1)
         self.assertFalse(prepare_run.rules_are_safe(bad))
 
+    def test_the_pin_reads_the_version_of_the_commit_it_pins(self):
+        import run
+        v = run.code_version("HEAD")
+        self.assertRegex(v or "", r"^\d+\.\d+\.\d+$")
+
+    def test_pin_refuses_anything_but_a_full_commit_id(self):
+        import run
+        for bad in ("master", "abc123", "x" * 40, ""):
+            with self.assertRaises(SystemExit):
+                run.pin("none", bad)
+
     def test_the_start_function_checks_before_starting(self):
         import phase0
         import tempfile

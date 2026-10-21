@@ -2,6 +2,7 @@
 
     python sandbox/t2/run.py start <run-id> [--world DIR] [--tickrate N] [--ram 6G]
     python sandbox/t2/run.py status <run-id>
+    python sandbox/t2/run.py pin <run-id> <40-hex-commit>              # the real update path, fleet idle
     python sandbox/t2/run.py command <run-id> <TYPE> [json-params]     # POST /command to the local bridge
     python sandbox/t2/run.py stop <run-id>
 
@@ -137,6 +138,53 @@ def stop(run_id):
     json.dump(pids, open(pids_path(run), "w"))
 
 
+def fleet_versions():
+    """({node: version}, the server's version) from the local bridge's /state."""
+    d = json.loads(bridge_get("/state"))
+    return {n: t.get("version") for n, t in (d.get("turtles") or {}).items()}, d.get("version")
+
+
+def code_version(sha):
+    """The proto.VERSION of the fleet code at this commit."""
+    txt = git("show", sha + ":protocol.lua")
+    m = re.search(r'proto\.VERSION\s*=\s*"([^"]+)"', txt)
+    return m.group(1) if m else None
+
+
+def pin(run_id, sha, wait_s=900):
+    """Puts the fleet on commit `sha` through the REAL update path: UPDATE_ALL with the commit as its ref
+    (central_server stageFanOut -> proto.stageUpdateRef -> updater.lua, fetching raw.githubusercontent.com/<sha>/...).
+    Waits until the server and every registered turtle report that commit's version. The commit must already be on
+    GitHub, and the fleet should be idle. Returns the versions seen."""
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise SystemExit("pin needs a full 40-hex commit id")
+    want = code_version(sha)
+    if not want:
+        raise SystemExit("cannot read proto.VERSION at " + sha)
+    before, server_before = fleet_versions()
+    bridge_post("/command", {"type": "UPDATE_ALL", "params": {"ref": sha}})
+    t0 = time.time()
+    seen = None
+    while time.time() - t0 < wait_s:
+        time.sleep(10)
+        try:
+            vers, server_v = fleet_versions()
+        except Exception:
+            continue  # the server computer restarts onto the new code first
+        seen = (vers, server_v)
+        if vers and server_v == want and all(v == want for v in vers.values()):
+            break
+    else:
+        raise SystemExit("pin timed out: wanted %s, saw server %s and turtles %s" % (
+            want, seen and seen[1], sorted(set((seen[0] or {}).values())) if seen else None))
+    lines = ["commit " + sha, "version " + want,
+             "before: server %s, turtles %s" % (server_before, sorted(set(before.values()))),
+             "seconds: %d" % (time.time() - t0)]
+    with open(os.path.join(run_dir(run_id), "PINNED.txt"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    return seen
+
+
 def alive(pid):
     out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True, text=True).stdout
     return str(pid) in out
@@ -155,6 +203,9 @@ def main():
     elif cmd == "status":
         pids = json.load(open(pids_path(run_dir(rid))))
         print(json.dumps({"server_alive": alive(pids["server"]), "bridge_alive": alive(pids["bridge"]), **pids}, indent=1))
+    elif cmd == "pin":
+        vers, server_v = pin(rid, sys.argv[3])
+        print("pinned: server %s, %d turtles, versions %s" % (server_v, len(vers), sorted(set(vers.values()))))
     elif cmd == "command":
         params = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
         print(bridge_post("/command", {"type": sys.argv[3], "params": params}))

@@ -11,7 +11,8 @@ end
 local names = { "test_the_live_copy_rules_are_refused", "test_rewriting_makes_them_safe_and_keeps_the_rest",
   "test_allowing_private_addresses_is_refused", "test_allowing_everything_else_is_refused",
   "test_another_port_on_localhost_is_refused", "test_an_extra_allowed_host_is_refused",
-  "test_the_start_function_checks_before_starting" }
+  "test_the_start_function_checks_before_starting", "test_the_pin_reads_the_version_of_the_commit_it_pins",
+  "test_pin_refuses_anything_but_a_full_commit_id" }
 
 local tests = {}
 for _, n in ipairs(names) do

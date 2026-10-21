@@ -57,11 +57,22 @@ unchanged is therefore below 2x for anything that depends on those real-clock in
   village-spawn-point, yungs-better-mineshafts). Five client-only jars are also left out (listed in
   `server\mods-left-out\LEFT_OUT.json`).
 - `radio_loss` and `radio_latency` (T1 only, spec 6.6).
-- Code pinning through `update_ref.txt` and the real update path: not built yet. This run used the code already on the
-  computers' disks.
+- Run `p1-a` used the code already on the computers' disks; pinning is built (section above) and was proven in `p2-a`.
 - No job was run to completion (a full three-sector job is about 3.9 hours at 1x), so there is no T1/T2 job-time comparison.
+
+## Pinning through the real update path (done, run p2-a)
+
+`run.py pin <run-id> <40-hex-commit>` sends `UPDATE_ALL` with `params.ref = <commit>` through the bridge's `/command`. That
+is the production path: `central_server` restarts onto the commit (`stageFanOut` -> `proto.stageUpdateRef` -> `updater.lua`
+fetching `raw.githubusercontent.com/JinxOG/CC-amazon-network/<commit>/...`, the one host the HTTP rules allow), then sends
+`UPDATE_ALL{ref}` to each turtle as it goes idle. It waits until the server and every registered turtle report the commit's
+`proto.VERSION`. Result on the 2026-10-18 world (fleet idle, commit 2f2515e = 1.9.149, world code 1.9.148): server restarted
+onto 1.9.149 in about 10 s, UPDATE_ALL delivered to each turtle, **all 16 turtles reported 1.9.149 after 50 s**. Checked on
+disk: `protocol.lua` and `turtle_base.lua` on computers 96, 143, 181 and 183 are byte-identical to `git show 2f2515e:<file>`.
+The commit must already be on GitHub, and the fleet should be idle (a busy turtle updates when it next reports idle).
+Tests added: the version is read from the commit; a ref that is not a full commit id is refused (9 tests in all).
 
 ## Next (phase 2 and the rest of phase 1)
 
-Pinning (`update_ref.txt` on every computer plus the real update path), then the control verbs one by one (6.6), scenario
+The control verbs one by one (6.6), scenario
 files and a report like T1's, and one T1-versus-T2 comparison of the same three-sector job at 2x.
