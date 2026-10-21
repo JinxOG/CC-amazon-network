@@ -1,0 +1,69 @@
+"""The T2 run tool must refuse to start a server whose ComputerCraft HTTP rules are not the safe set."""
+import os
+import sys
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "t2"))
+import prepare_run  # noqa: E402
+
+LIVE_STYLE = '''[http]
+	enabled = true
+
+	[[http.rules]]
+		host = "$private"
+		action = "allow"
+
+	[[http.rules]]
+		host = "*"
+		action = "allow"
+
+[peripheral]
+	command_block_enabled = false
+'''
+
+
+class Rules(unittest.TestCase):
+    def test_the_live_copy_rules_are_refused(self):
+        self.assertFalse(prepare_run.rules_are_safe(LIVE_STYLE))
+
+    def test_rewriting_makes_them_safe_and_keeps_the_rest(self):
+        out = prepare_run.rewrite_http_rules(LIVE_STYLE)
+        self.assertTrue(prepare_run.rules_are_safe(out))
+        self.assertIn("[peripheral]", out)
+        self.assertIn("command_block_enabled", out)
+        self.assertNotIn('action = "allow"\n\n\t[[http.rules]]\n\t\thost = "*"', out)
+
+    def test_allowing_private_addresses_is_refused(self):
+        bad = prepare_run.rewrite_http_rules(LIVE_STYLE).replace('host = "$private"\n\t\taction = "deny"', 'host = "$private"\n\t\taction = "allow"')
+        self.assertFalse(prepare_run.rules_are_safe(bad))
+
+    def test_allowing_everything_else_is_refused(self):
+        bad = prepare_run.rewrite_http_rules(LIVE_STYLE)
+        bad = bad[:bad.rindex('action = "deny"')] + 'action = "allow"' + bad[bad.rindex('action = "deny"') + len('action = "deny"'):]
+        self.assertFalse(prepare_run.rules_are_safe(bad))
+
+    def test_another_port_on_localhost_is_refused(self):
+        bad = prepare_run.rewrite_http_rules(LIVE_STYLE).replace("port = 3000", "port = 8123")
+        self.assertFalse(prepare_run.rules_are_safe(bad))
+
+    def test_an_extra_allowed_host_is_refused(self):
+        bad = prepare_run.rewrite_http_rules(LIVE_STYLE).replace(
+            '[[http.rules]]\n\t\thost = "$private"', '[[http.rules]]\n\t\thost = "192.168.0.0/16"\n\t\taction = "allow"\n\n\t[[http.rules]]\n\t\thost = "$private"', 1)
+        self.assertFalse(prepare_run.rules_are_safe(bad))
+
+    def test_the_start_function_checks_before_starting(self):
+        import phase0
+        import tempfile
+        run = tempfile.mkdtemp()
+        cfg = os.path.join(run, "world", "serverconfig")
+        os.makedirs(cfg)
+        with open(os.path.join(cfg, "computercraft-server.toml"), "w") as f:
+            f.write(LIVE_STYLE)
+        with self.assertRaises(SystemExit) as cm:
+            phase0.start(run)
+        self.assertIn("unsafe HTTP rules", str(cm.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
