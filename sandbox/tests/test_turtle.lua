@@ -192,4 +192,20 @@ return {
     t.eq(out(comp), "true|true|14")
     t.eq(world.items["0,64,-1"][1].count, 6)
   end,
+
+  ["a wrapped modem stops working while its upgrade is unequipped and works again when it is back"] = function(t)
+    local comp, sched = rig([[
+      local m = peripheral.wrap("left")
+      print(pcall(m.isOpen, 1))
+      turtle.select(1); turtle.equipLeft()     -- the pickaxe goes on the left; the modem goes to the slot
+      print(pcall(m.isOpen, 1))
+      turtle.equipLeft()                        -- and back
+      print(pcall(m.isOpen, 1))
+    ]], function(c)
+      c.tstate = { inv = { { name = "minecraft:diamond_pickaxe", count = 1 } }, selected = 1, fuel = 100,
+        equipped = { left = "computercraft:wireless_modem_advanced" }, dropped = {}, block_name = "computercraft:turtle_advanced" }
+    end)
+    sched:run{ until_ms = 10000 }
+    t.eq(out(comp), "true	false|false	No peripheral attached|true	false")
+  end,
 }
