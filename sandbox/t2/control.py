@@ -133,11 +133,11 @@ class Control:
         except OSError:
             return None
 
-    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None, right=None, startup=None):
+    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None, right=None, startup=None, items=None):
         """Places a new advanced turtle with a wireless modem at x, y, z (the spot must be air in a loaded chunk), gives it the
         code of an existing computer of the same role (the files at the top of the donor's disk; no state files) and turns
         it on. The fleet sees it register as a new node. Returns its computer id. `right` is a tool or peripheral upgrade for the
-        right side (for example "minecraft:diamond_pickaxe"); `startup` is a path of a Lua file to install as the new turtle's
+        right side (for example "minecraft:diamond_pickaxe"); `items` maps slot (0-15) to (item, count), set before the turtle starts; `startup` is a path of a Lua file to install as the new turtle's
         startup.lua in place of the donor's (a probe program; the turtle is then not a fleet node)."""
         before = set(self.computers())
         right_nbt = ',RightUpgrade:"%s"' % right if right else ""
@@ -167,6 +167,8 @@ class Control:
                 shutil.copy(src, os.path.join(dest, name))
         if startup:
             shutil.copy(startup, os.path.join(dest, "startup.lua"))
+        for slot, (item, count) in (items or {}).items():
+            self.set_slot(new, slot, item, count)    # before it is turned on, so a program starts with them
         self.turn_on([new])
         return new
 

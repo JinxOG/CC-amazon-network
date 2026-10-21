@@ -21,7 +21,16 @@ return {
     sim:run_for(120000)
     local area = sim.world:meta().areas[1]
     sim:dispatch{ type = "ORDER_MINE", params = { x1 = area.x1, z1 = area.z1, x2 = area.x2, z2 = area.z2 } }
-    local restart_at = 45 * 60000
+    -- the world restarts while a miner is out on its way to the zone (45 minutes in, with the original timings; the per-action
+    -- times were refit on 2026-10-21 and the miners are no longer at the same place then, so wait for the situation itself)
+    sim:run_until(function()
+      for _, id in ipairs({ 11, 12 }) do
+        local c = sim.by_id[id]
+        if c.pos and c.pos.x and (c.pos.x > 400 or c.pos.x < -200) then return true end
+      end
+      return false
+    end, 3 * 3600 * 1000)
+    local restart_at = (sim.clock:now() - sim.t0) + 1000
     local delay = sim.scenario.gps_delay
     sim:world_restart(restart_at, { gps_delay = delay })
     sim:run_until_time(restart_at + delay + 15 * 60000)  -- the GPS is back; give them time to recover or get lost

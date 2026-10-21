@@ -134,7 +134,9 @@ function M.install(comp, E)
     return name ~= nil and (name == "minecraft:sand" or name == "minecraft:red_sand" or name == "minecraft:gravel"
       or name:find("concrete_powder$") ~= nil)
   end
+  local no_gravity = os.getenv("SANDBOX_NO_GRAVITY") ~= nil   -- experiments only: how much does gravity change a job
   local function settle(x, y, z)
+    if no_gravity then return end
     local yy = y + 1
     while true do
       local n = world:get(x, yy, z)
@@ -193,7 +195,7 @@ function M.install(comp, E)
     return s
   end
 
-  function T.select(s) s = slot_arg(s, "select"); st.selected = s; return true end
+  function T.select(s) s = slot_arg(s, "select"); return timed(TIMINGS.select_ms or TIMINGS.turtle_cmd_ms, function() st.selected = s; return true end) end
   function T.getSelectedSlot() return st.selected end
   function T.getItemCount(s) local i = st.inv[slot_arg(s, "getItemCount")]; return i and i.count or 0 end
   function T.getItemSpace(s)
@@ -306,6 +308,9 @@ function M.install(comp, E)
 
   -- movement ---------------------------------------------------------------------------------
   local function move(dir, ms)
+    -- a move that cannot happen (a block in the way, no fuel) fails after about 120 ms in real CC (T2 probe), not 400
+    local bx, by, bz = pos_ahead(dir)
+    if st.fuel <= 0 or protected(bx, by, bz) or block_at(bx, by, bz) ~= nil then ms = TIMINGS.blocked_move_ms or ms end
     return timed(ms, function()
       if st.fuel <= 0 then return false, "Out of fuel" end
       local x, y, z = pos_ahead(dir)
@@ -330,7 +335,9 @@ function M.install(comp, E)
   -- digging and placing ----------------------------------------------------------------------
   local dig_rng
   local function dig(dir)
-    return timed(TIMINGS.dig_ms, function()
+    -- real CC: breaking a block takes the full animation (384 ms for stone); a dig with nothing there fails in one tick
+    local dx, dy, dz = pos_ahead(dir)
+    return timed(block_at(dx, dy, dz) and TIMINGS.dig_ms or (TIMINGS.dig_air_ms or TIMINGS.turtle_cmd_ms), function()
       if not is_pickaxe(st.equipped.left) and not is_pickaxe(st.equipped.right) then return false, "No tool to dig with" end
       local x, y, z = pos_ahead(dir)
       local b = block_at(x, y, z)
@@ -399,7 +406,7 @@ function M.install(comp, E)
 
   -- containers: suck and drop ----------------------------------------------------------------
   local function drop(dir, n)
-    return timed(TIMINGS.turtle_cmd_ms, function()
+    return timed(TIMINGS.drop_ms or TIMINGS.turtle_cmd_ms, function()
       local i = st.inv[st.selected]
       if not i then return false, "No items to drop" end
       local moved = math.min(n or i.count, i.count)
@@ -424,7 +431,7 @@ function M.install(comp, E)
   function T.dropDown(n) return drop("down", n) end
 
   local function suck(dir, n)
-    return timed(TIMINGS.turtle_cmd_ms, function()
+    return timed(TIMINGS.suck_ms or TIMINGS.turtle_cmd_ms, function()
       local x, y, z = pos_ahead(dir)
       local container = world.containers and world.containers[key(x, y, z)]
       if not container then
@@ -454,8 +461,14 @@ function M.install(comp, E)
   function T.suckUp(n) return suck("up", n) end
   function T.suckDown(n) return suck("down", n) end
 
+  comp.action_counts = comp.action_counts or {}
   for name, fn in pairs(T) do
-    T[name] = function(...) current_action = name; return fn(...) end
+    T[name] = function(...)
+      current_action = name
+      local counts = comp.action_counts
+      counts[name] = (counts[name] or 0) + 1   -- how many times the program called each turtle function (read by scenarios)
+      return fn(...)
+    end
   end
 
   E.turtle = CCEnv.api(comp, "turtle", T)

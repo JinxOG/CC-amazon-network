@@ -11,5 +11,16 @@ return {
     local w = sim:watch_log("Job complete: job_")
     sim:run_until(function() return w.count > 0 end, 6 * 3600 * 1000)
     sim:expect(w.count > 0, "the job completed")
+    -- how often each turtle function was called, by the miner that did the job (for comparing with real CC timings)
+    for _, c in ipairs(sim.sched.computers) do
+      if c.action_counts and next(c.action_counts) and (c.action_counts.dig or 0) > 100 then
+        local names = {}
+        for k in pairs(c.action_counts) do names[#names + 1] = k end
+        table.sort(names)
+        local parts = {}
+        for _, k in ipairs(names) do parts[#parts + 1] = k .. "=" .. c.action_counts[k] end
+        sim:expect(true, c.name .. " calls: " .. table.concat(parts, " "))
+      end
+    end
   end,
 }

@@ -74,18 +74,18 @@ The same job now also exists in REAL Minecraft: the three-sector job on the loca
 real `server.js`, same fleet code and world copy). It is the best reference for per-action times and it agrees with live job_0206
 within 1-8% per phase. `sandbox/tools/phase_fit.py` times the phases of a sandbox run (`sandbox/scenarios/real_world_phases.lua`, run
 to job completion, about 50 s); a grid of 54 runs (`G:/TurtleOS-Sandbox/run/fit-*`, `phasefit-*.out`) varying forward, up/down, turn,
-dig and scan times gives the fit now in `timings.lua`: forward, up and down 400 ms, turn 100 ms, dig 20 ms (scan time barely
+dig and scan times gives the fit now in `timings.lua`: forward, up and down 400 ms, turn 100 ms, dig 20 ms in the first version of this fit (scan time barely
 matters: 1 s to 2 s moves a phase by 12 s).
 
 | phase | live job_0206 | T2 at 1x | T2 at 10x (x9.55) | sandbox before | sandbox now |
 |---|---|---|---|---|---|
-| survey | 1762 s | 1740 s | 1740 s | 1454 (-17%) | 1763 (+1.3% vs T2 1x) |
-| ore-free sectors (two) | 467 s | 505 s | 506 s | 372 (-20%) | 483 (-4.4%) |
-| ore sector | 9496 s | 9411 s | 9779 s | 10715 (+13%) | 9395 (-0.2%) |
-| rescan | 698 s | 674 s | 688 s | 519 (-26%) | 672 (-0.3%) |
-| re-mine | 757 s | 746 s | 754 s | 564 (-25%) | 732 (-1.9%) |
-| flight home | 841 s | 842 s | 802 s | 648 (-23%) | 861 (+2.3%) |
-| job total | 14021 s | 13919 s | 14288 s | 14273 (+2.5% vs T2 1x) | 13909 (-0.1%) |
+| survey | 1762 s | 1740 s | 1740 s | 1454 (-17%) | 1742 (+0.1%) |
+| ore-free sectors (two) | 467 s | 505 s | 506 s | 372 (-20%) | 485 (-4.0%) |
+| ore sector | 9496 s | 9411 s | 9779 s | 10715 (+13%) | 9386 (-0.3%) |
+| rescan | 698 s | 674 s | 688 s | 519 (-26%) | 675 (+0.1%) |
+| re-mine | 757 s | 746 s | 754 s | 564 (-25%) | 735 (-1.5%) |
+| flight home | 841 s | 842 s | 802 s | 648 (-23%) | 864 (+2.6%) |
+| job total | 14021 s | 13919 s | 14288 s | 14273 (+2.5% vs T2 1x) | 13889 (-0.2%) |
 
 Batch lines: 187 in live, T2 at 1x and 10x and the sandbox. Median batch spacing: live 50.0 s, T2 at 1x 50.3 s, sandbox 53 s
 (it was 52-57 s before). Ore 4168-4174 in all of them. Forward/up/down at 400 ms is the 8 ticks a CC turtle move takes; turn and dig
@@ -93,6 +93,36 @@ are fitted values, to be checked against direct measurements on T2 at 1x (`probe
 `/state`: `pushBuildMs` median 7 ms (live 13, sandbox 17-20), `rsBuildMs` median 54 ms (live 64, sandbox 19): the
 T2 numbers sit below live because this PC is faster than the live host; the sandbox's `rsBuildMs` is still about 3x low, the
 CC ROM's `serialiseJSON` costing more than the sandbox's.
+
+**Per-action times measured in real CC:Tweaked (fidelity gap 4, 2026-10-21).** `sandbox/t2/scenarios/probe_actions.py` spawns a
+turtle with a diamond pickaxe on the local test server at 1x (Forge 47.4.10, run `probe-5`) that times each action with
+`os.epoch("utc")` (`sandbox/t2/lua/action_probe.lua`):
+
+| action | measured (ms per call) | sandbox before |
+|---|---|---|
+| forward / back / up / down | 400 (8 ticks) | 300 |
+| turnLeft / turnRight | 400 | 300 |
+| dig of stone | 384 | 300 |
+| dig with nothing there (fails) | 84 | 300 |
+| forward into a block (fails) | 120 | 300 |
+| place (success 51, empty slot 55) | 51 | 300 |
+| detect / inspect / select / refuel | 50 (1 tick) | 50 / 50 / 0 / 50 |
+| drop (into a chest) / suck | 365 / 400 | 50 / 50 |
+| getItemCount / getItemDetail / getFuelLevel | 0 (not main-thread tasks) | 0 |
+
+Now in `timings.lua`: the measured values everywhere, except two EFFECTIVE values. With every measured value the sandbox's
+survey, ore-free sectors, rescans, re-mine and flight home land within 4% of the real run, but its ore sector takes 11,600 s
+against 9,411 s (+23%). The sandbox miner's call counts are not the cause (it makes about 52,000 timed turtle calls in the job;
+CC's own tracking, `/computercraft track`, counts 74,639 main-thread tasks for the miner in the real run, so the real miner calls
+more, not less), and gravity is not (11,424 s with it off). So `dig_ms` (200, measured 384) and `turn_ms` (200, measured 400) are
+effective values fitted to the real ore-sector time (they trade against each other: turn 100 with dig 250, or turn 300 with
+dig 150, fit as well). Result against the real run at 1x: survey 1742 (1740), ore-free 485 (505), ore sector 9386 (9411), rescan
+675 (674), re-mine 735 (746), flight 864 (842), total 13889 s (13919), 187 batch lines, median batch spacing 50.1 s (50.3). Open: why
+the real miner spends about 40% less per dig and turn than a probe in the same game measures (candidates: digs that overlap the next
+command inside the 8-tick animation window, or action mixes the probe does not exercise); for W1 and the control mod's event log to
+study. Other server-side timings from T2 at 1x: `pushBuildMs` 7 ms and `rsBuildMs` 54 ms (live 13 and 64; this PC is faster than the
+live host); the sandbox's `rsBuildMs` (19 ms) is still low. Geo scanner time (`scan_ms`), reboot time and cloud-store call times are
+not measured: the probe turtle has no scanner and the reboot/cloud paths need the control mod's event log; they stay "unverified".
 
 ## 3. Forward calibration (spec 8.2): sandbox against the live server, 2026-10-20 (Task 25 step 2, done)
 

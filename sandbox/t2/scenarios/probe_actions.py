@@ -12,7 +12,7 @@ LUA = os.path.join(os.path.dirname(__file__), "..", "lua", "action_probe.lua")
 def steps(ctx):
     c = ctx.control
     # a clear column of sky above the base: nothing within 25 blocks around, 45 up
-    x, y, z = 170, 110, -2800
+    x, y, z = 136, 120, -200
     ctx.note("probe turtle at %s" % ((x, y, z),))
     for dx, dy, dz in ((0, 0, -1), ):
         pass
@@ -21,13 +21,9 @@ def steps(ctx):
     ctx._raw.command("setblock %d %d %d minecraft:stone" % (x, y, z - 1))
     ctx._raw.command("setblock %d %d %d minecraft:chest" % (x, y - 1, z))
     # the donor code is irrelevant: the probe replaces the startup
-    new = c.spawn_turtle(x, y, z, "SUPPORT", right="minecraft:diamond_pickaxe", startup=os.path.abspath(LUA), fuel=20000)
+    new = c.spawn_turtle(x, y, z, "SUPPORT", right="minecraft:diamond_pickaxe", startup=os.path.abspath(LUA), fuel=20000,
+                         items={0: ("minecraft:cobblestone", 64)})
     ctx.note("probe turtle is computer #%d" % new)
-    # an item for it to drop: a stack in slot 1 (NBT level)
-    c.set_slot(new, 0, "minecraft:cobblestone", 64)
-    ctx._raw.command("computercraft shutdown #%d" % new)
-    time.sleep(2)
-    ctx._raw.command("computercraft turn-on #%d" % new)
     done = ctx.wait_until(lambda: "probe_results.json" in c.list_disk(new) and b'"done"' in c.read_disk(new, "probe_results.json"), 900, poll=15)
     ctx.expect(done, "the probe finished")
     data = json.loads(c.read_disk(new, "probe_results.json"))
@@ -36,5 +32,5 @@ def steps(ctx):
     for k, v in sorted(data.items()):
         if isinstance(v, dict) and "per_ms" in v:
             ctx.note("%-14s %7.1f ms per call  (%d ok of %d)" % (k, v["per_ms"], v["ok"], v["n"]))
-        elif isinstance(v, dict):
+        elif isinstance(v, dict) or isinstance(v, str):
             ctx.note("%-14s %s" % (k, json.dumps(v)))

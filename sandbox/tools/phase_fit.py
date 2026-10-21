@@ -82,7 +82,7 @@ def main():
             for k in names[axis]:
                 tm[k] = v
         tag = "_".join("%s%d" % (a, v) for a, v in zip(axes, combo))
-        rd = "G:/TurtleOS-Sandbox/run/fit-" + tag
+        rd = "G:/TurtleOS-Sandbox/run/fit2-" + tag
         if not os.path.exists(rd + "/logs"):
             env = dict(os.environ, SANDBOX_TIMINGS=",".join("%s=%d" % kv for kv in tm.items()))
             subprocess.run(["bash", "sandbox/sim", "run", "sandbox/scenarios/real_world_phases.lua", "--run-dir", rd], cwd=REPO,
