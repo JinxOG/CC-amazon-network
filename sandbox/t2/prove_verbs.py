@@ -151,6 +151,29 @@ def main():
         return "#141 moved from %s to %s with /clone move: dump shows the new position, computer still on, no restart (no new INIT lines); fuel %d -> %d (the turtle reacts to the move); moved back" % ((x, y, z), (x, y, z - 6), fuel, fuel_after)
     prove("teleport", v_teleport)
 
+    def v_spawn():
+        x, y, z = c.free_spot()
+        new = c.spawn_turtle(x, y, z, "SUPPORT")
+        node = "node_%d" % new
+        ok = wait_for(lambda: node in json.loads(runmod.bridge_get("/state"))["turtles"], 90)
+        assert ok, "%s never registered with the bridge" % node
+        t = json.loads(runmod.bridge_get("/state"))["turtles"][node]
+        assert t.get("role") == "SUPPORT"
+        return "spawned computer #%d at %s with SUPPORT code copied from a donor; %s registered with the bridge as %s (fuel %s)" % (new, (x, y, z), node, t.get("role"), t.get("fuel"))
+    prove("spawn_turtle", v_spawn)
+
+    def v_listener():
+        x, y, z = c.free_spot(tall=2)
+        lid = c.spawn_listener(x, y, z)
+        lines = []
+        def heard():
+            lines[:] = c.harvest_radio(lid)
+            return sum(1 for l in lines if '"HEARTBEAT"' in l) >= 10
+        assert wait_for(heard, 120, every=10), "heard only %d lines" % len(lines)
+        acks = sum(1 for l in lines if "HEARTBEAT_ACK" in l)
+        return "listener #%d at %s: %d messages heard (%d heartbeats, %d acks), logged with time, channel and text; segments harvested to <run>/radio/<id>/" % (lid, (x, y, z), len(lines), sum(1 for l in lines if '"HEARTBEAT"' in l), acks)
+    prove("radio listener", v_listener)
+
     def v_save():
         c.set_fuel(182, 1234)
         dest = c.save_point("p%d" % int(time.time()))

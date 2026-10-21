@@ -36,6 +36,8 @@ class Control:
         self.disks = os.path.join(self.world, "computercraft", "computer")
         self._rcon = None
         self._gps_hosts_down = None
+        self._listener = None
+        self._harvested = {}
 
     # -- plumbing -----------------------------------------------------------------------------------------------
     def rcon(self):
@@ -74,7 +76,7 @@ class Control:
 
     def block_data(self, pos, path=""):
         x, y, z = pos
-        return self.command("data get block %d %d %d %s" % (x, y, z, path)).strip()
+        return self.command(("data get block %d %d %d %s" % (x, y, z, path)).strip()).strip()
 
     # -- turtles ------------------------------------------------------------------------------------------------
     def _pos(self, computer_id):
@@ -116,6 +118,101 @@ class Control:
             self.command('data modify block %d %d %d Items[{Slot:%db}] set value {Slot:%db,id:"minecraft:air",Count:0b}'
                          % (x, y, z, slot, slot))
         raise RuntimeError("slot %d of #%d would not clear" % (slot, computer_id))
+
+    def free_spot(self, y=67, tall=2):
+        """A position near the base where `tall` blocks above each other are air (for spawn_turtle / spawn_listener)."""
+        for x in range(160, 200, 3):
+            for z in range(-2790, -2750, 3):
+                if all("Test passed" in self.command("execute if block %d %d %d air" % (x, y + k, z)) for k in range(tall)):
+                    return (x, y, z)
+        raise RuntimeError("no free spot found near the base")
+
+    def role_of(self, computer_id):
+        try:
+            return self.read_disk(computer_id, "role.txt").decode("utf8", "replace").strip()
+        except OSError:
+            return None
+
+    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None):
+        """Places a new advanced turtle with a wireless modem at x, y, z (the spot must be air in a loaded chunk), gives it the
+        code of an existing computer of the same role (the files at the top of the donor's disk; no state files) and turns
+        it on. The fleet sees it register as a new node. Returns its computer id."""
+        before = set(self.computers())
+        out = self.command('setblock %d %d %d computercraft:turtle_advanced[facing=%s]{LeftUpgrade:"computercraft:wireless_modem_advanced",'
+                           'LeftUpgradeNbt:{active:1b},Fuel:%d}' % (x, y, z, facing, fuel))
+        if "Changed the block" not in out:
+            raise RuntimeError(out)
+        new = None
+        for _ in range(20):
+            added = set(self.computers()) - before
+            if added:
+                new = added.pop()
+                break
+            time.sleep(1)
+        if new is None:
+            raise RuntimeError("the new turtle never appeared in the computer list")
+        if donor is None:
+            donor = next((int(d) for d in sorted(os.listdir(self.disks), key=int) if d.isdigit() and self.role_of(int(d)) == role
+                          and int(d) != new), None)
+        if donor is None:
+            raise RuntimeError("no computer with role %s to copy the code from" % role)
+        dest = os.path.join(self.disks, str(new))
+        os.makedirs(dest, exist_ok=True)
+        for name in os.listdir(os.path.join(self.disks, str(donor))):
+            src = os.path.join(self.disks, str(donor), name)
+            if os.path.isfile(src) and not name.endswith((".dat", ".log", ".json")) and name not in ("update_failed.txt", "update_ref.txt"):
+                shutil.copy(src, os.path.join(dest, name))
+        self.turn_on([new])
+        return new
+
+    def spawn_listener(self, x, y, z, channels=None):
+        """A radio listener: an advanced computer at x, y, z with a wireless modem on top, running sandbox/t2/lua/radio_log.lua,
+        which logs every message on `channels` (default 1-5 and the private channel 1000+id of every computer now loaded,
+        at most 128 channels). The spot and the block above it must be air in a loaded chunk. Returns the computer id."""
+        before = set(self.computers())
+        out = self.command("setblock %d %d %d computercraft:computer_advanced[facing=north]{On:1b}" % (x, y, z))   # On:1b is what gives it an id
+        if "Changed the block" not in out:
+            raise RuntimeError(out)
+        out = self.command("setblock %d %d %d computercraft:wireless_modem_advanced[facing=down]" % (x, y + 1, z))
+        if "Changed the block" not in out:
+            raise RuntimeError(out)
+        new = None
+        for _ in range(20):
+            added = set(self.computers()) - before
+            if added:
+                new = added.pop()
+                break
+            time.sleep(1)
+        if new is None:
+            raise RuntimeError("the listener computer never appeared in the computer list")
+        if channels is None:
+            ids = sorted(self.computers())
+            channels = [1, 2, 3, 4, 5] + [1000 + i for i in ids if i != new][:123]
+        dest = os.path.join(self.disks, str(new))
+        os.makedirs(dest, exist_ok=True)
+        with open(os.path.join(dest, "channels.txt"), "w") as f:
+            f.write(chr(10).join(str(ch) for ch in channels[:128]) + chr(10))
+        shutil.copy(os.path.join(os.path.dirname(__file__), "lua", "radio_log.lua"), os.path.join(dest, "startup.lua"))
+        self.shutdown([new])
+        time.sleep(2)
+        self.turn_on([new])
+        self._listener = new
+        self._harvested = {}
+        return new
+
+    def harvest_radio(self, listener=None):
+        """Copies the listener's segment files into <run>/radio/ (growing ones are re-copied) and returns the lines heard so far."""
+        listener = listener or self._listener
+        out_dir = os.path.join(self.run, "radio", str(listener))
+        os.makedirs(out_dir, exist_ok=True)
+        for name in self.list_disk(listener):
+            if name.startswith("radio.") and name.endswith(".log"):
+                shutil.copy(os.path.join(self.disks, str(listener), name), os.path.join(out_dir, name))
+        lines = []
+        for name in sorted(os.listdir(out_dir), key=lambda n: int(n.split(".")[1])):
+            with open(os.path.join(out_dir, name), encoding="utf8", errors="replace") as f:
+                lines += [l.rstrip(chr(10)) for l in f if not l.startswith("#")]
+        return lines
 
     # -- computers on and off -----------------------------------------------------------------------------------
     def shutdown(self, ids):
