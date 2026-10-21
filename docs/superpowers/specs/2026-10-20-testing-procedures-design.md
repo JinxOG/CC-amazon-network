@@ -192,11 +192,11 @@ The dashboard is at `http://127.0.0.1:3000/`. `tools/gate_check.py` and `tools/a
 | Verb | T1 | T2 (exact commands proven in phase 2) |
 |---|---|---|
 | `snapshot` / `restore` | yes | restore = a fresh run from a world copy |
-| `teleport`, `spawn` a turtle, set inventory / fuel | yes | block and NBT commands, proven per verb |
+| `teleport`, `spawn` a turtle, set inventory / fuel | yes | proven 2026-10-20 except spawn: `/clone ... replace move` teleports **without a reboot** (the turtle then acts on its old position until its next GPS fix); fuel and slots set by NBT |
 | `server_crash`, `world_restart` | yes | yes: stop or kill the process, start again |
 | `server_lag`, `tps_drop` | yes | yes: tick-rate control |
 | `gps_down` | yes | yes: shut the GPS hosts down |
-| chunk unload | yes | yes: remove the force-load |
+| chunk unload | yes | **no without the test mod**: loader turtles hold Advanced Peripherals chunk tickets that no console command removes (phase 2, 2026-10-20) |
 | `radio_loss`, `radio_latency` | yes | **no**, T1 only |
 
 A verb T2 lacks raises a clear error. It is never faked.
@@ -218,7 +218,7 @@ T2 the control real Minecraft lacks:
 - every radio message logged;
 - radio loss and latency on demand;
 - every event each computer receives, logged;
-- turtles moved without a reboot;
+- chunk unload under a loader turtle;
 - single-turtle save and restore;
 - peripheral stalls on demand;
 - pause and single-step;
