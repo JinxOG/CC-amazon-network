@@ -1,0 +1,279 @@
+"""T2 scenario runner and run report (spec 6.9).
+
+    python sandbox/t2/scenario.py <scenario.py> [--run-id ID] [--pin SHA] [--tickrate N] [--keep-running]
+
+A scenario is a Python file in sandbox/t2/scenarios/ defining NAME and steps(ctx). The runner starts a fresh run from the
+2026-10-18 world copy, optionally pins the fleet to a commit (the real update path), runs the steps, writes
+<run>/report.md and report.json, and stops the run. ctx offers the same verb names as the simulator where Minecraft allows
+(ctx.control: see control.py; every state-changing call is listed under INTERVENTIONS), plus:
+
+    ctx.dispatch(TYPE, params)          POST /command to the local bridge
+    ctx.tickrate(n)                     game ticks per real second (20 = real time)
+    ctx.wait_game(seconds)              until that much GAME time has passed
+    ctx.wait_real(seconds)              sample tick time for that many REAL seconds
+    ctx.wait_until(cond, game_seconds)  poll cond() every few seconds of real time; returns its value or None
+    ctx.expect(ok, message)             a CHECK: PASS or FAIL
+    ctx.note(text)                      a line in the report
+    ctx.state()                         the bridge's /state as a dict
+    ctx.log_lines(substr)               bridge log lines containing substr
+
+The report has the simulator report's sections (code, world, speed, CHECKS, INTERVENTIONS, jobs, ore, tool output) and
+NOT STAGED in place of NOT MODELLED.
+"""
+import datetime
+import glob
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(__file__))
+import control as ctl  # noqa: E402
+import run as runmod  # noqa: E402
+
+REPO = runmod.REPO
+
+NOT_STAGED = [
+    "Citadel and Alex's Mobs are left out at speed (the tick-rate mod conflicts with Citadel; Alex's Mobs needs it); at 1x they are present only if a run puts them back (phase 0 report).",
+    "13 server-only mods from the pack file are not in this test server: awesome-dungeon (x3), get-it-together-drops, in-control, item-banning, lithostitched, mobs-properties-randomness, structure-layout-optimizer, tectonic, too-fast, village-spawn-point, yungs-better-mineshafts.",
+    "Five client-only jars are left out (server/mods-left-out/LEFT_OUT.json).",
+    "radio_loss and radio_latency (real Minecraft cannot do them; simulator only). chunk_unload (the loaders' tickets cannot be removed from the console).",
+    "At a tick rate above 20 the game clock runs faster than the fleet's real-clock (os.epoch) deadlines: this run shows mechanics, not timeout behaviour.",
+    "Exact replay: two runs of the same scenario differ in timing; a timing claim needs at least two runs.",
+]
+
+READ_ONLY = {"computers", "read_disk", "list_disk", "block_data", "get_fuel", "get_slot", "role_of", "gps_hosts", "free_spot",
+             "command", "rcon", "harvest_radio", "tick_rate"}
+
+
+class Interventions:
+    """Wraps a Control: every method that is not a read is recorded with its arguments and the game time."""
+
+    def __init__(self, ctx, control):
+        self._ctx, self._c = ctx, control
+
+    def __getattr__(self, name):
+        attr = getattr(self._c, name)
+        if not callable(attr) or name in READ_ONLY or name.startswith("_"):
+            return attr
+
+        def wrapper(*args, **kwargs):
+            self._ctx.interventions.append({"verb": name, "args": [repr(a) for a in args], "kwargs": {k: repr(v) for k, v in kwargs.items()},
+                                            "game_seconds": self._ctx.game_seconds()})
+            return attr(*args, **kwargs)
+        return wrapper
+
+
+class Ctx:
+    def __init__(self, run_id):
+        self.run_id = run_id
+        self.run = runmod.run_dir(run_id)
+        self.interventions = []
+        self.checks = []
+        self.notes = []
+        self.samples = []      # (real seconds, game ticks, mean tick ms, tickrate)
+        self.rate = 20
+        self.t0_real = time.time()
+        self.g0 = None
+        self.control = Interventions(self, ctl.Control(run_id))
+        self._raw = self.control._c
+
+    # -- time and speed -----------------------------------------------------------------------------------------
+    def gametime(self):
+        m = re.search(r"(\d+)", self._raw.command("time query gametime"))
+        return int(m.group(1))
+
+    def game_seconds(self):
+        return round((self.gametime() - self.g0) / 20, 1) if self.g0 is not None else 0
+
+    def tickrate(self, n):
+        self.rate = n
+        self._raw.command("tickrate %d" % n)
+        self.notes.append("game time %.0f s: tick rate set to %d (%.1fx)" % (self.game_seconds(), n, n / 20))
+
+    def sample(self):
+        tps = self._raw.command("forge tps")
+        m = re.search(r"Overall: Mean tick time: ([\d.]+) ms", tps)
+        self.samples.append((time.time(), self.gametime(), float(m.group(1)) if m else None, self.rate))
+
+    def wait_until(self, cond, game_seconds, poll=10):
+        start = self.gametime()
+        while (self.gametime() - start) / 20 < game_seconds:
+            v = cond()
+            if v:
+                return v
+            self.sample()
+            time.sleep(poll)
+        return cond() or None
+
+    def wait_real(self, seconds, poll=10):
+        """Sample the tick time every `poll` real seconds for `seconds` real seconds (for speed steps)."""
+        end = time.time() + seconds
+        while time.time() < end:
+            self.sample()
+            time.sleep(poll)
+
+    def wait_game(self, seconds, poll=10):
+        self.wait_until(lambda: False, seconds, poll)
+
+    # -- the bridge ---------------------------------------------------------------------------------------------
+    def dispatch(self, type_, params=None):
+        self.notes.append("game time %.0f s: POST /command %s %s" % (self.game_seconds(), type_, json.dumps(params or {})))
+        return runmod.bridge_post("/command", {"type": type_, "params": params or {}})
+
+    def state(self):
+        return json.loads(runmod.bridge_get("/state"))
+
+    def log_lines(self, substr=""):
+        out = []
+        for f in sorted(glob.glob(os.path.join(self.run, "bridge", "logs", "*.txt"))):
+            with open(f, encoding="utf8", errors="replace") as h:
+                out += [l.rstrip("\n") for l in h if substr in l]
+        return out
+
+    def expect(self, ok, message):
+        self.checks.append({"ok": bool(ok), "message": message})
+
+    def note(self, text):
+        self.notes.append(text)
+
+    def wait_registered(self, count=14, seconds=300):
+        return self.wait_until(lambda: len(self.state()["turtles"]) >= count, seconds, poll=5)
+
+
+def load_scenario(path):
+    spec = importlib.util.spec_from_file_location("t2_scenario", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def tools_output(since_iso):
+    out = {}
+    env = dict(os.environ, BRIDGE_URL="http://127.0.0.1:3000", PYTHONIOENCODING="utf-8")
+    for tool in ("gate_check", "ack_loss"):
+        try:
+            p = subprocess.run([sys.executable, os.path.join(REPO, "tools", tool + ".py"), since_iso], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", env=env, timeout=300)
+            out[tool] = {"exit": p.returncode, "output": (p.stdout + p.stderr)[-6000:]}
+        except Exception as e:  # noqa: BLE001
+            out[tool] = {"exit": None, "output": "could not run: %s" % e}
+    return out
+
+
+def job_summary(ctx):
+    lines = ctx.log_lines()
+    keys = ("Dispatched job", "Zone job_", "done by", "Job complete", "permanently failed", "Mine zone", "survey complete", "mine complete")
+    jobs = [l for l in lines if any(k in l for k in keys)]
+    done = [l for l in lines if "done by" in l and "Sector" in l or "Survey (" in l and "done by" in l]
+    ore = 0
+    for l in lines:
+        m = re.search(r"Sector \(.*?\) done by \S+ . (\d+) ore mined", l)
+        if m:
+            ore += int(m.group(1))
+    problems = [l for l in lines if re.search(r"\b(ERROR|FATAL)\b|unreachable|NEEDS HANDS|stuck", l)]
+    return {"job_lines": jobs, "sector_done_lines": len(done), "ore_from_sector_lines": ore, "problem_lines": problems[:40], "problem_count": len(problems)}
+
+
+def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
+    summary = job_summary(ctx)
+    seconds = time.time() - ctx.t0_real
+    game_total = ctx.game_seconds()
+    mean_speed = round(game_total / seconds, 2) if seconds else None
+    src = open(os.path.join(ctx.run, "bridge", "BRIDGE_SOURCE.txt")).read().strip().replace("\n", "; ")
+    rep = {"scenario": scenario.NAME, "run": ctx.run, "started": started_wall, "pinned_commit": pin, "bridge_source": src,
+           "world": "worlds/unpacked/2026-10-18_1700 (copied)", "game_seconds": game_total, "real_seconds": round(seconds),
+           "mean_speed_x": round(mean_speed / 1, 2) if mean_speed else None, "samples": len(ctx.samples),
+           "checks": ctx.checks, "interventions": ctx.interventions, "notes": ctx.notes, "jobs": summary,
+           "tools": tools, "error": error, "not_staged": NOT_STAGED,
+           "speed_steps": []}
+    # speed per tick-rate step, from the samples
+    by_rate = {}
+    for (t, g, ms, r) in ctx.samples:
+        by_rate.setdefault(r, []).append((t, g, ms))
+    for r, rows in sorted(by_rate.items()):
+        if len(rows) >= 2:
+            dt, dg = rows[-1][0] - rows[0][0], rows[-1][1] - rows[0][1]
+            mss = [x[2] for x in rows if x[2] is not None]
+            rep["speed_steps"].append({"tickrate": r, "speed_x": round(dg / dt / 20, 2) if dt > 0 else None,
+                                       "mean_tick_ms": round(sum(mss) / len(mss), 2) if mss else None,
+                                       "max_tick_ms": max(mss) if mss else None, "samples": len(rows)})
+    with open(os.path.join(ctx.run, "report.json"), "w") as f:
+        json.dump(rep, f, indent=1)
+    o = ["# T2 run report: %s" % scenario.NAME, "",
+         "- Run folder: %s" % ctx.run, "- Started: %s" % started_wall,
+         "- Fleet code: %s" % (("pinned to " + pin) if pin else "as installed on the computers of the world copy"),
+         "- Bridge: real server.js (%s)" % src, "- World: %s" % rep["world"],
+         "- Game time %.0f s (%.2f h) in %d s of real time: **mean speed %sx**" % (game_total, game_total / 3600, seconds, mean_speed),
+         "- Samples of tick time: %d" % len(ctx.samples), ""]
+    if error:
+        o += ["**The scenario stopped with an error:** `%s`" % error, ""]
+    o += ["## Speed per tick-rate step", "", "| tick rate | speed | mean tick ms | max tick ms | samples |", "|---|---|---|---|---|"]
+    for s in rep["speed_steps"]:
+        o.append("| %s | %sx | %s | %s | %s |" % (s["tickrate"], s["speed_x"], s["mean_tick_ms"], s["max_tick_ms"], s["samples"]))
+    o += ["", "## CHECKS", ""]
+    o += ["- %s %s" % ("PASS" if c["ok"] else "FAIL", c["message"]) for c in ctx.checks] or ["(none)"]
+    o += ["", "## INTERVENTIONS", ""]
+    if ctx.interventions:
+        o += ["Verbs that changed the world or a computer during the run. A report with interventions is not evidence the fleet works unaided "
+              "unless the intervention is the test.", ""]
+        o += ["- game %.0f s: %s(%s)" % (i["game_seconds"], i["verb"], ", ".join(i["args"] + ["%s=%s" % kv for kv in i["kwargs"].items()])) for i in ctx.interventions]
+    else:
+        o.append("None. Nobody reached into the run.")
+    o += ["", "## Jobs and ore", "", "- Sector lines logged as done: %d" % summary["sector_done_lines"],
+          "- Ore reported by the sector lines: %d" % summary["ore_from_sector_lines"], "- Problem lines: %d" % summary["problem_count"], ""]
+    o += ["```"] + [l[:200] for l in summary["job_lines"][:60]] + ["```"]
+    if summary["problem_lines"]:
+        o += ["", "Problem lines (first 40):", "```"] + [l[:200] for l in summary["problem_lines"]] + ["```"]
+    o += ["", "## Notes", ""] + ["- " + n for n in ctx.notes[-80:]]
+    for tool, r in tools.items():
+        o += ["", "## %s" % tool, "", "exit code %s" % r["exit"], "", "```", r["output"].strip()[-3500:], "```"]
+    o += ["", "## NOT STAGED", "", "Things this run could not exercise. A pass here says nothing about them:", ""]
+    o += ["- " + n for n in NOT_STAGED]
+    with open(os.path.join(ctx.run, "report.md"), "w", encoding="utf8") as f:
+        f.write("\n".join(o) + "\n")
+    return rep
+
+
+def main():
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__)
+        sys.exit(2)
+    opt = lambda k, d=None: args[args.index(k) + 1] if k in args else d  # noqa: E731
+    scenario = load_scenario(args[0])
+    run_id = opt("--run-id") or "%s-%s" % (scenario.NAME, time.strftime("%m%d-%H%M%S"))
+    pin = opt("--pin")
+    tick = int(opt("--tickrate", 0)) or None
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    since_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    runmod.start(run_id)
+    ctx = Ctx(run_id)
+    error = None
+    try:
+        ctx.wait_registered()
+        ctx.g0 = ctx.gametime()
+        ctx.t0_real = time.time()
+        if pin:
+            runmod.pin(run_id, pin)
+            ctx.note("fleet pinned to %s through the real update path" % pin)
+        if tick:
+            ctx.tickrate(tick)
+        scenario.steps(ctx)
+    except Exception as e:  # noqa: BLE001
+        error = "%s: %s" % (type(e).__name__, e)
+    tools = tools_output(since_iso)
+    write_report(ctx, scenario, pin, error, since_iso, tools, started)
+    if "--keep-running" not in args:
+        runmod.stop(run_id)
+    print("report:", os.path.join(ctx.run, "report.md"))
+    if error:
+        print("ERROR", error)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
