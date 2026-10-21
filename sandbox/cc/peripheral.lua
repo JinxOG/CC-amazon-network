@@ -44,13 +44,14 @@ function M.install(comp, E)
     local d = Blocks.lookup(comp, name)
     if not d then return nil end
     -- Like CC's own wrappers, every method looks the peripheral up by NAME at call time: while nothing is attached under
-    -- that name (a turtle's modem unequipped for a loader swap) the call raises "No peripheral attached", and it works
-    -- again when something is attached there again. (Unverified error text - needs the local test server.)
+    -- that name (a turtle's modem unequipped for a loader swap) the call raises "No such method <m>", and it works again when
+    -- something is attached there again. The text is what real CC:Tweaked gave the fleet in a T2 run at 1x
+    -- ("/protocol.lua:486: No such method transmit", 5 times in a three-sector job, run cmp-1x).
     local w = {}
     for m in pairs(d.methods) do
       w[m] = function(...)
         local cur = Blocks.lookup(comp, name)
-        if not cur then error("No peripheral attached", 2) end
+        if not cur then error("No such method " .. tostring(m), 2) end
         local fn = cur.methods[m]
         if not fn then error("No such method " .. tostring(m), 2) end
         return fn(...)

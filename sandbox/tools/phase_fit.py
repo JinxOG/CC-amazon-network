@@ -13,6 +13,11 @@ import subprocess
 import sys
 
 LIVE = {"survey": 1762, "nonore_sectors": 467, "ore_sector": 9496, "rescan": 698, "remine": 757, "tail": 841, "total": 14021}
+# the same job in real Minecraft on the local test server at 1x (run cmp-1x, 2026-10-21): the best ground truth for the
+# per-action times, because it is the same fleet code, world copy and job as the sandbox runs
+T2_1X = {"survey": 1740, "nonore_sectors": 505, "ore_sector": 9411, "rescan": 674, "remine": 746, "tail": 842, "total": 13919}
+if "--target" in sys.argv and sys.argv[sys.argv.index("--target") + 1] == "t2":
+    LIVE = T2_1X
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
@@ -22,7 +27,7 @@ def ts(line):
 
 def phases(run_dir):
     lines = []
-    for f in sorted(glob.glob(os.path.join(run_dir, "logs", "*.txt"))):
+    for f in sorted(glob.glob(os.path.join(run_dir, "logs", "*.txt")) + glob.glob(os.path.join(run_dir, "bridge", "logs", "*.txt"))):
         lines += open(f, encoding="utf8", errors="replace").read().splitlines()
     def first(pat, after=0):
         for l in lines:
@@ -63,8 +68,11 @@ def main():
         p = phases(sys.argv[1])
         show(os.path.basename(sys.argv[1]), p) if p else print("could not read the phases from", sys.argv[1])
         return
-    axes = {a.split("=")[0]: [int(x) for x in a.split("=")[1].split(",")] for a in sys.argv[2:]}
-    names = {"move": ["move_ms", "turn_ms", "up_ms", "down_ms"], "dig": ["dig_ms"], "scan": ["scan_ms"], "place": ["place_ms"]}
+    skip = sys.argv.index("--target") if "--target" in sys.argv else None
+    argv = [a for i, a in enumerate(sys.argv[2:], 2) if skip is None or i not in (skip, skip + 1)]
+    axes = {a.split("=")[0]: [int(x) for x in a.split("=")[1].split(",")] for a in argv}
+    names = {"move": ["move_ms", "turn_ms", "up_ms", "down_ms"], "fwd": ["move_ms"], "turn": ["turn_ms"], "ud": ["up_ms", "down_ms"],
+             "dig": ["dig_ms"], "scan": ["scan_ms"], "place": ["place_ms"], "cmd": ["turtle_cmd_ms"], "reboot": ["reboot_ms"]}
     print("%-30s" % "" + "".join("%10s" % k for k in LIVE))
     show("live job_0206", LIVE)
     results = []

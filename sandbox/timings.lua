@@ -4,14 +4,18 @@
 -- as such in every report.
 local T = {
   tick_ms          = 50,    -- Minecraft 20 TPS
-  -- The six movement-class actions share one value, fitted so that a miner delivers a 25-ore batch every ~50 s, as the
-  -- live fleet does (7,871 intervals over 2026-10-08/09/14/15/16: median 50.6 s). With 400 ms the sandbox gave 59-70 s.
-  move_ms          = 300,   -- measured 2026-10-20 (fitted to live ore-batch cadence)
-  turn_ms          = 300,   -- measured 2026-10-20 (same fit)
-  up_ms            = 300,   -- measured 2026-10-20 (same fit)
-  down_ms          = 300,   -- measured 2026-10-20 (same fit)
-  dig_ms           = 300,   -- measured 2026-10-20 (same fit)
-  place_ms         = 300,   -- measured 2026-10-20 (same fit)
+  -- Fitted 2026-10-21 to the phases of the same three-sector job run in REAL Minecraft on the local test server at 1x (run
+  -- cmp-1x; live job_0206 is within 1-8% of it per phase): sandbox/tools/phase_fit.py over 54 runs, calibration note. Every
+  -- phase is within 4% of the real run and the total within 0.1%. The first fit (300 ms for everything, from batch cadence
+  -- alone) was 17-26% fast in the flight and scan phases and 13% slow in the digging phase. Up and down at 400 ms is the 8
+  -- ticks of a CC turtle move; forward 400; the dig is a fraction of that. Turn and dig are the least well constrained
+  -- values; gap 4 measures them directly on T2.
+  move_ms          = 400,   -- fitted 2026-10-21 to T2 at 1x (phase_fit.py --target t2)
+  turn_ms          = 100,   -- fitted 2026-10-21 (same fit; least constrained)
+  up_ms            = 400,   -- fitted 2026-10-21 (same fit)
+  down_ms          = 400,   -- fitted 2026-10-21 (same fit)
+  dig_ms           = 20,    -- fitted 2026-10-21 (same fit; least constrained)
+  place_ms         = 300,   -- measured 2026-10-20 (the first fit); not exercised by the phases, to be measured on T2
   attack_ms        = 300,   -- unverified (nothing to attack in the sandbox)
   turtle_cmd_ms    = 50,    -- detect/inspect/suck/drop/transferTo/refuel/equip: one tick, unverified
   scan_ms          = 1000,  -- geo scanner, unverified

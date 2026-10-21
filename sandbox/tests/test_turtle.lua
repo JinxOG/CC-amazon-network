@@ -206,6 +206,6 @@ return {
         equipped = { left = "computercraft:wireless_modem_advanced" }, dropped = {}, block_name = "computercraft:turtle_advanced" }
     end)
     sched:run{ until_ms = 10000 }
-    t.eq(out(comp), "true	false|false	No peripheral attached|true	false")
+    t.eq(out(comp), "true	false|false	No such method isOpen|true	false")
   end,
 }

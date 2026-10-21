@@ -68,6 +68,32 @@ them). Master now agrees with live (0.05% against 0.02%) and the 1.15% was code 
 fix in the model for this. Run folders: `G:/TurtleOS-Sandbox/run/bis-<sha>/`.
 unis-<sha>\`.
 
+**Per-phase timing refit (fidelity gap 2, 2026-10-21).** The first fit (300 ms for every movement-class action, from the batch
+cadence alone) got the total right but the phases wrong: the flight and scan phases ran 17-26% fast and the ore sector 13% slow.
+The same job now also exists in REAL Minecraft: the three-sector job on the local test server at 1x (run `cmp-1x`, Forge 47.4.20,
+real `server.js`, same fleet code and world copy). It is the best reference for per-action times and it agrees with live job_0206
+within 1-8% per phase. `sandbox/tools/phase_fit.py` times the phases of a sandbox run (`sandbox/scenarios/real_world_phases.lua`, run
+to job completion, about 50 s); a grid of 54 runs (`G:/TurtleOS-Sandbox/run/fit-*`, `phasefit-*.out`) varying forward, up/down, turn,
+dig and scan times gives the fit now in `timings.lua`: forward, up and down 400 ms, turn 100 ms, dig 20 ms (scan time barely
+matters: 1 s to 2 s moves a phase by 12 s).
+
+| phase | live job_0206 | T2 at 1x | T2 at 10x (x9.55) | sandbox before | sandbox now |
+|---|---|---|---|---|---|
+| survey | 1762 s | 1740 s | 1740 s | 1454 (-17%) | 1763 (+1.3% vs T2 1x) |
+| ore-free sectors (two) | 467 s | 505 s | 506 s | 372 (-20%) | 483 (-4.4%) |
+| ore sector | 9496 s | 9411 s | 9779 s | 10715 (+13%) | 9395 (-0.2%) |
+| rescan | 698 s | 674 s | 688 s | 519 (-26%) | 672 (-0.3%) |
+| re-mine | 757 s | 746 s | 754 s | 564 (-25%) | 732 (-1.9%) |
+| flight home | 841 s | 842 s | 802 s | 648 (-23%) | 861 (+2.3%) |
+| job total | 14021 s | 13919 s | 14288 s | 14273 (+2.5% vs T2 1x) | 13909 (-0.1%) |
+
+Batch lines: 187 in live, T2 at 1x and 10x and the sandbox. Median batch spacing: live 50.0 s, T2 at 1x 50.3 s, sandbox 53 s
+(it was 52-57 s before). Ore 4168-4174 in all of them. Forward/up/down at 400 ms is the 8 ticks a CC turtle move takes; turn and dig
+are fitted values, to be checked against direct measurements on T2 at 1x (`probe_actions`, gap 4). T2 server timings at 1x from
+`/state`: `pushBuildMs` median 7 ms (live 13, sandbox 17-20), `rsBuildMs` median 54 ms (live 64, sandbox 19): the
+T2 numbers sit below live because this PC is faster than the live host; the sandbox's `rsBuildMs` is still about 3x low, the
+CC ROM's `serialiseJSON` costing more than the sandbox's.
+
 ## 3. Forward calibration (spec 8.2): sandbox against the live server, 2026-10-20 (Task 25 step 2, done)
 
 Same job both sides: `ORDER_MINE x1=1920 z1=-2624 x2=1984 z2=-2624 minerCount=2` (sector centres; the footprint

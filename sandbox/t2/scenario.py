@@ -38,8 +38,7 @@ REPO = runmod.REPO
 
 NOT_STAGED = [
     "Citadel and Alex's Mobs are left out at speed (the tick-rate mod conflicts with Citadel; Alex's Mobs needs it); at 1x they are present only if a run puts them back (phase 0 report).",
-    "13 server-only mods from the pack file are not in this test server: awesome-dungeon (x3), get-it-together-drops, in-control, item-banning, lithostitched, mobs-properties-randomness, structure-layout-optimizer, tectonic, too-fast, village-spawn-point, yungs-better-mineshafts.",
-    "Five client-only jars are left out (server/mods-left-out/LEFT_OUT.json).",
+    "Five client-only jars are left out (server/mods-left-out/LEFT_OUT.json). The pack's 8 server-only mods are installed (hash-checked against the pack, docs/superpowers/specs/2026-10-20-t2-server-only-mods.md); five older ones the pack no longer has are not part of the live set.",
     "radio_loss and radio_latency (real Minecraft cannot do them; simulator only). chunk_unload (the loaders' tickets cannot be removed from the console).",
     "At a tick rate above 20 the game clock runs faster than the fleet's real-clock (os.epoch) deadlines: this run shows mechanics, not timeout behaviour.",
     "Exact replay: two runs of the same scenario differ in timing; a timing claim needs at least two runs.",
@@ -84,8 +83,18 @@ class Ctx:
 
     # -- time and speed -----------------------------------------------------------------------------------------
     def gametime(self):
-        m = re.search(r"(\d+)", self._raw.command("time query gametime"))
-        return int(m.group(1))
+        # RCON can answer oddly (or time out) while the server is catching up after a long tick: try again before giving up
+        last = None
+        for attempt in range(8):
+            try:
+                last = self._raw.command("time query gametime")
+                m = re.search(r"(\d+)", last)
+                if m:
+                    return int(m.group(1))
+            except (OSError, RuntimeError):
+                self._raw._rcon = None
+            time.sleep(3)
+        raise RuntimeError("no game time from the server; last reply %r" % (last,))
 
     def game_seconds(self):
         return round((self.gametime() - self.g0) / 20, 1) if self.g0 is not None else 0
@@ -184,13 +193,21 @@ def job_summary(ctx):
     return {"job_lines": jobs, "sector_done_lines": len(done), "ore_from_sector_lines": ore, "problem_lines": problems[:40], "problem_count": len(problems)}
 
 
+def forge_version(run):
+    base = os.path.join(run, "libraries", "net", "minecraftforge", "forge")
+    try:
+        return ", ".join(sorted(os.listdir(base)))
+    except OSError:
+        return "unknown"
+
+
 def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
     summary = job_summary(ctx)
     seconds = time.time() - ctx.t0_real
     game_total = ctx.game_seconds()
     mean_speed = round(game_total / seconds, 2) if seconds else None
     src = open(os.path.join(ctx.run, "bridge", "BRIDGE_SOURCE.txt")).read().strip().replace("\n", "; ")
-    rep = {"scenario": scenario.NAME, "run": ctx.run, "started": started_wall, "pinned_commit": pin, "bridge_source": src,
+    rep = {"scenario": scenario.NAME, "run": ctx.run, "started": started_wall, "pinned_commit": pin, "forge": forge_version(ctx.run), "bridge_source": src,
            "world": "worlds/unpacked/2026-10-18_1700 (copied)", "game_seconds": game_total, "real_seconds": round(seconds),
            "mean_speed_x": round(mean_speed / 1, 2) if mean_speed else None, "samples": len(ctx.samples),
            "checks": ctx.checks, "interventions": ctx.interventions, "notes": ctx.notes, "jobs": summary,
@@ -218,6 +235,7 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
     o = ["# T2 run report: %s" % scenario.NAME, "",
          "- Run folder: %s" % ctx.run, "- Started: %s" % started_wall,
          "- Fleet code: %s" % (("pinned to " + pin) if pin else "as installed on the computers of the world copy"),
+         "- Forge: %s; mods in the server folder: %d" % (forge_version(ctx.run), len(os.listdir(os.path.join(ctx.run, "mods")))),
          "- Bridge: real server.js (%s)" % src, "- World: %s" % rep["world"],
          "- Game time %.0f s (%.2f h) in %d s of real time: **mean speed %sx**" % (game_total, game_total / 3600, seconds, mean_speed),
          "- Samples of tick time: %d" % len(ctx.samples), ""]

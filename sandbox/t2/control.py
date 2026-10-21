@@ -133,13 +133,16 @@ class Control:
         except OSError:
             return None
 
-    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None):
+    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None, right=None, startup=None):
         """Places a new advanced turtle with a wireless modem at x, y, z (the spot must be air in a loaded chunk), gives it the
         code of an existing computer of the same role (the files at the top of the donor's disk; no state files) and turns
-        it on. The fleet sees it register as a new node. Returns its computer id."""
+        it on. The fleet sees it register as a new node. Returns its computer id. `right` is a tool or peripheral upgrade for the
+        right side (for example "minecraft:diamond_pickaxe"); `startup` is a path of a Lua file to install as the new turtle's
+        startup.lua in place of the donor's (a probe program; the turtle is then not a fleet node)."""
         before = set(self.computers())
+        right_nbt = ',RightUpgrade:"%s"' % right if right else ""
         out = self.command('setblock %d %d %d computercraft:turtle_advanced[facing=%s]{LeftUpgrade:"computercraft:wireless_modem_advanced",'
-                           'LeftUpgradeNbt:{active:1b},Fuel:%d}' % (x, y, z, facing, fuel))
+                           'LeftUpgradeNbt:{active:1b},Fuel:%d%s}' % (x, y, z, facing, fuel, right_nbt))
         if "Changed the block" not in out:
             raise RuntimeError(out)
         new = None
@@ -162,6 +165,8 @@ class Control:
             src = os.path.join(self.disks, str(donor), name)
             if os.path.isfile(src) and not name.endswith((".dat", ".log", ".json")) and name not in ("update_failed.txt", "update_ref.txt"):
                 shutil.copy(src, os.path.join(dest, name))
+        if startup:
+            shutil.copy(startup, os.path.join(dest, "startup.lua"))
         self.turn_on([new])
         return new
 
