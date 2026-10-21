@@ -1307,7 +1307,10 @@ MUTANTS = [
      [('    if jobQueue.ownedByAnother(jobId, msg.from, "SECTOR_REQUEST") then\n', '    if false then\n')], OW_SECTOR),
 
     ('a stray turtle is refused but not recalled', 'central_server.lua',
-     [('        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })\n', '')], OW_SECTOR),
+     [('    if jobQueue.ownedByAnother(jobId, msg.from, "SECTOR_REQUEST") then\n        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })\n', '    if jobQueue.ownedByAnother(jobId, msg.from, "SECTOR_REQUEST") then\n')], OW_SECTOR),
+
+    ('a stray SECTOR_DONE is refused but not recalled', 'central_server.lua',
+     [('    if jobQueue.ownedByAnother(p.jobId, msg.from, "SECTOR_DONE") then\n        sendTo(msg.from, proto.MSG.RECALL, { reason = "not_your_job" })\n', '    if jobQueue.ownedByAnother(p.jobId, msg.from, "SECTOR_DONE") then\n')], OW_SDONE),
 
     ('a stray SECTOR_DONE is served the next sector', 'central_server.lua',
      [('    if jobQueue.ownedByAnother(p.jobId, msg.from, "SECTOR_DONE") then\n', '    if false then\n')], OW_SDONE),
