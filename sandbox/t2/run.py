@@ -80,6 +80,23 @@ def bridge_post(path, obj, timeout=20):
         return r.read().decode("utf8", "replace")
 
 
+def port_free(port, seconds=60):
+    """Waits until nothing listens on 127.0.0.1:<port> (a bridge from the run before may still be going down)."""
+    import socket
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        s = socket.socket()
+        s.settimeout(1)
+        try:
+            s.connect(("127.0.0.1", port))
+        except OSError:
+            return
+        finally:
+            s.close()
+        time.sleep(2)
+    raise SystemExit("something still listens on 127.0.0.1:%d; stop it first (run.py stop <run-id>)" % port)
+
+
 def wait_done(run, proc, since_bytes=0, limit=900):
     """Waits for the server's "Done" line written after `since_bytes` of console output; returns the seconds taken."""
     console = os.path.join(run, "console.log")
@@ -100,8 +117,9 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
     host, port, pw = open(os.path.join(run, "rcon.txt")).read().split()
     pids = json.load(open(pids_path(run))) if os.path.exists(pids_path(run)) else {"run": run}
     if with_bridge:
+        port_free(3000)
         pids["bridge"] = start_bridge(run, port, pw)
-        for _ in range(30):
+        for _ in range(60):
             try:
                 bridge_get("/ping", 2)
                 break
