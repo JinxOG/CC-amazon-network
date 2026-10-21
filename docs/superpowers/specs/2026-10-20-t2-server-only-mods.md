@@ -20,7 +20,7 @@ run keeps its mod set; the jars wait in `testserver\downloads\servermods\`.
 | Too Fast | toofast-1.20-0.4.3.5.jar | Modrinth CDN | **match** |
 | Village Spawn Point | villagespawnpoint-1.20.1-4.6.jar | Modrinth CDN | **match** |
 
-## NOT matchable: not in the pack's current index (5 of 13)
+## Not in the pack any more (5 of 13): removed on purpose, not a gap
 
 The instance's own `packwiz.json` (what the client last synced) still lists these as `onlyOtherSide`, but the pack's
 **current** `index.toml` (235 mod entries) has no entry for any of them, so there is no pinned file or hash to match:
@@ -39,3 +39,15 @@ Needs a ruling: leave the 5 out and name them as "not in the current pack", or u
 
 The pack file pins Forge **47.4.10**; the test server runs Forge **47.4.20** (what the client instance launched with and what
 the Modrinth app has). The live server's Forge version is not known to me.
+
+## Rulings and answers (2026-10-20, the user via the Head Engineer, later)
+
+- The 5 are leftovers: the user said "those mods are not on the current pack. We removed those. Those are just leftovers."
+  So the client's `packwiz.json` entries for them are stale, they are not a gap, and they are NOT listed in NOT STAGED.
+  The old `mods.zip` jars were rightly not used.
+- The live server runs **Forge 47.4.10** for Minecraft 1.20.1 (`forge-1.20.1-47.4.10`), as the pack file pins. The user
+  confirmed the download to me directly: official installer `forge-1.20.1-47.4.10-installer.jar` from Forge's maven, sha1
+  `66bfea9963bfa60d88bab6b2750e74a958392715` (matches Forge's published sha1), installed into
+  `G:\TurtleOS-Sandbox	estserver\server-47410\` (libraries only so far). The switch (new folder with the 227 client mods minus
+  the 5 client-only, plus the 8 matched server-only mods) happens after the running 1x reference run finishes; every
+  run report records the Forge version.

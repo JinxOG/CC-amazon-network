@@ -41,7 +41,11 @@ def start(run, append=False):
         if not prepare_run.rules_are_safe(f.read()):
             raise SystemExit("refusing to start: unsafe HTTP rules in " + cc)
     log = open(os.path.join(run, "console.log"), "ab" if append else "wb")
-    args = [java17(), "@user_jvm_args.txt", "@libraries/net/minecraftforge/forge/1.20.1-47.4.20/win_args.txt", "nogui"]
+    import glob
+    args_file = glob.glob(os.path.join(run, "libraries", "net", "minecraftforge", "forge", "*", "win_args.txt"))
+    if len(args_file) != 1:
+        raise SystemExit("expected exactly one Forge version under libraries/, found %s" % args_file)
+    args = [java17(), "@user_jvm_args.txt", "@libraries/" + os.path.relpath(args_file[0], os.path.join(run, "libraries")).replace("\\", "/"), "nogui"]
     return subprocess.Popen(args, cwd=run, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL), log
 
 
