@@ -98,3 +98,107 @@ Otherwise the boot guard is as today.
 1. **Loosening the boot guard (3.4)** is the riskiest change since the guard went in on 10-06. Is "home-bound only, capped budget, park on disagreement" the right scope? Or should GPS 3 first ship only the restore (3.3) and keep today's "no move without GPS", which is safe and still saves the facing-detection step when GPS is up?
 2. **Turns:** agreed that a crash mid-turn leaves facing unknown (3.3)? The card's wording, "save facing before every turn", can't by itself tell whether the turn happened.
 3. ~~ore_turtle.lua's own direct moves~~: none (17 raw calls, all in turtle_base). W1 is not needed.
+
+## 7. Rulings (SPEC-OWNER, 2026-10-22) and the Release A build
+
+**Ruled:**
+- **Two releases.** A = journal + restore, with "no move without GPS" **unchanged**. B (the bounded blind homing of 3.4) comes only after A is live-validated and B passes T1 and T2 under every fault that can be staged, with "any failed or blocked move without GPS = park at once". B's go-ahead is the user's call.
+- **Turns:** a crash mid-turn leaves facing unknown. No guessing.
+- **Source pin across every fleet file**, not only turtle_base.
+- **Atomic journal write** (temp file + fs.move). An unreadable journal counts as no journal.
+- **Job-time cost ≤ 2%** at T2 1x.
+- A VALIDATION block on the card.
+
+### 7.1 What Release A changes for a turtle
+
+Only one thing: after a reboot, **if GPS agrees with the journal, the turtle takes its facing from the journal instead of stepping out and back to measure it.** Every other rule, the boot guard included, is as today. A turtle with no GPS still waits, exactly as now.
+
+### 7.2 Code (all in turtle_base.lua; a new module cannot ship in its own first OTA)
+
+- **`jMove(dir)` / `jTurn(dir)`** are the only places that call `turtle.forward/back/up/down/turnLeft/turnRight`.
+  - Each journals the intent, then makes the raw call (`turtle[dir]()`).
+  - On a failure it settles the journal (`pending = nil`).
+- **`applyMove`** and **`move.turnLeft/turnRight`** write the settled state after they update `_self`.
+- **The other call sites:**
+  - `tryMove` loses its `moveFn` argument and calls `jMove(dir)`.
+  - The ~15 raw sites in detectFacing, the dig-out, the bypasses and the sidestep call `jMove`/`jTurn`. Their own `applyMove` calls stay where they are.
+- **`detectFacing`** sets `_self.facingKnown = false` before its first step. While it turns around to measure, the facing really is unknown, so a crash in the middle leaves a journal that restores nothing.
+- **The journal record:** `{ v=1, x, y, z, facing, facingKnown, posFixed, fuel, pending, t }`.
+  - It is written to `journal.tmp`, then `journal.dat` is deleted and `journal.tmp` moved onto it.
+  - **Read:** `journal.dat`. If it is missing, use `journal.tmp`: a crash between the delete and the move leaves a complete temp file. If it is present, `.dat` wins: a crash *during* the temp write leaves a partial temp file and a `.dat` that is still exact, because the move had not started.
+  - Anything that does not unserialise to a well-formed record means no journal.
+  - Every journal call is in a pcall. A journal fault never stops a move; it logs once.
+- **Restore** (`restoreFacingFromJournal(fix)`): called right after a successful `gpsSync` at boot (initPosition) and in waitForPositionFix, where `detectFacing` would run.
+  - It needs a journal with `posFixed` and `facingKnown`, and `pending` nil or a move. A pending turn means no restore.
+  - **Pending move:**
+    - fuel = journal − 1: the move happened;
+    - fuel ≥ journal: it did not;
+    - anything else, `"unlimited"` included: no restore.
+  - The resulting position must **equal** the GPS fix. If it does not, nothing is restored and `detectFacing` runs as today, which is the safe fallback. Both outcomes log a line, which is the evidence for the VALIDATION block:
+    - `Journal: restored facing east at x,y,z (agrees with GPS)`;
+    - `Journal: disagrees with GPS by N (...) -- measuring facing`.
+- **First-step check (added; not in the card).** A restored facing is provisional until the turtle's first horizontal move, which then takes one `gps.locate`.
+  - The fix agrees: the facing is confirmed.
+  - The fix disagrees: the real facing is taken from that one-block step, the position is corrected to GPS, and a loud warning `RESTORED FACING WAS WRONG` is logged.
+  - No fix: `facingKnown = false`, so the boot guard holds the next move.
+  - **Why:** the journal cannot tell a crash-reboot from the user picking a turtle up and putting it back **in the same block, turned**. The position agrees, the facing does not, and that is node_182's 10-06 loss. The check costs one GPS call per reboot, and the worst case is one block in the wrong direction (detectFacing itself steps a block).
+
+### 7.3 Tests, written first (layer 0)
+
+**Journal file:**
+- a round trip;
+- a partial temp file with `.dat` present uses `.dat`;
+- `.dat` missing with a complete temp file uses the temp file;
+- garbage, a wrong type or a missing field: no journal;
+- a write that raises does not stop the move.
+
+**Restore (`initPosition` with a journal on disk and a GPS stub):**
+- pending nil and agrees: facing restored, **no forward/back step** (the facing detection is skipped);
+- disagrees by 1: detectFacing runs;
+- pending forward with fuel −1: the moved position;
+- fuel equal: the old position;
+- fuel +N (refuel): the old position;
+- fuel −2: no restore;
+- fuel "unlimited": no restore;
+- a pending turn: no restore and detectFacing runs;
+- `facingKnown = false` or `posFixed = false` in the journal: no restore;
+- no GPS: no restore, the boot guard waits as today (unchanged; the existing boot-guard tests still pass untouched).
+
+**First step:**
+- agrees: confirmed and no further locate;
+- disagrees: facing corrected from the delta, position set to GPS, warning logged;
+- no fix: facingKnown false, so the next tryMove waits.
+
+**Writes:**
+- an intent is on disk **before** the raw call (the stub raw move asserts it);
+- after success the record has `pending = nil` and the new position or facing;
+- a failed move settles to `pending = nil` and the old position;
+- detectFacing writes `facingKnown = false` before its first step.
+
+**Source pin across every fleet file:**
+- every `*.lua` in the repo root, except central_server.lua and the tests;
+- no `turtle.(forward|back|up|down|turnLeft|turnRight)` and no `turtle[` outside the bodies of `jMove`/`jTurn`;
+- it carries its own self-test: the pin must find a planted raw call in a string.
+
+**Mutants for tests/mutate_logship.py:**
+- the restore skips the GPS comparison;
+- the fuel rule is inverted;
+- a pending turn restores;
+- the first-step check is skipped;
+- `.tmp` is preferred over `.dat`;
+- the intent is written after the move;
+- detectFacing does not clear facingKnown.
+
+### 7.4 Layers 1 and 2
+
+- **Simulator** (scenario `w3_gps3_journal_restore`):
+  - a miner and a delivery turtle are rebooted at random points mid-job, with GPS up. After each reboot:
+    - the journal line agrees;
+    - no facing-detection step;
+    - the simulator's true position equals the turtle's after every later move.
+  - One turtle is also teleported into the same block, rotated, then rebooted: `RESTORED FACING WAS WRONG` is logged, it corrects, and it never takes a second wrong step.
+  - The old code (1.9.151) is the control: it measures facing on every reboot.
+- **Test server:**
+  - shutdown mid-move (M4) with GPS up: restore lines appear and nothing is lost;
+  - the move-rate cost of a 1x mining job, with and without the journal: **must be ≤ 2%**.
+- **Live** (the watcher, after the deploy): reboots during normal work give `Journal: restored` lines and no `RESTORED FACING WAS WRONG`. Any disagreement line is read before the card moves.
