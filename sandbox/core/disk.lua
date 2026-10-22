@@ -19,6 +19,26 @@ function Disk.clean(path)
   return table.concat(out, "/")
 end
 
+-- A positive metadata cache shared by every Disk object on the same root: what this module has written is remembered (file sizes, known
+-- directories), so the many exists / isdir / size questions around one write do not each open a real file. Only things THIS module did are
+-- cached (never a "not there" answer), and anything that changes a tree behind its back (delete of a directory, move, rmdir) drops the
+-- root's whole cache. Before this, the GPS 3 journal (one small write per move) made a run 11x slower.
+local META = {}
+
+local function meta(self)
+  local m = META[self.root]
+  if not m then m = { files = {}, dirs = {} }; META[self.root] = m end
+  return m
+end
+
+local function remember_dirs(m, clean)
+  local parent = clean:match("^(.*)/[^/]+$")
+  while parent do
+    m.dirs[parent] = true
+    parent = parent:match("^(.*)/[^/]+$")
+  end
+end
+
 function Disk.new(root, quota)
   local self = setmetatable({ root = root:gsub("\\", "/"):gsub("/+$", ""), quota = quota or Disk.DEFAULT_QUOTA }, Disk)
   self:mkroot()
@@ -62,6 +82,7 @@ function Disk:real_list(p)
 end
 
 function Disk:real_rmdir(p)
+  META = {}      -- a whole tree is going away: forget every cached fact
   if WINDOWS then os.execute('rmdir /s /q "' .. native(p) .. '" >nul 2>nul')
   else os.execute('rm -rf "' .. p .. '"') end
 end
@@ -70,8 +91,22 @@ end
 
 function Disk:path(cc) local c = Disk.clean(cc); return c == "" and self.root or (self.root .. "/" .. c) end
 
-function Disk:exists(cc) return Disk.clean(cc) == "" or self:real_exists(self:path(cc)) end
-function Disk:isdir(cc) return Disk.clean(cc) == "" or self:real_isdir(self:path(cc)) end
+function Disk:exists(cc)
+  local clean = Disk.clean(cc)
+  if clean == "" then return true end
+  local m = meta(self)
+  if m.files[clean] or m.dirs[clean] then return true end
+  return self:real_exists(self:path(clean))
+end
+
+function Disk:isdir(cc)
+  local clean = Disk.clean(cc)
+  if clean == "" then return true end
+  local m = meta(self)
+  if m.dirs[clean] then return true end
+  if m.files[clean] then return false end
+  return self:real_isdir(self:path(clean))
+end
 
 function Disk:list(cc)
   if not self:isdir(cc) then return nil, "Not a directory" end
@@ -85,6 +120,10 @@ function Disk:read(cc)
 end
 
 function Disk:size(cc)
+  local clean = Disk.clean(cc)
+  local m = meta(self)
+  if m.files[clean] then return m.files[clean] end
+  if m.dirs[clean] then return 0 end
   local p = self:path(cc)
   if self:real_isdir(p) then return 0 end
   local f = io.open(p, "rb")
@@ -117,10 +156,13 @@ function Disk:write(cc, data, append)
   local new_size = append and (old + #data) or #data
   if self:used() - old + new_size > self.quota then return nil, "Out of space" end
   local parent = clean:match("^(.*)/[^/]+$")
-  if parent and not self:real_exists(self:path(parent)) then self:real_mkdir(self:path(parent)) end
+  local m = meta(self)
+  if parent and not m.dirs[parent] and not self:real_exists(self:path(parent)) then self:real_mkdir(self:path(parent)) end
   local f, err = io.open(self:path(clean), append and "ab" or "wb")
   if not f then return nil, err end
   f:write(data); f:close()
+  m.files[clean] = new_size
+  remember_dirs(m, clean)
   self._used = self:used() - old + new_size
   return true
 end
@@ -135,6 +177,7 @@ function Disk:delete(cc)
   else
     local old = self:size(clean) or 0
     os.remove(self:path(clean))
+    meta(self).files[clean] = nil
     self._used = self:used() - old
   end
   return true
@@ -142,7 +185,10 @@ end
 
 function Disk:mkdir(cc)
   local clean = Disk.clean(cc)
-  if clean ~= "" and not self:exists(clean) then self:real_mkdir(self:path(clean)) end
+  if clean ~= "" and not self:exists(clean) then
+    self:real_mkdir(self:path(clean))
+    meta(self).dirs[clean] = true
+  end
   return true
 end
 
@@ -154,6 +200,7 @@ function Disk:move(from, to)
   if parent then self:mkdir(parent) end
   local ok, err = os.rename(self:path(from), self:path(to))
   if not ok then return nil, err end
+  META[self.root] = nil      -- a rename can move a whole tree: forget what was cached for this root
   return true
 end
 
