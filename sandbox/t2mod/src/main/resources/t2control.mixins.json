@@ -15,7 +15,8 @@
     "ForgeChunkManagerMixin",
     "ChunkCacheAccessor",
     "DistanceManagerAccessor",
-    "PeripheralWrapperMixin"
+    "PeripheralWrapperMixin",
+    "MinecraftServerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

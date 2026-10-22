@@ -59,6 +59,10 @@ public final class T2Commands {
                         .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
                             .executes(c -> reply(c.getSource(), Chunks.unload(IntegerArgumentType.getInteger(c, "computer"),
                                     IntegerArgumentType.getInteger(c, "duration"), T2Control.currentTick())))))))
+            .then(Commands.literal("pause").executes(c -> pauseCmd(c.getSource(), "pause", 0)))
+            .then(Commands.literal("resume").executes(c -> pauseCmd(c.getSource(), "resume", 0)))
+            .then(Commands.literal("step")
+                .then(Commands.argument("ticks", IntegerArgumentType.integer(1, 1000000)).executes(c -> pauseCmd(c.getSource(), "step", IntegerArgumentType.getInteger(c, "ticks")))))
             .then(Commands.literal("peripheral")
                 .then(Commands.literal("stall")
                     .then(Commands.argument("type", StringArgumentType.word())
@@ -121,6 +125,20 @@ public final class T2Commands {
             }
         }
         return out;
+    }
+
+    private static int pauseCmd(CommandSourceStack src, String what, int n) {
+        PauseControl p = PauseControl.INSTANCE;
+        long before = T2Control.currentTick();
+        if (what.equals("pause")) p.pause();
+        else if (what.equals("resume")) p.resume();
+        else p.step(n);
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("tick", before);
+        if (n > 0) args.put("ticks", n);
+        String result = "{\"ok\":true,\"paused\":" + p.isPaused() + ",\"steps_left\":" + p.stepsLeft() + ",\"tick\":" + before + "}";
+        Logs.intervention(what, args, result);
+        return reply(src, result);
     }
 
     private static int peripheralStall(CommandContext<CommandSourceStack> c) {

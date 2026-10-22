@@ -468,6 +468,19 @@ class Control:
         """The simulator's rs_offline: every call to the Refined Storage bridge raises an error, for `dur` game ms from `t`."""
         return self.peripheral_fail(t, dur, "rsBridge")
 
+    # -- pause and step through the control mod (M6) ------------------------------------------------------------
+    def pause(self):
+        """Stops the server running game ticks: no world, no computers, no timers. Console commands still work. The real clock keeps going,
+        so anything a program measures with os.epoch (the fleet's own deadlines) runs on while the game stands still."""
+        return self.t2("pause")
+
+    def resume(self):
+        return self.t2("resume")
+
+    def step(self, ticks):
+        """Lets exactly `ticks` more game ticks run, then pauses again (pauses first if the server was running)."""
+        return self.t2("step %d" % ticks)
+
     # -- verbs Minecraft cannot do ------------------------------------------------------------------------------
     def teleport(self, computer_id, x, y, z):
         """Moves a turtle's block (and everything in it) to x, y, z with /clone ... replace move. The computer stays on and

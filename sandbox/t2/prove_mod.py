@@ -594,6 +594,93 @@ def m5():
     runmod.stop("m5-a")
 
 
+def m6():
+    """M6: pause and step, proved on the game clock, on a probe turtle's own uptime, and on the console staying alive."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    runmod.start("m6-a")
+    c = ctl.Control("m6-a")
+    t0 = time.time()
+    while time.time() - t0 < 300 and len(c.computers()) < 25:
+        time.sleep(5)
+    (sx, sy, sz) = free_spots(c, 1)[0]
+    tid = c.spawn_turtle(sx, sy, sz, "MINER", startup=os.path.join(here, "lua", "uptime_probe.lua"), facing="north")
+
+    def gt():
+        for _ in range(8):
+            m = re.search(r"(\d+)", c.command("time query gametime"))
+            if m:
+                return int(m.group(1))
+            time.sleep(2)
+        raise RuntimeError("no game time")
+
+    def rows():
+        return [line for line in c.read_disk(tid, "uptime.txt").decode().splitlines() if line.strip()]
+
+    time.sleep(12)
+    g_a = gt()
+    time.sleep(5)
+    g_b = gt()
+    record("running: the game clock advances about 20 ticks a second", 85 <= g_b - g_a <= 115, "%d ticks in 5 s" % (g_b - g_a))
+
+    # B pause for 12 s
+    n_rows = len(rows())
+    rep = c.pause()
+    time.sleep(1)
+    g_p0 = gt()
+    r_p0 = len(rows())
+    time.sleep(12)
+    g_p1 = gt()
+    r_p1 = len(rows())
+    record("pause: the game clock does not move for 12 s, the probe turtle writes nothing, and the console still answers",
+           rep.get("paused") and g_p1 == g_p0 and r_p1 == r_p0, "clock %d -> %d, probe rows %d -> %d, reply %s" % (g_p0, g_p1, r_p0, r_p1, rep))
+    st = c.t2("status")
+    record("status still answers while paused", "dir" in st, list(st)[:4])
+
+    # C step 10 ticks, exactly
+    c.step(10)
+    time.sleep(3)
+    g_s = gt()
+    time.sleep(3)
+    g_s2 = gt()
+    record("step 10: exactly 10 ticks ran and the server paused again", g_s - g_p1 == 10 and g_s2 == g_s, "clock %d -> %d -> %d" % (g_p1, g_s, g_s2))
+    c.step(7)
+    c.step(7)
+    time.sleep(3)
+    g_t = gt()
+    record("two steps of 7 add up to exactly 14", g_t - g_s2 == 14, "clock %d -> %d" % (g_s2, g_t))
+    c.step(200)
+    time.sleep(13)
+    g_u = gt()
+    rows_u = len(rows())
+    record("step 200 runs 200 ticks (10 s of game time) and the probe turtle writes about 10 rows meanwhile", g_u - g_t == 200 and 8 <= rows_u - r_p1 <= 14 + 5, "clock %d -> %d, probe rows +%d" % (g_t, g_u, rows_u - r_p1))
+
+    # D resume
+    rep2 = c.resume()
+    time.sleep(2)
+    g_v = gt()
+    time.sleep(5)
+    g_w = gt()
+    record("resume: the clock runs at 20 ticks a second again", 85 <= g_w - g_v <= 115 and not rep2.get("paused"), "%d ticks in 5 s; reply %s" % (g_w - g_v, rep2))
+    time.sleep(3)
+    r_end = rows()
+    clocks = [float(x.split()[0]) for x in r_end]
+    record("the probe turtle's own uptime never went backwards (no restart from pausing)", all(clocks[i] < clocks[i + 1] for i in range(len(clocks) - 1)), "%d rows, uptime %.1f .. %.1f" % (len(clocks), clocks[0], clocks[-1]))
+    iv = [i["verb"] for i in c.t2_lines("interventions")]
+    record("pause, steps and resume are in the interventions log", iv.count("pause") == 1 and iv.count("step") == 4 and iv.count("resume") == 1, iv)
+    runmod.stop("m6-a")
+
+
+def cost():
+    """The finished mod (M0-M6 hooks, every fault off, logs off) against the M0 no-mod reading: mean tick time, fleet booted and idle at 1x."""
+    runmod.start("cost-a")
+    vals = sample_tick("cost-a", seconds=300, every=10)
+    mean = sum(vals) / len(vals)
+    base = 7.96     # M0 report: the same measurement without the mod (18 samples)
+    record("with every hook of the finished mod loaded and every fault off, the idle mean tick time is within 5% of the no-mod reading (7.96 ms, M0)",
+           mean <= base * 1.05, "%.2f ms mean over %d samples (min %.2f, max %.2f); no-mod %.2f ms; %+.1f%%" % (mean, len(vals), min(vals), max(vals), base, (mean / base - 1) * 100))
+    runmod.stop("cost-a")
+
+
 def m0_ip():
     """Re-proves the server-ip refusal on the run left by m0 (its first attempt was fooled by a crash report from the step before)."""
     run = runmod.run_dir("m0-with")
@@ -613,7 +700,7 @@ def m0_ip():
 
 if __name__ == "__main__":
     phase = sys.argv[1]
-    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3, "m4": m4, "m5": m5}[phase]()
+    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3, "m4": m4, "m5": m5, "m6": m6, "cost": cost}[phase]()
     with open(os.path.join(ROOT, "mod-proof-%s.json" % phase), "w") as f:
         json.dump(results, f, indent=1)
     print("\n".join("%-8s %s" % (r["result"], r["proof"]) for r in results))

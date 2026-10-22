@@ -39,7 +39,7 @@ REPO = runmod.REPO
 NOT_STAGED = [
     "Citadel and Alex's Mobs are left out at speed (the tick-rate mod conflicts with Citadel; Alex's Mobs needs it); at 1x they are present only if a run puts them back (phase 0 report).",
     "Five client-only jars are left out (server/mods-left-out/LEFT_OUT.json). The pack's 8 server-only mods are installed (hash-checked against the pack, docs/superpowers/specs/2026-10-20-t2-server-only-mods.md); five older ones the pack no longer has are not part of the live set.",
-    "Radio loss, radio latency and chunk unload need the control mod and are supported. Not yet: turtle move API and save/restore, peripheral stall/fail, pause/step (control mod M4-M6).",
+    "Needs the control mod (installed on this server): radio loss and latency, chunk unload, turtle move and save/restore, peripheral stall and fail, pause and step. Not available: running Lua on a computer from outside (M7, no clean way exists). Chunk unload releases tickets at Forge level for every mod, but only in the overworld.",
     "At a tick rate above 20 the game clock runs faster than the fleet's real-clock (os.epoch) deadlines: this run shows mechanics, not timeout behaviour.",
     "Exact replay: two runs of the same scenario differ in timing; a timing claim needs at least two runs.",
 ]
