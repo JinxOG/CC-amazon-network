@@ -48,12 +48,60 @@ def rules_are_safe(toml_text):
                      ("$private", None, "deny"), ("*", None, "deny")]
 
 
+MOD_ID = "t2control"
+
+
+def is_t2control_jar(path):
+    """True when the jar is the T2 control mod, by file name or by the mod id in its mods.toml."""
+    if os.path.basename(path).lower().startswith(MOD_ID):
+        return True
+    try:
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            text = z.read("META-INF/mods.toml").decode("utf8", "replace")
+        return re.search(r'modId\s*=\s*"%s"' % MOD_ID, text) is not None
+    except Exception:  # noqa: BLE001 - not a readable mod jar
+        return False
+
+
+def default_scan_dirs(root=ROOT_DEFAULT):
+    """Every mods folder the control mod must NOT be in: the user's Modrinth instances (the sync program shares them with the
+    live server) and any test-server folder other than the one T2 runs from."""
+    dirs = []
+    profiles = os.path.expandvars(r"%APPDATA%\ModrinthApp\profiles")
+    if os.path.isdir(profiles):
+        for name in os.listdir(profiles):
+            dirs.append(os.path.join(profiles, name, "mods"))
+    for name in os.listdir(root) if os.path.isdir(root) else []:
+        if name.startswith("server") and name != "server":
+            dirs.append(os.path.join(root, name, "mods"))
+    return dirs
+
+
+def mod_found_outside(scan_dirs=None, root=ROOT_DEFAULT):
+    """The jars of the control mod found in folders where it must not be (the placement guard, spec section 5.2)."""
+    found = []
+    for d in scan_dirs if scan_dirs is not None else default_scan_dirs(root):
+        if os.path.isdir(d):
+            for name in os.listdir(d):
+                if name.lower().endswith(".jar") and is_t2control_jar(os.path.join(d, name)):
+                    found.append(os.path.join(d, name))
+    return found
+
+
+def check_placement(scan_dirs=None, root=ROOT_DEFAULT):
+    found = mod_found_outside(scan_dirs, root)
+    if found:
+        raise SystemExit("refusing to start: the T2 control mod is outside the test server's mods folder: " + "; ".join(found))
+
+
 def junction(link, target):
     subprocess.run(["cmd", "/c", "mklink", "/J", link.replace("/", "\\"), target.replace("/", "\\")], check=True,
                    stdout=subprocess.DEVNULL)
 
 
 def prepare(run_id, world_dir, root=ROOT_DEFAULT, ram="6G", server_port=25566, rcon_port=25576):
+    check_placement(root=root)
     run = os.path.join(root, "runs", run_id)
     if os.path.exists(run):
         raise SystemExit("run folder exists: " + run)
@@ -86,6 +134,8 @@ def prepare(run_id, world_dir, root=ROOT_DEFAULT, ram="6G", server_port=25566, r
         f.write("eula=true\n")
     with open(os.path.join(run, "user_jvm_args.txt"), "w") as f:
         f.write("-Xms2G\n-Xmx%s\n" % ram)
+    with open(os.path.join(run, "t2control.allow"), "w") as f:   # the control mod refuses to run without it (spec 5.1)
+        f.write("run %s" % run_id + chr(10))
     with open(os.path.join(run, "rcon.txt"), "w") as f:
         f.write("127.0.0.1 %d %s\n" % (rcon_port, password))
     return run

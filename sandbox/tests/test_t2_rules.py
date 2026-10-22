@@ -7,6 +7,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "t2"))
 import prepare_run  # noqa: E402
 
+NL = chr(10)
+
 LIVE_STYLE = '''[http]
 	enabled = true
 
@@ -67,6 +69,30 @@ class Rules(unittest.TestCase):
         import run
         for name in ("start", "stop", "pin", "relaunch", "launch", "bridge_post", "code_version"):
             self.assertTrue(callable(getattr(run, name, None)), name)
+
+    def test_the_control_mod_in_another_mods_folder_is_refused(self):
+        import tempfile
+        import zipfile
+        d = tempfile.mkdtemp()
+        # by file name
+        open(os.path.join(d, "t2control-0.1.0.jar"), "wb").write(b"not even a zip")
+        with self.assertRaises(SystemExit) as cm:
+            prepare_run.check_placement([d])
+        self.assertIn("outside the test server", str(cm.exception))
+        os.remove(os.path.join(d, "t2control-0.1.0.jar"))
+        # by the mod id inside, under another name
+        with zipfile.ZipFile(os.path.join(d, "renamed.jar"), "w") as z:
+            z.writestr("META-INF/mods.toml", NL.join(['modLoader="javafml"', '[[mods]]', 'modId="t2control"', 'version="1"']))
+        with self.assertRaises(SystemExit):
+            prepare_run.check_placement([d])
+        os.remove(os.path.join(d, "renamed.jar"))
+        # an ordinary mod is fine, and so is a folder that does not exist
+        with zipfile.ZipFile(os.path.join(d, "other.jar"), "w") as z:
+            z.writestr("META-INF/mods.toml", NL.join(['modLoader="javafml"', '[[mods]]', 'modId="something_else"']))
+        prepare_run.check_placement([d, os.path.join(d, "missing")])
+
+    def test_the_user_instances_hold_no_control_mod_now(self):
+        self.assertEqual(prepare_run.mod_found_outside(), [])
 
     def test_the_start_function_checks_before_starting(self):
         import phase0
