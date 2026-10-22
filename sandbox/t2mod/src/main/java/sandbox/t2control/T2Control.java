@@ -102,6 +102,7 @@ public class T2Control {
     private void onServerStopping(ServerStoppingEvent event) {
         Faults.INSTANCE.clear();
         ChunkFaults.INSTANCE.clear();
+        PeripheralFaults.INSTANCE.clear();
         Logs.close();
         server = null;
     }

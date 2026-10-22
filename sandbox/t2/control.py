@@ -447,6 +447,27 @@ class Control:
         """Puts a saved turtle back as it was (shuts it down, moves it back, restores its data and disk folder, turns it on)."""
         return self.t2("turtle restore %s" % name)
 
+    # -- peripheral faults through the control mod (M5) -----------------------------------------------------------
+    def peripheral_stall(self, t, dur, peripheral_type, extra_ms):
+        """Makes every call to a peripheral of this TYPE (the name a program finds it by, such as rsBridge) take `extra_ms` longer, for
+        `dur` game ms from `t`. The extra time passes on the computer's own thread; the server tick is not touched."""
+        return self._at(t, lambda: self.t2("peripheral stall %s %d %d" % (peripheral_type, extra_ms, max(1, -(-int(dur) // 1000)))))
+
+    def peripheral_fail(self, t, dur, peripheral_type):
+        """Makes every call to a peripheral of this TYPE raise an error, for `dur` game ms from `t`."""
+        return self._at(t, lambda: self.t2("peripheral fail %s %d" % (peripheral_type, max(1, -(-int(dur) // 1000)))))
+
+    def peripheral_clear(self):
+        return self.t2("peripheral clear")
+
+    def rs_stall(self, t, dur, seconds):
+        """The simulator's rs_stall: the Refined Storage bridge's calls (type rsBridge) take `seconds` longer, for `dur` game ms from `t`."""
+        return self.peripheral_stall(t, dur, "rsBridge", int(seconds * 1000))
+
+    def rs_offline(self, t, dur):
+        """The simulator's rs_offline: every call to the Refined Storage bridge raises an error, for `dur` game ms from `t`."""
+        return self.peripheral_fail(t, dur, "rsBridge")
+
     # -- verbs Minecraft cannot do ------------------------------------------------------------------------------
     def teleport(self, computer_id, x, y, z):
         """Moves a turtle's block (and everything in it) to x, y, z with /clone ... replace move. The computer stays on and

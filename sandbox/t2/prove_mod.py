@@ -510,6 +510,90 @@ def m4():
     runmod.stop("m4-a")
 
 
+def m5():
+    """M5: peripheral stall and fail, proved on the warehouse's own RS probe (type rsBridge), both ways."""
+    import datetime
+    import glob
+    runmod.start("m5-a")
+    run = runmod.run_dir("m5-a")
+    c = ctl.Control("m5-a")
+    t0 = time.time()
+    while time.time() - t0 < 300 and len(c.computers()) < 25:
+        time.sleep(5)
+
+    def now_iso():
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    def probes(since):
+        """(iso time, ms) of every 'RS probe: listItems Nms' line since `since`, and the text of every 'RS listItems failed' line."""
+        ok, bad = [], []
+        for f in glob.glob(os.path.join(run, "bridge", "logs", "*.txt")):
+            for line in open(f, encoding="utf8", errors="replace"):
+                if line[:19] < since:
+                    continue
+                m = re.search(r"RS probe: listItems (\d+)ms", line)
+                if m:
+                    ok.append((line[:19], int(m.group(1))))
+                elif "RS listItems failed" in line:
+                    bad.append(line.strip()[:200])
+        return sorted(ok), bad
+
+    time.sleep(20)
+    a0 = now_iso()
+    time.sleep(40)
+    base, _ = probes(a0)
+    record("baseline: the warehouse probes the RS bridge about every 10 s and each call is quick", len(base) >= 3 and max(m for _, m in base) < 500, "%d probes, ms %s" % (len(base), [m for _, m in base]))
+
+    # B fail for 45 s
+    b0 = now_iso()
+    rep = c.rs_offline(0, 45000)
+    time.sleep(50)
+    ok_b, bad_b = probes(b0)
+    during = [x for x in ok_b if x[0] <= b0[:17] + "99"]
+    record("fail: while the RS bridge is made to fail the warehouse logs the failure and gets no listing",
+           rep.get("ok") and len(bad_b) >= 2 and all("T2 fault" in x for x in bad_b), "%d failure lines, e.g. %s; reply %s" % (len(bad_b), bad_b[:1], rep))
+    time.sleep(25)
+    c0 = now_iso()
+    time.sleep(35)
+    after_b, bad_after = probes(c0)
+    record("fail: after it expires the probes work again", len(after_b) >= 2 and len(bad_after) == 0, "%d good probes, %d failures after expiry" % (len(after_b), len(bad_after)))
+
+    # C stall 1500 ms for 60 s (under the warehouse's 2 s 'slow' line, so its probe rhythm stays at 10 s)
+    d0 = now_iso()
+    rep = c.rs_stall(0, 60000, 1.5)
+    time.sleep(65)
+    stalled, _ = probes(d0)
+    record("stall 1.5 s: every probe while it lasts reads at least 1.5 s", rep.get("ok") and len(stalled) >= 3 and min(m for _, m in stalled) >= 1500, "%d probes, ms %s" % (len(stalled), [m for _, m in stalled]))
+    e0 = now_iso()
+    time.sleep(40)
+    recov, _ = probes(e0)
+    record("stall: after it expires the probes are quick again", len(recov) >= 2 and max(m for _, m in recov) < 500, "ms %s" % [m for _, m in recov])
+
+    # D a rule for another type changes nothing
+    f0 = now_iso()
+    c.peripheral_stall(0, 40000, "notAType", 3000)
+    time.sleep(45)
+    other, _ = probes(f0)
+    record("a rule for a different peripheral type has no effect on the RS bridge", len(other) >= 2 and max(m for _, m in other) < 500, "ms %s" % [m for _, m in other])
+    st = c.t2("peripheral status")
+    record("the mod counted the calls it stalled and failed", st["stalled_calls"] >= 3 and st["failed_calls"] >= 2, st)
+
+    # E a long stall: the warehouse's own rule (2 s is 'slow') backs its probes off to 10 minutes
+    g0 = now_iso()
+    c.rs_stall(0, 30000, 2.5)
+    time.sleep(45)
+    slow, _ = probes(g0)
+    slowlines = []
+    for f in glob.glob(os.path.join(run, "bridge", "logs", "*.txt")):
+        for line in open(f, encoding="utf8", errors="replace"):
+            if line[:19] >= g0 and "slow, next in" in line:
+                slowlines.append(line.strip()[-120:])
+    record("stall 2.5 s: the warehouse itself calls the reading slow and backs off (its own rule, seen on the real server)", len(slowlines) >= 1, slowlines[:1])
+    iv = [i["verb"] for i in c.t2_lines("interventions")]
+    record("the faults are in the interventions log", iv.count("peripheral_fail") == 1 and iv.count("peripheral_stall") == 3, iv)
+    runmod.stop("m5-a")
+
+
 def m0_ip():
     """Re-proves the server-ip refusal on the run left by m0 (its first attempt was fooled by a crash report from the step before)."""
     run = runmod.run_dir("m0-with")
@@ -529,7 +613,7 @@ def m0_ip():
 
 if __name__ == "__main__":
     phase = sys.argv[1]
-    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3, "m4": m4}[phase]()
+    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3, "m4": m4, "m5": m5}[phase]()
     with open(os.path.join(ROOT, "mod-proof-%s.json" % phase), "w") as f:
         json.dump(results, f, indent=1)
     print("\n".join("%-8s %s" % (r["result"], r["proof"]) for r in results))

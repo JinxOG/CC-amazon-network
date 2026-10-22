@@ -14,7 +14,8 @@
     "ChunkManagerMixin",
     "ForgeChunkManagerMixin",
     "ChunkCacheAccessor",
-    "DistanceManagerAccessor"
+    "DistanceManagerAccessor",
+    "PeripheralWrapperMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -59,6 +59,23 @@ public final class T2Commands {
                         .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
                             .executes(c -> reply(c.getSource(), Chunks.unload(IntegerArgumentType.getInteger(c, "computer"),
                                     IntegerArgumentType.getInteger(c, "duration"), T2Control.currentTick())))))))
+            .then(Commands.literal("peripheral")
+                .then(Commands.literal("stall")
+                    .then(Commands.argument("type", StringArgumentType.word())
+                        .then(Commands.argument("extra_ms", IntegerArgumentType.integer(1, 20000))
+                            .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
+                                .executes(c -> peripheralStall(c))))))
+                .then(Commands.literal("fail")
+                    .then(Commands.argument("type", StringArgumentType.word())
+                        .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
+                            .executes(c -> peripheralFail(c)))))
+                .then(Commands.literal("clear").executes(c -> {
+                    PeripheralFaults.INSTANCE.clear();
+                    Logs.intervention("peripheral_clear", new LinkedHashMap<>(), "{\"ok\":true}");
+                    return reply(c.getSource(), "{\"ok\":true}");
+                }))
+                .then(Commands.literal("status").executes(c -> reply(c.getSource(), "{\"rules\":" + PeripheralFaults.INSTANCE.activeRules(T2Control.currentTick())
+                        + ",\"stalled_calls\":" + PeripheralFaults.INSTANCE.stalledCalls() + ",\"failed_calls\":" + PeripheralFaults.INSTANCE.failedCalls() + "}"))))
             .then(Commands.literal("turtle")
                 .then(Commands.literal("move")
                     .then(Commands.argument("computer", IntegerArgumentType.integer(0))
@@ -104,6 +121,31 @@ public final class T2Commands {
             }
         }
         return out;
+    }
+
+    private static int peripheralStall(CommandContext<CommandSourceStack> c) {
+        String type = StringArgumentType.getString(c, "type");
+        int extra = IntegerArgumentType.getInteger(c, "extra_ms");
+        int duration = IntegerArgumentType.getInteger(c, "duration");
+        long now = T2Control.currentTick();
+        PeripheralFaults.INSTANCE.addStall(type, extra, now, duration);
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("type", type); args.put("extra_ms", extra); args.put("duration_s", duration); args.put("start_tick", now); args.put("expires_tick", now + duration * 20L);
+        String result = "{\"ok\":true,\"expires_tick\":" + (now + duration * 20L) + "}";
+        Logs.intervention("peripheral_stall", args, result);
+        return reply(c.getSource(), result);
+    }
+
+    private static int peripheralFail(CommandContext<CommandSourceStack> c) {
+        String type = StringArgumentType.getString(c, "type");
+        int duration = IntegerArgumentType.getInteger(c, "duration");
+        long now = T2Control.currentTick();
+        PeripheralFaults.INSTANCE.addFail(type, now, duration);
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("type", type); args.put("duration_s", duration); args.put("start_tick", now); args.put("expires_tick", now + duration * 20L);
+        String result = "{\"ok\":true,\"expires_tick\":" + (now + duration * 20L) + "}";
+        Logs.intervention("peripheral_fail", args, result);
+        return reply(c.getSource(), result);
     }
 
     private static int turtleMove(CommandContext<CommandSourceStack> c, String tail) {

@@ -55,7 +55,7 @@ Versions: **CC:Tweaked `cc-tweaked-1.20.1-forge-1.120.2`**, **Advanced Periphera
 | Event log | `dan200.computercraft.core.computer.ComputerExecutor#queueEvent(String, Object[])` (package-private; targeted by name). **Changed in M1:** the design named `ServerComputer#queueEvent`, but modem and peripheral events reach a computer through `IComputerAccess` without passing it, so `modem_message` was missing from the log | Logs what was queued. Whether the program then *consumed* it, or a filtered yield ate it, is not visible here; the log says so |
 | Turtle move without reboot | `dan200.computercraft.shared.turtle.core.TurtleBrain#teleportTo(Level, BlockPos)`, called (not hooked) | The same path a turtle uses to move itself. Facing: set separately; to be proven in M4 |
 | Chunk unload | `de.srendi.advancedperipherals.common.util.ChunkManager#removeForceChunk(ServerLevel, UUID)`, called, plus a hook on `ChunkManager#serverTick` / `addForceChunk` that refuses to re-force that UUID until the fault expires | The loader re-asks for its ticket every tick; without the refusal the unload would undo itself at once |
-| Peripheral stall | **To be found in M5:** the call path where CC:T dispatches a peripheral method; Advanced Peripherals' bridge methods if a generic point is not clean | Must stall without blocking the server thread for other computers |
+| Peripheral stall / fail | **Found in M5:** `dan200.computercraft.core.apis.PeripheralAPI$PeripheralWrapper#call(ILuaContext, String, IArguments)` (private, HEAD, cancellable), on the computer's own thread; matched by the peripheral's type name (`rsBridge`). A stall sleeps on that thread; a fail throws a `LuaException` | Does not block the server thread for other computers; one generic point, so it covers every peripheral, not just Advanced Peripherals |
 | Pause / step | Server tick loop, or the tick-rate mod's own control if it pauses cleanly | Computers mid-run keep running until they yield. Timers freeze, but `os.epoch` (real clock) does not; the report says so |
 | Turtle save/restore | Block-entity NBT plus the computer's disk folder, by command | Mostly commands; the mod makes it one atomic call |
 
@@ -186,4 +186,4 @@ from before the private channel. M1's logs on T2 show whether real CC agrees, cl
    with a per-run flag.
 2. **Event log volume.** The fleet queues many timer events. Filtering by computer or event name may be needed for long
    runs; decided from M1's measured volume.
-3. **The peripheral stall hook (M5)** is the one hook not yet located in the jars.
+3. **The peripheral stall hook (M5)** was located in M5 (section 4).
