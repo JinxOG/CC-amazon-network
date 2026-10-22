@@ -2472,11 +2472,18 @@ function jobQueue.reassign(jobId, fromId, reason)
     -- 20:00 reboot, resumed as "0/4 sectors remaining" and closed with the ore
     -- still there. Such a zone is kept, the dead holder's sector returned to
     -- the list it came from, and ensureMineZone reuses it.
+    --
+    -- AND THE FIRST MINE PASS (spec owner, 2026-10-22). The store does not know
+    -- the survey is done: job_0210 was requeued by the 12:03 restart mid-way
+    -- through its first sector, rebuilt as "3/3 sectors remaining", and
+    -- surveyed all over again (26 min). The miner scans each level itself --
+    -- the survey never hands it a dig list -- so a kept survey cannot send it
+    -- to spots already dug. A zone still in its SURVEY phase is still dropped.
     local liveZone = state.miningZones[jobId]
-    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then
+    if liveZone and (liveZone.phase == "RESCAN" or liveZone.phase == "MINE" or liveZone.postRescan) then
         releaseLease(jobId, fromId, "reassign")
         logInfo(string.format("Job %s keeps its %s zone (%d rescan, %d to mine) for the next miner",
-            jobId, liveZone.postRescan and "re-mine" or "rescan",
+            jobId, liveZone.postRescan and "re-mine" or (liveZone.phase == "MINE" and "mine" or "rescan"),
             #(liveZone.rescanSectors or {}), #(liveZone.pending or {})))
         saveMiningZones()
     else

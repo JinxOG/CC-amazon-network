@@ -287,7 +287,10 @@ OW_SDONE  = "a SECTOR_DONE from a turtle the job is not assigned to is not serve
 OW_OWNER  ="the owner's sector request is still served"
 RZ_RESCAN ="a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
 RZ_REMINE = "a requeued zone re-mining after its rescan keeps the re-mine list"
-RZ_FIRST  = "a requeued zone on its first mine pass is still rebuilt from the store"
+RZ_FIRST  = "a requeued zone on its first mine pass keeps its zone, and is not surveyed again"
+RZ_SURVEY = "a requeued zone still in its survey is rebuilt from the store"
+RZ_ONCE   = "a mine-pass requeue returns the dead holder's sector to pending exactly once"
+RZ_SHARED = "a mine-pass requeue on a shared zone leaves the other miner's lease alone"
 GJ_AGREE  = "a reboot with GPS up still measures facing, and the journal agrees"
 GJ_NONE   = "without a journal: measured, and nothing to check"
 GJ_LOUD   = "a journal more than 1 block from GPS is logged loudly"
@@ -1383,13 +1386,22 @@ MUTANTS = [
 
     # -- A requeued zone keeps work the store cannot rebuild ------------------
     ('a requeued rescan zone is dropped again', 'central_server.lua',
-     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n', '    if false then\n')], RZ_RESCAN),
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.phase == "MINE" or liveZone.postRescan) then\n', '    if false then\n')], RZ_RESCAN),
 
     ('a requeued re-mine zone is dropped again', 'central_server.lua',
-     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n', '    if liveZone and liveZone.phase == "RESCAN" then\n')], RZ_REMINE),
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.phase == "MINE" or liveZone.postRescan) then\n', '    if liveZone and (liveZone.phase == "RESCAN" or (liveZone.phase == "MINE" and not liveZone.postRescan)) then\n')], RZ_REMINE),
 
     ('every requeued zone is kept', 'central_server.lua',
-     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n', '    if liveZone then\n')], RZ_FIRST),
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.phase == "MINE" or liveZone.postRescan) then\n', '    if liveZone then\n')], RZ_SURVEY),
+
+    ('a first-pass mine zone is dropped again', 'central_server.lua',
+     [('    if liveZone and (liveZone.phase == "RESCAN" or liveZone.phase == "MINE" or liveZone.postRescan) then\n', '    if liveZone and (liveZone.phase == "RESCAN" or liveZone.postRescan) then\n')], RZ_FIRST),
+
+    ('a mine-pass requeue releases every miner on the zone', 'central_server.lua',
+     [('        releaseLease(jobId, fromId, "reassign")\n        logInfo(string.format("Job %s keeps its', '        for m in pairs(liveZone.lastAssignments or {}) do releaseLease(jobId, m, "reassign") end\n        logInfo(string.format("Job %s keeps its')], RZ_SHARED),
+
+    ('a released lease keeps its claim', 'central_server.lua',
+     [('    zone.lastAssignments[minerId] = nil\n\n    local sKey', '\n    local sKey')], RZ_ONCE),
 
     ('a released rescan sector goes to pending', 'central_server.lua',
      [('local listName = (la.isSurvey and zone.phase == "RESCAN") and "rescanSectors" or "pending"', 'local listName = "pending"')], RZ_RESCAN),

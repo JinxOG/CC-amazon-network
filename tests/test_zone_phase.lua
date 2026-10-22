@@ -586,13 +586,75 @@ return {
         assert_eq(post, true)
     end,
 
-    ["a requeued zone on its first mine pass is still rebuilt from the store"] =
+    -- job_0210, 2026-10-22: node_183 finished the survey and mined its first
+    -- sector for 3 h; the 12:03 restart requeued the job, reassign dropped the
+    -- zone, and the store -- which knows only doneSectors, none yet -- rebuilt
+    -- it as "3/3 sectors remaining" and SURVEYED IT AGAIN (26 min) before the
+    -- next miner could mine. A MINE-phase zone is now kept like a rescan one
+    -- (spec owner, 2026-10-22). The miner scans each level itself; the survey
+    -- never hands it a dig list, so the kept survey cannot send it to dug spots.
+    ["a requeued zone on its first mine pass keeps its zone, and is not surveyed again"] =
     function(assert_eq)
-        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) } })
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = false, jobId = JA } } })
+        T.jobQueue.reassign(JA, A, "boot_recovery")
+        local kept = T.state.miningZones[JA]
+        local phase = kept and kept.phase
+        local saidKeep = logged(T, "keeps its mine zone")
+        -- The job comes back to a miner (here the same one, rebooted and home).
+        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "IN_PROGRESS", A
+        T.state.registry[A].jobId, T.state.registry[A].status = JA, proto.STATUS.WORKING
+        local got = request(T, A, JA)
+        local resurveyed = logged(T, "3/3 sectors remaining")
+        restore()
+        assert_eq(kept ~= nil, true, "the runtime zone is kept: the store does not know the survey is done")
+        assert_eq(phase, "MINE")
+        assert_eq(saidKeep ~= nil, true, "and it says so -- the VALIDATION line")
+        assert_eq(got and got.survey, false, "the next sector is a MINE sector, not a survey")
+        assert_eq(resurveyed, nil, "never rebuilt as N/N remaining")
+    end,
+
+    ["a mine-pass requeue returns the dead holder's sector to pending exactly once"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = false, jobId = JA } } })
+        T.jobQueue.reassign(JA, A, "boot_recovery")
+        T.jobQueue.reassign(JA, A, "boot_recovery")      -- a second report of the same reboot
+        local n = 0
+        for _, s in ipairs(zone.pending) do if s.x == S1.x and s.z == S1.z then n = n + 1 end end
+        local held = zone.lastAssignments[A]
+        restore()
+        assert_eq(n, 1, "S1 is back in pending once")
+        assert_eq(held, nil, "and the dead holder's claim is gone")
+    end,
+
+    -- A zone of 6+ sectors is shared by two jobs (sharedZoneKey): rebooting one
+    -- miner must not touch the other's lease.
+    ["a mine-pass requeue on a shared zone leaves the other miner's lease alone"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) },
+            lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = false, jobId = JA },
+                                [B] = { x = S3.x, z = S3.z, isSurvey = false, jobId = JB } } })
+        T.jobQueue.reassign(JA, A, "boot_recovery")
+        local bLease = zone.lastAssignments[B]
+        local bJob, bZone = T.state.jobs[JB], T.state.miningZones[JB]
+        local s3Pending = sectorIn(zone.pending, S3)
+        restore()
+        assert_eq(bLease and (bLease.x .. "," .. bLease.z), S3.x .. "," .. S3.z, "B still holds S3")
+        assert_eq(bJob.status, "IN_PROGRESS", "B's job untouched")
+        assert_eq(bZone == zone, true, "B still on the same zone object")
+        assert_eq(s3Pending, false, "B's sector is not handed out again")
+    end,
+
+    -- Out of scope (spec owner, 2026-10-22): a SURVEY-phase zone is still
+    -- dropped and rebuilt.
+    ["a requeued zone still in its survey is rebuilt from the store"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "SURVEY", surveySectors = { copy(S2) } })
         T.jobQueue.reassign(JA, A, "boot_recovery")
         local gone = T.state.miningZones[JA] == nil
         restore()
-        assert_eq(gone, true, "doneSectors already holds everything a first pass needs")
+        assert_eq(gone, true)
     end,
 
     -- The done count overshoots its total (job_0196, 10-15: "4/3", "5/3").
