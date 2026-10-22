@@ -37,6 +37,7 @@ local files = {
     "tests.test_bridge_push_order",
     "tests.test_silent_waits",
     "tests.test_zone_phase",
+    "tests.test_gps3_journal",
 }
 
 local passed, failed = 0, 0

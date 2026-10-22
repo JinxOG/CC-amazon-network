@@ -745,6 +745,194 @@ end
 
 -- ─── Position ────────────────────────────────────────────────────────────────
 
+-- ─── Journal (GPS 3, release A) ─────────────────────────────────────────────
+-- Every physical move and turn goes through jMove / jTurn, which write the
+-- intent to journal.dat first; applyMove and move.turn* write the settled state
+-- after. After a reboot WITH a GPS fix, a journal that agrees with the fix gives
+-- the facing back, so the turtle does not step out and back to measure it.
+-- "No move without GPS" is unchanged: a journal is never a fix (rulings
+-- 2026-10-22; moving on a restored position without GPS is release B, the
+-- user's call).
+--
+-- The write is atomic: journal.tmp, then delete journal.dat and move the temp
+-- file onto it. A crash during the temp write leaves .dat exact (the move had
+-- not started); a crash between the delete and the move leaves a complete
+-- temp file. Anything unreadable is no journal. A journal fault never stops a
+-- move.
+--
+-- A source-pin test (tests/test_gps3_journal.lua) fails on any raw
+-- turtle.forward/back/up/down/turnLeft/turnRight outside these two wrappers, in
+-- every file the updater ships.
+local JOURNAL_FILE, JOURNAL_TMP = "journal.dat", "journal.tmp"
+local JOURNAL_MOVES = { forward = true, back = true, up = true, down = true }
+local JOURNAL_TURNS = { turnLeft = true, turnRight = true }
+local FACING_NAMES  = { [0] = "north", [1] = "east", [2] = "south", [3] = "west" }
+local _journalFaulted = false
+-- The journal as it was at boot, before anything wrote over it. Any physical
+-- move or turn after boot makes it stale, so jMove/jTurn drop it.
+local _bootJournal = nil
+
+local function writeJournal(pending)
+    local ok, err = pcall(function()
+        local rec = textutils.serialise({
+            v = 1, x = _self.pos.x, y = _self.pos.y, z = _self.pos.z,
+            facing = _self.facing, facingKnown = _self.facingKnown == true,
+            posFixed = _self.posFixed == true, fuel = turtle.getFuelLevel(),
+            pending = pending, t = os.epoch("utc"),
+        })
+        local h = fs.open(JOURNAL_TMP, "w")
+        if not h then error("cannot open " .. JOURNAL_TMP, 0) end
+        h.write(rec)
+        h.close()
+        if fs.exists(JOURNAL_FILE) then fs.delete(JOURNAL_FILE) end
+        fs.move(JOURNAL_TMP, JOURNAL_FILE)
+    end)
+    if not ok and not _journalFaulted then
+        _journalFaulted = true
+        logWarn("Journal write failed -- moves go on; a reboot will measure facing instead: "
+            .. tostring(err))
+    end
+end
+
+local function readJournalFile(path)
+    local h = fs.open(path, "r")
+    if not h then return nil end
+    local s = h.readAll()
+    h.close()
+    local ok, rec = pcall(textutils.unserialise, s)
+    if not ok or type(rec) ~= "table" then return nil end
+    for _, k in ipairs({ "x", "y", "z", "facing" }) do
+        if type(rec[k]) ~= "number" then return nil end
+    end
+    if rec.pending ~= nil and not (JOURNAL_MOVES[rec.pending] or JOURNAL_TURNS[rec.pending]) then
+        return nil
+    end
+    return rec
+end
+
+local function readJournal()
+    local ok, rec = pcall(function()
+        if fs.exists(JOURNAL_FILE) then return readJournalFile(JOURNAL_FILE) end
+        if fs.exists(JOURNAL_TMP)  then return readJournalFile(JOURNAL_TMP)  end
+        return nil
+    end)
+    return ok and rec or nil
+end
+
+-- The only raw move. Intent first, so a crash mid-move leaves it on disk; a
+-- move that fails settles at once. A successful one is settled by applyMove.
+local function jMove(dir)
+    _bootJournal = nil
+    writeJournal(dir)
+    local ok, err = turtle[dir]()
+    if not ok then writeJournal(nil) end
+    return ok, err
+end
+
+-- The only raw turn. Settled by move.turnLeft/turnRight; the turns made while
+-- measuring facing are never settled, which is right -- the facing is unknown.
+local function jTurn(dir)
+    _bootJournal = nil
+    writeJournal(dir)
+    return turtle[dir]()
+end
+
+-- One step's change in position, for a facing.
+local function stepDelta(facing, dir)
+    if dir == "up" then return 0, 1, 0 end
+    if dir == "down" then return 0, -1, 0 end
+    local dx, dz = 0, 0
+    if     facing == 0 then dz = -1
+    elseif facing == 1 then dx = 1
+    elseif facing == 2 then dz = 1
+    else                    dx = -1 end
+    if dir == "back" then dx, dz = -dx, -dz end
+    return dx, 0, dz
+end
+
+-- Where the journal says the turtle is, or nil and why not. A pending move is
+-- settled by fuel: every move costs exactly 1, so one lower means it happened;
+-- equal or higher (a refuel only happens standing still) means it did not.
+local function journalPosition(j)
+    if not (j.posFixed and j.facingKnown) then return nil, "it had no fix or no facing" end
+    if j.pending == nil then return j.x, j.y, j.z end
+    if JOURNAL_TURNS[j.pending] then return nil, "it crashed mid-turn, so the facing is unknown" end
+    local now = turtle.getFuelLevel()
+    if type(now) ~= "number" or type(j.fuel) ~= "number" then
+        return nil, "fuel cannot settle the last move"
+    end
+    if now >= j.fuel then return j.x, j.y, j.z end
+    if now == j.fuel - 1 then
+        local dx, dy, dz = stepDelta(j.facing, j.pending)
+        return j.x + dx, j.y + dy, j.z + dz
+    end
+    return nil, string.format("fuel is %d after a move journaled at %d", now, j.fuel)
+end
+
+-- Called with a fresh GPS fix in _self.pos and the facing unknown. True when
+-- the journal agreed and gave the facing back (provisional until the first
+-- horizontal step agrees with GPS -- see confirmRestoredFacing).
+local function restoreFacingFromJournal()
+    local j = _bootJournal
+    _bootJournal = nil
+    if not j then return false end
+    local x, y, z = journalPosition(j)
+    local p = _self.pos
+    if not x then
+        logInfo("Journal: nothing to restore (" .. tostring(y) .. ") -- measuring facing")
+        return false
+    end
+    local off = math.abs(x - p.x) + math.abs(y - p.y) + math.abs(z - p.z)
+    local where = string.format("journal %d,%d,%d, GPS %d,%d,%d", x, y, z, p.x, p.y, p.z)
+    if off == 0 then
+        _self.facing, _self.facingKnown, _self.facingProvisional = j.facing, true, true
+        logInfo(string.format("Journal: restored facing %s at %d,%d,%d (agrees with GPS)",
+            FACING_NAMES[j.facing] or tostring(j.facing), p.x, p.y, p.z))
+        writeJournal(nil)
+        return true
+    elseif off == 1 then
+        logWarn("Journal: 1 block from GPS (" .. where .. ") -- measuring facing")
+    else
+        logWarn(string.format("JOURNAL DISAGREES WITH GPS by %d (%s) -- measuring facing", off, where))
+    end
+    return false
+end
+
+-- The journal cannot tell a crash from a turtle picked up and put back in the
+-- same block, turned: the position agrees and the facing does not -- node_182's
+-- loss on 2026-10-06. So the first horizontal step after a restore asks GPS.
+local function confirmRestoredFacing(dir, prevX, prevZ)
+    _self.facingProvisional = false
+    local x, y, z = gps.locate(CFG.GPS_TIMEOUT)
+    if not x then
+        _self.facingKnown = false
+        logWarn("Restored facing not confirmed: no GPS on the first step -- facing UNKNOWN until measured")
+        return
+    end
+    x, y, z = math.floor(x), math.floor(y), math.floor(z)
+    if x == _self.pos.x and z == _self.pos.z then
+        logInfo("Journal: restored facing confirmed by GPS on the first step")
+        return
+    end
+    local was = _self.facing
+    local dx, dz = x - prevX, z - prevZ
+    if dir == "back" then dx, dz = -dx, -dz end
+    local f = nil
+    if     dx == 0 and dz == -1 then f = 0
+    elseif dx == 1 and dz == 0  then f = 1
+    elseif dx == 0 and dz == 1  then f = 2
+    elseif dx == -1 and dz == 0 then f = 3 end
+    _self.pos = { x = x, y = y, z = z }
+    if f then
+        _self.facing = f
+        logWarn(string.format("RESTORED FACING WAS WRONG: the journal said %s, the first step went %s -- corrected",
+            FACING_NAMES[was] or tostring(was), FACING_NAMES[f]))
+    else
+        _self.facingKnown = false
+        logWarn("RESTORED FACING WAS WRONG and the first step does not say which way -- facing UNKNOWN")
+    end
+end
+
 local function gpsSync()
     local x, y, z = gps.locate(CFG.GPS_TIMEOUT)
     if x then
@@ -785,13 +973,17 @@ local function detectFacing()
         return false
     end
 
+    -- While it turns about to measure, the facing IS unknown -- and the journal
+    -- must say so if the power goes mid-way (GPS 3).
+    _self.facingKnown = false
+
     -- Try to move forward one step to detect direction
-    local moved = turtle.forward()
+    local moved = jMove("forward")
     if not moved then
         -- Blocked — try turning until we find a free direction
         for _ = 1, 4 do
-            turtle.turnRight()
-            if turtle.forward() then moved = true; break end
+            jTurn("turnRight")
+            if jMove("forward") then moved = true; break end
         end
     end
     if not moved then
@@ -805,7 +997,7 @@ local function detectFacing()
     end
 
     local x2, y2, z2 = gps.locate(CFG.GPS_TIMEOUT)
-    turtle.back()  -- return to original position
+    jMove("back")  -- return to original position
 
     if not x2 then
         logWarn("GPS lost during facing detection. Facing UNKNOWN; not moving on a guess.")
@@ -828,13 +1020,15 @@ local function detectFacing()
     local names = { [0]="north", [1]="east", [2]="south", [3]="west" }
     logInfo("Facing: " .. names[_self.facing])
     _self.facingKnown = true
+    writeJournal(nil)
     return true
 end
 
 local function initPosition()
+    _bootJournal = readJournal()
     if gpsSync() then
         logInfo(string.format("GPS fix: %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
-        detectFacing()
+        if not restoreFacingFromJournal() then detectFacing() end
     else
         logWarn("No GPS fix. Tracking from (0,0,0). Facing assumed north.")
     end
@@ -850,6 +1044,7 @@ end
 -- then re-detects facing -- a late fix without it still points every move
 -- the wrong way.
 function base.detectFacingForTest() return detectFacing() end
+function base.initPositionForTest() return initPosition() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
 -- position; 2026-10-06, facing).
@@ -866,7 +1061,8 @@ function base.waitForPositionFix(why, positionOnly)
     logWarn(string.format("No GPS fix or facing -- NOT moving until both are measured (%s)",
         tostring(why)))
     local tries = 0
-    while not ((_self.posFixed or gpsSync()) and (positionOnly or _self.facingKnown or detectFacing())) do
+    while not ((_self.posFixed or gpsSync())
+               and (positionOnly or _self.facingKnown or restoreFacingFromJournal() or detectFacing())) do
         tries = tries + 1
         -- A STUCK TURTLE SAYS SO (2026-10-08). node_184 and node_182 registered
         -- at 12:07:56 and were never heard from again: this wait runs before
@@ -908,6 +1104,10 @@ local function applyMove(dir)
     elseif dir == "down" then _self.pos.y = _self.pos.y - 1
     end
 
+    if _self.facingProvisional and (dir == "forward" or dir == "back") then
+        confirmRestoredFacing(dir, prevX, prevZ)
+    end
+
     -- Periodic GPS re-sync to correct drift on long journeys
     _self.moveCount = _self.moveCount + 1
     if _self.moveCount % CFG.GPS_RESYNC_INTERVAL == 0 then
@@ -921,6 +1121,7 @@ local function applyMove(dir)
         })
         proto.send(_self.modem, proto.CH_LOCAL, sig)
     end
+    writeJournal(nil)
 end
 
 -- ─── Geofence helpers ───────────────────────────────────────────────────────
@@ -1052,12 +1253,12 @@ function base.digOutForFacing(x, y, z)
         for _ = 1, 4 do
             if turtle.detect() then
                 base.makeRoomBeforeDig()
-                if digGuarded("forward") and turtle.forward() then
+                if digGuarded("forward") and jMove("forward") then
                     logWarn("Boxed in on all four sides -- dug one block out to measure facing")
                     return true
                 end
             end
-            turtle.turnRight()
+            jTurn("turnRight")
         end
         return false
     end
@@ -1087,14 +1288,14 @@ local function bypassForward()
 
         turnOut()
         if fenceBlocksStep("forward") then turnRtn(); return false end
-        if not turtle.forward() then turnRtn(); return false end
+        if not jMove("forward") then turnRtn(); return false end
         applyMove("forward")
         turnRtn()
 
         local advanced = 0
         for _ = 1, 3 do
             if fenceBlocksStep("forward") then break end
-            if turtle.forward() then
+            if jMove("forward") then
                 applyMove("forward")
                 advanced = advanced + 1
                 if not isTurtleBlock("forward") then break end
@@ -1113,14 +1314,14 @@ local function bypassForward()
                 turnOut()
                 return false
             end
-            turtle.forward(); applyMove("forward")
+            jMove("forward"); applyMove("forward")
             turnOut()
             return false
         end
 
         turnRtn()
         if not fenceBlocksStep("forward") then
-            if turtle.forward() then applyMove("forward") end
+            if jMove("forward") then applyMove("forward") end
         end
         turnOut()
         return true
@@ -1134,10 +1335,10 @@ local function bypassForward()
         if not _self.canDig then return false end
 
         local digLayer  = isUp and turtle.digUp   or turtle.digDown
-        local moveLayer = isUp and turtle.up      or turtle.down
+        local moveLayer = function() return jMove(isUp and "up" or "down") end
         local applyDir  = isUp and "up"           or "down"
         local returnDig = isUp and turtle.digDown or turtle.digUp
-        local returnMov = isUp and turtle.down    or turtle.up
+        local returnMov = function() return jMove(isUp and "down" or "up") end
         local returnDir = isUp and "down"         or "up"
         local detectLayer = isUp and turtle.detectUp or turtle.detectDown
 
@@ -1166,13 +1367,13 @@ local function bypassForward()
         local advanced = 0
         for _ = 1, 2 do
             if fenceBlocksStep("forward") then break end
-            if not turtle.forward() then
+            if not jMove("forward") then
                 if isTurtleBlock("forward") then break end  -- another turtle, stop
                 base.makeRoomBeforeDig()
                 turtle.dig()                                -- terrain — dig it
                 sleep(0.2)
                 if fenceBlocksStep("forward") then break end
-                if not turtle.forward() then break end
+                if not jMove("forward") then break end
             end
             applyMove("forward")
             advanced = advanced + 1
@@ -1269,7 +1470,7 @@ function base.sidestepOutOfColumn()
                 base.makeRoomBeforeDig()
                 digGuarded("forward")
             end
-            if turtle.forward() then
+            if jMove("forward") then
                 applyMove("forward")
                 return true
             end
@@ -1279,7 +1480,7 @@ function base.sidestepOutOfColumn()
     return false
 end
 
-local function tryMove(moveFn, digFn, dir)
+local function tryMove(digFn, dir)
     -- NO TURTLE MOVES AFTER BOOT ON A GUESS (recovery layer release 2). Only
     -- miners ever called waitForPositionFix; delivery and support moved on
     -- whatever initPosition guessed ("Facing assumed north") -- the failure that
@@ -1356,7 +1557,7 @@ local function tryMove(moveFn, digFn, dir)
     local blockReport     = nil
 
     while true do
-        if moveFn() then applyMove(dir); return true end
+        if jMove(dir) then applyMove(dir); return true end
 
         if isTurtleBlock(dir) then
             -- Another turtle is in the way — wait, then try to route around it.
@@ -1430,19 +1631,21 @@ local function tryMove(moveFn, digFn, dir)
     end
 end
 
-function move.forward() return tryMove(turtle.forward, turtle.dig,     "forward") end
-function move.back()    return tryMove(turtle.back,    nil,             "back")    end
-function move.up()      return tryMove(turtle.up,      turtle.digUp,   "up")      end
-function move.down()    return tryMove(turtle.down,    turtle.digDown, "down")    end
+function move.forward() return tryMove(turtle.dig,     "forward") end
+function move.back()    return tryMove(nil,             "back")    end
+function move.up()      return tryMove(turtle.digUp,   "up")      end
+function move.down()    return tryMove(turtle.digDown, "down")    end
 
 function move.turnLeft()
-    turtle.turnLeft()
+    jTurn("turnLeft")
     _self.facing = (_self.facing - 1) % 4
+    writeJournal(nil)
 end
 
 function move.turnRight()
-    turtle.turnRight()
+    jTurn("turnRight")
     _self.facing = (_self.facing + 1) % 4
+    writeJournal(nil)
 end
 
 function move.face(dir)

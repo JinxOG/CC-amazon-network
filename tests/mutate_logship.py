@@ -288,6 +288,28 @@ OW_OWNER  ="the owner's sector request is still served"
 RZ_RESCAN ="a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
 RZ_REMINE = "a requeued zone re-mining after its rescan keeps the re-mine list"
 RZ_FIRST  = "a requeued zone on its first mine pass is still rebuilt from the store"
+GJ_LOUD   = "a journal more than 1 block from GPS is logged loudly and the facing is measured"
+GJ_ONE    = "exactly 1 block from GPS measures the facing without the loud line"
+GJ_LANDED = "a crash after a move landed (fuel one lower) restores the moved position"
+GJ_BEFORE = "a crash before the move (fuel unchanged) restores the old position"
+GJ_TWO    = "an impossible fuel drop (two for one move) restores nothing"
+GJ_UNLIM  = "unlimited fuel cannot settle a pending move, so nothing is restored"
+GJ_TURN   = "a crash mid-turn leaves the facing unknown: measured, never guessed"
+GJ_NOFIX  = "a journal written without a GPS fix restores nothing"
+GJ_FIELD  = "a well-formed table with a missing field is no journal"
+GJ_PART   = "a partial temp file (crash during the write) loses to the journal"
+GJ_TMP    = "a complete temp file with no journal (crash between delete and move) is used"
+GJ_FAULT  = "a journal that cannot be written never stops a move"
+GJ_INTENT = "the intent is on disk before the turtle moves"
+GJ_SETTLE = "after a move the journal is settled at the new position"
+GJ_TURNW  = "after a turn the journal holds the new facing"
+GJ_BLOCK  = "a blocked move settles the journal where the turtle still is"
+GJ_DETECT = "facing detection marks the facing unknown before its first step"
+GJ_PUT    = "put back in the same block, turned: the first step finds out and corrects"
+GJ_STEPNF = "no GPS on the first step: the facing becomes unknown and the guard holds"
+GJ_WAIT   = "GPS back after a no-fix boot: the wait restores the facing instead of measuring"
+GJ_STALE  = "a turn made before GPS came back makes the boot journal stale: measured, not restored"
+GJ_PIN    = "no raw turtle move or turn outside jMove and jTurn, in any fleet file"
 RS_ONCE   = "it is sent on the turtle's first heartbeat, once"
 RS_GONE   = "a job requeued before the first heartbeat is not sent"
 RS_ERROR  = "the fuel path's ERROR heartbeat does not take the job"
@@ -1481,7 +1503,7 @@ MUTANTS = [
      [('            if not _geofence.contains(pos.x + d[1], pos.z + d[2]) then return false end\n', '')], BX_FENCE),
 
     ('digging out digs a turtle', 'turtle_base.lua',
-     [('                if digGuarded("forward") and turtle.forward() then\n                    logWarn("Boxed in', '                if turtle.dig() and turtle.forward() then\n                    logWarn("Boxed in')], BX_TURTLE),
+     [('                if digGuarded("forward") and jMove("forward") then\n                    logWarn("Boxed in', '                if turtle.dig() and jMove("forward") then\n                    logWarn("Boxed in')], BX_TURTLE),
 
     # -- Recall-all cancels; a cancel is final (2026-10-08) ------------------
     ('recall-all cancels nothing', 'central_server.lua',
@@ -1544,7 +1566,7 @@ MUTANTS = [
      [('        _self.posFixed = true\n', '')], G_WAIT),
 
     ('a turtle with no fix goes ahead anyway', 'turtle_base.lua',
-     [('    while not ((_self.posFixed or gpsSync()) and (positionOnly or _self.facingKnown or detectFacing())) do\n',
+     [('    while not ((_self.posFixed or gpsSync())\n               and (positionOnly or _self.facingKnown or restoreFacingFromJournal() or detectFacing())) do\n',
        '    while false do\n')], G_WAIT),
 
     ('boot recovery flies without a fix', 'ore_turtle.lua',
@@ -1926,6 +1948,74 @@ MUTANTS = [
      [('        { src = FILES.turtle_base,    name = "turtle_base.lua" },\n'
        '        { src = FILES.support_turtle, name = "startup.lua"     },',
        '        { src = FILES.support_turtle, name = "startup.lua"     },')], INSTALL),
+
+    # GPS 3 release A: the fuel journal and the facing restored at boot.
+    ('the restore skips the GPS comparison', "turtle_base.lua",
+     [('    if off == 0 then\n        _self.facing, _self.facingKnown',
+       '    if true then\n        _self.facing, _self.facingKnown')], GJ_LOUD),
+    ('a 1-block difference is logged as loudly as a big one', "turtle_base.lua",
+     [('    elseif off == 1 then\n',
+       '    elseif off == -1 then\n')], GJ_ONE),
+    ('a move with fuel one lower is taken as not having happened', "turtle_base.lua",
+     [('    if now == j.fuel - 1 then\n',
+       '    if now == j.fuel + 1 then\n')], GJ_LANDED),
+    ('equal fuel is not taken as the move not happening', "turtle_base.lua",
+     [('    if now >= j.fuel then return j.x, j.y, j.z end\n',
+       '    if now > j.fuel then return j.x, j.y, j.z end\n')], GJ_BEFORE),
+    ('any fuel drop counts as the move landing', "turtle_base.lua",
+     [('    if now == j.fuel - 1 then\n',
+       '    if now < j.fuel then\n')], GJ_TWO),
+    ('unlimited fuel is compared as a number', "turtle_base.lua",
+     [('    if type(now) ~= "number" or type(j.fuel) ~= "number" then\n        return nil, "fuel cannot settle the last move"\n    end\n',
+       '')], GJ_UNLIM),
+    ('a pending turn restores the facing', "turtle_base.lua",
+     [('    if JOURNAL_TURNS[j.pending] then return nil, "it crashed mid-turn, so the facing is unknown" end\n',
+       '')], GJ_TURN),
+    ('a journal written without a fix restores', "turtle_base.lua",
+     [('    if not (j.posFixed and j.facingKnown) then',
+       '    if not j.facingKnown then')], GJ_NOFIX),
+    ('a record missing a field is accepted', "turtle_base.lua",
+     [('        if type(rec[k]) ~= "number" then return nil end\n',
+       '')], GJ_FIELD),
+    ('the temp file is preferred over the journal', "turtle_base.lua",
+     [('        if fs.exists(JOURNAL_FILE) then return readJournalFile(JOURNAL_FILE) end\n        if fs.exists(JOURNAL_TMP)  then return readJournalFile(JOURNAL_TMP)  end\n',
+       '        if fs.exists(JOURNAL_TMP)  then return readJournalFile(JOURNAL_TMP)  end\n        if fs.exists(JOURNAL_FILE) then return readJournalFile(JOURNAL_FILE) end\n')], GJ_PART),
+    ('a complete temp file is never read', "turtle_base.lua",
+     [('        if fs.exists(JOURNAL_TMP)  then return readJournalFile(JOURNAL_TMP)  end\n',
+       '')], GJ_TMP),
+    ('a journal fault stops the move', "turtle_base.lua",
+     [('    if not ok and not _journalFaulted then\n',
+       '    if not ok then error(err, 0) end\n    if not ok and not _journalFaulted then\n')], GJ_FAULT),
+    ('the intent is written after the move', "turtle_base.lua",
+     [('    writeJournal(dir)\n    local ok, err = turtle[dir]()\n',
+       '    local ok, err = turtle[dir]()\n    writeJournal(dir)\n')], GJ_INTENT),
+    ('a successful move is never settled', "turtle_base.lua",
+     [('        proto.send(_self.modem, proto.CH_LOCAL, sig)\n    end\n    writeJournal(nil)\nend\n',
+       '        proto.send(_self.modem, proto.CH_LOCAL, sig)\n    end\nend\n')], GJ_SETTLE),
+    ('a tracked turn is never settled', "turtle_base.lua",
+     [('    jTurn("turnLeft")\n    _self.facing = (_self.facing - 1) % 4\n    writeJournal(nil)\n',
+       '    jTurn("turnLeft")\n    _self.facing = (_self.facing - 1) % 4\n')], GJ_TURNW),
+    ('a failed move leaves its intent pending', "turtle_base.lua",
+     [('    if not ok then writeJournal(nil) end\n',
+       '')], GJ_BLOCK),
+    ('facing detection does not clear the facing first', "turtle_base.lua",
+     [('    _self.facingKnown = false\n\n    -- Try to move forward one step',
+       '\n    -- Try to move forward one step')], GJ_DETECT),
+    ('the first-step check is skipped', "turtle_base.lua",
+     [('    if _self.facingProvisional and (dir == "forward" or dir == "back") then\n',
+       '    if false then\n')], GJ_PUT),
+    ('no GPS on the first step keeps the restored facing', "turtle_base.lua",
+     [('        _self.facingKnown = false\n        logWarn("Restored facing not confirmed',
+       '        logWarn("Restored facing not confirmed')], GJ_STEPNF),
+    ('the wait never tries the journal', "turtle_base.lua",
+     [('_self.facingKnown or restoreFacingFromJournal() or detectFacing()',
+       '_self.facingKnown or detectFacing()')], GJ_WAIT),
+    ('a turn after boot leaves the boot journal standing', "turtle_base.lua",
+     [('local function jTurn(dir)\n    _bootJournal = nil\n',
+       'local function jTurn(dir)\n')], GJ_STALE),
+    ('a raw move comes back in the vertical bypass', "turtle_base.lua",
+     [('        local moveLayer = function() return jMove(isUp and "up" or "down") end\n',
+       '        local moveLayer = isUp and turtle.up or turtle.down\n')], GJ_PIN),
 
     # The guards that stop a broken parse from being reported as a pass. A
     # manifest test whose scanner finds nothing agrees with every manifest.
