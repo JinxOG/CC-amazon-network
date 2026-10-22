@@ -272,7 +272,9 @@ class Control:
                 text = self.read_disk(int(d), "startup.lua").decode("utf8", "replace")
             except (OSError, ValueError):
                 continue
-            if re.search(r'gps["\']?\s*,\s*["\']host', text) or "gps host" in text:
+            # A GPS host's startup.lua is a few lines that run `gps host x y z`. The central server's startup.lua is 250 KB and since GPS 2
+            # MENTIONS "gps host" in its own code, so a text match alone also found the server, and gps_down() shut it down (gps2-1x, 2026-10-22).
+            if len(text) < 2000 and (re.search(r'gps["\']?\s*,\s*["\']host', text) or "gps host" in text):
                 ids.append(int(d))
         return sorted(ids)
 
