@@ -7,6 +7,11 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Properties;
 
+import net.minecraft.server.MinecraftServer;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.event.server.ServerStartedEvent;
+import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.fml.common.Mod;
@@ -16,15 +21,19 @@ import net.minecraftforge.fml.loading.FMLPaths;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-/** The T2 control mod (spec docs/superpowers/specs/2026-10-20-t2-control-mod-design.md). M0: the load guard only. */
+/** The T2 control mod (spec docs/superpowers/specs/2026-10-20-t2-control-mod-design.md). M0: the load guard. M1: the logs. */
 @Mod(T2Control.MOD_ID)
 public class T2Control {
     public static final String MOD_ID = "t2control";
     private static final Logger LOGGER = LogManager.getLogger("t2control");
+    private static volatile MinecraftServer server;
 
     public T2Control() {
         IEventBus bus = FMLJavaModLoadingContext.get().getModEventBus();
         bus.addListener(this::commonSetup);
+        MinecraftForge.EVENT_BUS.addListener(this::onCommands);
+        MinecraftForge.EVENT_BUS.addListener(this::onServerStarted);
+        MinecraftForge.EVENT_BUS.addListener(this::onServerStopping);
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {
@@ -49,6 +58,22 @@ public class T2Control {
         }
         LOGGER.info("t2control loaded: local test server, allow file present, CC:Tweaked {} and Advanced Peripherals {} as expected",
                 Guard.EXPECTED_CC_TWEAKED, Guard.EXPECTED_ADVANCED_PERIPHERALS);
+    }
+
+    private void onCommands(RegisterCommandsEvent event) {
+        T2Commands.register(event.getDispatcher());
+    }
+
+    private void onServerStarted(ServerStartedEvent event) {
+        server = event.getServer();
+        Logs.open(FMLPaths.GAMEDIR.get().resolve("t2control"), () -> server == null ? -1L : server.getTickCount());
+        LOGGER.info("t2control logs open under {} (radio and event logging are off until /t2 radio log on, /t2 events log on)",
+                FMLPaths.GAMEDIR.get().resolve("t2control"));
+    }
+
+    private void onServerStopping(ServerStoppingEvent event) {
+        Logs.close();
+        server = null;
     }
 
     private static String versionOf(String modId) {

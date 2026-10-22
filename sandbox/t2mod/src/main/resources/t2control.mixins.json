@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "sandbox.t2control.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "t2control.refmap.json",
+  "mixins": [
+    "ModemPeripheralAccessor",
+    "ComputerExecutorMixin",
+    "WirelessNetworkMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

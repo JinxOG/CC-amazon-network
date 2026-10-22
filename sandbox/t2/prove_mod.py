@@ -142,6 +142,78 @@ def m0():
     record("with the decoy gone the placement guard passes", prepare_run.mod_found_outside() == [], "no copies outside server/mods")
 
 
+def free_spots(c, n):
+    """n separate spots with two free blocks above each other near the base."""
+    spots = []
+    for x in range(160, 200, 3):
+        for z in range(-2790, -2750, 3):
+            if len(spots) == n:
+                return spots
+            if all("Test passed" in c.command("execute if block %d %d %d air" % (x, 67 + k, z)) for k in range(3)):
+                spots.append((x, 67, z))
+    if len(spots) < n:
+        raise RuntimeError("not enough free spots")
+    return spots
+
+
+def m1():
+    here = os.path.dirname(os.path.abspath(__file__))
+    run = runmod.start("m1-b")
+    c = ctl.Control("m1-b")
+    t0 = time.time()
+    while time.time() - t0 < 300 and len(c.computers()) < 25:
+        time.sleep(5)
+    st = c.t2_status()
+    record("logs are off after start and nothing is written", not st["radio_log"] and not st["events_log"] and st["radio"]["written"] == 0
+           and st["events"]["written"] == 0, st)
+    (rx_spot, tx_spot) = free_spots(c, 2)
+    rx = c.spawn_computer(rx_spot[0], rx_spot[1], rx_spot[2], os.path.join(here, "lua", "radio_log.lua"), files={"channels.txt": "777\n"})
+    tx = c.spawn_computer(tx_spot[0], tx_spot[1], tx_spot[2], os.path.join(here, "lua", "radio_send.lua"), files={"probe.txt": "777\n778\nT2-PROBE\n"})
+    time.sleep(25)
+    before = c.t2_status()
+    c.radio_log("on")
+    c.events_log("on")
+    time.sleep(40)
+    radio = c.t2_lines("radio")
+    probe = [l for l in radio if l["channel"] == 777 and l["body"].startswith("T2-PROBE")]
+    record("radio log: the scripted message appears with the right channel, reply channel, receiver, body and outcome",
+           len(probe) >= 4 and all(l["to"] == rx and l["reply_channel"] == 778 and l["outcome"] == "delivered" for l in probe),
+           "%d lines, e.g. %s" % (len(probe), probe[:1]))
+    near = probe[0]["from_pos"].split(",") if probe else ["0", "0", "0"]
+    record("radio log: the sender position is the sender's", abs(int(near[0]) - tx_spot[0]) <= 1 and abs(int(near[2]) - tx_spot[2]) <= 1,
+           "%s against sender at %s" % (probe[0]["from_pos"] if probe else None, tx_spot))
+    fleet = [l for l in radio if l["channel"] == 1 and "HEARTBEAT" in l["body"]]
+    record("radio log: fleet heartbeats are logged too", len(fleet) >= 10, "%d heartbeat lines" % len(fleet))
+    events = c.t2_lines("events")
+    rx_events = [e for e in events if e["computer"] == rx and e["event"] == "modem_message" and "T2-PROBE" in e["args"]]
+    tx_timers = [e for e in events if e["computer"] == tx and e["event"] == "timer"]
+    record("events log: the receiver was handed the modem_message event, and the sender's own timer events are logged",
+           len(rx_events) >= 4 and len(tx_timers) >= 4, "%d modem_message events at #%d, %d timer events at #%d" % (len(rx_events), rx, len(tx_timers), tx))
+    mid = c.t2_status()
+    # off: nothing more is written
+    c.radio_log("off")
+    c.events_log("off")
+    time.sleep(3)
+    s1 = c.t2_status()
+    time.sleep(20)
+    s2 = c.t2_status()
+    record("with logging switched off nothing more is written (the same sender keeps sending)",
+           s1["radio"]["written"] == s2["radio"]["written"] and s1["events"]["written"] == s2["events"]["written"] and s1["radio"]["written"] > 0,
+           "radio %d -> %d, events %d -> %d" % (s1["radio"]["written"], s2["radio"]["written"], s1["events"]["written"], s2["events"]["written"]))
+    iv = c.t2_lines("interventions")
+    record("interventions: every switch is recorded with its arguments", [i["verb"] + ":" + i["args"]["state"] for i in iv] ==
+           ["radio_log:on", "events_log:on", "radio_log:off", "events_log:off"], [i["verb"] + ":" + i["args"]["state"] for i in iv])
+    record("no line was dropped", s2["radio"]["dropped"] == 0 and s2["events"]["dropped"] == 0, s2)
+    # all: also the attempts that did not reach a program
+    c.radio_log("all")
+    time.sleep(10)
+    c.radio_log("off")
+    allr = [l for l in c.t2_lines("radio") if l["outcome"].startswith("not_reached")]
+    record("radio log all: attempts that did not reach a program are logged with the reason",
+           any(l["outcome"] == "not_reached:channel_closed" for l in allr), "%d not_reached lines, e.g. %s" % (len(allr), allr[:1]))
+    runmod.stop("m1-b")
+
+
 def m0_ip():
     """Re-proves the server-ip refusal on the run left by m0 (its first attempt was fooled by a crash report from the step before)."""
     run = runmod.run_dir("m0-with")
@@ -161,7 +233,7 @@ def m0_ip():
 
 if __name__ == "__main__":
     phase = sys.argv[1]
-    {"m0": m0, "m0ip": m0_ip}[phase]()
+    {"m0": m0, "m0ip": m0_ip, "m1": m1}[phase]()
     with open(os.path.join(ROOT, "mod-proof-%s.json" % phase), "w") as f:
         json.dump(results, f, indent=1)
     print("\n".join("%-8s %s" % (r["result"], r["proof"]) for r in results))

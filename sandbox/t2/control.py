@@ -172,8 +172,41 @@ class Control:
         self.turn_on([new])
         return new
 
+    def spawn_computer(self, x, y, z, startup, files=None, modem=True):
+        """An advanced computer at x, y, z (and a wireless modem on top when `modem`, facing=down), running the Lua file `startup`
+        as its startup.lua; `files` maps names to text written beside it. The spot and the block above must be air in a loaded
+        chunk. Returns the computer id (placing it with {On:1b} is what gives it an id; it is restarted after its files are in)."""
+        before = set(self.computers())
+        out = self.command("setblock %d %d %d computercraft:computer_advanced[facing=north]{On:1b}" % (x, y, z))
+        if "Changed the block" not in out:
+            raise RuntimeError(out)
+        if modem:
+            out = self.command("setblock %d %d %d computercraft:wireless_modem_advanced[facing=down]" % (x, y + 1, z))
+            if "Changed the block" not in out:
+                raise RuntimeError(out)
+        new = None
+        for _ in range(20):
+            added = set(self.computers()) - before
+            if added:
+                new = added.pop()
+                break
+            time.sleep(1)
+        if new is None:
+            raise RuntimeError("the computer never appeared in the computer list")
+        dest = os.path.join(self.disks, str(new))
+        os.makedirs(dest, exist_ok=True)
+        for name, text in (files or {}).items():
+            with open(os.path.join(dest, name), "w") as f:
+                f.write(text)
+        shutil.copy(startup, os.path.join(dest, "startup.lua"))
+        self.shutdown([new])
+        time.sleep(2)
+        self.turn_on([new])
+        return new
+
     def spawn_listener(self, x, y, z, channels=None):
-        """A radio listener: an advanced computer at x, y, z with a wireless modem on top, running sandbox/t2/lua/radio_log.lua,
+        """RETIRED by the control mod's radio log (radio_log("on"), t2_lines("radio")) now that the mod exists; kept for runs without it.
+        A radio listener: an advanced computer at x, y, z with a wireless modem on top, running sandbox/t2/lua/radio_log.lua,
         which logs every message on `channels` (default 1-5 and the private channel 1000+id of every computer now loaded,
         at most 128 channels). The spot and the block above it must be air in a loaded chunk. Returns the computer id."""
         before = set(self.computers())
@@ -318,6 +351,36 @@ class Control:
         shutil.rmtree(self.world)
         shutil.copytree(src, self.world)
         return runmod.relaunch(self.run_id)
+
+    # -- the control mod (sandbox/t2mod): /t2 commands and the files it writes under <run>/t2control/ ------------------------------
+    def t2(self, text):
+        """One /t2 command; returns the reply (one line of JSON, as a dict)."""
+        reply = self.command("t2 " + text).strip()
+        try:
+            return json.loads(reply)
+        except ValueError:
+            raise RuntimeError("t2 %s -> %r" % (text, reply))
+
+    def radio_log(self, state="on"):
+        return self.t2("radio log " + state)
+
+    def events_log(self, state="on"):
+        return self.t2("events log " + state)
+
+    def t2_status(self):
+        return self.t2("status")
+
+    def t2_lines(self, name):
+        """The lines of <run>/t2control/<name>.jsonl as dicts (name: radio, events, interventions)."""
+        path = os.path.join(self.run, "t2control", name + ".jsonl")
+        out = []
+        if os.path.exists(path):
+            with open(path, encoding="utf8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        out.append(json.loads(line))
+        return out
 
     # -- chunk loading ------------------------------------------------------------------------------------------
     def chunk_unload(self, *args, **kwargs):

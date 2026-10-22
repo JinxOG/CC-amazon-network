@@ -193,6 +193,28 @@ def job_summary(ctx):
     return {"job_lines": jobs, "sector_done_lines": len(done), "ore_from_sector_lines": ore, "problem_lines": problems[:40], "problem_count": len(problems)}
 
 
+def t2_summary(ctx):
+    """What the control mod recorded (files under <run>/t2control, status from the mod); None when it did not log anything."""
+    status = ctx._raw.t2_status()
+    if not status["radio"].get("written") and not status["events"].get("written") and not status["interventions"].get("written"):
+        return None
+    radio = ctx._raw.t2_lines("radio")
+    events = ctx._raw.t2_lines("events")
+    by_channel = {}
+    for l in radio:
+        key = "channel 1 (to server)" if l["channel"] == 1 else "channel 2 (broadcast)" if l["channel"] == 2 else             "channel 3-5" if l["channel"] in (3, 4, 5) else "private 1000+id" if 1000 <= l["channel"] < 66000 and l["channel"] != 65534 else "other %d" % l["channel"]
+        by_channel[key] = by_channel.get(key, 0) + 1
+    by_event = {}
+    for e in events:
+        by_event[e["event"]] = by_event.get(e["event"], 0) + 1
+    outcomes = {}
+    for l in radio:
+        outcomes[l["outcome"]] = outcomes.get(l["outcome"], 0) + 1
+    return {"status": status, "radio_lines": len(radio), "radio_by_channel": by_channel, "radio_outcomes": outcomes,
+            "event_lines": len(events), "events_by_name": dict(sorted(by_event.items(), key=lambda kv: -kv[1])[:12]),
+            "interventions": ctx._raw.t2_lines("interventions")}
+
+
 def forge_version(run):
     base = os.path.join(run, "libraries", "net", "minecraftforge", "forge")
     try:
@@ -207,7 +229,7 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
     game_total = ctx.game_seconds()
     mean_speed = round(game_total / seconds, 2) if seconds else None
     src = open(os.path.join(ctx.run, "bridge", "BRIDGE_SOURCE.txt")).read().strip().replace("\n", "; ")
-    rep = {"scenario": scenario.NAME, "run": ctx.run, "started": started_wall, "pinned_commit": pin, "forge": forge_version(ctx.run), "bridge_source": src,
+    rep = {"scenario": scenario.NAME, "run": ctx.run, "started": started_wall, "pinned_commit": pin, "forge": forge_version(ctx.run), "control_mod": getattr(ctx, "t2", None), "bridge_source": src,
            "world": "worlds/unpacked/2026-10-18_1700 (copied)", "game_seconds": game_total, "real_seconds": round(seconds),
            "mean_speed_x": round(mean_speed / 1, 2) if mean_speed else None, "samples": len(ctx.samples),
            "checks": ctx.checks, "interventions": ctx.interventions, "notes": ctx.notes, "jobs": summary,
@@ -262,6 +284,16 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
     if summary["problem_lines"]:
         o += ["", "Problem lines (first 40):", "```"] + [l[:200] for l in summary["problem_lines"]] + ["```"]
     o += ["", "## Notes", ""] + ["- " + n for n in ctx.notes[-80:]]
+    t2 = getattr(ctx, "t2", None)
+    if t2 and "error" not in t2:
+        o += ["", "## Control mod logs (<run>/t2control/)", "",
+              "- radio.jsonl: %d lines (written %d, dropped %d); outcomes %s" % (t2["radio_lines"], t2["status"]["radio"]["written"], t2["status"]["radio"]["dropped"], t2["radio_outcomes"]),
+              "- radio lines by channel: %s" % t2["radio_by_channel"],
+              "- events.jsonl: %d lines (written %d, dropped %d); most frequent events %s" % (t2["event_lines"], t2["status"]["events"]["written"], t2["status"]["events"]["dropped"], t2["events_by_name"]),
+              "- The event log shows what was QUEUED to each computer; whether the program consumed it, or a filtered yield ate it, is not visible there.",
+              "- interventions.jsonl: %d line(s)" % len(t2["interventions"])]
+    elif t2:
+        o += ["", "## Control mod logs", "", "could not be read: %s" % t2["error"]]
     for tool, r in tools.items():
         o += ["", "## %s" % tool, "", "exit code %s" % r["exit"], "", "```", r["output"].strip()[-3500:], "```"]
     o += ["", "## NOT STAGED", "", "Things this run could not exercise. A pass here says nothing about them:", ""]
@@ -280,6 +312,7 @@ def main():
     scenario = load_scenario(args[0])
     run_id = opt("--run-id") or "%s-%s" % (scenario.NAME, time.strftime("%m%d-%H%M%S"))
     pin = opt("--pin")
+    t2logs = "--t2logs" in args
     tick = int(opt("--tickrate", 0)) or None
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     since_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -293,12 +326,20 @@ def main():
         if pin:
             runmod.pin(run_id, pin)
             ctx.note("fleet pinned to %s through the real update path" % pin)
+        if t2logs:
+            ctx._raw.radio_log("on")
+            ctx._raw.events_log("on")
+            ctx.note("control mod: radio log and event log on")
         if tick:
             ctx.tickrate(tick)
         scenario.steps(ctx)
     except Exception as e:  # noqa: BLE001
         error = "%s: %s" % (type(e).__name__, e)
     tools = tools_output(since_iso)
+    try:
+        ctx.t2 = t2_summary(ctx)
+    except Exception as e:  # noqa: BLE001 - the report must still be written
+        ctx.t2 = {"error": str(e)}
     write_report(ctx, scenario, pin, error, since_iso, tools, started)
     if "--keep-running" not in args:
         runmod.stop(run_id)
