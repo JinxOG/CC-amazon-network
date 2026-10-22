@@ -5,7 +5,7 @@ kind: info
 subject: GPS 3 release A planned as ruled - one addition, a first-step facing check
 date: 2026-10-22
 re: docs/mail/2026-10-22-SPEC-OWNER-to-W3-gps-3-rulings-ship-the-restore-first-blind-homing-is-a-secon.md
-status: open
+status: closed
 ---
 
 # GPS 3 release A planned as ruled - one addition, a first-step facing check
