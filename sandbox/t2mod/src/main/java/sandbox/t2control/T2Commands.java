@@ -4,7 +4,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -15,11 +19,89 @@ public final class T2Commands {
 
     public static void register(CommandDispatcher<CommandSourceStack> d) {
         d.register(Commands.literal("t2").requires(s -> s.hasPermission(2))
-            .then(Commands.literal("radio").then(Commands.literal("log")
-                .then(Commands.argument("state", StringArgumentType.word()).executes(c -> toggle(c.getSource(), "radio", StringArgumentType.getString(c, "state"))))))
+            .then(Commands.literal("radio")
+                .then(Commands.literal("log")
+                    .then(Commands.argument("state", StringArgumentType.word()).executes(c -> toggle(c.getSource(), "radio", StringArgumentType.getString(c, "state")))))
+                .then(Commands.literal("loss")
+                    .then(Commands.argument("rate", DoubleArgumentType.doubleArg(0, 1))
+                        .then(withTail(Commands.argument("duration", IntegerArgumentType.integer(1, 86400)), T2Commands::loss))))
+                .then(Commands.literal("latency")
+                    .then(Commands.argument("min_ms", IntegerArgumentType.integer(0, 60000))
+                        .then(Commands.argument("max_ms", IntegerArgumentType.integer(0, 60000))
+                            .then(withTail(Commands.argument("duration", IntegerArgumentType.integer(1, 86400)), T2Commands::latency)))))
+                .then(Commands.literal("clear").executes(c -> clear(c.getSource()))))
             .then(Commands.literal("events").then(Commands.literal("log")
                 .then(Commands.argument("state", StringArgumentType.word()).executes(c -> toggle(c.getSource(), "events", StringArgumentType.getString(c, "state"))))))
             .then(Commands.literal("status").executes(c -> reply(c.getSource(), Logs.status()))));
+    }
+
+    /** A command node that runs with no options, or with a free-text tail such as "channel 5 to 12 seed 3". */
+    private static ArgumentBuilder<CommandSourceStack, ?> withTail(ArgumentBuilder<CommandSourceStack, ?> node,
+                                                                    java.util.function.BiFunction<CommandContext<CommandSourceStack>, String, Integer> run) {
+        return node.executes(c -> run.apply(c, ""))
+            .then(Commands.argument("options", StringArgumentType.greedyString()).executes(c -> run.apply(c, StringArgumentType.getString(c, "options"))));
+    }
+
+    /** Reads "channel N", "to N", "seed N" pairs; returns null and says why in err[0] when something is not understood. */
+    static Map<String, Long> parseOptions(String tail, String[] err) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        String[] t = tail.trim().isEmpty() ? new String[0] : tail.trim().split("\\s+");
+        for (int i = 0; i < t.length; i += 2) {
+            String key = t[i];
+            if (!(key.equals("channel") || key.equals("to") || key.equals("seed")) || i + 1 >= t.length) {
+                err[0] = "options are: channel <n>, to <computer id>, seed <n>";
+                return null;
+            }
+            try {
+                out.put(key, Long.parseLong(t[i + 1]));
+            } catch (NumberFormatException e) {
+                err[0] = key + " needs a number";
+                return null;
+            }
+        }
+        return out;
+    }
+
+    private static int loss(CommandContext<CommandSourceStack> c, String tail) {
+        String[] err = new String[1];
+        Map<String, Long> o = parseOptions(tail, err);
+        if (o == null) return reply(c.getSource(), "{\"error\":\"" + err[0] + "\"}");
+        double rate = DoubleArgumentType.getDouble(c, "rate");
+        int duration = IntegerArgumentType.getInteger(c, "duration");
+        long now = T2Control.currentTick();
+        int channel = o.containsKey("channel") ? o.get("channel").intValue() : Faults.ANY;
+        int to = o.containsKey("to") ? o.get("to").intValue() : Faults.ANY;
+        long seed = Faults.INSTANCE.addLoss(rate, now, duration, channel, to, o.get("seed"));
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("rate", rate); args.put("duration_s", duration); args.put("channel", channel); args.put("to", to); args.put("seed", seed);
+        args.put("start_tick", now); args.put("expires_tick", now + duration * 20L);
+        String result = "{\"ok\":true,\"seed\":" + seed + ",\"expires_tick\":" + (now + duration * 20L) + "}";
+        Logs.intervention("radio_loss", args, result);
+        return reply(c.getSource(), result);
+    }
+
+    private static int latency(CommandContext<CommandSourceStack> c, String tail) {
+        String[] err = new String[1];
+        Map<String, Long> o = parseOptions(tail, err);
+        if (o == null || o.containsKey("to")) return reply(c.getSource(), "{\"error\":\"" + (o == null ? err[0] : "latency takes channel and seed only") + "\"}");
+        int min = IntegerArgumentType.getInteger(c, "min_ms");
+        int max = IntegerArgumentType.getInteger(c, "max_ms");
+        int duration = IntegerArgumentType.getInteger(c, "duration");
+        long now = T2Control.currentTick();
+        int channel = o.containsKey("channel") ? o.get("channel").intValue() : Faults.ANY;
+        long seed = Faults.INSTANCE.addLatency(min, max, now, duration, channel, o.get("seed"));
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("min_ms", min); args.put("max_ms", max); args.put("duration_s", duration); args.put("channel", channel); args.put("seed", seed);
+        args.put("start_tick", now); args.put("expires_tick", now + duration * 20L);
+        String result = "{\"ok\":true,\"seed\":" + seed + ",\"expires_tick\":" + (now + duration * 20L) + "}";
+        Logs.intervention("radio_latency", args, result);
+        return reply(c.getSource(), result);
+    }
+
+    private static int clear(CommandSourceStack src) {
+        Faults.INSTANCE.clear();
+        Logs.intervention("radio_clear", new LinkedHashMap<>(), "{\"ok\":true}");
+        return reply(src, "{\"ok\":true}");
     }
 
     private static int toggle(CommandSourceStack src, String which, String state) {

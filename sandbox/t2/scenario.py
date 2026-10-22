@@ -1,6 +1,6 @@
 """T2 scenario runner and run report (spec 6.9).
 
-    python sandbox/t2/scenario.py <scenario.py> [--run-id ID] [--pin SHA] [--tickrate N] [--keep-running]
+    python sandbox/t2/scenario.py <scenario.py> [--run-id ID] [--pin SHA] [--install SHA] [--tickrate N] [--keep-running]
 
 A scenario is a Python file in sandbox/t2/scenarios/ defining NAME and steps(ctx). The runner starts a fresh run from the
 2026-10-18 world copy, optionally pins the fleet to a commit (the real update path), runs the steps, writes
@@ -105,6 +105,7 @@ class Ctx:
         self.notes.append("game time %.0f s: tick rate set to %d (%.1fx)" % (self.game_seconds(), n, n / 20))
 
     def sample(self):
+        self._raw.run_due(self.game_seconds() * 1000)
         tps = self._raw.command("forge tps")
         m = re.search(r"Overall: Mean tick time: ([\d.]+) ms", tps)
         self.samples.append((time.time(), self.gametime(), float(m.group(1)) if m else None, self.rate))
@@ -256,7 +257,7 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
         json.dump(rep, f, indent=1)
     o = ["# T2 run report: %s" % scenario.NAME, "",
          "- Run folder: %s" % ctx.run, "- Started: %s" % started_wall,
-         "- Fleet code: %s" % (("pinned to " + pin) if pin else "as installed on the computers of the world copy"),
+         "- Fleet code: %s" % (("pinned to " + pin) if pin else ("copied from " + str(getattr(ctx, "install", None))) if getattr(ctx, "install", None) else "as installed on the computers of the world copy"),
          "- Forge: %s; mods in the server folder: %d" % (forge_version(ctx.run), len(os.listdir(os.path.join(ctx.run, "mods")))),
          "- Bridge: real server.js (%s)" % src, "- World: %s" % rep["world"],
          "- Game time %.0f s (%.2f h) in %d s of real time: **mean speed %sx**" % (game_total, game_total / 3600, seconds, mean_speed),
@@ -316,13 +317,17 @@ def main():
     tick = int(opt("--tickrate", 0)) or None
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     since_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    runmod.start(run_id)
+    install = opt("--install")
+    runmod.start(run_id, install=install)
     ctx = Ctx(run_id)
+    ctx.install = install
     error = None
     try:
         ctx.wait_registered()
         ctx.g0 = ctx.gametime()
         ctx.t0_real = time.time()
+        if install:
+            ctx.note("fleet code copied from commit %s straight onto the computers before boot (not the update path)" % install)
         if pin:
             runmod.pin(run_id, pin)
             ctx.note("fleet pinned to %s through the real update path" % pin)

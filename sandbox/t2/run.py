@@ -142,8 +142,45 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
     return pids
 
 
-def start(run_id, world=None, tickrate=None, ram="6G"):
+STARTUP_SRC = {"DELIVERY": "delivery_turtle.lua", "SUPPORT": "support_turtle.lua", "MINER": "ore_turtle.lua", "LOADER": "loader_turtle.lua",
+               "WAREHOUSE": "warehouse.lua", "SERVER": "central_server.lua", "ADMIN": "admin_ui.lua"}
+
+
+def install_at(run, sha):
+    """Puts commit `sha` straight onto every computer of a STOPPED run: each .lua the computer holds that exists at that
+    commit is overwritten from git, and its startup.lua is the commit's file for its role. This is for commits older than
+    the updater's commit pin (1.9.128), whose updater ignores update_ref.txt and fetches master: the real update path
+    cannot reach them. It is a file copy, not the update path, and the report says so."""
+    root = os.path.join(run, "world", "computercraft", "computer")
+    n = 0
+    for cid in os.listdir(root):
+        d = os.path.join(root, cid)
+        role_file = os.path.join(d, "role.txt")
+        if not os.path.isfile(role_file):
+            continue
+        role = open(role_file).read().strip()
+        for pending in ("update_ref.txt", "update_fanout.pending", "deploy_ref.txt", "update_failed.txt"):
+            if os.path.exists(os.path.join(d, pending)):
+                os.remove(os.path.join(d, pending))
+        names = {f for f in os.listdir(d) if f.endswith(".lua") and f != "startup.lua"}
+        for f in sorted(names):
+            try:
+                data = subprocess.run(["git", "-C", REPO, "show", "%s:%s" % (sha, f)], capture_output=True, check=True).stdout
+            except subprocess.CalledProcessError:
+                continue  # not in that commit: left alone, the old code never requires it
+            open(os.path.join(d, f), "wb").write(data)
+        src = STARTUP_SRC.get(role)
+        if src:
+            data = subprocess.run(["git", "-C", REPO, "show", "%s:%s" % (sha, src)], capture_output=True, check=True).stdout
+            open(os.path.join(d, "startup.lua"), "wb").write(data)
+        n += 1
+    return n
+
+
+def start(run_id, world=None, tickrate=None, ram="6G", install=None):
     run = prepare_run.prepare(run_id, world or phase0.WORLD, ram=ram)
+    if install:
+        install_at(run, install)
     prepare_bridge(run)
     launch(run, True, tickrate)
     return run

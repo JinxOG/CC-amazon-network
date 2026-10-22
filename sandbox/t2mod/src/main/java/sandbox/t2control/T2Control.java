@@ -10,6 +10,7 @@ import java.util.Properties;
 import net.minecraft.server.MinecraftServer;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.server.ServerStartedEvent;
 import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -34,6 +35,7 @@ public class T2Control {
         MinecraftForge.EVENT_BUS.addListener(this::onCommands);
         MinecraftForge.EVENT_BUS.addListener(this::onServerStarted);
         MinecraftForge.EVENT_BUS.addListener(this::onServerStopping);
+        MinecraftForge.EVENT_BUS.addListener(this::onTick);
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {
@@ -71,7 +73,27 @@ public class T2Control {
                 FMLPaths.GAMEDIR.get().resolve("t2control"));
     }
 
+    /** The current game tick; -1 when the server is not running. */
+    public static long currentTick() {
+        MinecraftServer s = server;
+        return s == null ? -1L : s.getTickCount();
+    }
+
+    /** Delayed radio deliveries that are due run here, on the server thread, once per tick. */
+    private void onTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+        long now = currentTick();
+        for (Runnable r : Faults.INSTANCE.due(now)) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                LOGGER.error("a delayed radio delivery failed", e);
+            }
+        }
+    }
+
     private void onServerStopping(ServerStoppingEvent event) {
+        Faults.INSTANCE.clear();
         Logs.close();
         server = null;
     }

@@ -121,13 +121,11 @@ def main():
     prove("tps_drop / server_lag", v_lag)
 
     def v_unsupported():
-        for verb in ("radio_loss", "radio_latency"):
-            try:
-                getattr(c, verb)()
-            except ctl.Unsupported:
-                continue
-            raise AssertionError(verb + " did not raise")
-        return "radio_loss and radio_latency raise Unsupported with the reason"
+        try:
+            c.chunk_unload()
+        except ctl.Unsupported:
+            return "chunk_unload raises Unsupported with the reason (radio_loss, radio_latency and teleport are supported: radio since the control mod M2, teleport via /clone)"
+        raise AssertionError("chunk_unload did not raise")
     prove("unsupported verbs raise", v_unsupported)
 
     def v_teleport():

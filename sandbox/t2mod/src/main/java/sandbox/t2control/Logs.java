@@ -118,6 +118,8 @@ public final class Logs {
             }
             o.add((String) row[0], s);
         }
+        o.addProperty("faults_active", Faults.INSTANCE.activeRules(ticks.now()));
+        o.addProperty("delayed_pending", Faults.INSTANCE.pendingCount());
         o.addProperty("dir", dir == null ? "" : dir.toString());
         return GSON.toJson(o);
     }

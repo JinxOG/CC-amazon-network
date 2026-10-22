@@ -6,6 +6,7 @@
   "refmap": "t2control.refmap.json",
   "mixins": [
     "ModemPeripheralAccessor",
+    "WirelessNetworkInvoker",
     "ComputerExecutorMixin",
     "WirelessNetworkMixin"
   ],

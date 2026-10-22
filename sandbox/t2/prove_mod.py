@@ -214,6 +214,117 @@ def m1():
     runmod.stop("m1-b")
 
 
+def m2():
+    here = os.path.dirname(os.path.abspath(__file__))
+    NL = chr(10)
+    runmod.start("m2-a")
+    c = ctl.Control("m2-a")
+    t0 = time.time()
+    while time.time() - t0 < 300 and len(c.computers()) < 25:
+        time.sleep(5)
+    c.radio_log("on")
+    (rx_spot, tx_spot) = free_spots(c, 2)
+    rx = c.spawn_computer(rx_spot[0], rx_spot[1], rx_spot[2], os.path.join(here, "lua", "radio_log.lua"), files={"channels.txt": "777" + NL})
+    tx = c.spawn_computer(tx_spot[0], tx_spot[1], tx_spot[2], os.path.join(here, "lua", "radio_send.lua"),
+                          files={"probe.txt": NL.join(["777", "778", "T2-PROBE", "1"]) + NL})
+    time.sleep(15)
+
+    def received():
+        """(receive utc ms, sent utc ms, sequence) for every probe message the receiver's own program saw."""
+        out = []
+        for line in c.harvest_radio(rx):
+            m = re.match(r"(\d+) [\d.]+ 777 778 \S+ T2-PROBE #(\d+) t=(\d+)", line.replace(chr(92) + "n", " "))
+            if m:
+                out.append((int(m.group(1)), int(m.group(3)), int(m.group(2))))
+        return out
+
+    def logged(outcome=None, since=0):
+        rows = [l for l in c.t2_lines("radio") if l["channel"] == 777 and l["to"] == rx and l["utc"] >= since and "T2-PROBE" in l["body"]]
+        return [l for l in rows if outcome is None or l["outcome"].startswith(outcome)]
+
+    # A baseline
+    a0 = int(time.time() * 1000)
+    time.sleep(12)
+    base = received()
+    delays = [r - s_ for r, s_, _ in base if r >= a0]
+    record("baseline: the receiver gets the probe messages with no delay, and the log says delivered", len(delays) >= 8 and max(delays) < 150 and len(logged("delivered", a0)) >= 8,
+           "%d received, max delay %s ms, %d delivered lines" % (len(delays), max(delays) if delays else None, len(logged("delivered", a0))))
+
+    # B loss 1.0 on the channel for 20 s
+    b0 = int(time.time() * 1000)
+    reply = c.radio_loss(0, 20000, 1.0, channel=777)
+    time.sleep(24)
+    lost = logged("lost", b0)
+    gone = [r for r in received() if b0 + 1500 <= r[1] <= b0 + 18000]
+    fleet = [l for l in c.t2_lines("radio") if l["channel"] == 1 and l["utc"] >= b0 and l["outcome"] == "delivered"]
+    record("loss 1.0 for 20 s on channel 777: the probe messages are logged lost and the receiver's program gets none", len(lost) >= 12 and len(gone) == 0,
+           "%d lost lines, %d messages sent in the window reached the program; reply %s" % (len(lost), len(gone), reply))
+    record("the fleet's own traffic on other channels is untouched meanwhile", len(fleet) >= 20, "%d channel-1 deliveries in the window" % len(fleet))
+    b1 = int(time.time() * 1000)
+    time.sleep(10)
+    record("after the rule expires by itself, delivery resumes", len([r for r in received() if r[1] >= b1]) >= 6 and len(logged("delivered", b1)) >= 6,
+           "%d received after expiry" % len([r for r in received() if r[1] >= b1]))
+
+    # C loss 0.0
+    c0 = int(time.time() * 1000)
+    c.radio_loss(0, 20000, 0.0, channel=777)
+    time.sleep(22)
+    record("loss 0.0 loses nothing", len(logged("lost", c0)) == 0 and len(logged("delivered", c0)) >= 15, "%d lost, %d delivered" % (len(logged("lost", c0)), len(logged("delivered", c0))))
+
+    # D loss 0.5, seeded
+    d0 = int(time.time() * 1000)
+    c.radio_loss(0, 50000, 0.5, channel=777, seed=5)
+    time.sleep(53)
+    nl, nd = len(logged("lost", d0)), len(logged("delivered", d0))
+    seq_of = lambda text: int(re.search(r"#(\d+)", text).group(1))  # noqa: E731
+    sent_in_window = set(seq_of(l["body"]) for l in logged(None, d0))
+    seq_delivered = set(seq_of(l["body"]) for l in logged("delivered", d0))
+    seq_received = set(q for r, s_, q in received() if q in sent_in_window)
+    inner = set(sorted(sent_in_window)[2:-2])      # the first and last two sequence numbers may straddle the window edges
+    record("loss 0.5 loses about half, and exactly the messages the log calls delivered reached the program",
+           0.25 <= nl / max(1, nl + nd) <= 0.75 and (seq_delivered & inner) == (seq_received & inner) and len(inner) >= 30,
+           "%d lost, %d delivered; the same %d of %d inner messages in the log and at the program" % (nl, nd, len(seq_received & inner), len(inner)))
+
+    # E latency 1000 ms
+    e0 = int(time.time() * 1000)
+    c.radio_latency(0, 20000, 1000, channel=777)
+    time.sleep(26)
+    dl = [r - s_ for r, s_, _ in received() if e0 + 1500 <= s_ <= e0 + 17000]
+    dl_log = logged("delayed", e0)
+    record("latency 1000 ms: the measured gap between sending and the program receiving is 1000 ms (to a tick)", len(dl) >= 8 and all(950 <= x <= 1250 for x in dl) and len(dl_log) >= 8,
+           "%d messages, delays %s ms, %d delayed lines" % (len(dl), sorted(dl)[:3] + sorted(dl)[-3:] if dl else None, len(dl_log)))
+    e1 = int(time.time() * 1000)
+    time.sleep(8)
+    late = [r - s_ for r, s_, _ in received() if s_ >= e1 + 1500]
+    record("after the latency rule expires, delay is back to nothing", len(late) >= 4 and max(late) < 150, "delays %s" % late[:6])
+
+    # F latency range
+    f0 = int(time.time() * 1000)
+    c.radio_latency(0, 30000, 0, channel=777, max_ms=1500)
+    time.sleep(34)
+    rows = [(r, s_, q) for r, s_, q in received() if f0 + 1500 <= s_ <= f0 + 28000]
+    ds = [r - s_ for r, s_, _ in rows]
+    arrival_order = [q for r, s_, q in sorted(rows)]
+    reordered = sum(1 for i in range(1, len(arrival_order)) if arrival_order[i] < arrival_order[i - 1])
+    record("latency 0..1500 ms: delays spread over the range", len(ds) >= 15 and min(ds) < 400 and max(ds) > 1000 and max(ds) <= 1700, "min %s max %s over %d messages; %d arrived out of order" % (min(ds) if ds else None, max(ds) if ds else None, len(ds), reordered))
+
+    # G receiver gone while delayed
+    g0 = int(time.time() * 1000)
+    c.radio_latency(0, 20000, 3000, channel=777)
+    time.sleep(6)
+    c.command("setblock %d %d %d minecraft:air" % rx_spot)
+    c.command("setblock %d %d %d minecraft:air" % (rx_spot[0], rx_spot[1] + 1, rx_spot[2]))
+    time.sleep(10)
+    gone_lines = logged("dropped_receiver_gone", g0)
+    record("a delayed message whose receiver is gone is dropped and logged", len(gone_lines) >= 1, "%d dropped_receiver_gone lines" % len(gone_lines))
+
+    iv = [i["verb"] for i in c.t2_lines("interventions")]
+    record("every fault command is in the interventions log with its seed and expiry", iv.count("radio_loss") == 3 and iv.count("radio_latency") == 3 and "seed" in c.t2_lines("interventions")[-1]["args"], iv)
+    st = c.t2_status()
+    record("no line was dropped", st["radio"]["dropped"] == 0, st)
+    runmod.stop("m2-a")
+
+
 def m0_ip():
     """Re-proves the server-ip refusal on the run left by m0 (its first attempt was fooled by a crash report from the step before)."""
     run = runmod.run_dir("m0-with")
@@ -233,7 +344,7 @@ def m0_ip():
 
 if __name__ == "__main__":
     phase = sys.argv[1]
-    {"m0": m0, "m0ip": m0_ip, "m1": m1}[phase]()
+    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2}[phase]()
     with open(os.path.join(ROOT, "mod-proof-%s.json" % phase), "w") as f:
         json.dump(results, f, indent=1)
     print("\n".join("%-8s %s" % (r["result"], r["proof"]) for r in results))

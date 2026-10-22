@@ -38,6 +38,7 @@ class Control:
         self._gps_hosts_down = None
         self._listener = None
         self._harvested = {}
+        self._scheduled = []
 
     # -- plumbing -----------------------------------------------------------------------------------------------
     def rcon(self):
@@ -382,6 +383,35 @@ class Control:
                         out.append(json.loads(line))
         return out
 
+    # -- radio faults: the same names and arguments as the simulator's sim:radio_loss / sim:radio_latency (times in game ms) ----
+    def radio_loss(self, t, dur, rate, channel=None, to=None, seed=None):
+        """Loses a share `rate` (0..1) of the radio messages that would reach a program, for `dur` game ms starting `t` game ms after the
+        scenario began (t=0: now). Optional channel and receiver computer id. Returns the reply (seed and expiry tick)."""
+        opts = ("channel %d " % channel if channel is not None else "") + ("to %d " % to if to is not None else "") + ("seed %d" % seed if seed is not None else "")
+        return self._at(t, lambda: self.t2(("radio loss %s %d %s" % (rate, max(1, -(-int(dur) // 1000)), opts)).strip()))
+
+    def radio_latency(self, t, dur, ms, channel=None, max_ms=None, seed=None):
+        """Delays by `ms` game ms (or a range ms..max_ms) the radio messages that would reach a program, for `dur` game ms from `t`."""
+        opts = ("channel %d " % channel if channel is not None else "") + ("seed %d" % seed if seed is not None else "")
+        return self._at(t, lambda: self.t2(("radio latency %d %d %d %s" % (ms, max_ms if max_ms is not None else ms, max(1, -(-int(dur) // 1000)), opts)).strip()))
+
+    def radio_clear(self):
+        return self.t2("radio clear")
+
+    def _at(self, t, fn):
+        """Runs now when t is 0; otherwise the scenario runner's polling loop runs it when that game time is reached."""
+        if not t:
+            return fn()
+        self._scheduled.append((t, fn))
+        return {"scheduled_for_game_ms": t}
+
+    def run_due(self, game_ms):
+        """Called by the scenario runner while it waits: starts the scheduled faults that are due."""
+        due = [x for x in self._scheduled if x[0] <= game_ms]
+        self._scheduled = [x for x in self._scheduled if x[0] > game_ms]
+        for _, fn in due:
+            fn()
+
     # -- chunk loading ------------------------------------------------------------------------------------------
     def chunk_unload(self, *args, **kwargs):
         raise Unsupported("chunk_unload: this world's chunks are held by the chunk-loader turtles' Advanced Peripherals tickets "
@@ -390,12 +420,6 @@ class Control:
                           "Releasing them needs the test-only mod (spec 6.10).")
 
     # -- verbs Minecraft cannot do ------------------------------------------------------------------------------
-    def radio_loss(self, *args, **kwargs):
-        raise Unsupported("radio_loss: real Minecraft gives no way to drop modem messages; it stays in the simulator (T1). "
-                          "The planned test-only mod (spec 6.10) will add it.")
-
-    radio_latency = radio_loss
-
     def teleport(self, computer_id, x, y, z):
         """Moves a turtle's block (and everything in it) to x, y, z with /clone ... replace move. The computer stays on and
         is not restarted (proved in prove_verbs.py); its own idea of where it is stays stale until it next asks GPS. The
