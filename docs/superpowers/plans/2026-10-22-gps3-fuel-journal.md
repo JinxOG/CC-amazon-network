@@ -134,9 +134,10 @@ Only one thing: after a reboot, **if GPS agrees with the journal, the turtle tak
     - fuel = journal − 1: the move happened;
     - fuel ≥ journal: it did not;
     - anything else, `"unlimited"` included: no restore.
-  - The resulting position must **equal** the GPS fix. If it does not, nothing is restored and `detectFacing` runs as today, which is the safe fallback. Both outcomes log a line, which is the evidence for the VALIDATION block:
+  - The resulting position must **equal** the GPS fix for the facing to be restored. Otherwise `detectFacing` runs as today, which is the safe fallback. Every boot with a journal and a fix logs one line, which is the evidence for the VALIDATION block:
     - `Journal: restored facing east at x,y,z (agrees with GPS)`;
-    - `Journal: disagrees with GPS by N (...) -- measuring facing`.
+    - `Journal: 1 block from GPS (...) -- measuring facing`;
+    - the loud case the ruling asks for, a disagreement of **more than 1 block**: `JOURNAL DISAGREES WITH GPS by N (...)`. The VALIDATION block's *Failed if* is any line of this kind.
 - **First-step check (added; not in the card).** A restored facing is provisional until the turtle's first horizontal move, which then takes one `gps.locate`.
   - The fix agrees: the facing is confirmed.
   - The fix disagrees: the real facing is taken from that one-block step, the position is corrected to GPS, and a loud warning `RESTORED FACING WAS WRONG` is logged.
@@ -200,5 +201,5 @@ Only one thing: after a reboot, **if GPS agrees with the journal, the turtle tak
   - The old code (1.9.151) is the control: it measures facing on every reboot.
 - **Test server:**
   - shutdown mid-move (M4) with GPS up: restore lines appear and nothing is lost;
-  - the move-rate cost of a 1x mining job, with and without the journal: **must be ≤ 2%**.
+  - the cost, as ruled: the three-sector job at 1x, with and without the journal. Job time may grow by **at most 2%**. If it grows more, drop the "after" write for moves and measure again.
 - **Live** (the watcher, after the deploy): reboots during normal work give `Journal: restored` lines and no `RESTORED FACING WAS WRONG`. Any disagreement line is read before the card moves.
