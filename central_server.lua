@@ -2947,9 +2947,9 @@ end
 --
 -- Until now the first sign of a GPS outage was turtles failing: refusals to
 -- depart, miners parked mid-field. The server never moves, so it can judge GPS
--- by asking the hosts itself. Once a minute it judges the replies to its last
--- ping, then pings again: "PING" on the GPS channel, replies asked for on its
--- own GPS_REPLY_CH. The hosts (CC's own `gps host`) answer {x, y, z} on the
+-- by asking the hosts itself. Every 15 s it pings -- "PING" on the GPS
+-- channel -- and 3 s later judges the replies, which are asked for on its
+-- own GPS_REPLY_CH. The hosts (CC's own GPS host program) answer {x, y, z} on the
 -- reply channel, and each answer arrives with its measured distance.
 --
 --   * fewer than GPS_MIN_HOSTS answers: no turtle can get a fix ("no_fix");
