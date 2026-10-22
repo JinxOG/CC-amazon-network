@@ -61,3 +61,14 @@ New: `scenario.py --install <sha>` copies that commit's files onto every compute
 
 - Radio loss and latency: now supported. Still unsupported: chunk unload (M3), turtle move failures (M4), peripheral stall (M5), pause/step (M6).
 - Citadel and Alex's Mobs left out at speed; five client-only jars; speed caveat (deadlines in real time get N times longer in game time); no exact replay.
+
+## Addendum (2026-10-22): the same replay on current master
+
+Run ack-new: fleet pinned (real update path) to `aa00793` = proto 1.9.150, same scenario (16 parked turtles, 4.03 game hours, 8.1x): **0.64% lost** (4173 acks of 4200 beats, 70 baseline lines).
+
+| code | parked ack loss on real Minecraft | simulator (T1) |
+|---|---|---|
+| 1.9.107 (before the fix) | 2.42% | 9.08% |
+| 1.9.150 (current master) | 0.64% | 0.03% |
+
+The direction agrees with the simulator (the fix lowers the loss, by a factor of about 4) but the sizes do not: real Minecraft on one PC loses less before the fix and more after it than the simulator says. Same thin-evidence caveat as above (about 250 beats per turtle, one run each).
