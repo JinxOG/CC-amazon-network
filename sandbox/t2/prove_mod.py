@@ -419,6 +419,97 @@ def m3():
     runmod.stop("m3-a")
 
 
+def m4():
+    """M4: turtle move without a reboot (facing confirmed), and turtle save / restore."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    runmod.start("m4-a")
+    c = ctl.Control("m4-a")
+    t0 = time.time()
+    while time.time() - t0 < 300 and len(c.computers()) < 25:
+        time.sleep(5)
+    spots = free_spots(c, 4)
+    for (x, y, z) in spots:
+        c.command("setblock %d %d %d minecraft:stone" % (x + 1, y, z))      # a stone east of every spot: detect() is true only when facing east
+    (sx, sy, sz) = spots[0]
+    tid = c.spawn_turtle(sx, sy, sz, "MINER", startup=os.path.join(here, "lua", "uptime_probe.lua"), facing="north")
+
+    def rows():
+        out = []
+        for line in c.read_disk(tid, "uptime.txt").decode().splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                out.append((float(parts[0]), parts[1] == "true"))
+        return out
+
+    time.sleep(12)
+    base = rows()
+    record("the probe turtle runs and sees no block while facing north", len(base) >= 5 and not any(d for _, d in base[-3:]), "%d rows, last %s" % (len(base), base[-2:]))
+
+    # B move with facing east to spot 1: the computer stays on, uptime keeps counting, the dump shows the new place, detect now sees the stone
+    (mx, my, mz) = spots[1]
+    clock_before = rows()[-1][0]
+    reply = c.turtle_move(tid, mx, my, mz, "e")
+    time.sleep(8)
+    r = rows()
+    comps = c.computers()
+    clocks = [a for a, _ in r]
+    monotonic = all(clocks[i] < clocks[i + 1] for i in range(len(clocks) - 1))
+    record("move: the turtle is at the new place and the computer stayed on (uptime kept counting, no restart)",
+           reply.get("ok") and comps[tid]["pos"] == (mx, my, mz) and comps[tid]["on"] and monotonic and clocks[-1] > clock_before,
+           "reply %s; dump %s; uptime %.1f -> %.1f over %d rows, monotonic=%s" % (reply, comps[tid], clock_before, clocks[-1], len(r), monotonic))
+    record("move: facing east confirmed (detect sees the stone east of the new place)", all(d for _, d in r[-3:]), "last rows %s" % r[-3:])
+
+    # C every facing, alternating between two spots (a turtle cannot move onto its own block); the second spot has stone on its WEST side only
+    (nx, ny, nz) = spots[2]
+    c.command("setblock %d %d %d minecraft:air" % (nx + 1, ny, nz))
+    c.command("setblock %d %d %d minecraft:stone" % (nx - 1, ny, nz))
+    seen = {}
+    for f, spot in (("n", (nx, ny, nz)), ("w", (mx, my, mz)), ("s", (nx, ny, nz)), ("e", (mx, my, mz)), ("w", (nx, ny, nz))):
+        rep = c.turtle_move(tid, spot[0], spot[1], spot[2], f)
+        time.sleep(3)
+        seen[f + "@" + ("N" if spot == (nx, ny, nz) else "M")] = (rep.get("ok"), rep.get("facing"), rows()[-1][1])
+    record("move: each facing is reported back, and detect agrees where a stone is (east of M, west of N)",
+           all(v[0] for v in seen.values()) and seen["e@M"][2] is True and seen["w@N"][2] is True and seen["n@N"][2] is False and seen["w@M"][2] is False and seen["s@N"][2] is False,
+           "moves -> %s" % seen)
+    bad = c.turtle_move(tid, spots[3][0], spots[3][1] + 4, spots[3][2], "q")
+    gone = c.turtle_move(999999, mx, my, mz)
+    record("a bad facing or an unknown computer is answered with an error and nothing moves", "error" in bad and "error" in gone, "%s ; %s" % (bad, gone))
+
+    # D save / restore
+    c.set_fuel(tid, 777)
+    c.set_slot(tid, 3, "minecraft:cobblestone", 9)
+    pos0 = c.computers()[tid]["pos"]
+    with open(os.path.join(c.disks, str(tid), "marker.txt"), "w") as f:
+        f.write("before")
+    sv = c.turtle_save(tid, "m4save")
+    c.set_fuel(tid, 111)
+    c.clear_slot(tid, 3)
+    c.set_slot(tid, 5, "minecraft:dirt", 2)
+    with open(os.path.join(c.disks, str(tid), "marker.txt"), "w") as f:
+        f.write("after")
+    c.turtle_move(tid, spots[3][0], spots[3][1], spots[3][2], "w")
+    time.sleep(2)
+    changed = (c.get_fuel(tid), c.computers()[tid]["pos"])
+    rs = c.turtle_restore("m4save")
+    time.sleep(10)
+    back_fuel = c.get_fuel(tid)
+    here_pos = c.computers()[tid]["pos"]
+    slot3 = c.get_slot(tid, 3)
+    slot5 = c.block_data(here_pos, "Items[{Slot:5b}]")
+    marker = open(os.path.join(c.disks, str(tid), "marker.txt")).read()
+    record("restore: fuel, position, inventory and the disk folder come back to what was saved",
+           sv.get("ok") and rs.get("ok") and back_fuel == 777 and here_pos == pos0 and "cobblestone" in slot3 and "dirt" not in slot5 and marker == "before" and c.computers()[tid]["on"],
+           "changed state was fuel/pos %s; after restore fuel %s, pos %s, slot3 %s, slot5 %s, marker %s, on=%s; replies %s %s" % (changed, back_fuel, here_pos, slot3[:60], slot5[:60], marker, c.computers()[tid]["on"], sv, rs))
+    time.sleep(8)
+    r3 = rows()
+    record("restore: the program is running again after the restore", len(r3) >= 2 and r3[-1][0] < 60, "last rows %s" % r3[-2:])
+    nosave = c.turtle_restore("nosuchsave")
+    record("a restore from a name that was never saved is answered with an error", "error" in nosave, nosave)
+    iv = [i["verb"] for i in c.t2_lines("interventions")]
+    record("moves, the save and the restore are in the interventions log", iv.count("turtle_move") >= 6 and "turtle_save" in iv and "turtle_restore" in iv, iv)
+    runmod.stop("m4-a")
+
+
 def m0_ip():
     """Re-proves the server-ip refusal on the run left by m0 (its first attempt was fooled by a crash report from the step before)."""
     run = runmod.run_dir("m0-with")
@@ -438,7 +529,7 @@ def m0_ip():
 
 if __name__ == "__main__":
     phase = sys.argv[1]
-    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3}[phase]()
+    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3, "m4": m4}[phase]()
     with open(os.path.join(ROOT, "mod-proof-%s.json" % phase), "w") as f:
         json.dump(results, f, indent=1)
     print("\n".join("%-8s %s" % (r["result"], r["proof"]) for r in results))

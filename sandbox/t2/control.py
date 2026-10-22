@@ -433,6 +433,20 @@ class Control:
             return [self.t2("chunk unload area %d %d %d %d %d" % (x1, z1, x2, z2, seconds))]
         return self._at(t, go)
 
+    # -- turtle controls through the control mod (M4) ----------------------------------------------------------
+    def turtle_move(self, computer_id, x, y, z, facing=None):
+        """Moves a turtle to x, y, z through the call a turtle uses to move itself: the computer stays on and knows where it is.
+        `facing` is n, e, s or w (optional). Needs the control mod; `teleport` is the older /clone way."""
+        return self.t2(("turtle move %d %d %d %d %s" % (computer_id, x, y, z, facing or "")).strip())
+
+    def turtle_save(self, computer_id, name):
+        """Saves a turtle (position, facing, inventory, fuel, upgrades) and its computer's disk folder together, under `name`."""
+        return self.t2("turtle save %d %s" % (computer_id, name))
+
+    def turtle_restore(self, name):
+        """Puts a saved turtle back as it was (shuts it down, moves it back, restores its data and disk folder, turns it on)."""
+        return self.t2("turtle restore %s" % name)
+
     # -- verbs Minecraft cannot do ------------------------------------------------------------------------------
     def teleport(self, computer_id, x, y, z):
         """Moves a turtle's block (and everything in it) to x, y, z with /clone ... replace move. The computer stays on and

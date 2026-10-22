@@ -59,6 +59,21 @@ public final class T2Commands {
                         .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
                             .executes(c -> reply(c.getSource(), Chunks.unload(IntegerArgumentType.getInteger(c, "computer"),
                                     IntegerArgumentType.getInteger(c, "duration"), T2Control.currentTick())))))))
+            .then(Commands.literal("turtle")
+                .then(Commands.literal("move")
+                    .then(Commands.argument("computer", IntegerArgumentType.integer(0))
+                        .then(Commands.argument("x", IntegerArgumentType.integer())
+                            .then(Commands.argument("y", IntegerArgumentType.integer())
+                                .then(withTail(Commands.argument("z", IntegerArgumentType.integer()), T2Commands::turtleMove))))))
+                .then(Commands.literal("save")
+                    .then(Commands.argument("computer", IntegerArgumentType.integer(0))
+                        .then(Commands.argument("name", StringArgumentType.word())
+                            .executes(c -> reply(c.getSource(), Turtles.save(c.getSource().getServer(), net.minecraftforge.fml.loading.FMLPaths.GAMEDIR.get(),
+                                    IntegerArgumentType.getInteger(c, "computer"), StringArgumentType.getString(c, "name")))))))
+                .then(Commands.literal("restore")
+                    .then(Commands.argument("name", StringArgumentType.word())
+                        .executes(c -> reply(c.getSource(), Turtles.restore(c.getSource().getServer(), net.minecraftforge.fml.loading.FMLPaths.GAMEDIR.get(),
+                                StringArgumentType.getString(c, "name"), T2Control.currentTick()))))))
             .then(Commands.literal("events").then(Commands.literal("log")
                 .then(Commands.argument("state", StringArgumentType.word()).executes(c -> toggle(c.getSource(), "events", StringArgumentType.getString(c, "state"))))))
             .then(Commands.literal("status").executes(c -> reply(c.getSource(), Logs.status()))));
@@ -89,6 +104,12 @@ public final class T2Commands {
             }
         }
         return out;
+    }
+
+    private static int turtleMove(CommandContext<CommandSourceStack> c, String tail) {
+        String facing = tail.trim().isEmpty() ? null : tail.trim();
+        return reply(c.getSource(), Turtles.move(c.getSource().getServer(), IntegerArgumentType.getInteger(c, "computer"),
+                IntegerArgumentType.getInteger(c, "x"), IntegerArgumentType.getInteger(c, "y"), IntegerArgumentType.getInteger(c, "z"), facing, T2Control.currentTick()));
     }
 
     private static int loss(CommandContext<CommandSourceStack> c, String tail) {
