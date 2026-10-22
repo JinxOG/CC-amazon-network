@@ -376,6 +376,13 @@ function M.install(opts)
         end
     end
 
+    -- os.queueEvent. Eleventh fidelity gap (2026-10-22): missing, so code that
+    -- puts held events back (the server's GPS check) could not be tested.
+    -- Appends to the same queue os.pullEvent reads, as CC:Tweaked does.
+    os.queueEvent = function(...)
+        c.events[#c.events + 1] = table.pack(...)
+    end
+
     -- os.startTimer / os.cancelTimer.
     --
     -- SEVENTH fidelity gap found in this stub, and the most expensive so far:

@@ -2936,9 +2936,150 @@ local function destinationBusy(dest)
     return false
 end
 
+-- ─── GPS 2: the server checks GPS itself (2026-10-22) ───────────────────────
+--
+-- Until now the first sign of a GPS outage was turtles failing: refusals to
+-- depart, miners parked mid-field. The server never moves, so it can judge GPS
+-- by asking the hosts itself. Once a minute it judges the replies to its last
+-- ping, then pings again: "PING" on the GPS channel, replies asked for on its
+-- own GPS_REPLY_CH. The hosts (CC's own `gps host`) answer {x, y, z} on the
+-- reply channel, and each answer arrives with its measured distance.
+--
+--   * fewer than GPS_MIN_HOSTS answers: no turtle can get a fix ("no_fix");
+--   * a host whose measured distance disagrees with its claimed position, by
+--     more than GPS_TOLERANCE, is giving turtles a wrong position
+--     ("wrong_fix"). Needs the server's own position: gps_home.dat, learned
+--     once at boot by gps.locate before the loop starts (delete the file if
+--     the server is ever moved). Unknown, the check only counts hosts.
+--
+-- Either raises state.gpsHealth.ok = false, published in /state for the
+-- dashboard (W5), and dispatcher.tick sends nothing out until GPS is back.
+--
+-- NOT gps.locate in the loop. It pulls events unfiltered and throws away all
+-- but its replies (reference-cc-yield-eats-events): the fleet's heartbeats,
+-- and bridge http responses whose handles cannot be queued again. The first
+-- version held and re-queued them; the sandbox showed the re-queued GPS
+-- replies reaching this loop as table payloads and crashing it. The replies
+-- now come in through the loop like any other message, and nothing waits.
+dispatcher.GPS_PING_CH   = 65534
+dispatcher.GPS_REPLY_CH  = 65000
+dispatcher.GPS_MIN_HOSTS = 4
+dispatcher.GPS_TOLERANCE = 1.5
+dispatcher.GPS_HOME_FILE = "gps_home.dat"
+
+function dispatcher.gpsHome()
+    if dispatcher._gpsHome then return dispatcher._gpsHome end
+    if fs.exists(dispatcher.GPS_HOME_FILE) then
+        local f = fs.open(dispatcher.GPS_HOME_FILE, "r")
+        local h = f and textutils.unserialise(f.readAll() or "")
+        if f then f.close() end
+        if type(h) == "table" and h.x then dispatcher._gpsHome = h end
+    end
+    return dispatcher._gpsHome
+end
+
+function dispatcher.setGpsHome(x, y, z)
+    dispatcher._gpsHome = { x = x, y = y, z = z }
+    local f = fs.open(dispatcher.GPS_HOME_FILE, "w")
+    if f then f.write(textutils.serialise(dispatcher._gpsHome)); f.close() end
+    logInfo(string.format("GPS check: the server stands at %d,%d,%d", x, y, z))
+end
+
+-- A reply to the server's ping, from the loop. Anything that is not
+-- {x, y, z} with a distance is ignored.
+function dispatcher.noteGpsReply(msg, distance)
+    local w = state.gpsWindow
+    if not w or type(msg) ~= "table" or type(distance) ~= "number" then return end
+    local x, y, z = tonumber(msg[1]), tonumber(msg[2]), tonumber(msg[3])
+    if not (x and y and z) then return end
+    w.hosts[x .. "," .. y .. "," .. z] = { x = x, y = y, z = z, d = distance }
+end
+
+function dispatcher.evaluateGps()
+    local w = state.gpsWindow
+    if not w or w.judged then return end
+    w.judged = true
+    local home, n, wrong = dispatcher.gpsHome(), 0, nil
+    for _, h in pairs(w.hosts) do
+        n = n + 1
+        if home and not wrong then
+            local real = math.sqrt((h.x - home.x) ^ 2 + (h.y - home.y) ^ 2 + (h.z - home.z) ^ 2)
+            if math.abs(real - h.d) > dispatcher.GPS_TOLERANCE then
+                wrong = string.format("wrong_fix: the host claiming %d,%d,%d answered from %.0f blocks away, "
+                    .. "but that position is %.0f blocks from the server", h.x, h.y, h.z, h.d, real)
+            end
+        end
+    end
+    local reason = wrong or (n < dispatcher.GPS_MIN_HOSTS
+        and string.format("no_fix: %d of %d GPS hosts answered", n, dispatcher.GPS_MIN_HOSTS)) or nil
+    local was = state.gpsHealth
+    local now = os.epoch("utc")
+    state.gpsHealth = { ok = reason == nil, reason = reason, hosts = n, checkedAt = now,
+        since = reason and ((was and was.ok == false and was.since) or now) or nil }
+    if reason and not (was and was.ok == false) then
+        logWarn("GPS CHECK FAILED: " .. reason .. " -- no job is sent out until GPS is back")
+    elseif not reason and was and was.ok == false then
+        logInfo(string.format("GPS check: back after %ds (%d hosts) -- dispatch resumes",
+            math.floor((now - (was.since or now)) / 1000), n))
+    end
+end
+
+-- Ping the hosts; their replies come in through the loop (noteGpsReply).
+function dispatcher.pingGps()
+    local m = state.modem
+    if not m then return end
+    if not m.isOpen(dispatcher.GPS_REPLY_CH) then m.open(dispatcher.GPS_REPLY_CH) end
+    state.gpsWindow = { startedAt = os.epoch("utc"), hosts = {} }
+    m.transmit(dispatcher.GPS_PING_CH, dispatcher.GPS_REPLY_CH, "PING")
+end
+
+-- Judge the replies to the last ping, then ping again.
+function dispatcher.checkGps()
+    dispatcher.evaluateGps()
+    dispatcher.pingGps()
+end
+
+-- From the loop every 5 s. A ping every GPS_PING_EVERY_MS, judged
+-- GPS_JUDGE_AFTER_MS later: an outage is seen within about 18 s. The first
+-- version pinged once a minute and judged at the next ping, and in the
+-- sandbox a job ordered 30 s into an outage went out before it was seen.
+dispatcher.GPS_PING_EVERY_MS  = 15000
+dispatcher.GPS_JUDGE_AFTER_MS = 3000
+function dispatcher.gpsTick()
+    local now = os.epoch("utc")
+    local w = state.gpsWindow
+    if w and not w.judged and now - w.startedAt >= dispatcher.GPS_JUDGE_AFTER_MS then
+        dispatcher.evaluateGps()
+    end
+    if not w or (w.judged and now - w.startedAt >= dispatcher.GPS_PING_EVERY_MS) then
+        dispatcher.pingGps()
+    end
+end
+
+-- What the loop decodes. A modem message may carry a table, not text -- a GPS
+-- reply is one -- and textutils.unserialise on a table throws, which took the
+-- whole loop down in the sandbox. Text is unserialised, a table used as is,
+-- anything else is nothing.
+function dispatcher.parseRadio(payload)
+    if type(payload) == "table" then return payload end
+    if type(payload) ~= "string" then return nil end
+    local ok, v = pcall(textutils.unserialise, payload)
+    return ok and v or nil
+end
+
 function dispatcher.tick()
     local pending = jobQueue.getPending()
     if #pending == 0 then return end
+
+    -- GPS 2: nothing goes out on a GPS the server itself cannot trust.
+    if state.gpsHealth and state.gpsHealth.ok == false then
+        local now = os.epoch("utc")
+        if (now - lastDispatchHoldLog) >= 60000 then
+            logWarn("Dispatch hold: GPS check failing (" .. tostring(state.gpsHealth.reason) .. ")")
+            lastDispatchHoldLog = now
+        end
+        return
+    end
 
     -- Filter out support jobs (they are created internally, not dispatched here)
     local workerJobs = {}
@@ -5596,6 +5737,10 @@ function server.run()
                         -- server. Non-zero means someone is reading the wrong
                         -- source for at least one machine.
                         ',"versionMismatch":' .. tostring(registry.versionMismatchCount()) ..
+                        -- GPS 2: the server's own GPS check. {ok, reason,
+                        -- checkedAt, since}; ok=false means dispatch is held.
+                        -- W5 draws the dashboard alert from it.
+                        ',"gps":'          .. js(state.gpsHealth,      'null', "gps") ..
                         -- How long the PREVIOUS assembly took, in ms. This
                         -- function is synchronous, so that number is exactly how
                         -- long the server was deaf to the radio -- the window in
@@ -5682,8 +5827,16 @@ function server.run()
     -- on their own timers so they never run inside the bridge push path.
     local storageTimer     = os.startTimer(CFG.STORAGE_INTERVAL)
     local craftableTimer   = os.startTimer(CFG.CRAFTABLE_INTERVAL)
+    local gpsTimer         = os.startTimer(5)    -- GPS 2: the server checks GPS itself
     pcall(refreshStorage)
     pcall(refreshCraftable)
+    -- GPS 2: learn where the server stands, once, BEFORE the loop -- the only
+    -- place a blocking gps.locate eats nothing that matters. Unknown, the
+    -- check counts hosts only until a later boot learns it.
+    if not dispatcher.gpsHome() and gps and gps.locate then
+        local okL, gx, gy, gz = pcall(gps.locate, 2)
+        if okL and gx then dispatcher.setGpsHome(gx, gy, gz) end
+    end
 
     -- Async bridge push state.  A push is fire-and-forget: http.request returns
     -- immediately, the response arrives as http_success / http_failure in the main
@@ -5885,7 +6038,7 @@ function server.run()
         -- A fleet controller should not be stoppable by a stray signal at
         -- 02:29 in the morning. The cost is that Ctrl+T no longer stops it;
         -- reboot the computer to do that.
-        local event, p1, p2, p3, p4 = os.pullEventRaw()
+        local event, p1, p2, p3, p4, p5 = os.pullEventRaw()
 
         -- The busy window opens HERE, not at the top of the loop body: the time
         -- spent blocked in pullEventRaw above is time this server is listening,
@@ -5919,8 +6072,12 @@ function server.run()
                 "Terminate ignored (#%d) — press Ctrl+T again within %ds to stop",
                 terminateCount, TERMINATE_CONFIRM_MS / 1000))
 
+        elseif event == "modem_message" and p2 == dispatcher.GPS_REPLY_CH then
+            -- GPS 2: a host answering the server's own ping (p5 = distance).
+            dispatcher.noteGpsReply(p4, p5)
+
         elseif event == "modem_message" then
-            local parsed = textutils.unserialise(p4)
+            local parsed = dispatcher.parseRadio(p4)
             if parsed then
                 local valid, msg = proto.decode(parsed)
                 -- SAY WHEN A MESSAGE IS THROWN AWAY.
@@ -6150,6 +6307,10 @@ function server.run()
                 timed("refreshCraftable", refreshCraftable)
                 lastCraftableWC = os.epoch("utc")
                 craftableTimer = os.startTimer(CFG.CRAFTABLE_INTERVAL)
+
+            elseif p1 == gpsTimer then
+                timed("gpsTick", dispatcher.gpsTick)
+                gpsTimer = os.startTimer(5)
 
             end
 

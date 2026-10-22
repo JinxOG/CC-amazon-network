@@ -57,7 +57,7 @@ end
 -- the startup code above (server.run calls refreshStorage once before the loop)
 -- cannot satisfy an ordering assertion about the loop.
 local function loopBody(src)
-    local from = src:find("local event, p1, p2, p3, p4 = os%.pullEventRaw%(%)")
+    local from = src:find("local event, p1, p2, p3, p4, p5 = os%.pullEventRaw%(%)")
     assert(from, "the event loop's pullEventRaw moved or vanished")
     local to = src:find("\n%-%- ─── Test seam", from)
     return src:sub(from, to or #src), from

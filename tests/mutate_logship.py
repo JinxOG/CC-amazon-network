@@ -258,7 +258,14 @@ R3_HOLD   = "a recovering turtle that never docks stays held"
 R3_KEEP   = "a recovering delivery or support turtle keeps the job it will resume"
 R3_LOADER = "a miner's 'recovering abandoned loader' report alone does not hold it"
 RS_NOTREG = "a rebooted turtle's job is not sent with its REGISTER_ACK"
-EC_HOME   = "with the delivery chest home, every other chest is locked"
+G2_NOFIX  = "no GPS hosts answering raises the alert and holds dispatch"
+G2_BACK   = "four hosts answering truly clear the alert and dispatch resumes"
+G2_WRONG  = "a host whose distance disagrees with its position raises wrong_fix"
+G2_TICK   = "the loop's tick judges a ping 3 s after sending it, and pings again 15 s on"
+G2_THREE  ="three hosts are not enough for a fix"
+G2_EVENTS = "the GPS check never waits on the radio, and pings for its own replies"
+G2_TABLE  = "a table on the radio is decoded as itself, never a crash"
+EC_HOME   ="with the delivery chest home, every other chest is locked"
 EC_AWAY   = "with the delivery chest out of place, only the fuel slot is locked"
 EC_AMBIG  = "two loose chests and an empty fuel slot are not guessed between"
 EC_USE    = "delivery_turtle.lua decides its other chests with base.otherChestSlots (SOURCE-ONLY)"
@@ -1248,6 +1255,34 @@ MUTANTS = [
 
     ('a recovering turtle keeps its job', 'central_server.lua',
      [('        jobQueue.reassign(jid, id, "boot_recovery")\n    end\n    registry.holdUntilDocked(id)\n', '    end\n    registry.holdUntilDocked(id)\n')], R3_REQ),
+
+    # -- GPS 2: the server checks GPS itself -----------------------------------
+    ('dispatch is not held while GPS is failing', 'central_server.lua',
+     [('    if state.gpsHealth and state.gpsHealth.ok == false then\n        local now = os.epoch("utc")\n', '    if false then\n        local now = os.epoch("utc")\n')], G2_NOFIX),
+
+    ('the GPS alert never clears', 'central_server.lua',
+     [('    state.gpsHealth = { ok = reason == nil, reason = reason, hosts = n, checkedAt = now,', '    state.gpsHealth = { ok = (reason == nil) and not (was and was.ok == false), reason = reason, hosts = n, checkedAt = now,')], G2_BACK),
+
+    ('a lying GPS host is accepted', 'central_server.lua',
+     [('            if math.abs(real - h.d) > dispatcher.GPS_TOLERANCE then\n', '            if false then\n')], G2_WRONG),
+
+    ('three GPS hosts count as a fix', 'central_server.lua',
+     [('    local reason = wrong or (n < dispatcher.GPS_MIN_HOSTS\n', '    local reason = wrong or (n < 3\n')], G2_THREE),
+
+    ('the GPS check pings without judging the last ping', 'central_server.lua',
+     [('function dispatcher.checkGps()\n    dispatcher.evaluateGps()\n', 'function dispatcher.checkGps()\n')], G2_NOFIX),
+
+    ('the GPS check locates itself in the loop', 'central_server.lua',
+     [('function dispatcher.checkGps()\n    dispatcher.evaluateGps()\n', 'function dispatcher.checkGps()\n    pcall(gps.locate, 0.05)\n    dispatcher.evaluateGps()\n')], G2_EVENTS),
+
+    ('the GPS ping is judged only at the next ping', 'central_server.lua',
+     [('dispatcher.GPS_JUDGE_AFTER_MS = 3000\n', 'dispatcher.GPS_JUDGE_AFTER_MS = 15000\n')], G2_TICK),
+
+    ('the GPS is pinged once a minute again', 'central_server.lua',
+     [('dispatcher.GPS_PING_EVERY_MS  = 15000\n', 'dispatcher.GPS_PING_EVERY_MS  = 60000\n')], G2_TICK),
+
+    ('a table on the radio is unserialised', 'central_server.lua',
+     [('    if type(payload) == "table" then return payload end\n', '    if type(payload) == "table" then return textutils.unserialise(payload) end\n')], G2_TABLE),
 
     # -- Which ender chests are not the delivery chest ------------------------
     ('a wandered delivery chest stays locked', 'turtle_base.lua',

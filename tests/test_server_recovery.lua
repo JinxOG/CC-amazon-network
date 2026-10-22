@@ -176,6 +176,18 @@ local function idleMiner(T, id)
     }
 end
 
+-- n GPS hosts answer the server's ping, each from its true distance to the
+-- server at 150,70,-2800 -- plus wrong[i] blocks for a host whose coordinates
+-- were set up wrong. GPS 2's tests.
+local GPS_HOSTS = { { 100, 255, -2850 }, { 200, 255, -2850 }, { 100, 255, -2750 }, { 200, 250, -2750 } }
+local function answer(T, n, wrong)
+    for i = 1, n do
+        local h = GPS_HOSTS[i]
+        local d = math.sqrt((h[1] - 150) ^ 2 + (h[2] - 70) ^ 2 + (h[3] + 2800) ^ 2)
+        T.dispatcher.noteGpsReply({ h[1], h[2], h[3] }, d + ((wrong or {})[i] or 0))
+    end
+end
+
 local function offeredIdle(T, id)
     for _, t in ipairs(T.registry.getIdle(proto.ROLE.MINER)) do
         if t.id == id then return true end
@@ -962,6 +974,130 @@ return {
         restore()
         assert_eq(during, 0, "fuel.ensureFuel beats from outside the main loop")
         assert_eq(after, 1, "the main loop's first beat still gets it")
+    end,
+
+    -- ── GPS 2: the server checks GPS itself ──────────────────────────────────
+    -- Card GPS 2 (2026-10-22): the first sign of a GPS outage was turtles
+    -- failing. Once a minute the server judges the replies to its own GPS ping
+    -- and pings again; replies come in through the loop like any message, so
+    -- nothing waits and nothing is eaten. No fix or a lying host raises an alert
+    -- in /state and holds dispatch until GPS is back.
+    ["no GPS hosts answering raises the alert and holds dispatch"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.dispatcher.checkGps()                     -- ping
+        T.dispatcher.checkGps()                     -- nobody answered: judged
+        local h = T.state.gpsHealth
+        idleMiner(T, "node_119")
+        local jid = T.jobQueue.add(proto.JOB.MINE, { x1 = 1920, z1 = -2624, x2 = 1984, z2 = -2624 }, 5)
+        T.state.lastDispatchTime = 0
+        T.dispatcher.tick()
+        local owner = T.state.jobs[jid].assignedTo
+        restore()
+        assert_eq(h and h.ok, false, "no hosts: the alert is up")
+        assert_eq(h and h.reason and h.reason:find("^no_fix: 0 of 4") ~= nil, true)
+        assert_eq(owner, nil, "and no miner is sent out while GPS is gone")
+    end,
+
+    ["four hosts answering truly clear the alert and dispatch resumes"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.dispatcher.setGpsHome(150, 70, -2800)
+        T.dispatcher.checkGps(); T.dispatcher.checkGps()        -- an outage first
+        answer(T, 4)
+        T.dispatcher.checkGps()
+        local h = T.state.gpsHealth
+        idleMiner(T, "node_119")
+        T.state.registry["node_118"].status = proto.STATUS.WORKING
+        local jid = T.jobQueue.add(proto.JOB.MINE, { x1 = 1920, z1 = -2624, x2 = 1984, z2 = -2624 }, 5)
+        T.state.lastDispatchTime = 0
+        T.dispatcher.tick()
+        local owner = T.state.jobs[jid].assignedTo
+        restore()
+        assert_eq(h and h.ok, true, "four true answers: GPS is back")
+        assert_eq(h and h.hosts, 4)
+        assert_eq(owner, "node_119", "and the next job goes out")
+    end,
+
+    -- The sandbox (w3_gps2_server_check): pinging once a minute and judging at
+    -- the next ping let a job ordered 30 s into an outage go out unseen.
+    ["the loop's tick judges a ping 3 s after sending it, and pings again 15 s on"] =
+    function(assert_eq)
+        local _, T, advance, restore = serverWithMinerOnJob()
+        T.sent = {}
+        T.dispatcher.gpsTick()                      -- pings
+        local pinged = #T.sent
+        advance(2); T.dispatcher.gpsTick()
+        local tooSoon = T.state.gpsHealth
+        advance(1); T.dispatcher.gpsTick()          -- 3 s: judged, nobody answered
+        local judged = T.state.gpsHealth
+        advance(11); T.dispatcher.gpsTick()
+        local beforeNext = #T.sent
+        advance(1); T.dispatcher.gpsTick()          -- 15 s: the next ping
+        local afterNext = #T.sent
+        restore()
+        assert_eq(pinged, 1)
+        assert_eq(tooSoon, nil, "not judged before 3 s")
+        assert_eq(judged and judged.ok, false, "judged at 3 s: the outage is seen")
+        assert_eq(beforeNext, 1, "no second ping before 15 s")
+        assert_eq(afterNext, 2, "the next ping at 15 s")
+    end,
+
+    ["three hosts are not enough for a fix"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.dispatcher.setGpsHome(150, 70, -2800)
+        T.dispatcher.checkGps()
+        answer(T, 3)
+        T.dispatcher.checkGps()
+        local h = T.state.gpsHealth
+        restore()
+        assert_eq(h and h.ok, false, "gps.locate needs four: a turtle gets no fix from three")
+        assert_eq(h and h.reason and h.reason:find("^no_fix: 3 of 4") ~= nil, true)
+    end,
+
+    ["a host whose distance disagrees with its position raises wrong_fix"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.dispatcher.setGpsHome(150, 70, -2800)
+        T.dispatcher.checkGps()
+        answer(T, 4, { [2] = 30 })                  -- host 2 is set up with the wrong coordinates
+        T.dispatcher.checkGps()
+        local h = T.state.gpsHealth
+        restore()
+        assert_eq(h and h.ok, false, "turtles would fly on the wrong position")
+        assert_eq(h and h.reason and h.reason:find("^wrong_fix") ~= nil, true)
+    end,
+
+    ["the GPS check never waits on the radio, and pings for its own replies"] =
+    function(assert_eq)
+        local _, T, _, restore, c = serverWithMinerOnJob()
+        c.events = { { "modem_message", "top", 1118, 1118, "a turtle heartbeat", 12 } }
+        T.sent = {}
+        -- A gps.locate that behaves like CC's: it pulls whatever comes next. The
+        -- check must never call it inside the loop.
+        local savedGps = gps
+        gps = { locate = function() pcall(os.pullEvent); return 150, 70, -2800 end }
+        T.dispatcher.checkGps()
+        gps = savedGps
+        local queued = #c.events
+        local ping = T.sent[1]
+        restore()
+        assert_eq(queued, 1, "nothing was pulled: the fleet's message is still there")
+        assert_eq(ping and ping.channel, 65534, "the ping goes out on the GPS channel")
+        assert_eq(ping and ping.body, "PING")
+    end,
+
+    ["a table on the radio is decoded as itself, never a crash"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local okT, t = pcall(T.dispatcher.parseRadio, { 150, 255, -2800 })
+        local okN, n = pcall(T.dispatcher.parseRadio, 42)
+        local okS, s = pcall(T.dispatcher.parseRadio, textutils.serialise({ type = "X" }))
+        restore()
+        assert_eq(okT and type(t) == "table", true, "a GPS reply's table does not throw")
+        assert_eq(okN and n == nil, true)
+        assert_eq(okS and s and s.type, "X", "text still decodes")
     end,
 
     -- ── A delivery's jobs can be saved ───────────────────────────────────────

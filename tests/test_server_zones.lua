@@ -996,7 +996,7 @@ return {
         local src = f:read("*a")
         f:close()
 
-        local pullAt = src:find("local event, p1, p2, p3, p4 = os%.pullEventRaw%(%)")
+        local pullAt = src:find("local event, p1, p2, p3, p4, p5 = os%.pullEventRaw%(%)")
         assert_eq(pullAt ~= nil, true, "the event loop moved or vanished")
 
         -- The window must OPEN after the pull returns. Opening it at the top of
