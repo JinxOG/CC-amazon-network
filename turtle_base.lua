@@ -748,11 +748,22 @@ end
 -- ─── Journal (GPS 3, release A) ─────────────────────────────────────────────
 -- Every physical move and turn goes through jMove / jTurn, which write the
 -- intent to journal.dat first; applyMove and move.turn* write the settled state
--- after. After a reboot WITH a GPS fix, a journal that agrees with the fix gives
--- the facing back, so the turtle does not step out and back to measure it.
--- "No move without GPS" is unchanged: a journal is never a fix (rulings
--- 2026-10-22; moving on a restored position without GPS is release B, the
--- user's call).
+-- after. At boot the journal is CHECKED against GPS and the measured facing; it
+-- changes nothing the turtle does. "No move without GPS" is unchanged and the
+-- facing is still measured on every boot.
+--
+-- Why only a check (sandbox, 2026-10-22, w3_gps3_journal_restore): the first
+-- design took the facing from the journal and skipped the measurement. A miner
+-- picked up and put back in the same block, turned, agreed on position, took the
+-- journal's (wrong) facing, turned to "face" its loader, missed it and left it
+-- behind -- before any step could check it. A check on the first step needs GPS,
+-- and a flying miner has its modem swapped for the chunk loader: it parked at
+-- y=200 with no modem. A journal cannot tell a crash from a hand put-back, so it
+-- must never be trusted for facing without a measurement.
+--
+-- What the check gives: on every boot with GPS, whether the journal's position
+-- (settled by fuel) and facing agree with the measured ones -- the evidence
+-- release B (moving on a journal without GPS) needs, and the user's call.
 --
 -- The write is atomic: journal.tmp, then delete journal.dat and move the temp
 -- file onto it. A crash during the temp write leaves .dat exact (the move had
@@ -768,9 +779,6 @@ local JOURNAL_MOVES = { forward = true, back = true, up = true, down = true }
 local JOURNAL_TURNS = { turnLeft = true, turnRight = true }
 local FACING_NAMES  = { [0] = "north", [1] = "east", [2] = "south", [3] = "west" }
 local _journalFaulted = false
--- The journal as it was at boot, before anything wrote over it. Any physical
--- move or turn after boot makes it stale, so jMove/jTurn drop it.
-local _bootJournal = nil
 
 local function writeJournal(pending)
     local ok, err = pcall(function()
@@ -789,7 +797,7 @@ local function writeJournal(pending)
     end)
     if not ok and not _journalFaulted then
         _journalFaulted = true
-        logWarn("Journal write failed -- moves go on; a reboot will measure facing instead: "
+        logWarn("Journal write failed -- moves go on; the boot check will have nothing to check: "
             .. tostring(err))
     end
 end
@@ -822,7 +830,6 @@ end
 -- The only raw move. Intent first, so a crash mid-move leaves it on disk; a
 -- move that fails settles at once. A successful one is settled by applyMove.
 local function jMove(dir)
-    _bootJournal = nil
     writeJournal(dir)
     local ok, err = turtle[dir]()
     if not ok then writeJournal(nil) end
@@ -832,7 +839,6 @@ end
 -- The only raw turn. Settled by move.turnLeft/turnRight; the turns made while
 -- measuring facing are never settled, which is right -- the facing is unknown.
 local function jTurn(dir)
-    _bootJournal = nil
     writeJournal(dir)
     return turtle[dir]()
 end
@@ -850,86 +856,56 @@ local function stepDelta(facing, dir)
     return dx, 0, dz
 end
 
--- Where the journal says the turtle is, or nil and why not. A pending move is
--- settled by fuel: every move costs exactly 1, so one lower means it happened;
--- equal or higher (a refuel only happens standing still) means it did not.
-local function journalPosition(j)
-    if not (j.posFixed and j.facingKnown) then return nil, "it had no fix or no facing" end
-    if j.pending == nil then return j.x, j.y, j.z end
-    if JOURNAL_TURNS[j.pending] then return nil, "it crashed mid-turn, so the facing is unknown" end
+-- What the journal claims, read at boot BEFORE anything moves or burns fuel:
+-- { x, y, z, facing } (facing nil when it cannot be known), or nil and why not.
+-- A pending move is settled by fuel: every move costs exactly 1, so one lower
+-- means it happened; equal or higher (a refuel only happens standing still)
+-- means it did not. A pending turn leaves the position and loses the facing.
+local function journalClaim()
+    local j = readJournal()
+    if not j then return nil, "no readable journal" end
+    if not j.posFixed then return nil, "it was written without a GPS fix" end
+    local facing = j.facingKnown and j.facing or nil
+    if j.pending == nil then return { x = j.x, y = j.y, z = j.z, facing = facing } end
+    if JOURNAL_TURNS[j.pending] then return { x = j.x, y = j.y, z = j.z, facing = nil } end
     local now = turtle.getFuelLevel()
     if type(now) ~= "number" or type(j.fuel) ~= "number" then
         return nil, "fuel cannot settle the last move"
     end
-    if now >= j.fuel then return j.x, j.y, j.z end
-    if now == j.fuel - 1 then
+    if now >= j.fuel then return { x = j.x, y = j.y, z = j.z, facing = facing } end
+    if now == j.fuel - 1 and facing then
         local dx, dy, dz = stepDelta(j.facing, j.pending)
-        return j.x + dx, j.y + dy, j.z + dz
+        return { x = j.x + dx, y = j.y + dy, z = j.z + dz, facing = facing }
     end
-    return nil, string.format("fuel is %d after a move journaled at %d", now, j.fuel)
+    return nil, string.format("fuel is %s after a move journaled at %s", tostring(now), tostring(j.fuel))
 end
 
--- Called with a fresh GPS fix in _self.pos and the facing unknown. True when
--- the journal agreed and gave the facing back (provisional until the first
--- horizontal step agrees with GPS -- see confirmRestoredFacing).
-local function restoreFacingFromJournal()
-    local j = _bootJournal
-    _bootJournal = nil
-    if not j then return false end
-    local x, y, z = journalPosition(j)
+-- After the boot fix and facing measurement: one line saying whether the
+-- journal agreed. The loud lines are the VALIDATION signal (rulings 2026-10-22):
+-- a position more than 1 block off, or a facing that differs from the measured.
+local function checkJournal(claim, why)
+    if not claim then
+        logInfo("Journal: nothing to check (" .. tostring(why) .. ")")
+        return
+    end
     local p = _self.pos
-    if not x then
-        logInfo("Journal: nothing to restore (" .. tostring(y) .. ") -- measuring facing")
-        return false
+    local off = math.abs(claim.x - p.x) + math.abs(claim.y - p.y) + math.abs(claim.z - p.z)
+    local where = string.format("journal %d,%d,%d, GPS %d,%d,%d", claim.x, claim.y, claim.z, p.x, p.y, p.z)
+    local facingOk = claim.facing == nil or not _self.facingKnown or claim.facing == _self.facing
+    if off == 1 then
+        logWarn("Journal: 1 block from GPS (" .. where .. ")")
+    elseif off > 1 then
+        logWarn(string.format("JOURNAL DISAGREES WITH GPS by %d (%s)", off, where))
     end
-    local off = math.abs(x - p.x) + math.abs(y - p.y) + math.abs(z - p.z)
-    local where = string.format("journal %d,%d,%d, GPS %d,%d,%d", x, y, z, p.x, p.y, p.z)
-    if off == 0 then
-        _self.facing, _self.facingKnown, _self.facingProvisional = j.facing, true, true
-        logInfo(string.format("Journal: restored facing %s at %d,%d,%d (agrees with GPS)",
-            FACING_NAMES[j.facing] or tostring(j.facing), p.x, p.y, p.z))
-        writeJournal(nil)
-        return true
-    elseif off == 1 then
-        logWarn("Journal: 1 block from GPS (" .. where .. ") -- measuring facing")
-    else
-        logWarn(string.format("JOURNAL DISAGREES WITH GPS by %d (%s) -- measuring facing", off, where))
+    if not facingOk then
+        logWarn(string.format("JOURNAL FACING DIFFERS: journal %s, measured %s at %d,%d,%d (put back turned by hand, or a journal fault)",
+            FACING_NAMES[claim.facing] or tostring(claim.facing), FACING_NAMES[_self.facing] or tostring(_self.facing),
+            p.x, p.y, p.z))
     end
-    return false
-end
-
--- The journal cannot tell a crash from a turtle picked up and put back in the
--- same block, turned: the position agrees and the facing does not -- node_182's
--- loss on 2026-10-06. So the first horizontal step after a restore asks GPS.
-local function confirmRestoredFacing(dir, prevX, prevZ)
-    _self.facingProvisional = false
-    local x, y, z = gps.locate(CFG.GPS_TIMEOUT)
-    if not x then
-        _self.facingKnown = false
-        logWarn("Restored facing not confirmed: no GPS on the first step -- facing UNKNOWN until measured")
-        return
-    end
-    x, y, z = math.floor(x), math.floor(y), math.floor(z)
-    if x == _self.pos.x and z == _self.pos.z then
-        logInfo("Journal: restored facing confirmed by GPS on the first step")
-        return
-    end
-    local was = _self.facing
-    local dx, dz = x - prevX, z - prevZ
-    if dir == "back" then dx, dz = -dx, -dz end
-    local f = nil
-    if     dx == 0 and dz == -1 then f = 0
-    elseif dx == 1 and dz == 0  then f = 1
-    elseif dx == 0 and dz == 1  then f = 2
-    elseif dx == -1 and dz == 0 then f = 3 end
-    _self.pos = { x = x, y = y, z = z }
-    if f then
-        _self.facing = f
-        logWarn(string.format("RESTORED FACING WAS WRONG: the journal said %s, the first step went %s -- corrected",
-            FACING_NAMES[was] or tostring(was), FACING_NAMES[f]))
-    else
-        _self.facingKnown = false
-        logWarn("RESTORED FACING WAS WRONG and the first step does not say which way -- facing UNKNOWN")
+    if off == 0 and facingOk then
+        logInfo(string.format("Journal: agrees with GPS at %d,%d,%d, facing %s", p.x, p.y, p.z,
+            claim.facing and _self.facingKnown and FACING_NAMES[claim.facing]
+                or (claim.facing and "not measured" or "not journaled (mid-turn)")))
     end
 end
 
@@ -1025,10 +1001,11 @@ local function detectFacing()
 end
 
 local function initPosition()
-    _bootJournal = readJournal()
+    local claim, why = journalClaim()    -- before detectFacing moves or burns fuel
     if gpsSync() then
         logInfo(string.format("GPS fix: %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
-        if not restoreFacingFromJournal() then detectFacing() end
+        detectFacing()
+        checkJournal(claim, why)
     else
         logWarn("No GPS fix. Tracking from (0,0,0). Facing assumed north.")
     end
@@ -1061,8 +1038,7 @@ function base.waitForPositionFix(why, positionOnly)
     logWarn(string.format("No GPS fix or facing -- NOT moving until both are measured (%s)",
         tostring(why)))
     local tries = 0
-    while not ((_self.posFixed or gpsSync())
-               and (positionOnly or _self.facingKnown or restoreFacingFromJournal() or detectFacing())) do
+    while not ((_self.posFixed or gpsSync()) and (positionOnly or _self.facingKnown or detectFacing())) do
         tries = tries + 1
         -- A STUCK TURTLE SAYS SO (2026-10-08). node_184 and node_182 registered
         -- at 12:07:56 and were never heard from again: this wait runs before
@@ -1102,10 +1078,6 @@ local function applyMove(dir)
         end
     elseif dir == "up"   then _self.pos.y = _self.pos.y + 1
     elseif dir == "down" then _self.pos.y = _self.pos.y - 1
-    end
-
-    if _self.facingProvisional and (dir == "forward" or dir == "back") then
-        confirmRestoredFacing(dir, prevX, prevZ)
     end
 
     -- Periodic GPS re-sync to correct drift on long journeys

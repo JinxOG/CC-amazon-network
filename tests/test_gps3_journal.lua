@@ -1,12 +1,11 @@
--- GPS 3, release A (rulings 2026-10-22): the fuel journal and the facing restored at boot.
+-- GPS 3, release A (rulings 2026-10-22, revised after the sandbox): the fuel journal, checked at boot.
 --
--- Every physical move and turn writes its intent to journal.dat first. After a
--- reboot WITH a GPS fix, a journal that agrees with the fix gives the facing
--- back, so the turtle does not step out and back to measure it. "No move
--- without GPS" is unchanged: without a fix nothing is restored and the boot
--- guard waits as before. A restored facing is provisional until the first
--- horizontal step agrees with GPS -- the journal cannot tell a crash from a
--- turtle picked up and put back in the same block, turned (node_182, 10-06).
+-- Every physical move and turn writes its intent to journal.dat first. At boot
+-- the turtle measures its facing exactly as before, then CHECKS the journal
+-- against GPS and that measurement and logs one line. The journal never changes
+-- what the turtle uses: it cannot tell a crash from a turtle picked up and put
+-- back in the same block, turned (sandbox w3_gps3_journal_restore, 2026-10-22:
+-- trusting it left a loader behind and parked a miner with no modem).
 --
 -- A "reboot" here is a reload of turtle_base over the same stub disk: the
 -- module's memory is gone, journal.dat is not.
@@ -85,92 +84,101 @@ local function crashDuring(dir, after, c, fuelDrop)
     return function() turtle[dir] = raw end
 end
 
-return {
-    -- ── Restore ─────────────────────────────────────────────────────────────
 
-    ["a reboot with GPS up takes the facing from the journal and takes no step to measure it"] =
+-- Reboot over the same disk: the new module, its log, and a step counter.
+local function reboot()
+    local b2 = load()
+    local said, restore = captureLog()
+    local steps = countSteps()
+    -- A boot that raises must hand print back first, or the runner's FAIL line
+    -- is swallowed by the capture and the test reads as green.
+    local ok, err = pcall(b2.initPositionForTest)
+    if not ok then restore(); error(err, 0) end
+    return b2, said, restore, steps
+end
+
+return {
+    -- ── The boot check ──────────────────────────────────────────────────────
+
+    ["a reboot with GPS up still measures facing, and the journal agrees"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 1)
         base.move.forward(); base.move.forward(); base.move.turnRight()
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 0, "no step out and back")
-        assert_eq(b2.hasPositionFix(), true)
-        assert_eq(b2.getFacing(), c.pos.facing, "the facing it really has (south)")
-        b2.move.forward()
-        assert_eq(pos(b2), at(c), "and the next step goes where it thinks")
-    end,
-
-    ["without a journal it measures facing as before (the control)"] =
-    function(assert_eq)
-        local _, c = working({ 10, 70, 10 }, 1)
-        fs.delete(JOURNAL); fs.delete(TMP)
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2, "out and back")
-        assert_eq(b2.hasPositionFix(), true)
+        local b2, said, restore, steps = reboot()
+        restore()
+        assert_eq(steps(), 2, "measured as before: out and back")
+        assert_eq(said("Journal: agrees with GPS at 12,70,10, facing south"), true)
         assert_eq(b2.getFacing(), c.pos.facing)
     end,
 
-    ["a journal more than 1 block from GPS is logged loudly and the facing is measured"] =
+    ["without a journal: measured, and nothing to check"] =
+    function(assert_eq)
+        local _, c = working({ 10, 70, 10 }, 1)
+        fs.delete(JOURNAL); fs.delete(TMP)
+        local b2, said, restore, steps = reboot()
+        restore()
+        assert_eq(steps(), 2)
+        assert_eq(said("Journal: nothing to check (no readable journal)"), true)
+        assert_eq(b2.getFacing(), c.pos.facing)
+    end,
+
+    ["a journal more than 1 block from GPS is logged loudly"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 1)
         base.move.forward()
         c.pos.x = c.pos.x + 5                               -- moved by hand
-        local b2 = load()
-        local said, restore = captureLog()
-        local steps = countSteps()
-        b2.initPositionForTest()
+        local b2, said, restore = reboot()
         restore()
         assert_eq(said("JOURNAL DISAGREES WITH GPS by 5"), true)
-        assert_eq(steps(), 2, "measured, not restored")
-        assert_eq(pos(b2), at(c))
+        assert_eq(said("Journal: agrees"), false)
+        assert_eq(pos(b2), at(c), "GPS is what it uses")
     end,
 
-    ["exactly 1 block from GPS measures the facing without the loud line"] =
+    ["exactly 1 block from GPS is a warning, not the loud line"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 1)
         base.move.forward()
         c.pos.y = c.pos.y + 1
-        local b2 = load()
-        local said, restore = captureLog()
-        local steps = countSteps()
-        b2.initPositionForTest()
+        local _, said, restore = reboot()
         restore()
         assert_eq(said("JOURNAL DISAGREES"), false)
         assert_eq(said("Journal: 1 block from GPS"), true)
-        assert_eq(steps(), 2)
+        assert_eq(said("Journal: agrees"), false)
     end,
 
-    ["a crash after a move landed (fuel one lower) restores the moved position"] =
+    ["put back in the same block, turned: the measured facing is used and the difference is logged"] =
+    function(assert_eq)
+        local base, c = working({ 10, 70, 10 }, 1)
+        base.move.forward()
+        c.pos.facing = 3                                    -- picked up, put back facing west
+        local b2, said, restore = reboot()
+        restore()
+        assert_eq(said("JOURNAL FACING DIFFERS: journal east, measured west"), true)
+        assert_eq(b2.getFacing(), 3, "the measured facing, never the journal's")
+        b2.move.forward()
+        assert_eq(pos(b2), at(c), "and the next step goes where it thinks")
+    end,
+
+    ["a crash after a move landed (fuel one lower) agrees at the moved position"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 2)
         local undo = crashDuring("forward", true, c)
         pcall(base.move.forward)
         undo()
-        local b2 = load()
-        local said, restore = captureLog()
-        local steps = countSteps()
-        b2.initPositionForTest()
+        local _, said, restore = reboot()
         restore()
-        assert_eq(steps(), 0)
-        assert_eq(said("agrees with GPS"), true)
-        assert_eq(pos(b2), "10,70,11")
+        assert_eq(said("Journal: agrees with GPS at 10,70,11"), true)
     end,
 
-    ["a crash before the move (fuel unchanged) restores the old position"] =
+    ["a crash before the move (fuel unchanged) agrees at the old position"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 2)
         local undo = crashDuring("forward", false, c)
         pcall(base.move.forward)
         undo()
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 0)
-        assert_eq(pos(b2), "10,70,10")
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: agrees with GPS at 10,70,10"), true)
     end,
 
     ["a refuel after the crash (fuel higher) still means the move did not happen"] =
@@ -180,119 +188,80 @@ return {
         pcall(base.move.forward)
         undo()
         c.fuel = c.fuel + 800
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 0)
-        assert_eq(pos(b2), "10,70,10")
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: agrees with GPS at 10,70,10"), true)
     end,
 
-    ["an impossible fuel drop (two for one move) restores nothing"] =
+    ["an impossible fuel drop (two for one move) has nothing to check"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 2)
         local undo = crashDuring("forward", true, c, 2)
         pcall(base.move.forward)
         undo()
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2, "measured")
-        assert_eq(b2.getFacing(), c.pos.facing)
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: nothing to check (fuel is"), true)
     end,
 
-    ["unlimited fuel cannot settle a pending move, so nothing is restored"] =
+    ["unlimited fuel cannot settle a pending move, so there is nothing to check"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 2)
         local undo = crashDuring("forward", true, c)
         pcall(base.move.forward)
         undo()
         c.fuel = "unlimited"
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2)
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: nothing to check (fuel cannot settle the last move)"), true)
     end,
 
-    ["a crash mid-turn leaves the facing unknown: measured, never guessed"] =
+    ["a crash mid-turn checks the position and not the facing"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 0)
         local undo = crashDuring("turnRight", true, c, 0)
         pcall(base.move.turnRight)
         undo()
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2, "measured")
+        local b2, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: agrees with GPS at 10,70,10, facing not journaled (mid-turn)"), true)
+        assert_eq(said("JOURNAL FACING DIFFERS"), false, "the turn happened; the journal could not know")
         assert_eq(b2.getFacing(), c.pos.facing)
     end,
 
-    ["a crash during facing detection restores nothing (the facing was unknown)"] =
+    ["a crash during facing detection has nothing to check"] =
     function(assert_eq)
         local b1, c = working({ 10, 70, 10 }, 1)          -- known, then re-measured
         local undo = crashDuring("forward", true, c)
         pcall(b1.detectFacingForTest)
         undo()
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2)
+        local b2, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: nothing to check"), true)
         assert_eq(b2.getFacing(), c.pos.facing)
     end,
 
-    ["a journal written without a GPS fix restores nothing"] =
+    ["a journal written without a GPS fix has nothing to check"] =
     function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
+        local base = working({ 10, 70, 10 }, 1)
         base.move.forward()
         local j = readJournal(); j.posFixed = false
         writeFile(JOURNAL, textutils.serialise(j))
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2)
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: nothing to check (it was written without a GPS fix)"), true)
     end,
 
-    ["no GPS at boot: nothing restored, no fix, no step -- the boot guard waits as today"] =
+    ["no GPS at boot: no check, no fix, no step -- the boot guard waits as today"] =
     function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
+        local base = working({ 10, 70, 10 }, 1)
         base.move.forward()
         gps = { locate = function() return nil end }
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
+        local b2, said, restore, steps = reboot()
+        restore()
         assert_eq(steps(), 0)
         assert_eq(b2.hasPositionFix(), false, "a journal is never a fix")
-    end,
-
-    ["GPS back after a no-fix boot: the wait restores the facing instead of measuring"] =
-    function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
-        base.move.forward()
-        local real = gps.locate
-        gps = { locate = function() return nil end }
-        local b2 = load()
-        b2.initPositionForTest()
-        gps = { locate = real }
-        local steps = countSteps()
-        b2.waitForPositionFix("test")
-        assert_eq(steps(), 0)
-        assert_eq(b2.hasPositionFix(), true)
-        assert_eq(b2.getFacing(), c.pos.facing)
-    end,
-
-    ["a turn made before GPS came back makes the boot journal stale: measured, not restored"] =
-    function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
-        base.move.forward()
-        local real = gps.locate
-        gps = { locate = function() return nil end }
-        local b2 = load()
-        b2.initPositionForTest()
-        b2.move.turnRight()                                 -- as base.init's move.face does
-        gps = { locate = real }
-        local steps = countSteps()
-        b2.waitForPositionFix("test")
-        assert_eq(steps(), 2, "measured")
-        assert_eq(b2.getFacing(), c.pos.facing, "the facing it really has after the turn")
+        assert_eq(said("Journal:") or said("JOURNAL"), false, "no check of any kind without a fix")
     end,
 
     -- ── The file ────────────────────────────────────────────────────────────
@@ -301,49 +270,42 @@ return {
     function(assert_eq)
         local _, c = working({ 10, 70, 10 }, 1)
         writeFile(JOURNAL, "{ x = 10, y = ")
-        local b2 = load()
-        local steps = countSteps()
-        local ok = pcall(b2.initPositionForTest)
-        assert_eq(ok, true)
-        assert_eq(steps(), 2)
+        local b2, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: nothing to check (no readable journal)"), true)
         assert_eq(b2.getFacing(), c.pos.facing)
     end,
 
     ["a well-formed table with a missing field is no journal"] =
     function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
+        local base = working({ 10, 70, 10 }, 1)
         base.move.forward()
         local j = readJournal(); j.facing = nil
         writeFile(JOURNAL, textutils.serialise(j))
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 2)
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: nothing to check (no readable journal)"), true)
     end,
 
     ["a partial temp file (crash during the write) loses to the journal"] =
     function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
+        local base = working({ 10, 70, 10 }, 1)
         base.move.forward()
         writeFile(TMP, "{ x = 99, y = ")
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 0, "the journal itself is exact")
-        assert_eq(pos(b2), at(c))
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: agrees with GPS at 11,70,10"), true, "the journal itself is exact")
     end,
 
     ["a complete temp file with no journal (crash between delete and move) is used"] =
     function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
+        local base = working({ 10, 70, 10 }, 1)
         base.move.forward()
         local h = fs.open(JOURNAL, "r"); local s = h.readAll(); h.close()
         fs.delete(JOURNAL); writeFile(TMP, s)
-        local b2 = load()
-        local steps = countSteps()
-        b2.initPositionForTest()
-        assert_eq(steps(), 0)
-        assert_eq(pos(b2), at(c))
+        local _, said, restore = reboot()
+        restore()
+        assert_eq(said("Journal: agrees with GPS at 11,70,10"), true)
     end,
 
     ["a journal that cannot be written never stops a move"] =
@@ -423,56 +385,6 @@ return {
         b1.detectFacingForTest()
         turtle.forward = raw
         assert_eq(known, false)
-    end,
-
-    -- ── First step ──────────────────────────────────────────────────────────
-
-    ["put back in the same block, turned: the first step finds out and corrects"] =
-    function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
-        base.move.forward()
-        c.pos.facing = 3                                    -- picked up, put back facing west
-        local b2 = load()
-        local said, restore = captureLog()
-        b2.initPositionForTest()
-        local restoredFacing = b2.getFacing()
-        b2.move.forward()
-        local afterFirst = pos(b2)
-        b2.move.forward()
-        restore()
-        assert_eq(restoredFacing, 1, "the journal's facing (it cannot know)")
-        assert_eq(said("RESTORED FACING WAS WRONG"), true)
-        assert_eq(afterFirst, "10,70,10", "one block west of 11,70,10: corrected to GPS")
-        assert_eq(b2.getFacing(), 3)
-        assert_eq(pos(b2), at(c), "the second step goes where it thinks")
-    end,
-
-    ["a restored facing that agrees costs one GPS call on the first step, none after"] =
-    function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
-        base.move.forward()
-        local b2 = load()
-        b2.initPositionForTest()
-        local calls = 0
-        local real = gps.locate
-        gps.locate = function(...) calls = calls + 1; return real(...) end
-        b2.move.up()                                        -- vertical: says nothing about facing
-        local afterUp = calls
-        b2.move.forward(); b2.move.forward()
-        assert_eq(afterUp, 0)
-        assert_eq(calls, 1)
-        assert_eq(pos(b2), at(c))
-    end,
-
-    ["no GPS on the first step: the facing becomes unknown and the guard holds"] =
-    function(assert_eq)
-        local base, c = working({ 10, 70, 10 }, 1)
-        base.move.forward()
-        local b2 = load()
-        b2.initPositionForTest()
-        gps.locate = function() return nil end
-        b2.move.forward()
-        assert_eq(b2.hasPositionFix(), false)
     end,
 
     -- ── Source pin: every fleet file ────────────────────────────────────────

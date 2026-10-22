@@ -203,3 +203,37 @@ Only one thing: after a reboot, **if GPS agrees with the journal, the turtle tak
   - shutdown mid-move (M4) with GPS up: restore lines appear and nothing is lost;
   - the cost, as ruled: the three-sector job at 1x, with and without the journal. Job time may grow by **at most 2%**. If it grows more, drop the "after" write for moves and measure again.
 - **Live** (the watcher, after the deploy): reboots during normal work give `Journal: restored` lines and no `RESTORED FACING WAS WRONG`. Any disagreement line is read before the card moves.
+
+## 8. Revised after layer 1 (2026-10-22): the journal is CHECKED, never trusted for facing
+
+**This section supersedes 7.1, the restore in 7.2, and 7.3's restore and first-step tests.** The decision is with the spec owner (mail `2026-10-22-W3-to-SPEC-OWNER-gps-3-release-a-the-sandbox-says-never-trust...`).
+
+### Why
+
+Scenario `w3_gps3_journal_restore`, run on 4f557e7 (restore plus the first-step check):
+- **Random reboots:** all 5 restored and agreed.
+- **A field put-back, same block, turned:** the miner took the journal's facing.
+  1. Boot recovery then turned it to "face" its loader. It logged `loader_not_in_front` and left the loader behind.
+  2. It then climbed to y=200 with its modem swapped out for the chunk loader.
+  3. The first-step check had no GPS, so it parked for good.
+
+There are two lessons:
+- **Facing is used before any move.** Facing a loader, and placing or digging in a direction, all depend on it.
+- **A miner's first step often has no GPS.** In travel mode the modem is swapped out for the chunk loader.
+
+A journal cannot tell a crash from a hand put-back.
+
+### What Release A is now
+
+- The journal, the wrappers, the atomic write and the source pin are unchanged.
+- **At boot:**
+  1. `journalClaim()` reads the journal **before anything moves or burns fuel**. A pending move is settled by fuel; a pending turn keeps the position and drops the facing.
+  2. GPS fix.
+  3. `detectFacing()`, exactly as today.
+  4. `checkJournal()` logs one line: `Journal: agrees with GPS ...`, `Journal: 1 block from GPS`, `JOURNAL DISAGREES WITH GPS by N` (more than 1 block), `JOURNAL FACING DIFFERS: journal X, measured Y`, or `Journal: nothing to check (why)`.
+- With no GPS at boot there is no check, and the boot guard waits as before.
+- **The turtle never uses the journal's position or facing.**
+
+### For Release B
+
+The put-back case means a journal's facing cannot be trusted after a reboot without a measurement. B, as it was shaped, would fly a turned turtle its whole budget the wrong way. That needs a new answer before B is designed further.

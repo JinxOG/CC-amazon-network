@@ -288,14 +288,18 @@ OW_OWNER  ="the owner's sector request is still served"
 RZ_RESCAN ="a requeued zone mid-rescan keeps its rescan, and the dead holder's sector"
 RZ_REMINE = "a requeued zone re-mining after its rescan keeps the re-mine list"
 RZ_FIRST  = "a requeued zone on its first mine pass is still rebuilt from the store"
-GJ_LOUD   = "a journal more than 1 block from GPS is logged loudly and the facing is measured"
-GJ_ONE    = "exactly 1 block from GPS measures the facing without the loud line"
-GJ_LANDED = "a crash after a move landed (fuel one lower) restores the moved position"
-GJ_BEFORE = "a crash before the move (fuel unchanged) restores the old position"
-GJ_TWO    = "an impossible fuel drop (two for one move) restores nothing"
-GJ_UNLIM  = "unlimited fuel cannot settle a pending move, so nothing is restored"
-GJ_TURN   = "a crash mid-turn leaves the facing unknown: measured, never guessed"
-GJ_NOFIX  = "a journal written without a GPS fix restores nothing"
+GJ_AGREE  = "a reboot with GPS up still measures facing, and the journal agrees"
+GJ_NONE   = "without a journal: measured, and nothing to check"
+GJ_LOUD   = "a journal more than 1 block from GPS is logged loudly"
+GJ_ONE    = "exactly 1 block from GPS is a warning, not the loud line"
+GJ_PUT    = "put back in the same block, turned: the measured facing is used and the difference is logged"
+GJ_LANDED = "a crash after a move landed (fuel one lower) agrees at the moved position"
+GJ_BEFORE = "a crash before the move (fuel unchanged) agrees at the old position"
+GJ_TWO    = "an impossible fuel drop (two for one move) has nothing to check"
+GJ_UNLIM  = "unlimited fuel cannot settle a pending move, so there is nothing to check"
+GJ_TURN   = "a crash mid-turn checks the position and not the facing"
+GJ_NOFIX  = "a journal written without a GPS fix has nothing to check"
+GJ_NOGPS  = "no GPS at boot: no check, no fix, no step -- the boot guard waits as today"
 GJ_FIELD  = "a well-formed table with a missing field is no journal"
 GJ_PART   = "a partial temp file (crash during the write) loses to the journal"
 GJ_TMP    = "a complete temp file with no journal (crash between delete and move) is used"
@@ -305,10 +309,6 @@ GJ_SETTLE = "after a move the journal is settled at the new position"
 GJ_TURNW  = "after a turn the journal holds the new facing"
 GJ_BLOCK  = "a blocked move settles the journal where the turtle still is"
 GJ_DETECT = "facing detection marks the facing unknown before its first step"
-GJ_PUT    = "put back in the same block, turned: the first step finds out and corrects"
-GJ_STEPNF = "no GPS on the first step: the facing becomes unknown and the guard holds"
-GJ_WAIT   = "GPS back after a no-fix boot: the wait restores the facing instead of measuring"
-GJ_STALE  = "a turn made before GPS came back makes the boot journal stale: measured, not restored"
 GJ_PIN    = "no raw turtle move or turn outside jMove and jTurn, in any fleet file"
 RS_ONCE   = "it is sent on the turtle's first heartbeat, once"
 RS_GONE   = "a job requeued before the first heartbeat is not sent"
@@ -1566,7 +1566,7 @@ MUTANTS = [
      [('        _self.posFixed = true\n', '')], G_WAIT),
 
     ('a turtle with no fix goes ahead anyway', 'turtle_base.lua',
-     [('    while not ((_self.posFixed or gpsSync())\n               and (positionOnly or _self.facingKnown or restoreFacingFromJournal() or detectFacing())) do\n',
+     [('    while not ((_self.posFixed or gpsSync()) and (positionOnly or _self.facingKnown or detectFacing())) do\n',
        '    while false do\n')], G_WAIT),
 
     ('boot recovery flies without a fix', 'ore_turtle.lua',
@@ -1949,31 +1949,49 @@ MUTANTS = [
        '        { src = FILES.support_turtle, name = "startup.lua"     },',
        '        { src = FILES.support_turtle, name = "startup.lua"     },')], INSTALL),
 
-    # GPS 3 release A: the fuel journal and the facing restored at boot.
-    ('the restore skips the GPS comparison', "turtle_base.lua",
-     [('    if off == 0 then\n        _self.facing, _self.facingKnown',
-       '    if true then\n        _self.facing, _self.facingKnown')], GJ_LOUD),
-    ('a 1-block difference is logged as loudly as a big one', "turtle_base.lua",
-     [('    elseif off == 1 then\n',
-       '    elseif off == -1 then\n')], GJ_ONE),
+    # GPS 3 release A: the fuel journal, checked at boot (never trusted for facing).
+    ('the journal is read after facing detection has rewritten it', "turtle_base.lua",
+     [('    local claim, why = journalClaim()    -- before detectFacing moves or burns fuel\n    if gpsSync() then\n        logInfo(string.format("GPS fix: %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))\n        detectFacing()\n        checkJournal(claim, why)\n',
+       '    if gpsSync() then\n        logInfo(string.format("GPS fix: %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))\n        detectFacing()\n        checkJournal(journalClaim())\n')], GJ_LOUD),
+    ("the journal's facing replaces the measured one", "turtle_base.lua",
+     [('        detectFacing()\n        checkJournal(claim, why)\n',
+       '        detectFacing()\n        if claim and claim.facing then _self.facing = claim.facing end\n        checkJournal(claim, why)\n')], GJ_PUT),
+    ('the boot check is never run', "turtle_base.lua",
+     [('        checkJournal(claim, why)\n',
+       '')], GJ_AGREE),
+    ('a missing journal is reported as agreeing', "turtle_base.lua",
+     [('    if not claim then\n        logInfo("Journal: nothing to check (" .. tostring(why) .. ")")\n        return\n    end\n',
+       '    if not claim then\n        logInfo("Journal: agrees")\n        return\n    end\n')], GJ_NONE),
+    ('a big disagreement is only a warning', "turtle_base.lua",
+     [('    elseif off > 1 then\n        logWarn(string.format("JOURNAL DISAGREES WITH GPS by %d (%s)", off, where))\n',
+       '    elseif off > 1 then\n        logWarn("Journal: " .. off .. " blocks from GPS (" .. where .. ")")\n')], GJ_LOUD),
+    ('1 block is logged loudly', "turtle_base.lua",
+     [('    if off == 1 then\n        logWarn("Journal: 1 block from GPS',
+       '    if off == -1 then\n        logWarn("Journal: 1 block from GPS')], GJ_ONE),
+    ('the facing is never compared', "turtle_base.lua",
+     [('    local facingOk = claim.facing == nil or not _self.facingKnown or claim.facing == _self.facing\n',
+       '    local facingOk = true\n')], GJ_PUT),
     ('a move with fuel one lower is taken as not having happened', "turtle_base.lua",
-     [('    if now == j.fuel - 1 then\n',
-       '    if now == j.fuel + 1 then\n')], GJ_LANDED),
+     [('    if now == j.fuel - 1 and facing then\n',
+       '    if now == j.fuel + 1 and facing then\n')], GJ_LANDED),
     ('equal fuel is not taken as the move not happening', "turtle_base.lua",
-     [('    if now >= j.fuel then return j.x, j.y, j.z end\n',
-       '    if now > j.fuel then return j.x, j.y, j.z end\n')], GJ_BEFORE),
+     [('    if now >= j.fuel then return { x = j.x',
+       '    if now > j.fuel then return { x = j.x')], GJ_BEFORE),
     ('any fuel drop counts as the move landing', "turtle_base.lua",
-     [('    if now == j.fuel - 1 then\n',
-       '    if now < j.fuel then\n')], GJ_TWO),
+     [('    if now == j.fuel - 1 and facing then\n',
+       '    if now < j.fuel and facing then\n')], GJ_TWO),
     ('unlimited fuel is compared as a number', "turtle_base.lua",
      [('    if type(now) ~= "number" or type(j.fuel) ~= "number" then\n        return nil, "fuel cannot settle the last move"\n    end\n',
        '')], GJ_UNLIM),
-    ('a pending turn restores the facing', "turtle_base.lua",
-     [('    if JOURNAL_TURNS[j.pending] then return nil, "it crashed mid-turn, so the facing is unknown" end\n',
-       '')], GJ_TURN),
-    ('a journal written without a fix restores', "turtle_base.lua",
-     [('    if not (j.posFixed and j.facingKnown) then',
-       '    if not j.facingKnown then')], GJ_NOFIX),
+    ("a pending turn keeps the journal's facing", "turtle_base.lua",
+     [('    if JOURNAL_TURNS[j.pending] then return { x = j.x, y = j.y, z = j.z, facing = nil } end\n',
+       '    if JOURNAL_TURNS[j.pending] then return { x = j.x, y = j.y, z = j.z, facing = facing } end\n')], GJ_TURN),
+    ('a journal written without a fix is checked', "turtle_base.lua",
+     [('    if not j.posFixed then return nil, "it was written without a GPS fix" end\n',
+       '')], GJ_NOFIX),
+    ('the check runs without a GPS fix', "turtle_base.lua",
+     [('    else\n        logWarn("No GPS fix. Tracking from (0,0,0). Facing assumed north.")\n',
+       '    else\n        checkJournal(claim, why)\n        logWarn("No GPS fix. Tracking from (0,0,0). Facing assumed north.")\n')], GJ_NOGPS),
     ('a record missing a field is accepted', "turtle_base.lua",
      [('        if type(rec[k]) ~= "number" then return nil end\n',
        '')], GJ_FIELD),
@@ -2001,18 +2019,6 @@ MUTANTS = [
     ('facing detection does not clear the facing first', "turtle_base.lua",
      [('    _self.facingKnown = false\n\n    -- Try to move forward one step',
        '\n    -- Try to move forward one step')], GJ_DETECT),
-    ('the first-step check is skipped', "turtle_base.lua",
-     [('    if _self.facingProvisional and (dir == "forward" or dir == "back") then\n',
-       '    if false then\n')], GJ_PUT),
-    ('no GPS on the first step keeps the restored facing', "turtle_base.lua",
-     [('        _self.facingKnown = false\n        logWarn("Restored facing not confirmed',
-       '        logWarn("Restored facing not confirmed')], GJ_STEPNF),
-    ('the wait never tries the journal', "turtle_base.lua",
-     [('_self.facingKnown or restoreFacingFromJournal() or detectFacing()',
-       '_self.facingKnown or detectFacing()')], GJ_WAIT),
-    ('a turn after boot leaves the boot journal standing', "turtle_base.lua",
-     [('local function jTurn(dir)\n    _bootJournal = nil\n',
-       'local function jTurn(dir)\n')], GJ_STALE),
     ('a raw move comes back in the vertical bypass', "turtle_base.lua",
      [('        local moveLayer = function() return jMove(isUp and "up" or "down") end\n',
        '        local moveLayer = isUp and turtle.up or turtle.down\n')], GJ_PIN),
