@@ -29,8 +29,8 @@ Supported with the mod: radio loss and latency, chunk unload (overworld, every m
 
 ## Findings the mod produced (also mailed)
 
-1. Old-code ack loss on real Minecraft (1.9.107, 16 parked turtles, 4 game hours): 2.42% - not the live 11-18% and not the simulator's 9%.
-2. 5% radio loss makes a mining job fail on the real server (174 "GPS locate failed", job permanently failed) where the same job without the fault is clean.
+1. Old-code ack loss on real Minecraft at 10x (1.9.107, 16 parked turtles, 4 game hours): 2.42%; current master at 8x: 0.64%. These ran at speed and should under-state the loss; the 1x series that counts is running (results by mail).
+2. 5% radio loss made a mining job fail on the real server at 5x (174 "GPS locate failed", repeated "server unreachable" pauses, job permanently failed) where the same job without the fault is clean. Cause not isolated (see the M2 report); the 1x re-run is pending.
 3. The base is held by Advanced Peripherals AND the Chunk Loaders mod.
 4. A real `listItems` on this world's RS network takes about 60 ms (495 kinds of item).
 5. The real update path cannot pin a commit older than 1.9.128; `--install` copies one in instead.
