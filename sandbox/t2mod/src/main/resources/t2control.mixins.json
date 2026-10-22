@@ -8,7 +8,13 @@
     "ModemPeripheralAccessor",
     "WirelessNetworkInvoker",
     "ComputerExecutorMixin",
-    "WirelessNetworkMixin"
+    "WirelessNetworkMixin",
+    "ChunkyAccessor",
+    "ChunkyPeripheralMixin",
+    "ChunkManagerMixin",
+    "ForgeChunkManagerMixin",
+    "ChunkCacheAccessor",
+    "DistanceManagerAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

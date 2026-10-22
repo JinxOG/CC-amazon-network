@@ -83,6 +83,13 @@ public class T2Control {
     private void onTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         long now = currentTick();
+        for (Runnable r : ChunkFaults.INSTANCE.due(now)) {
+            try {
+                r.run();
+            } catch (RuntimeException e) {
+                LOGGER.error("putting a chunk-loader ticket back failed", e);
+            }
+        }
         for (Runnable r : Faults.INSTANCE.due(now)) {
             try {
                 r.run();
@@ -94,6 +101,7 @@ public class T2Control {
 
     private void onServerStopping(ServerStoppingEvent event) {
         Faults.INSTANCE.clear();
+        ChunkFaults.INSTANCE.clear();
         Logs.close();
         server = null;
     }

@@ -325,6 +325,100 @@ def m2():
     runmod.stop("m2-a")
 
 
+def m3():
+    """M3: chunk unload under a loader, proved both ways (the refusal hook holds the chunk down; without a release the loader re-forces)."""
+    runmod.start("m3-a")
+    c = ctl.Control("m3-a")
+    t0 = time.time()
+    while time.time() - t0 < 300 and len(c.computers()) < 25:
+        time.sleep(5)
+    c.events_log("on")
+    time.sleep(10)
+    loaders = c.chunk_loaders()
+    record("the mod lists the chunk-loader turtles whose computers are loaded", len(loaders) >= 1, "%d loaders, first %s" % (len(loaders), loaders[:1]))
+    if not loaders:
+        runmod.stop("m3-a")
+        return
+    # The base's loaders stand in the same few chunks and cover each other, so the fault must release EVERY loader near the chunk under
+    # test (this is what the simulator's chunk_unload(area) does too): all loaders within 4 chunks of the first one.
+    L = loaders[0]
+    cx, cz = L["chunk_x"], L["chunk_z"]
+    group = [l for l in loaders if max(abs(l["chunk_x"] - cx), abs(l["chunk_z"] - cz)) <= 4]
+    gids = sorted(l["computer"] for l in group)
+    cid = L["computer"]
+    area = ((cx - 4) * 16, (cz - 4) * 16, (cx + 4) * 16 + 15, (cz + 4) * 16 + 15)
+    bx, bz = cx * 16 + 8, cz * 16 + 8
+    print("chunk (%d,%d); %d of %d loaders within 4 chunks: %s" % (cx, cz, len(group), len(loaders), gids), flush=True)
+
+    def loaded():
+        return "passed" in c.command("execute if loaded %d 70 %d" % (bx, bz)).lower()
+
+    def on():
+        return any(c.computers().get(i, {}).get("on", False) for i in gids)
+
+    def events_since(ms):
+        return len([e for e in c.t2_lines("events") if e["computer"] == cid and e["utc"] >= ms])
+
+    def fl():
+        return c.command("forceload query %d %d" % (bx, bz)).strip()[:80]
+
+    # baseline: loaded and alive
+    a0 = int(time.time() * 1000)
+    time.sleep(8)
+    record("before the fault the loader's chunk is loaded and its computer is alive", loaded() and all(c.computers().get(i, {}).get("on", False) for i in gids),
+           "chunk (%d,%d) loaded=%s, loaders on=%s; forceload: %s" % (cx, cz, loaded(), len(gids), fl()))
+
+    # B release for 40 s
+    b0 = int(time.time() * 1000)
+    reply = c.chunk_unload(0, area=area, dur=40000)
+    rel = reply[0]
+    time.sleep(10)
+    record("after the release the chunk is unloaded and the loaders' computers are off", (not loaded()) and (not on()),
+           "loaded=%s, any loader computer on=%s; %s" % (loaded(), on(), rel))
+    st = c.t2("chunk status")
+    record("the loader is listed as released and gone from the loaders list", st["released"] == 1 and not (set(gids) & set(l["computer"] for l in c.chunk_loaders())) and rel.get("tickets_released", 0) >= len(gids), "%s; %s" % (st, rel))
+
+    # C the refusal hook: a ticket request for a chunk inside the released area goes through the one Forge method every chunk-loading mod uses
+    p_in = c.t2("chunk probe %d %d" % (cx, cz))
+    p_out = c.t2("chunk probe %d %d" % (cx + 30, cz))
+    record("a ticket request inside the released area is refused (refusal hook); one outside it is accepted",
+           p_in["accepted"] is False and p_in["refusals"] >= 1 and p_out["accepted"] is True, "inside %s; outside %s" % (p_in, p_out))
+    # the chunk can be brought back by other means (the loaders do not re-hold it), and goes again when those end
+    c.command("forceload add %d %d" % (bx, bz))
+    time.sleep(8)
+    back_up = loaded()
+    c.command("forceload remove %d %d" % (bx, bz))
+    time.sleep(10)
+    record("brought back by /forceload the loaders do not re-hold it: it goes again when that ends", back_up and (not loaded()), "loaded while forced=%s, after /forceload remove=%s" % (back_up, loaded()))
+
+    # D expiry puts the ticket back
+    time.sleep(max(0, 45 - (time.time() * 1000 - b0) / 1000))
+    d0 = int(time.time() * 1000)
+    time.sleep(15)
+    record("when the release runs out the ticket is put back: chunk loaded and the computer boots again", loaded() and all(c.computers().get(i, {}).get("on", False) for i in gids) and c.t2("chunk status")["released"] == 0,
+           "loaded=%s, computers on: %s; %s" % (loaded(), [i for i in gids if c.computers().get(i, {}).get("on", False)], c.t2("chunk status")))
+    time.sleep(10)
+    record("the loader is listed again, with a ticket of its own", set(gids) <= set(l["computer"] for l in c.chunk_loaders()), "%d of %d listed again" % (len(set(gids) & set(l["computer"] for l in c.chunk_loaders())), len(gids)))
+
+    p_after = c.t2("chunk probe %d %d" % (cx, cz))
+    record("after the release has run out the same request is accepted again", p_after["accepted"] is True, p_after)
+    # E control: with no release, a vanilla forceload add + remove does NOT unload the chunk (the loader re-forced), so C above was the hook, not luck
+    c.command("forceload add %d %d" % (bx, bz))
+    time.sleep(5)
+    c.command("forceload remove %d %d" % (bx, bz))
+    time.sleep(10)
+    record("control: with no release the chunk stays loaded after the same forceload add and remove", loaded(), "loaded=%s" % loaded())
+
+    # F bad input
+    r1 = c.t2("chunk unload 999999 10")
+    record("an unknown computer is answered with an error, and nothing changes", "error" in r1 and c.t2("chunk status")["released"] == 0, r1)
+    iv = [i["verb"] for i in c.t2_lines("interventions")]
+    record("the release is in the interventions log", iv.count("chunk_unload_area") == 1, iv)
+    st = c.t2_status()
+    record("no line was dropped", st["events"]["dropped"] == 0, st)
+    runmod.stop("m3-a")
+
+
 def m0_ip():
     """Re-proves the server-ip refusal on the run left by m0 (its first attempt was fooled by a crash report from the step before)."""
     run = runmod.run_dir("m0-with")
@@ -344,7 +438,7 @@ def m0_ip():
 
 if __name__ == "__main__":
     phase = sys.argv[1]
-    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2}[phase]()
+    {"m0": m0, "m0ip": m0_ip, "m1": m1, "m2": m2, "m3": m3}[phase]()
     with open(os.path.join(ROOT, "mod-proof-%s.json" % phase), "w") as f:
         json.dump(results, f, indent=1)
     print("\n".join("%-8s %s" % (r["result"], r["proof"]) for r in results))

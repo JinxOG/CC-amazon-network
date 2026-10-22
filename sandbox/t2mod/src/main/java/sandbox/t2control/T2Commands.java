@@ -30,6 +30,35 @@ public final class T2Commands {
                         .then(Commands.argument("max_ms", IntegerArgumentType.integer(0, 60000))
                             .then(withTail(Commands.argument("duration", IntegerArgumentType.integer(1, 86400)), T2Commands::latency)))))
                 .then(Commands.literal("clear").executes(c -> clear(c.getSource()))))
+            .then(Commands.literal("chunk")
+                .then(Commands.literal("list").executes(c -> reply(c.getSource(), Chunks.list())))
+                .then(Commands.literal("status").executes(c -> reply(c.getSource(), "{\"released\":" + ChunkFaults.INSTANCE.activeCount(T2Control.currentTick())
+                        + ",\"refusals\":" + Chunks.refusals() + "}")))
+                .then(Commands.literal("probe")
+                    .then(Commands.argument("chunk_x", IntegerArgumentType.integer())
+                        .then(Commands.argument("chunk_z", IntegerArgumentType.integer())
+                            .executes(c -> reply(c.getSource(), Chunks.probe(c.getSource().getServer(),
+                                    IntegerArgumentType.getInteger(c, "chunk_x"), IntegerArgumentType.getInteger(c, "chunk_z")))))))
+                .then(Commands.literal("tickets")
+                    .then(Commands.argument("chunk_x", IntegerArgumentType.integer())
+                        .then(Commands.argument("chunk_z", IntegerArgumentType.integer())
+                            .executes(c -> reply(c.getSource(), Chunks.tickets(c.getSource().getServer(),
+                                    IntegerArgumentType.getInteger(c, "chunk_x"), IntegerArgumentType.getInteger(c, "chunk_z")))))))
+                .then(Commands.literal("unload")
+                    .then(Commands.literal("area")
+                        .then(Commands.argument("x1", IntegerArgumentType.integer())
+                            .then(Commands.argument("z1", IntegerArgumentType.integer())
+                                .then(Commands.argument("x2", IntegerArgumentType.integer())
+                                    .then(Commands.argument("z2", IntegerArgumentType.integer())
+                                        .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
+                                            .executes(c -> reply(c.getSource(), Chunks.unloadArea(c.getSource().getServer(),
+                                                    IntegerArgumentType.getInteger(c, "x1"), IntegerArgumentType.getInteger(c, "z1"),
+                                                    IntegerArgumentType.getInteger(c, "x2"), IntegerArgumentType.getInteger(c, "z2"),
+                                                    IntegerArgumentType.getInteger(c, "duration"), T2Control.currentTick())))))))))
+                    .then(Commands.argument("computer", IntegerArgumentType.integer(0))
+                        .then(Commands.argument("duration", IntegerArgumentType.integer(1, 86400))
+                            .executes(c -> reply(c.getSource(), Chunks.unload(IntegerArgumentType.getInteger(c, "computer"),
+                                    IntegerArgumentType.getInteger(c, "duration"), T2Control.currentTick())))))))
             .then(Commands.literal("events").then(Commands.literal("log")
                 .then(Commands.argument("state", StringArgumentType.word()).executes(c -> toggle(c.getSource(), "events", StringArgumentType.getString(c, "state"))))))
             .then(Commands.literal("status").executes(c -> reply(c.getSource(), Logs.status()))));

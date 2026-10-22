@@ -413,11 +413,25 @@ class Control:
             fn()
 
     # -- chunk loading ------------------------------------------------------------------------------------------
-    def chunk_unload(self, *args, **kwargs):
-        raise Unsupported("chunk_unload: this world's chunks are held by the chunk-loader turtles' Advanced Peripherals tickets "
-                          "(advancedperipherals_ForcedChunks.dat), and FTB Chunks has no claim on the base; no console command "
-                          "removes those tickets (ftbchunks admin unload_everything changed nothing on the 31 loaded computers). "
-                          "Releasing them needs the test-only mod (spec 6.10).")
+    def chunk_loaders(self):
+        """The chunk-loader turtles whose computers are loaded right now: [{computer, chunk_x, chunk_z, uuid}] (control mod)."""
+        return self.t2("chunk list")["loaders"]
+
+    def chunk_unload(self, t=0, area=None, dur=60000, computer=None):
+        """Unloads chunks for `dur` game ms from `t` (control mod, M3); their computers shut down and, when the time is up, the tickets are
+        put back and the computers boot again. `area=(x1, z1, x2, z2)` in blocks (the simulator's argument) releases EVERY Forge chunk
+        ticket on those chunks, whatever mod holds it (Advanced Peripherals loaders, the Chunk Loaders mod, ...) and refuses new ones
+        meanwhile. `computer=<id>` releases only that one Advanced Peripherals loader's own ticket. Returns the replies."""
+        seconds = max(1, -(-int(dur) // 1000))
+
+        def go():
+            if computer is not None:
+                return [self.t2("chunk unload %d %d" % (computer, seconds))]
+            if area is None:
+                raise ValueError("chunk_unload needs an area (x1, z1, x2, z2) or a computer id")
+            x1, z1, x2, z2 = area
+            return [self.t2("chunk unload area %d %d %d %d %d" % (x1, z1, x2, z2, seconds))]
+        return self._at(t, go)
 
     # -- verbs Minecraft cannot do ------------------------------------------------------------------------------
     def teleport(self, computer_id, x, y, z):

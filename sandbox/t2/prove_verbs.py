@@ -120,13 +120,7 @@ def main():
         return "tick rate 5: the game ran %.2f ticks per real second for 30 s, then back to 20" % rate
     prove("tps_drop / server_lag", v_lag)
 
-    def v_unsupported():
-        try:
-            c.chunk_unload()
-        except ctl.Unsupported:
-            return "chunk_unload raises Unsupported with the reason (radio_loss, radio_latency and teleport are supported: radio since the control mod M2, teleport via /clone)"
-        raise AssertionError("chunk_unload did not raise")
-    prove("unsupported verbs raise", v_unsupported)
+    # chunk_unload is a control-mod verb: proved in prove_mod.py m3, not here
 
     def v_teleport():
         import glob
@@ -196,13 +190,7 @@ def main():
         return "server process killed (no save), started again on the same folder; %d computers listed, turtles back online (bridge kept running)" % len(c.computers())
     prove("server_crash / restart_after_crash", v_crash)
 
-    def v_unload():
-        try:
-            c.chunk_unload()
-        except ctl.Unsupported as e:
-            raise
-        raise AssertionError("chunk_unload did not raise")
-    prove("chunk_unload", v_unload)
+
 
     with open(os.path.join(run, "VERBS.json"), "w") as f:
         json.dump(results, f, indent=1)
