@@ -4694,6 +4694,21 @@ function server.dropFanOut()
         .. "turtles ahead of their server is worse than both behind.")
 end
 
+-- One /state section as JSON, or `fallback` if it cannot be serialised, so a
+-- bad shape degrades one field rather than blanking the dashboard. A value not
+-- yet known (nil) is the fallback WITHOUT a warning: CC's serialiseJSON raises
+-- on a top-level nil, and state.gpsHealth is nil until the first GPS judgement
+-- -- 1.9.151 logged "Bridge serialise[gps] failed ... got nil" twice per boot.
+local function bridgeJson(val, fallback, label)
+    if val == nil then return fallback end
+    local ok, r = pcall(textutils.serialiseJSON, val)
+    if not ok then
+        logWarn("Bridge serialise[" .. label .. "] failed: " .. tostring(r))
+        return fallback
+    end
+    return r
+end
+
 function server.run()
     state.modem = peripheral.find("modem")
     if not state.modem then
@@ -5685,14 +5700,7 @@ function server.run()
             return ',"' .. name .. '":' .. tostring(value and true or false)
         end
 
-        local function js(val, fallback, label)
-            local ok, r = pcall(textutils.serialiseJSON, val)
-            if not ok then
-                logWarn("Bridge serialise[" .. label .. "] failed: " .. tostring(r))
-                return fallback
-            end
-            return r
-        end
+        local js = bridgeJson
         -- Include last 100 log lines so the bridge can expose them for monitoring.
         local logSlice = {}
         -- Only what the bridge has not confirmed writing, capped. Was the last
@@ -6533,6 +6541,7 @@ end
 if _G.__CC_SERVER_TEST then
     server._test = {
         state    = state,
+        bridgeJson = bridgeJson,
         registry = registry,
         jobQueue = jobQueue,
         dispatcher = dispatcher,

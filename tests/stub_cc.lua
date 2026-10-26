@@ -544,9 +544,20 @@ local JSON_ESC = {
     ['\t'] = '\\t',
 }
 
-function M._json(v)
+-- Eleventh fidelity gap (2026-10-22): real CC:Tweaked's serialiseJSON(nil)
+-- RAISES "bad argument #1 (table, string, number or boolean expected, got
+-- nil)"; this stub returned "null". The live 1.9.151 server logged
+-- "Bridge serialise[gps] failed" twice at every boot (state.gpsHealth is nil
+-- until the first GPS judgement) and no test could see it. A nil inside a
+-- table never reaches here -- pairs skips it -- so only a top-level nil raises.
+function M._json(v, nested)
     local t = type(v)
-    if v == nil then return "null" end
+    if v == nil then
+        if not nested then
+            error("bad argument #1 (table, string, number or boolean expected, got nil)", 0)
+        end
+        return "null"
+    end
     if t == "boolean" or t == "number" then return tostring(v) end
     if t == "string" then
         local out = v:gsub('.', function(ch)
@@ -568,12 +579,12 @@ function M._json(v)
     end
     if isArray and n > 0 then
         local parts = {}
-        for i = 1, n do parts[#parts + 1] = M._json(v[i]) end
+        for i = 1, n do parts[#parts + 1] = M._json(v[i], true) end
         return "[" .. table.concat(parts, ",") .. "]"
     end
     local parts = {}
     for k, val in pairs(v) do
-        parts[#parts + 1] = M._json(tostring(k)) .. ":" .. M._json(val)
+        parts[#parts + 1] = M._json(tostring(k), true) .. ":" .. M._json(val, true)
     end
     return "{" .. table.concat(parts, ",") .. "}"
 end

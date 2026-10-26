@@ -982,6 +982,26 @@ return {
     -- and pings again; replies come in through the loop like any message, so
     -- nothing waits and nothing is eaten. No fix or a lying host raises an alert
     -- in /state and holds dispatch until GPS is back.
+    -- Live on 1.9.151: "Bridge serialise[gps] failed: bad argument #1 ... got
+    -- nil", twice at every server boot. state.gpsHealth is nil until the first
+    -- judgement, and CC's serialiseJSON raises on a top-level nil (the stub
+    -- did not, until 2026-10-22). Not yet judged is null, said quietly.
+    ["a value not yet known goes to /state as null without a warning"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local before = #T.state.log
+        local out = T.bridgeJson(nil, "null", "gps")
+        local warned = false
+        for i = before + 1, #T.state.log do
+            if T.state.log[i].msg:find("serialise", 1, true) then warned = true end
+        end
+        local bad = T.bridgeJson({ ok = true, hosts = 4 }, "null", "gps")
+        restore()
+        assert_eq(out, "null")
+        assert_eq(warned, false, "an unknown value is not a serialise failure")
+        assert_eq(bad:find('"hosts":4', 1, true) ~= nil, true, "a known value is still serialised")
+    end,
+
     ["no GPS hosts answering raises the alert and holds dispatch"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()

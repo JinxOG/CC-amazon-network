@@ -291,6 +291,7 @@ RZ_FIRST  = "a requeued zone on its first mine pass keeps its zone, and is not s
 RZ_SURVEY = "a requeued zone still in its survey is rebuilt from the store"
 RZ_ONCE   = "a mine-pass requeue returns the dead holder's sector to pending exactly once"
 RZ_SHARED = "a mine-pass requeue on a shared zone leaves the other miner's lease alone"
+BJ_NIL    = "a value not yet known goes to /state as null without a warning"
 GJ_AGREE  = "a reboot with GPS up still measures facing, and the journal agrees"
 GJ_NONE   = "without a journal: measured, and nothing to check"
 GJ_LOUD   = "a journal more than 1 block from GPS is logged loudly"
@@ -1960,6 +1961,10 @@ MUTANTS = [
      [('        { src = FILES.turtle_base,    name = "turtle_base.lua" },\n'
        '        { src = FILES.support_turtle, name = "startup.lua"     },',
        '        { src = FILES.support_turtle, name = "startup.lua"     },')], INSTALL),
+
+    ("a nil /state section is serialised and warned about again", "central_server.lua",
+     [("    if val == nil then return fallback end\n    local ok, r = pcall(textutils.serialiseJSON, val)\n",
+       "    local ok, r = pcall(textutils.serialiseJSON, val)\n")], BJ_NIL),
 
     # GPS 3 release A: the fuel journal, checked at boot (never trusted for facing).
     ('the journal is read after facing detection has rewritten it', "turtle_base.lua",
