@@ -6,6 +6,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "t2"))
 import prepare_run  # noqa: E402
+import control  # noqa: E402
 
 NL = chr(10)
 
@@ -105,6 +106,28 @@ class Rules(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             phase0.start(run)
         self.assertIn("unsafe HTTP rules", str(cm.exception))
+
+
+class GpsHosts(unittest.TestCase):
+    HOST = 'shell.run("gps","host", 322, 92, -2814)'
+    SERVER_TEXT = "-- run the gps host command to test" + chr(10) + ("x = 1" + chr(10)) * 500       # the real server's startup.lua mentions "gps host" in a comment
+
+    def test_only_the_exact_host_call_is_a_host(self):
+        programs = {48: self.HOST, 49: 'shell.run("gps", "host", 322, 92,-2809)' + NL, 95: self.SERVER_TEXT, 3: "print('hi')"}
+        self.assertEqual(control.Control.match_gps_hosts(programs, {95: "SERVER"}), [48, 49])
+
+    def test_a_server_that_looks_like_a_host_is_refused_not_shut_down(self):
+        # the refusal is the test: even a server whose whole startup.lua is the host call must never be returned
+        with self.assertRaises(RuntimeError):
+            control.Control.match_gps_hosts({95: self.HOST, 48: self.HOST}, {95: "SERVER"})
+
+    def test_a_warehouse_or_a_turtle_with_a_host_program_is_refused(self):
+        for role in ("WAREHOUSE", "MINER", "DELIVERY", "ADMIN"):
+            with self.assertRaises(RuntimeError):
+                control.Control.match_gps_hosts({7: self.HOST}, {7: role + NL})
+
+    def test_text_that_merely_mentions_gps_host_is_not_a_host(self):
+        self.assertEqual(control.Control.match_gps_hosts({95: self.SERVER_TEXT, 5: 'print("gps host")'}, {}), [])
 
 
 if __name__ == "__main__":

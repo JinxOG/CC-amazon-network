@@ -264,22 +264,41 @@ class Control:
         for i in ids:
             self.command("computercraft turn-on #%d" % i)
 
+    # A GPS host's whole program is the one call `shell.run("gps", "host", x, y, z)` (the fleet's own host computers: the repo's gps_host.lua says
+    # so). Anything else is NOT a host, whatever words it contains: the central server's startup.lua mentions "gps host" in a comment (GPS 2), and
+    # a text match once shut the server down (gps2-1x, 2026-10-22).
+    GPS_HOST_PROGRAM = re.compile(r'^\s*shell\.run\(\s*"gps"\s*,\s*"host"\s*,\s*-?\d+\s*,\s*-?\d+\s*,\s*-?\d+\s*\)\s*$')
+    NEVER_A_HOST_ROLES = ("SERVER", "WAREHOUSE", "ADMIN", "DELIVERY", "SUPPORT", "MINER", "LOADER")
+
+    @staticmethod
+    def match_gps_hosts(programs, roles):
+        """programs: {computer id: startup.lua text}; roles: {computer id: role.txt text or None}. Returns the sorted ids that are GPS hosts: their
+        startup.lua is exactly the host call. Raises (and returns nothing) if that set would ever include a computer with a fleet role (the
+        central server, the warehouse, a turtle...): a host never has one, so a match on such a computer means the match is wrong."""
+        ids = sorted(i for i, text in programs.items() if Control.GPS_HOST_PROGRAM.match(text.strip()))
+        bad = [i for i in ids if (roles.get(i) or "").strip().upper() in Control.NEVER_A_HOST_ROLES]
+        if bad:
+            raise RuntimeError("refusing: computers %s would be treated as GPS hosts but have a fleet role (%s)"
+                               % (bad, ", ".join("#%d=%s" % (i, (roles.get(i) or "").strip()) for i in bad)))
+        return ids
+
     def gps_hosts(self):
-        """Computers whose disk runs the GPS host program (found by reading disks, not by guessing ids)."""
-        ids = []
+        """Computers whose disk runs the GPS host program (found by reading disks, not by guessing ids); see match_gps_hosts."""
+        programs, roles = {}, {}
         for d in os.listdir(self.disks):
             try:
-                text = self.read_disk(int(d), "startup.lua").decode("utf8", "replace")
+                i = int(d)
+                programs[i] = self.read_disk(i, "startup.lua").decode("utf8", "replace")
             except (OSError, ValueError):
                 continue
-            # A GPS host's startup.lua is a few lines that run `gps host x y z`. The central server's startup.lua is 250 KB and since GPS 2
-            # MENTIONS "gps host" in its own code, so a text match alone also found the server, and gps_down() shut it down (gps2-1x, 2026-10-22).
-            if len(text) < 2000 and (re.search(r'gps["\']?\s*,\s*["\']host', text) or "gps host" in text):
-                ids.append(int(d))
-        return sorted(ids)
+            roles[i] = self.role_of(i)
+        return self.match_gps_hosts(programs, roles)
 
     def gps_down(self, hosts=None):
         hosts = hosts or self.gps_hosts()
+        for i in hosts:
+            if (self.role_of(i) or "").strip().upper() in self.NEVER_A_HOST_ROLES:
+                raise RuntimeError("refusing to shut down #%d as a GPS host: its role is %s" % (i, self.role_of(i)))
         self._gps_hosts_down = hosts
         self.shutdown(hosts)
         return hosts
