@@ -18,7 +18,11 @@ local CC_RESTART_GAP_MS = 20 * 1000
 local LOG_DISPLAY_MAX = 200
 local TURTLE_DISPLAY_MAX = 30
 local LOG_DEDUPE_MAX = 5000
-local FLUSH_WALL_SECONDS = tonumber(os.getenv("SANDBOX_FLUSH_S")) or 1.0   -- at most this often in real time, so the live view lags a second but the simulator is not slowed
+-- The live view's state file is rewritten every FLUSH_EVENTS scheduler events (about once a second of real time at full speed), NOT by the wall
+-- clock: a flush allocates, and the interpreter hands out addresses in order, so a flush that lands between different events in different runs
+-- moves every later address and with it the iteration order of tables keyed by tables. With the wall clock, the same seed gave different traces
+-- (found 2026-10-26 while buffering the disk, which changed how long things take between flushes).
+local FLUSH_EVENTS = tonumber(os.getenv("SANDBOX_FLUSH_EVENTS")) or 1000
 
 local BRIDGE_OWNED = { locations = true, players = true, updatedAt = true, storageSource = true, storageAt = true }
 local EXPLICITLY_MERGED = { turtles = true, jobs = true, version = true, storage = true, storageTs = true,
@@ -204,6 +208,7 @@ function Standin:flush()
     os.rename(self.run_dir .. "/state.json.tmp", self.run_dir .. "/state.json")
   end
   self.dirty_state = false
+  self.events_since_flush = 0
   self.last_flush_wall = os.clock()
 end
 
@@ -215,7 +220,8 @@ function Standin:maybe_flush()
 end
 
 function Standin:poll_flush()
-  if self.dirty_state and os.clock() - self.last_flush_wall >= FLUSH_WALL_SECONDS then self:flush() end
+  self.events_since_flush = (self.events_since_flush or 0) + 1
+  if self.dirty_state and self.events_since_flush >= FLUSH_EVENTS then self:flush() end
 end
 
 -- Storage ----------------------------------------------------------------------------------------
