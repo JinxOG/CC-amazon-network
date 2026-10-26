@@ -100,6 +100,37 @@ def junction(link, target):
                    stdout=subprocess.DEVNULL)
 
 
+def refresh_chunkloader_activity(world_dir, now_ms=None):
+    """The Chunk Loaders mod switches a player's loaders off after 10080 minutes (7 days, config inactivityTimeout) of REAL time offline, and the
+    world copy stores each owner's last-seen time. A copy older than 7 days therefore has dead loaders: the chunks around the base unload, the
+    GPS hosts with them, and the fleet cannot register (found 2026-10-26 on a copy taken 2026-10-18; it worked until the copy turned 7 days old).
+    On the live server the owners play regularly. So in each RUN's copy (never the saved template) the last-seen times are set to now. Returns the
+    number of times changed. The file is tiny NBT: a list of compounds each holding `time` (a long) and `player` (an int array)."""
+    import struct
+    import time
+    path = os.path.join(world_dir, "chunkloaders", "active_players.nbt")
+    if not os.path.isfile(path):
+        return 0
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    with open(path, "rb") as f:
+        data = f.read()
+    marker = bytes([4, 0, 4]) + b"time"          # tag type long (4), name length 4, "time"
+    count = 0
+    out = bytearray()
+    i = 0
+    while True:
+        j = data.find(marker, i)
+        if j < 0:
+            out += data[i:]
+            break
+        out += data[i:j + len(marker)] + struct.pack(">q", now_ms)
+        i = j + len(marker) + 8
+        count += 1
+    with open(path, "wb") as f:
+        f.write(bytes(out))
+    return count
+
+
 def prepare(run_id, world_dir, root=ROOT_DEFAULT, ram="6G", server_port=25566, rcon_port=25576):
     check_placement(root=root)
     run = os.path.join(root, "runs", run_id)
@@ -108,6 +139,7 @@ def prepare(run_id, world_dir, root=ROOT_DEFAULT, ram="6G", server_port=25566, r
     server = os.path.join(root, "server")
     os.makedirs(run)
     shutil.copytree(world_dir, os.path.join(run, "world"))
+    refresh_chunkloader_activity(os.path.join(run, "world"))
     for name in ("config", "defaultconfigs", "kubejs"):
         shutil.copytree(os.path.join(server, name), os.path.join(run, name))
     junction(os.path.join(run, "mods"), os.path.join(server, "mods"))

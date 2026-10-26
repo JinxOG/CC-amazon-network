@@ -130,5 +130,29 @@ class GpsHosts(unittest.TestCase):
         self.assertEqual(control.Control.match_gps_hosts({95: self.SERVER_TEXT, 5: 'print("gps host")'}, {}), [])
 
 
+class ChunkloaderActivity(unittest.TestCase):
+    def test_last_seen_times_are_set_to_now_in_the_copy_only(self):
+        import struct
+        import tempfile
+        marker = bytes([4, 0, 4]) + b"time"
+        player = b"player"
+        body = (bytes([10, 0, 0, 9, 0, 5]) + b"times" + bytes([10, 0, 0, 0, 2])
+                + marker + struct.pack(">q", 1000) + bytes([11, 0, 6]) + player + bytes([0, 0, 0, 4]) + b"\x01" * 16 + b"\x00"
+                + marker + struct.pack(">q", 2000) + bytes([11, 0, 6]) + player + bytes([0, 0, 0, 4]) + b"\x02" * 16 + b"\x00\x00")
+        d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(d, "chunkloaders"))
+        p = os.path.join(d, "chunkloaders", "active_players.nbt")
+        with open(p, "wb") as f:
+            f.write(body)
+        n = prepare_run.refresh_chunkloader_activity(d, now_ms=123456789)
+        self.assertEqual(n, 2)
+        with open(p, "rb") as f:
+            new = f.read()
+        self.assertEqual(len(new), len(body))
+        self.assertEqual(new.count(marker + struct.pack(">q", 123456789)), 2)
+        self.assertNotIn(struct.pack(">q", 1000), new)
+        self.assertEqual(prepare_run.refresh_chunkloader_activity(os.path.join(d, "nothing")), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
