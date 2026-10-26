@@ -306,7 +306,7 @@ def write_report(ctx, scenario, pin, error, since_iso, tools, started_wall):
     elif t2:
         o += ["", "## Control mod logs", "", "could not be read: %s" % t2["error"]]
     for tool, r in tools.items():
-        o += ["", "## %s" % tool, "", "exit code %s" % r["exit"], "", "```", r["output"].strip()[-3500:], "```"]
+        o += ["", "## %s" % tool, "", "exit code %s" % r["exit"], "", "```", r["output"].strip(), "```"]
     o += ["", "## NOT STAGED", "", "Things this run could not exercise. A pass here says nothing about them:", ""]
     o += ["- " + n for n in NOT_STAGED]
     with open(os.path.join(ctx.run, "report.md"), "w", encoding="utf8") as f:
