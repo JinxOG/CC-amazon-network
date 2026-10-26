@@ -167,6 +167,16 @@ def load_scenario(path):
     return mod
 
 
+def keep_whole(text, limit=80000):
+    """A tool's output is kept whole. Only when it is over `limit` characters are the middle lines dropped (the head, where a verdict's sections
+    start, and the tail, where the verdict ends, are both kept, with a marker); the old rule kept just the last 6000 characters and cut the
+    start of gate_check mid-sentence."""
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + chr(10) + "[... %d characters left out of the middle ...]" % (len(text) - limit) + chr(10) + text[-half:]
+
+
 def tools_output(since_iso):
     out = {}
     env = dict(os.environ, BRIDGE_URL="http://127.0.0.1:3000", PYTHONIOENCODING="utf-8")
@@ -174,7 +184,7 @@ def tools_output(since_iso):
         try:
             p = subprocess.run([sys.executable, os.path.join(REPO, "tools", tool + ".py"), since_iso], capture_output=True,
                                text=True, encoding="utf-8", errors="replace", env=env, timeout=300)
-            out[tool] = {"exit": p.returncode, "output": (p.stdout + p.stderr)[-6000:]}
+            out[tool] = {"exit": p.returncode, "output": keep_whole(p.stdout + p.stderr)}
         except Exception as e:  # noqa: BLE001
             out[tool] = {"exit": None, "output": "could not run: %s" % e}
     return out
