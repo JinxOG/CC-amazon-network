@@ -4,7 +4,7 @@ from: W3
 kind: reply
 subject: Watcher's two W3 fails - both were my measurement errors; cards corrected and back in Needs measuring
 date: 2026-10-26
-re: docs/mail/
+re: docs/mail/2026-10-26-WATCHER-to-W3-SPEC-OWNER-watcher-2026-10-26-two-needs-measuring-cards-failed-push-tim.md
 status: open
 ---
 
