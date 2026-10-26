@@ -18,20 +18,34 @@ def steps(ctx):
     cid = int(node.replace("node_", ""))
     ctx.note("miner %s (computer #%d)" % (node, cid))
 
+    job = went[0].split("Dispatched ")[1].split()[0]
+
+    def holder():
+        """The miner the job is with NOW. A cut requeues the job (boot recovery) and it can go to another miner; cutting
+        the first one again would only reboot a turtle parked at its dock (run gps3-journal-1x, cuts 2 and 3)."""
+        last = [l for l in ctx.log_lines("Dispatched %s ->" % job)]
+        return last[-1].split("-> ")[1].split()[0] if last else node
+
     for i in range(3):
         mined = ctx.wait_until(lambda: len([l for l in ctx.log_lines("Sector (") if "done by" in l]) >= i + 1, 3 * 3600)
         if not mined:
             ctx.note("no sector %d finished; stopping the cuts" % (i + 1))
             break
         ctx.wait_game(40 + 25 * i)                          # somewhere inside the next sector
-        before = len(ctx.log_lines("Journal:"))
-        ctx.control.shutdown([cid])
+        who = holder()
+        wid = int(who.replace("node_", ""))
+        mine = lambda: [l for l in ctx.log_lines("Journal:") if who in l]
+        before = len(mine())
+        ctx.control.shutdown([wid])
         ctx.wait_game(5)
-        ctx.control.turn_on([cid])
-        said = ctx.wait_until(lambda: len(ctx.log_lines("Journal:")) > before, 300)
-        lines = [l for l in ctx.log_lines("Journal:")][before:]
-        ctx.note("cut %d: %s" % (i + 1, " | ".join(l[-120:] for l in lines[:3])))
-        ctx.expect(bool(said), "cut %d: the turtle said what the journal gave it" % (i + 1))
+        ctx.control.turn_on([wid])
+        # Up to 30 game minutes: a miner cut in the field flies home with its modem swapped for the chunk loader, so
+        # its boot lines reach the bridge only when the radio is back (cut 1 of gps3-journal-1x logged its agreement
+        # one second after the boot, but it arrived after the old 300 s window).
+        said = ctx.wait_until(lambda: len(mine()) > before, 1800)
+        lines = mine()[before:]
+        ctx.note("cut %d on %s: %s" % (i + 1, who, " | ".join(l[-120:] for l in lines[:3])))
+        ctx.expect(bool(said), "cut %d: %s said what the journal gave it" % (i + 1, who))
 
     done = ctx.wait_until(lambda: ctx.log_lines("Job complete: job_"), 6 * 3600)
     ctx.expect(bool(done), "the job completed")
