@@ -1,7 +1,8 @@
 """W3 card "A miner rebooted at its dock ignores the job re-sent to it and idles 8 minutes" (fix b1a96eb, 1.9.144; live on
 1.9.151), layer 2. Same as sandbox/scenarios/w3_dock_idle_reboot.lua: the miner is rebooted seconds after it sets off, still
 in the depot lane. The server must re-send its job on the miner's first heartbeat, and the miner must set off again
-within 3 minutes, with no idle-stuck requeue. Pin any commit at or after 1.9.144 (the live fleet is on bfc2770). 1x."""
+within 3 minutes, with no idle-stuck requeue (watched for 10 minutes). Pin bfc2770 (the live commit). 1x, ~15 game
+minutes: the card is proven by the re-departure, so the job is cancelled once the watch is over rather than run to the end."""
 NAME = "w3_dock_idle_reboot"
 
 
@@ -29,6 +30,7 @@ def steps(ctx):
     ctx.expect(bool(again), "the rebooted miner set off again on its job")
     ctx.expect(bool(again) and waited < 180, "within 3 minutes of the reboot (%.0f s)" % waited)
     ctx.expect(len(ctx.log_lines("(first heartbeat)")) >= 1, "the server re-sent the job on its first heartbeat")
-    ctx.expect(len(ctx.log_lines("Idle-stuck MINE job")) == 0, "no idle-stuck requeue was needed")
-    done = ctx.wait_until(lambda: ctx.log_lines("Job complete: job_"), 6 * 3600)
-    ctx.expect(bool(done), "the job completed")
+    ctx.wait_game(600)                                  # the old fault: an idle-stuck requeue 8 minutes later
+    ctx.expect(len(ctx.log_lines("Idle-stuck MINE job")) == 0, "no idle-stuck requeue in the 10 minutes after")
+    job = went[0].split("Dispatched ")[1].split()[0]
+    ctx.dispatch("CANCEL_JOB", {"jobId": job})
