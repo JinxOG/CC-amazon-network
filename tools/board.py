@@ -49,14 +49,23 @@ def body_of(item_id):
     return c.get("id"), c.get("body", "")
 
 
+# A real block starts a line with VALIDATION and has a Worked if: field. A card that merely mentions
+# "the VALIDATION block" in prose does not count. The line may begin with the date stamp that `note`
+# adds: on 2026-10-26 the first watcher run skipped 15 of 18 blocks because `note` had written them as
+# "2026-10-22 16:24 UTC VALIDATION" and this check wanted VALIDATION at the very start of the line.
+VALIDATION_LINE = re.compile(r"^(?:\d{4}-\d\d-\d\d \d\d:\d\d UTC )?VALIDATION\b", re.M)
+
+
+def has_validation(body):
+    return bool(VALIDATION_LINE.search(body)) and "Worked if:" in body
+
+
 def cmd_list(status=None, with_validation=False):
     for it in items():
         if status and it.get("status") != status:
             continue
         _, body = body_of(it["id"])
-        # A real block starts a line with VALIDATION and has a Worked if: field. A card that merely
-        # mentions "the VALIDATION block" in prose does not count.
-        if with_validation and not (re.search(r"^VALIDATION", body, re.M) and "Worked if:" in body):
+        if with_validation and not has_validation(body):
             continue
         print("=" * 100)
         print(f"ID      {it['id']}\nTITLE   {it.get('title')}\nSTATUS  {it.get('status')}\nOWNER   {it.get('owner', '-')}")
