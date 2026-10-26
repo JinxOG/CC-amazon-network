@@ -3368,6 +3368,12 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
     if type(p.detail) == "string" and p.detail:find("^stuck_no_fix") then
         registry.flagStuck(msg.from, p.detail)
     end
+    -- A recall answered mid-flight (1.9.129). Details otherwise live only in
+    -- the job's history; this one is the evidence the fix works, so it goes
+    -- to the log where the watcher can read it.
+    if type(p.detail) == "string" and p.detail:find("^recalled in flight") then
+        logInfo(string.format("%s %s [%s]", msg.from, p.detail, tostring(p.jobId)))
+    end
     -- ONE RECOVERY MESSAGE, EVERY ROLE (recovery layer release 3; ruled
     -- 2026-10-08). base.homeAfterBoot sends it from the one place every role
     -- passes after a field reboot; it replaces the two miner-only triggers (a

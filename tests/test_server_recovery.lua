@@ -982,6 +982,26 @@ return {
     -- and pings again; replies come in through the loop like any message, so
     -- nothing waits and nothing is eaten. No fix or a lying host raises an alert
     -- in /state and holds dispatch until GPS is back.
+    -- Card "A recall is ignored while a turtle is in sky flight" (fix 1.9.129).
+    -- The miner says "recalled in flight -- turning back before the sector" as
+    -- a STATUS_UPDATE detail, and the server kept details only in the job's
+    -- history: the one line that proves the fix never reached /logs, so the
+    -- watcher could not judge the card (found 2026-10-26).
+    ["a miner's in-flight recall is written to the log"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = "node_118", payload = {
+            jobId = "job_0726", status = proto.STATUS.RETURNING,
+            detail = "recalled in flight -- turning back before the sector" } })
+        local line
+        for _, e in ipairs(T.state.log) do
+            if e.msg:find("recalled in flight", 1, true) then line = e.msg end
+        end
+        restore()
+        assert_eq(line ~= nil and line:find("node_118", 1, true) ~= nil, true,
+            "the recall-in-flight line is in the log, with the node (" .. tostring(line) .. ")")
+    end,
+
     -- Live on 1.9.151: "Bridge serialise[gps] failed: bad argument #1 ... got
     -- nil", twice at every server boot. state.gpsHealth is nil until the first
     -- judgement, and CC's serialiseJSON raises on a top-level nil (the stub
