@@ -32,6 +32,26 @@ RUNS = [
 ]
 
 
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+
+
+def notify(subject, body):
+    """Mails SPEC-OWNER (a file under docs/mail, committed and pushed) so a stalled queue surfaces in hours, not days (the 2026-10-22 stall
+    went unseen for four days). Never raises: a failed notification must not stop the queue."""
+    try:
+        out = subprocess.run([sys.executable, "-I", os.path.join(REPO, "tools", "mail.py"), "new", "--to", "SPEC-OWNER", "--from", "SANDBOX",
+                              "--kind", "info", "--subject", subject], capture_output=True, text=True, cwd=REPO).stdout.strip().splitlines()
+        path = os.path.join(REPO, out[-1])
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(chr(10) + body + chr(10))
+        subprocess.run(["git", "add", path], cwd=REPO, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "mail: SANDBOX queue notice" + chr(10) * 2 + "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"], cwd=REPO, capture_output=True)
+        subprocess.run(["git", "-c", "rebase.autoStash=true", "pull", "--rebase", "origin", "master"], cwd=REPO, capture_output=True)
+        subprocess.run(["git", "push", "origin", "HEAD:master"], cwd=REPO, capture_output=True)
+    except Exception as e:  # noqa: BLE001
+        print("could not send the notice: %s" % e, flush=True)
+
+
 def cleanup(run_id):
     """Stops whatever a failed run left behind: its server by its own tool, any bridge still running for it, then its folder."""
     subprocess.run([sys.executable, "-I", os.path.join(q.HERE, "run.py"), "stop", run_id], capture_output=True)
@@ -60,6 +80,9 @@ def main():
                 break
             cleanup(run_id)
         else:
+            notify("T2 queue: %s failed twice" % run_id,
+                   "The 1x queue run %s (%s) failed twice. Last output: %s" % (run_id, scen, tail)
+                   + chr(10) + "The queue moves on to the next run; this one needs a look.")
             continue
         if scen.startswith("ack_loss"):
             n, a, b = q.ack_loss(run_id)
@@ -68,3 +91,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    notify("T2 queue: finished (the queue has gone idle)", "The 1x queue has run every item (see queue3.out); the test server is idle.")
