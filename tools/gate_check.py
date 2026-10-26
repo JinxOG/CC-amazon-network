@@ -124,16 +124,12 @@ for label, q, fatal in (
     # gate starts crying wolf, which ends in its verdicts being ignored.
     ("job retry",          "node=server&contains=%20retry%20",  True),
     ("idle-stuck rescue",  "contains=Idle-stuck",             True),
-    ("sector returned",    "contains=returned%20to%20pending", True),
+    # "sector returned": counted below, after this loop (a field reboot returns one by design).
     # 1.9.110: a zone whose miners all ended with sectors still to do. Counted
     # separately below: since 1.9.121 the same warning is logged for every
     # crew top-up, and a top-up that queued a replacement is the system working.
-    # PROTECTED HARDWARE MISSING AT BOOT. node_118 printed "slot 16 is empty"
-    # on its first boot after the 2026-09-30 outage and was then offered three
-    # jobs it could only refuse. Fatal, and cheap. It catches an EMPTY slot only;
-    # a slot holding the wrong thing is caught by the NEEDS HANDS line, which is
-    # an ERROR and so already counted above.
-    ("protected slot empty", "contains=expected%20protected%20item", True),
+    # PROTECTED HARDWARE MISSING AT BOOT: counted below, after this loop, so an
+    # empty loader slot on a field reboot is not called a fault.
     # Kept last and non-fatal ON PURPOSE: the server logs its crash-log summary
     # at every boot, so this matches old news by design. Anything it catches
     # that the fatal checks above did not is worth a human glance, nothing more.
@@ -151,6 +147,69 @@ for label, q, fatal in (
     if n and n <= 5:
         for l in d["lines"][:5]:
             print(f"        {l['ts'][11:19]} {l['source']} {(l.get('msg') or '')[:100]}")
+
+# A SECTOR RETURNED TO PENDING. Fatal -- except one kind (spec owner, 2026-10-26):
+# since ddefd50 a miner that reboots in the field has its job requeued and its zone
+# KEPT, and its held sector goes back: "Lease on (x,z) released by node_X
+# (reassign) -- returned to pending", right after "node_X is recovering from a
+# reboot". That is the keep working, not a lost sector. Anything else -- a
+# failure's return, or a reassign with no recovery beside it -- still counts.
+_ret = logs("contains=returned%20to%20pending")["lines"]
+_rec = logs("node=server&contains=is%20recovering%20from%20a%20reboot")["lines"]
+_rec_at = collections.defaultdict(list)
+for l in _rec:
+    m = re.search(r"(node_\d+) is recovering", l.get("msg") or "")
+    if m:
+        _rec_at[m.group(1)].append(p_ts(l["ts"]))
+_rreal, _rexp = [], 0
+for l in _ret:
+    msg = l.get("msg") or ""
+    m = re.search(r"released by (node_\d+) \(reassign\)", msg)
+    t = p_ts(l["ts"])
+    if m and any(0 <= (t - r).total_seconds() <= 60 for r in _rec_at.get(m.group(1), [])):
+        _rexp += 1
+    else:
+        _rreal.append(l)
+_flag = "  <-- FAULT" if _rreal else ""
+print(f"    {'sector returned':<22}{len(_rreal)}{_flag}"
+      f"   (returned by a field reboot's requeue: {_rexp} -- not a fault)")
+for l in _rreal[:5]:
+    print(f"        {l['ts'][11:19]} {l['source']} {(l.get('msg') or '')[:100]}")
+if _rreal:
+    fails.append(f"sector returned: {len(_rreal)}")
+
+# PROTECTED HARDWARE MISSING AT BOOT. node_118 printed "slot 16 is empty" on its
+# first boot after the 2026-09-30 outage and was then offered three jobs it could
+# only refuse. Fatal, and cheap. It catches an EMPTY slot only; a slot holding the
+# wrong thing is caught by the NEEDS HANDS line, an ERROR and so counted above.
+#
+# EXCEPT SLOT 2 ON A FIELD REBOOT (spec owner, 2026-10-26). Slot 2 is the miner's
+# chunk loader; a miner that reboots while its loader stands in the world finds
+# slot 2 empty, correctly, and its boot recovery fetches it: "Boot: loader
+# recorded at ... recovering" from the same node within seconds. gps3-journal-1x
+# and mine-zone-1x were both called NOT CLEAN for exactly that. Such a line is
+# expected, not a fault -- but only with the recovery line beside it.
+_empty = logs("contains=expected%20protected%20item")["lines"]
+_recov = logs("contains=Boot%3A%20loader%20recorded")["lines"]
+_recov_at = collections.defaultdict(list)
+for l in _recov:
+    _recov_at[l.get("source")].append(p_ts(l["ts"]))
+_real, _expected = [], 0
+for l in _empty:
+    msg = l.get("msg") or ""
+    t = p_ts(l["ts"])
+    near = [r for r in _recov_at.get(l.get("source"), []) if 0 <= (r - t).total_seconds() <= 30]
+    if "slot 2 is empty" in msg and near:
+        _expected += 1
+    else:
+        _real.append(l)
+_flag = "  <-- FAULT" if _real else ""
+print(f"    {'protected slot empty':<22}{len(_real)}{_flag}"
+      f"   (loader out at a field reboot, recovered: {_expected} -- not a fault)")
+for l in _real[:5]:
+    print(f"        {l['ts'][11:19]} {l['source']} {(l.get('msg') or '')[:100]}")
+if _real:
+    fails.append(f"protected slot empty: {len(_real)}")
 
 # A ZONE LEFT UNMINED -- BUT ONLY IF NOTHING REPLACED THE MINER.
 #
