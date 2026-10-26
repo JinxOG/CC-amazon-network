@@ -2445,19 +2445,36 @@ for attempt = 1, GPS_WAIT_ATTEMPTS do
 end
 
 if not _haveGpsFix then
-    -- Stay put. A miner that cannot place itself must not fly, must not try to
-    -- retrieve a loader, and must not accept a job -- the pre-departure preflight
-    -- refuses too. It still boots and registers, so it is visible and reachable
-    -- rather than silently absent.
+    -- STAY PUT, BUT NEVER GIVE UP.
+    --
+    -- Refusing to move without a fix is right and stays. What was wrong was
+    -- giving up after two minutes: the loop above ran out of attempts, nothing
+    -- ever retried, and recoverPlacedLoader below was skipped entirely. A field
+    -- miner whose GPS came back late therefore stranded FOREVER, with its loader
+    -- standing and its chunk force-loaded, long after the fix was available.
+    -- Measured on master by the head engineer and by W3's
+    -- sandbox/scenarios/world_restart_gps_late.lua, which fails on the old code.
+    --
+    -- base.waitForPositionFix is the right instrument and already existed: it
+    -- retries forever, measures facing as well as position, and -- since
+    -- 1.9.136 -- reports stuck_no_fix with its coordinates once a minute and
+    -- flushes its log, so the server raises NEEDS HANDS. Parked and shouting is
+    -- what we want; parked and silent is what killed node_184 and node_182.
     print("[MINER] NO GPS FIX after " .. (GPS_WAIT_ATTEMPTS * GPS_RETRY_SECONDS)
-        .. "s — refusing to move. Check the GPS host computers.")
-    base.sendProgress("no_gps_fix: refusing to move until the GPS hosts are up")
-else
-    -- Recover an abandoned loader before any job can be accepted.
-    local rok, rerr = pcall(recoverPlacedLoader)
-    if not rok then
-        print("[MINER] Loader recovery crashed: " .. tostring(rerr))
-    end
+        .. "s — staying put and retrying until the GPS hosts are up.")
+    base.sendProgress("no_gps_fix: parked, retrying until the GPS hosts are up")
+    base.waitForPositionFix("boot recovery after a late GPS start")
+end
+
+-- Recover an abandoned loader before any job can be accepted.
+--
+-- Outside the `if` deliberately: a miner that had to wait for GPS needs this
+-- MORE than one that never lost it, because the restart that took GPS away is
+-- exactly the restart that left its loader standing. Skipping recovery on the
+-- no-fix path is what made the stranding permanent.
+local rok, rerr = pcall(recoverPlacedLoader)
+if not rok then
+    print("[MINER] Loader recovery crashed: " .. tostring(rerr))
 end
 -- Same for the geo scanner. Runs after the loader because the loader is the
 -- expensive one -- a whole turtle plus a permanently force-loaded chunk -- and

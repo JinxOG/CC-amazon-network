@@ -391,4 +391,49 @@ function(assert_eq)
         .. "still has to delete loader_state.dat by hand")
 end
 
+-- A LATE GPS START MUST NOT STRAND A FIELD MINER FOREVER.
+--
+-- The boot loop tried GPS six times over two minutes and then gave up: nothing
+-- retried, and recoverPlacedLoader was skipped because it sat in the else. A
+-- miner whose GPS came back later stranded permanently, loader standing and
+-- chunk force-loaded. Measured on master by the head engineer and by
+-- sandbox/scenarios/world_restart_gps_late.lua, which fails on the old code.
+--
+-- Two properties, and the second is the one that made it permanent:
+--   * the no-fix path waits forever (base.waitForPositionFix reports
+--     stuck_no_fix once a minute, so parked is visible, not silent);
+--   * the loader recovery runs on BOTH paths -- the restart that took GPS away
+--     is exactly the restart that left the loader standing.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load. The
+-- behaviour is proven at layer 1 by the scenario; this keeps a revert from
+-- needing a six-minute run to notice.
+suite["a late GPS start parks and retries, and still recovers the loader (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+
+    local parkedAt = src:find("no_gps_fix: parked", 1, true)
+    local waitAt   = src:find("base.waitForPositionFix(\"boot recovery after a late GPS start\")", 1, true)
+    local recovAt  = src:find("pcall(recoverPlacedLoader)", 1, true)
+    assert_eq(parkedAt ~= nil, true, "the no-fix path must say it is parked and retrying")
+    assert_eq(waitAt ~= nil, true,
+        "it must wait for a fix forever rather than giving up after six tries")
+    assert_eq(recovAt ~= nil and recovAt > waitAt, true,
+        "the loader recovery must come after the wait")
+
+    -- The recovery must NOT be reachable only on the had-a-fix path. Anything
+    -- between the wait and the recovery that opens an else branch puts it back
+    -- where it was.
+    -- Not just the literal else: re-gating it on the flag by any means puts it
+    -- back where it was, so neither an else nor a mention of the flag may sit
+    -- between the wait and the recovery.
+    local between = src:sub(waitAt, recovAt)
+    assert_eq(between:find("else", 1, true) == nil, true,
+        "the loader recovery must run whether or not GPS was there at boot: "
+        .. "skipping it on the no-fix path is what made the stranding permanent")
+    assert_eq(between:find("_haveGpsFix", 1, true) == nil, true,
+        "and it must not be re-gated on the boot fix flag either")
+end
+
 return suite

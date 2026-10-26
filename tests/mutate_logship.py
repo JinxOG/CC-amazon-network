@@ -383,7 +383,15 @@ A_REQUEUE  = "a job recalled for ack timeout is requeued, not recorded complete"
 A_NORMAL   = "a job that was acknowledged still completes normally"
 
 # (label, file, [(old, new), ...], test that must go red)
+G_LATE    = "a late GPS start parks and retries, and still recovers the loader (SOURCE-ONLY, weaker)"
+
 MUTANTS = [
+    ("a late GPS start gives up instead of waiting", "ore_turtle.lua",
+     [('    base.waitForPositionFix("boot recovery after a late GPS start")\n', '')], G_LATE),
+
+    ("the loader recovery is skipped again when GPS was late", "ore_turtle.lua",
+     [('local rok, rerr = pcall(recoverPlacedLoader)', 'local rok, rerr = true, nil\nif _haveGpsFix then rok, rerr = pcall(recoverPlacedLoader) end')], G_LATE),
+
     ("seq never advances", "logship.lua",
      [("    self._seq = self._seq + 1\n", "    self._seq = self._seq\n")], SHIP),
 
