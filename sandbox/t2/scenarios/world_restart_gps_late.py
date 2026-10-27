@@ -34,3 +34,6 @@ def steps(ctx):
     ctx.expect(len(ctx.log_lines("Loader recovery FAILED")) == 0, "no 'Loader recovery FAILED' line")
     stuck = len(ctx.log_lines("stuck_no_fix"))
     ctx.note("stuck_no_fix lines while waiting for a fix: %d" % stuck)
+    # W1: with the fix a parked miner reports stuck_no_fix about once a minute while GPS is down. A pass with ZERO such lines means the scenario never
+    # made a miner wait for a fix, so it proves nothing about the fix: that is a failed check, not a clean pass.
+    ctx.expect(stuck >= 1, "at least one miner sat waiting for a fix and said so (stuck_no_fix lines: %d); zero would mean the wait was never exercised" % stuck)
