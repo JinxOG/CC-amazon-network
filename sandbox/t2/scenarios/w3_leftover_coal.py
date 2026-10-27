@@ -1,34 +1,34 @@
 """W3 card "Refuels leave turtles full of leftover coal - now returned to the chest" (fix 96add99, live since 1.9.138),
-layer 2. Same as sandbox/scenarios/w3_leftover_coal.lua: every miner's tank is set to 2,000 (less than any zone needs)
-and the three-sector job is ordered, so the dispatched miner refuels at its dock station before it sets off. It must log
-'Refuelling at dock station' and 'Returned N leftover fuel item(s)', and carry no loose coal outside slot 14 once it has
-left the depot (read with get_slot). Pin bfc2770 (the live commit). 1x, ~10 game minutes; the job is then cancelled."""
-import re
-
+layer 2. An idle, docked miner's tank is set to 70,000 (below the 80 % at which a dock refuel runs, with room for only
+~375 coal), then FORCE_REFUEL makes it refuel from its dock station. A refuel pulls coal into its free working slots and
+burns only what the tank takes, so with ~700 coal in the station chest there MUST be leftovers: it must log
+'Returned N leftover fuel item(s)' and carry no loose coal outside slot 14 afterwards (read with get_slot).
+Revised 2026-10-27: the first version drained the tank to 2,000 and dispatched a job; the refuel then burned every coal
+the chest held (+56,320, tank 58,318) and there was nothing left over to return -- inconclusive, not a pass or a fault.
+Pin bfc2770 (the live commit). 1x, ~5 game minutes."""
 NAME = "w3_leftover_coal"
 
 
 def steps(ctx):
     ctx.wait_registered(14, 300)
     st = ctx.state()
-    miners = sorted(int(n.replace("node_", "")) for n, t in (st.get("turtles") or {}).items()
-                    if t.get("role") == "MINER" and t.get("status") == "IDLE")
-    for cid in miners:
-        ctx.control.set_fuel(cid, 2000)                                    # THE TEST
-    ctx.note("set fuel 2000 on miners %r" % miners)
-    ctx.dispatch("ORDER_MINE", {"x1": 1920, "z1": -2624, "x2": 1984, "z2": -2624, "minerCount": 2})
-    went = ctx.wait_until(lambda: ctx.log_lines("Dispatched job_"), 600)
-    ctx.expect(bool(went), "the job was dispatched")
-    if not went:
+    idle = sorted(n for n, t in (st.get("turtles") or {}).items() if t.get("role") == "MINER" and t.get("status") == "IDLE")
+    ctx.expect(bool(idle), "an idle miner (%r)" % idle)
+    if not idle:
         return
-    node = went[0].split("-> ")[1].split()[0]
+    node = idle[0]
     cid = int(node.replace("node_", ""))
-    job = re.search(r"Dispatched (job_\d+)", went[0]).group(1)
-    left = ctx.wait_until(lambda: [l for l in ctx.log_lines("Exited depot") if node in l], 900)
-    ctx.expect(bool(left), "%s left the depot" % node)
-    ctx.wait_game(60)                                                      # its log lines arrive in batches
-    ctx.expect(bool([l for l in ctx.log_lines("Refuelling at dock station") if node in l]), "it refuelled at its dock first")
-    ctx.expect(bool([l for l in ctx.log_lines("leftover fuel item(s)") if node in l]), "it returned the leftover coal")
+    ctx.control.set_fuel(cid, 70000)                                     # THE TEST: room for ~375 coal only
+    ctx.wait_game(12)                                                    # the next heartbeat reports the new level
+    r0 = len([l for l in ctx.log_lines("leftover fuel item(s)") if node in l])
+    f0 = len([l for l in ctx.log_lines("FORCE_REFUEL received") if node in l])
+    ctx.dispatch("FORCE_REFUEL", {"turtleId": node})
+    ctx.note("%s (computer #%d): fuel set to 70000, FORCE_REFUEL sent" % (node, cid))
+    got = ctx.wait_until(lambda: len([l for l in ctx.log_lines("FORCE_REFUEL received") if node in l]) > f0, 120)
+    ctx.expect(bool(got), "%s refuelled at its dock on FORCE_REFUEL" % node)
+    ret = ctx.wait_until(lambda: len([l for l in ctx.log_lines("leftover fuel item(s)") if node in l]) > r0, 180)
+    ctx.expect(bool(ret), "it returned the leftover coal ('Returned N leftover fuel item(s)')")
+    ctx.wait_game(10)
     loose = []
     for nbt_slot in range(16):                       # NBT slots are 0-15; Lua slot 14 (the coal reserve) is NBT 13
         if nbt_slot == 13:
@@ -37,4 +37,3 @@ def steps(ctx):
         if "coal" in text and "ender" not in text:
             loose.append("slot %d: %s" % (nbt_slot + 1, text[:60]))
     ctx.expect(not loose, "no loose coal aboard outside slot 14 (%s)" % " ".join(loose))
-    ctx.dispatch("CANCEL_JOB", {"jobId": job})
