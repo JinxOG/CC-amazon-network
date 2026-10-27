@@ -198,6 +198,108 @@ end
 
 return {
 
+    -- ─── The ore chest in the ledger (recovery layer, W1's card) ─────────────
+    --
+    -- node_181, 2026-10-08: DUMPING at 22:48:33, a reboot at 22:52 left the
+    -- chest standing near 2048,16,-3392, slot 16 empty at boot, and the miner
+    -- benched until a person handed it a new one. The fuel chest is the
+    -- ledger's first entry and is W3's; this is the ore chest, in W1's files,
+    -- against the ruled base.ledger contract.
+    --
+    -- A FAKE ledger on purpose: these pin what bankPayload CALLS. The recovery
+    -- itself is turtle_base's and has its own tests -- retesting it here would
+    -- duplicate W3's coverage and still not exercise the real thing.
+    ["banking records the chest, with the face it actually used, before placing it"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        bankingDrops(c)
+        local seen = {}
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local ok = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+            ledger = {
+                record = function(face, x, y, z)
+                    seen[#seen + 1] = { face = face, x = x, y = y, z = z,
+                                        placed = c.world[wkey(x, y, z)] ~= nil }
+                    return true
+                end,
+                clearIfHome = function() seen.cleared = true end,
+            } })
+        assert_eq(ok, true)
+        assert_eq(#seen, 1, "exactly one record for the face that took the chest")
+        assert_eq(seen[1].face, "down", "down is the preferred face")
+        assert_eq(seen[1].x, c.pos.x); assert_eq(seen[1].y, c.pos.y - 1)
+        assert_eq(seen[1].z, c.pos.z)
+        assert_eq(seen[1].placed, false,
+            "recorded BEFORE the place, or a crash in between strands the chest "
+            .. "with nothing saying where")
+        assert_eq(seen.cleared, true, "and the ledger is asked to clear it afterwards")
+    end,
+
+    -- The chest goes down, and the dig to take it back fails -- a reboot lands
+    -- here in the field. bankPayload must still ASK the ledger, which keeps the
+    -- record because the chest is not home. Deciding here instead would
+    -- duplicate that rule in two places.
+    ["banking still asks the ledger to clear when the chest could not be taken back"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local asked = false
+        local realDig = turtle.digDown
+        turtle.digDown = function() return false, "interrupted" end
+        flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+            ledger = { record = function() return true end,
+                       clearIfHome = function() asked = true end } })
+        turtle.digDown = realDig
+        assert_eq(asked, true,
+            "the ledger decides whether the chest is home; bankPayload only asks")
+    end,
+
+    ["a clean place failure rolls the record back"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        bankingDrops(c)
+        c.inv[16] = nil                      -- nothing to place, faces all clear
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local recorded, rolled = 0, 0
+        local ok, why = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+            ledger = { record = function() recorded = recorded + 1; return true end,
+                       rollback = function() rolled = rolled + 1 end,
+                       clearIfHome = function() end } })
+        assert_eq(ok, false); assert_eq(why, "chest_not_placed")
+        assert_eq(recorded > 0, true, "it recorded before trying to place")
+        assert_eq(rolled, recorded,
+            "every record for a place that failed cleanly must be rolled back, or "
+            .. "boot recovery digs at a block the chest never occupied")
+    end,
+
+    ["a record that cannot be written stops the placement"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local ok, why = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end,
+            ledger = { record = function() return false, "ledger_write_failed" end,
+                       clearIfHome = function() end } })
+        assert_eq(ok, false); assert_eq(why, "ledger_write_failed")
+        assert_eq(#banked, 0); assert_eq(#ground, 0,
+            "nothing may be dropped when we could not record the chest we were "
+            .. "about to place")
+    end,
+
+    ["banking works unchanged with no ledger wired in"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked = bankingDrops(c)
+        c.inv[5] = { name = "minecraft:iron_ore", count = 40 }
+        local ok, face = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, true, "the ledger is optional: delivery and support do not "
+            .. "use bankPayload, and its own tests pass no ledger")
+        assert_eq(face, "down"); assert_eq(#banked, 1)
+    end,
+
     -- PROOF OF POSSESSION BY LABEL.
     --
     -- The same physical turtle cannot be carried and standing at once, so a

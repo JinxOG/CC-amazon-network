@@ -1018,10 +1018,33 @@ local BANK_FACES = {
       drop   = function() return turtle.dropUp()     end },
 }
 
+-- Which absolute block a face puts the chest into. The face is chosen at
+-- runtime, so the ledger is told a position, never a direction -- a direction
+-- would be wrong the moment the turtle turned.
+local function faceBlock(p, name)
+    if name == "down" then return p.x, p.y - 1, p.z end
+    if name == "up"   then return p.x, p.y + 1, p.z end
+    local ax, az = aheadBlock(p)
+    return ax, p.y, az
+end
+
 -- opts.chestSlot  - slot holding the ender chest
 -- opts.shouldDump - function(slot, itemDetail) -> boolean
 -- opts.afterDig   - optional, called after each successful clearing dig so the
 --                   caller can put displaced hardware back before we place
+-- opts.ledger     - optional, the placed-item ledger for the ore chest:
+--                     record(faceName, x, y, z) -> ok, reason
+--                     rollback()      - a place that failed cleanly
+--                     clearIfHome()    - after the chest is taken back
+--
+--   Optional because this module is deliberately free of turtle_base: the
+--   caller (ore_turtle) owns base.ledger and passes it in, and bankPayload's
+--   own tests pass none. node_181 lost its ore chest to a reboot mid-dump on
+--   2026-10-08 because nothing on disk said a chest was out there; the ledger
+--   is where that now lives (ruled 2026-10-08, turtle_base's base.ledger).
+--
+--   The ledger decides whether the chest is home -- clearIfHome is called
+--   whether or not the chest came back, rather than deciding it twice.
 --
 -- Returns true, faceName on success; false, reason when the chest never went
 -- down. On failure NOTHING is dropped -- see the guard below.
@@ -1055,7 +1078,25 @@ function mine_flow.bankPayload(opts)
             if opts.afterDig then opts.afterDig() end
             turtle.select(chestSlot)
         end
-        if not f.detect() and f.place() then face = f break end
+        if not f.detect() then
+            -- RECORD BEFORE THE PLACE. A crash in between leaves a record for a
+            -- chest that never went down, which recovery resolves harmlessly; a
+            -- crash the other way round strands the chest with nothing saying
+            -- where, which is exactly how node_181 lost its on 2026-10-08.
+            local L = opts.ledger
+            if L and L.record then
+                local bx, by, bz = faceBlock(_hooks.pos(), f.name)
+                local recOk, recWhy = L.record(f.name, bx, by, bz)
+                -- A chest we could not record is a chest we must not place.
+                if not recOk then return false, recWhy or "ledger_write_failed" end
+            end
+            if f.place() then face = f break end
+            -- A CLEAN place() failure: a definite answer, and nothing left the
+            -- inventory, so the record just written describes nothing. Roll it
+            -- back before trying the next face, or boot recovery goes digging at
+            -- a block the chest never occupied.
+            if L and L.rollback then L.rollback() end
+        end
     end
 
     -- No face took the chest -- an empty chest slot, or boxed in by blocks that
@@ -1076,6 +1117,10 @@ function mine_flow.bankPayload(opts)
 
     turtle.select(chestSlot)
     mine_flow.digGuarded(face.name)
+    -- Asked whether or not the dig worked: the ledger checks the home slot and
+    -- keeps the record when the chest is still standing. Deciding that here as
+    -- well would put the same rule in two places, and they would drift.
+    if opts.ledger and opts.ledger.clearIfHome then opts.ledger.clearIfHome() end
     return true, face.name
 end
 

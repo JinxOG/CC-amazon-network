@@ -124,6 +124,46 @@ local SERVER_DOWN_LIMIT_MS = 300000   -- 5 minutes
 -- 1.18+ ore peaks: iron/coal y=16, copper/gold y=0, redstone y=-32, diamond y=-52.
 local SCAN_LEVELS = { 16, 0, -32, -52 }
 
+-- REGISTERED BEFORE base.init, NOT where it is used. turtle_base recovers
+-- the ledger during init, and a kind registered after that first pass is
+-- refused as unknown_kind: node_11 raised a NEEDS HANDS it did not need,
+-- then recovered the chest a second later from base.run. Measured in
+-- sandbox run 20261026-225655.
+-- THE ORE CHEST IS A LEDGER KIND (recovery layer, W1's card).
+--
+-- node_181, 2026-10-08: DUMPING at 22:48:33, a reboot at 22:52 left its chest
+-- standing near 2048,16,-3392, slot 16 empty at boot, and it was benched for
+-- missing hardware until the user handed it a new one. Nothing on disk said a
+-- chest was out there, so nothing could go back for it.
+--
+-- Registering is nearly all of the work: base.ledger.recover already carries
+-- every guard this needed -- it checks the turtle is where it placed it, turns
+-- to the recorded facing for a forward placement, verifies the block IS the
+-- chest before digging, makes room and refuses with no_room rather than
+-- destroying the drop, digs through digGuarded, and raises NEEDS HANDS with the
+-- coordinates instead of guessing. base.run calls recoverLedger at boot for
+-- every role, so a miner picks this up without a line of its own.
+--
+-- bankPayload chooses between three faces at runtime, so it reports the face
+-- and the block it used; base.ledger.placeDown only covers "down".
+local ORE_CHEST_ITEM = "enderstorage:ender_chest"
+base.ledger.registerKind("ore_chest",
+    { blockName = ORE_CHEST_ITEM, homeSlot = S_ORE_EC })
+
+local oreChestLedger = {
+    record = function(face, x, y, z)
+        local p = base.getPos()
+        return base.ledger.record("ore_chest", {
+            x = x, y = y, z = z, face = face,
+            facing    = p.facing,
+            blockName = ORE_CHEST_ITEM,
+            turtleAt  = { x = p.x, y = p.y, z = p.z },
+        })
+    end,
+    rollback    = function() base.ledger.rollback("ore_chest") end,
+    clearIfHome = function() base.ledger.clearIfHome("ore_chest", S_ORE_EC) end,
+}
+
 -- base.init is allowed to fail without killing the whole program.
 --
 -- comms.init() calls error("No modem found") when it cannot equip a modem, and
@@ -876,6 +916,7 @@ local function dumpToEC()
     local banked, why = mine_flow.bankPayload({
         chestSlot = S_ORE_EC,
         afterDig  = rescueProtectedItems,
+        ledger    = oreChestLedger,
         shouldDump = function(s, item)
             local isHardware = item and protectedItemNames[item.name] ~= nil
             local reserved   = PROTECTED[s] == true
@@ -2464,6 +2505,15 @@ if not _haveGpsFix then
         .. "s — staying put and retrying until the GPS hosts are up.")
     base.sendProgress("no_gps_fix: parked, retrying until the GPS hosts are up")
     base.waitForPositionFix("boot recovery after a late GPS start")
+end
+
+-- The ledger FIRST: the ore chest is adjacent and cheap, and the loader
+-- recovery below flies to the sector, so a chest left by the same reboot would
+-- be abandoned for the whole trip. base.run calls recoverLedger itself, but
+-- that is after this file's own recovery, which is why turtle_base exports it.
+local ledOk, ledErr = pcall(base.recoverLedger)
+if not ledOk then
+    print("[MINER] Ledger recovery crashed: " .. tostring(ledErr))
 end
 
 -- Recover an abandoned loader before any job can be accepted.

@@ -436,4 +436,34 @@ function(assert_eq)
         "and it must not be re-gated on the boot fix flag either")
 end
 
+-- THE ORE CHEST IS WIRED INTO THE LEDGER (W1's card, ruled 2026-10-08).
+--
+-- Three things, and the recovery itself is turtle_base's: registering the kind
+-- is what makes base.ledger.recover handle it at all, passing the ledger into
+-- bankPayload is what records the chest before it goes down, and recovering the
+-- ledger before the loader is what stops a chest being abandoned for a whole
+-- flight to the sector.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load. What
+-- bankPayload DOES with a ledger is behavioural in test_mine_flow.
+suite["the ore chest is a registered ledger kind, recorded and recovered first (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+
+    assert_eq(src:find('base.ledger.registerKind("ore_chest"', 1, true) ~= nil, true,
+        "an unregistered kind is unknown to base.ledger.recover, which refuses it")
+    assert_eq(src:find("ledger    = oreChestLedger", 1, true) ~= nil, true,
+        "bankPayload must be given the ledger, or nothing records the chest")
+    assert_eq(src:find('base.ledger.clearIfHome("ore_chest", S_ORE_EC)', 1, true) ~= nil, true,
+        "and the home slot it is cleared against must be the ore chest's own")
+
+    local ledgerAt = src:find("pcall(base.recoverLedger)", 1, true)
+    local loaderAt = src:find("pcall(recoverPlacedLoader)", 1, true)
+    assert_eq(ledgerAt ~= nil, true, "boot must recover the ledger")
+    assert_eq(loaderAt ~= nil and ledgerAt < loaderAt, true,
+        "the chest is adjacent and cheap; the loader recovery flies to the "
+        .. "sector, so a chest recovered after it waits out the whole trip")
+end
+
 return suite

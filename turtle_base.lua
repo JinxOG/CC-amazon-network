@@ -2249,9 +2249,10 @@ end
 -- recorded here BEFORE the place and cleared only once it is back in its home
 -- slot, so a reboot at any instant errs toward "we may have one out there" --
 -- the recoverable direction. One file per kind, because two can be out at once:
--- a dump can start while the fuel chest is down. W1's chest_state (2026-10-08)
--- is the storage contract this generalises; node_181 lost its ore chest to a
--- reboot mid-dump that day because nothing on disk said it was out there.
+-- a dump can start while the fuel chest is down. W1's chest_state (2026-10-08,
+-- since deleted -- the ore chest is a kind here now) is the storage contract
+-- this generalises; node_181 lost its ore chest to a reboot mid-dump that day
+-- because nothing on disk said it was out there.
 --
 -- A field of base rather than a module: a new module and its first require
 -- cannot ship in one OTA (the updater running it is the previous version).

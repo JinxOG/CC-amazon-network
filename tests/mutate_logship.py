@@ -385,7 +385,31 @@ A_NORMAL   = "a job that was acknowledged still completes normally"
 # (label, file, [(old, new), ...], test that must go red)
 G_LATE    = "a late GPS start parks and retries, and still recovers the loader (SOURCE-ONLY, weaker)"
 
+O_REC     = "banking records the chest, with the face it actually used, before placing it"
+O_ASK     = "banking still asks the ledger to clear when the chest could not be taken back"
+O_ROLL    = "a clean place failure rolls the record back"
+O_WRITE   = "a record that cannot be written stops the placement"
+O_WIRE    = "the ore chest is a registered ledger kind, recorded and recovered first (SOURCE-ONLY, weaker)"
+
 MUTANTS = [
+    ("the ore chest is never recorded before it is placed", "mine_flow.lua",
+     [('            if L and L.record then', '            if false then')], O_REC),
+
+    ("a failed ledger write does not stop the placement", "mine_flow.lua",
+     [('                if not recOk then return false, recWhy or "ledger_write_failed" end', '')], O_WRITE),
+
+    ("a cleanly failed place leaves its record behind", "mine_flow.lua",
+     [('            if L and L.rollback then L.rollback() end', '')], O_ROLL),
+
+    ("banking never asks the ledger to clear the chest", "mine_flow.lua",
+     [('    if opts.ledger and opts.ledger.clearIfHome then opts.ledger.clearIfHome() end', '')], O_ASK),
+
+    ("the ore chest kind is never registered", "ore_turtle.lua",
+     [('base.ledger.registerKind("ore_chest",\n    { blockName = ORE_CHEST_ITEM, homeSlot = S_ORE_EC })\n', '')], O_WIRE),
+
+    ("the ledger is recovered after the loader instead of before", "ore_turtle.lua",
+     [('local ledOk, ledErr = pcall(base.recoverLedger)', 'local ledOk, ledErr = true, nil')], O_WIRE),
+
     ("a late GPS start gives up instead of waiting", "ore_turtle.lua",
      [('    base.waitForPositionFix("boot recovery after a late GPS start")\n', '')], G_LATE),
 
