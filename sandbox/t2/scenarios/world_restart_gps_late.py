@@ -29,10 +29,10 @@ def steps(ctx):
     ctx.control.gps_up()
     ctx.note("GPS hosts back on")
 
-    done = ctx.wait_until(lambda: ctx.log_lines("Job complete: job_"), 6 * 3600)
+    done = ctx.wait_until(lambda: ctx.log_lines("Job complete: job_") or (len(ctx.log_lines("Dispatched job_")) >= 2 and len(ctx.log_lines("Position and facing measured after")) >= 1 and len(ctx.log_lines("Loader recovered")) >= 1 and None), 60 * 60)
     # W1 (2026-10-27): "the job completes" measures the whole fleet pipeline, and a 4 h job is hostage to anything else on the host (the first 1x run of
     # this scenario ended with the bridge starved). The fix's CONTRACT is narrower, so that is what is asserted; completion is recorded as a note.
-    ctx.note("job completed within 6 game hours of the GPS returning: %s (informational, not the contract)" % bool(done))
+    ctx.note("job completed within the hour after the GPS returned (the wait is capped at one game hour now): %s (informational, not the contract)" % bool(done))
     measured = len(ctx.log_lines("Position and facing measured after"))
     ctx.expect(measured >= 1, "a miner that booted with no GPS parked, kept retrying and measured position and facing once the hosts were back (%d lines)" % measured)
     recovered = len(ctx.log_lines("Loader recovered"))
