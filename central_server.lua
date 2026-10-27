@@ -2059,6 +2059,11 @@ function jobQueue.assign(jobId, turtleId)
     job.ackBy      = os.epoch("utc") + (CFG.ACK_TIMEOUT * 1000)
     turtle.status  = proto.STATUS.TRAVELLING
     turtle.jobId   = jobId
+    -- This JOB_ASSIGN supersedes any re-send held since a reboot. A stale one
+    -- firing on the next heartbeat is a second copy of a job already running,
+    -- answered "busy" and read as a rejection (T2 world-restart-gps-late-1x,
+    -- 2026-10-27: job_0206 requeued under a miner still mining it, 2 h 49 m).
+    turtle.reSendJobId = nil
     jobQueue._hist(jobId, "assigned", "to=" .. turtleId)
     saveJobs()   -- persist assignedTo so server reboot can re-link, not re-queue
     return true

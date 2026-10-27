@@ -291,7 +291,9 @@ RZ_FIRST  = "a requeued zone on its first mine pass keeps its zone, and is not s
 RZ_SURVEY = "a requeued zone still in its survey is rebuilt from the store"
 RZ_ONCE   = "a mine-pass requeue returns the dead holder's sector to pending exactly once"
 RZ_SHARED = "a mine-pass requeue on a shared zone leaves the other miner's lease alone"
-RF_LOG    = "a miner's in-flight recall is written to the log"
+RS_REQ    = "a held re-send does not survive a requeue and a fresh dispatch to the same turtle"
+RS_RETRY  = "a fresh dispatch retires a held re-send even when the job came back by a retry"
+RF_LOG    ="a miner's in-flight recall is written to the log"
 BJ_NIL    ="a value not yet known goes to /state as null without a warning"
 GJ_AGREE  = "a reboot with GPS up still measures facing, and the journal agrees"
 GJ_NONE   = "without a journal: measured, and nothing to check"
@@ -1994,6 +1996,12 @@ MUTANTS = [
      [('        { src = FILES.turtle_base,    name = "turtle_base.lua" },\n'
        '        { src = FILES.support_turtle, name = "startup.lua"     },',
        '        { src = FILES.support_turtle, name = "startup.lua"     },')], INSTALL),
+
+    ("a fresh dispatch leaves the held re-send standing", "central_server.lua",
+     [('    turtle.reSendJobId = nil\n    jobQueue._hist(jobId, "assigned"', '    jobQueue._hist(jobId, "assigned"')], RS_REQ),
+
+    ("a fresh dispatch after a retry leaves the held re-send standing", "central_server.lua",
+     [('    turtle.reSendJobId = nil\n    jobQueue._hist(jobId, "assigned"', '    jobQueue._hist(jobId, "assigned"')], RS_RETRY),
 
     ("an in-flight recall is kept out of the log again", "central_server.lua",
      [('    if type(p.detail) == "string" and p.detail:find("^recalled in flight") then\n        logInfo(',

@@ -944,6 +944,57 @@ return {
         assert_eq(n, 0, "requeued for another miner: not this turtle's any more")
     end,
 
+    -- T2 world-restart-gps-late-1x, 2026-10-27: node_183 re-registered at 07:40
+    -- holding job_0206 (re-send held), was requeued (recovering), waited for GPS
+    -- before its main loop -- so no heartbeat for 27 minutes -- docked, and was
+    -- dispatched job_0206 AGAIN at 08:07:10. Its first heartbeat, at 08:07:13,
+    -- fired the stale re-send: a second JOB_ASSIGN for the job it was already
+    -- running, answered "busy", which requeued the job while the miner kept
+    -- mining it. The job sat pending for 2 h 49 m. A requeue ends the held re-send.
+    ["a held re-send does not survive a requeue and a fresh dispatch to the same turtle"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = "node_118", payload = {
+            status = proto.STATUS.IDLE, detail = "recovering: at 1704,185,-3095" } })
+        local requeued = T.state.jobs["job_0726"].status
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = "node_118", payload = {
+            status = proto.STATUS.IDLE, detail = "docked" } })
+        T.jobQueue.assign("job_0726", "node_118")                 -- the same job, back to the same miner
+        T.jobQueue.acknowledge("job_0726", "node_118", true)
+        T.sent = {}
+        idleBeat(T)                                               -- its first heartbeat since the reboot
+        local n = jobAssignsIn(T)
+        local job = T.state.jobs["job_0726"]
+        local status, owner = job.status, job.assignedTo
+        restore()
+        assert_eq(requeued, "PENDING", "precondition: the reboot requeued it")
+        assert_eq(n, 0, "no second JOB_ASSIGN: the fresh dispatch already carried it")
+        assert_eq(status, "IN_PROGRESS", "and the job stays with the miner running it")
+        assert_eq(owner, "node_118")
+    end,
+
+    -- The same shape by the other road: a failure's retry, not a reassign, puts
+    -- the job back, and it goes to the same turtle before its first heartbeat.
+    -- Only the fresh dispatch itself can retire the held re-send here.
+    ["a fresh dispatch retires a held re-send even when the job came back by a retry"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        rebootRegister(T)
+        T.jobQueue.fail("job_0726", "approach_failed", true)     -- retried: PENDING again, not via reassign
+        local retried = T.state.jobs["job_0726"].status
+        T.jobQueue.assign("job_0726", "node_118")
+        T.jobQueue.acknowledge("job_0726", "node_118", true)
+        T.sent = {}
+        idleBeat(T)
+        local n = jobAssignsIn(T)
+        local status = T.state.jobs["job_0726"].status
+        restore()
+        assert_eq(retried, "PENDING", "precondition: the retry put it back in the queue")
+        assert_eq(n, 0, "no second JOB_ASSIGN")
+        assert_eq(status, "IN_PROGRESS")
+    end,
+
     ["a turtle that re-registers mid-job is not sent the held job"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()

@@ -16,6 +16,8 @@ return {
     local measured = sim:capture_log("Position and facing measured after")
     local pruned   = sim:capture_log("Pruned stale offline turtle")
     local docked   = sim:capture_log("Docked at bay")
+    local busy     = sim:capture_log("rejected by")
+    local done     = sim:watch_log("Job complete: job_")
     sim:run_for(120000)
     local area = sim.world:meta().areas[1]
     sim:dispatch{ type = "ORDER_MINE", params = { x1 = area.x1, z1 = area.z1, x2 = area.x2, z2 = area.z2, minerCount = 1 } }
@@ -52,6 +54,12 @@ return {
     local gone = false
     for i = pr0 + 1, #pruned.lines do if pruned.lines[i]:find(name, 1, true) then gone = true end end
     sim:expect(not gone, "it was never pruned as offline")
+    -- And the job: requeued by the reboot, it comes back to the same (only) miner, which had sent no heartbeat for the
+    -- whole outage. A re-send held since the reboot must not fire on top of that fresh dispatch (T2 2026-10-27: it was
+    -- answered "busy", the job requeued under a miner still mining it, and sat pending for 2 h 49 m).
+    local finished = sim:run_until(function() return done.count >= 1 end, 12 * 3600 * 1000)
+    sim:expect(#busy.lines == 0, "the job was never rejected as 'busy' (" .. #busy.lines .. ")")
+    sim:expect(finished, "the job completed")
     sim.results.moved_without_gps = moved
   end,
 }
