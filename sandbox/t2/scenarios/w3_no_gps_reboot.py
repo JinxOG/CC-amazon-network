@@ -4,7 +4,8 @@ Same as sandbox/scenarios/w3_no_gps_reboot.lua: once the miner is at work in its
 the miner's computer is cut and turned back on; GPS returns 6 game minutes later.
 Pass: the miner logs 'NOT moving until both are measured', the server raises 'NEEDS HANDS: node_X — stuck_no_fix', the
 miner is never pruned, then logs 'Position and facing measured after' once GPS is back and docks.
-Pin master at or after 119bdfa (1.9.152; on 1.9.151 the miner strands, which is the failure). 1x, ~60 game minutes."""
+Pin master at or after f25c84c (the late-GPS fix 119bdfa plus the re-send fix). 1x, ~60 game minutes plus the rest of
+the job (it must complete with no "busy" rejection)."""
 import re
 
 NAME = "w3_no_gps_reboot"
@@ -42,3 +43,11 @@ def steps(ctx):
     home = ctx.wait_until(lambda: len(mine("Docked at bay")) > d0, 3600)
     ctx.expect(bool(home), "and recovered home to its dock")
     ctx.expect(len(mine("Pruned stale offline turtle")) == p0, "it was never pruned as offline")
+    # The job, requeued by the reboot, comes back to the same miner after a long silence (no heartbeat while it waited
+    # for GPS). A re-send held since the reboot must not fire on top of that fresh dispatch: the 2026-10-27 T2 run
+    # world-restart-gps-late-1x saw it answered 'busy' and the job stall 2 h 49 m (fixed in f25c84c).
+    job = went[0].split("Dispatched ")[1].split()[0]
+    busy = [l for l in ctx.log_lines("rejected by") if "busy" in l and job in l]
+    ctx.expect(not busy, "the job was never rejected as 'busy' (%d)" % len(busy))
+    finished = ctx.wait_until(lambda: ctx.log_lines("Job complete: %s" % job), 6 * 3600)
+    ctx.expect(bool(finished), "the job completed")
