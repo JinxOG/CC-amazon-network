@@ -198,6 +198,215 @@ end
 
 return {
 
+    -- ─── Picking the next ore (the per-ore table.sort, SPEC-OWNER 2026-10-20) ─
+    --
+    -- mineOreList used to table.sort the whole remaining list after every ore
+    -- and read element 1. takeNearest does one pass instead. The risk in that
+    -- swap is not that it breaks loudly -- it is that it quietly walks a
+    -- DIFFERENT route, which changes fuel use and trip length and would not be
+    -- noticed until the field. So the central test below is an equivalence
+    -- test against the old algorithm, kept verbatim as the oracle.
+    ["takeNearest picks the nearest ore, not the first"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local list = {
+            { x = 10, y = 0, z = 0, name = "far"  },
+            { x =  1, y = 0, z = 0, name = "near" },
+            { x =  5, y = 0, z = 0, name = "mid"  },
+        }
+        local ore, dist = flow.takeNearest(list, { x = 0, y = 0, z = 0 })
+        assert_eq(ore.name, "near")
+        assert_eq(dist, 1, "and reports the distance it measured")
+        assert_eq(#list, 2, "and the ore it picked is gone from the list")
+    end,
+
+    ["takeNearest returns nil for an empty list, so the caller's loop ends"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.takeNearest({}, { x = 0, y = 0, z = 0 }), nil)
+    end,
+
+    -- Removal swaps the last element into the gap. Done wrong that silently
+    -- drops an ore or mines one twice, and the sector still "completes".
+    ["takeNearest loses no ore and repeats none while draining a list"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local list = {}
+        for i = 1, 9 do list[i] = { x = i * 3, y = 0, z = i, name = "o" .. i } end
+        local seen = {}
+        while #list > 0 do
+            local ore = flow.takeNearest(list, { x = 0, y = 0, z = 0 })
+            seen[ore.name] = (seen[ore.name] or 0) + 1
+        end
+        for i = 1, 9 do
+            assert_eq(seen["o" .. i], 1, "o" .. i .. " must come out exactly once")
+        end
+    end,
+
+    -- table.sort is not stable, so which of several equidistant ores won was
+    -- arbitrary before. Pinning it costs nothing and makes a walk reproducible.
+    ["equidistant ores resolve to the earliest in list order"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local list = { { x = 1, y = 0, z = 0, name = "a" },
+                       { x = -1, y = 0, z = 0, name = "b" },
+                       { x = 0, y = 0, z = 1, name = "c" } }
+        assert_eq(flow.takeNearest(list, { x = 0, y = 0, z = 0 }).name, "a")
+    end,
+
+    -- Two separate claims, because one test could not carry both.
+    --
+    -- A first version asserted that the whole walk matched the old algorithm's
+    -- step for step, and it FAILED -- correctly, and not because the code is
+    -- wrong. When two ores are equidistant the old sort and this pick choose
+    -- different ones, and from that step on the two routes diverge completely
+    -- and legitimately. table.sort is not stable, so the old choice there was
+    -- arbitrary: there was no behaviour to preserve. Asserting on it was
+    -- asserting on luck.
+    --
+    -- So: minimality is the real contract and holds always; route equivalence
+    -- holds only where the old behaviour was ever defined, i.e. until the first
+    -- tie. Both report how much evidence they actually gathered, because a
+    -- property test that silently examines nothing looks exactly like one that
+    -- passes (feedback-checks-must-be-able-to-fail).
+    ["takeNearest always returns a minimum-distance ore, ties included"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local function dist(o, p)
+            return math.abs(o.x - p.x) + math.abs(o.y - p.y) + math.abs(o.z - p.z)
+        end
+        math.randomseed(20261027)
+        local checked = 0
+        for _ = 1, 40 do
+            local p = { x = math.random(-16, 16), y = math.random(-60, 10),
+                        z = math.random(-16, 16) }
+            local remaining = {}
+            for i = 1, math.random(1, 25) do
+                remaining[i] = { x = math.random(-16, 16), y = math.random(-60, 10),
+                                 z = math.random(-16, 16) }
+            end
+            while #remaining > 0 do
+                local best
+                for _, o in ipairs(remaining) do
+                    local d = dist(o, p)
+                    if best == nil or d < best then best = d end
+                end
+                local ore, d = flow.takeNearest(remaining, p)
+                assert_eq(d, best, "the pick must be a minimum over what is left")
+                assert_eq(dist(ore, p), best,
+                    "and the distance returned must describe the ore returned -- "
+                    .. "a wrong index gives one ore's identity with another's distance")
+                p = { x = ore.x, y = ore.y, z = ore.z }
+                checked = checked + 1
+            end
+        end
+        print(("[takeNearest] minimality: %d picks checked"):format(checked))
+        assert_eq(checked >= 300, true,
+            "only " .. checked .. " picks checked -- too few to prove anything")
+    end,
+
+    ["takeNearest walks the old route exactly, up to the first equidistant pair"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local function dist(o, p)
+            return math.abs(o.x - p.x) + math.abs(o.y - p.y) + math.abs(o.z - p.z)
+        end
+        local function tied(remaining, p)
+            local best, n = nil, 0
+            for _, o in ipairs(remaining) do
+                local d = dist(o, p)
+                if best == nil or d < best then best, n = d, 1
+                elseif d == best then n = n + 1 end
+            end
+            return n > 1
+        end
+
+        math.randomseed(1027)
+        local steps, truncated = 0, 0
+        for trial = 1, 60 do
+            local start = { x = math.random(-16, 16), y = math.random(-60, 10),
+                            z = math.random(-16, 16) }
+            local remOld, remNew = {}, {}
+            for i = 1, math.random(1, 25) do
+                local o = { x = math.random(-16, 16), y = math.random(-60, 10),
+                            z = math.random(-16, 16) }
+                remOld[i], remNew[i] = o, o
+            end
+            local p = { x = start.x, y = start.y, z = start.z }
+            while #remNew > 0 do
+                if tied(remNew, p) then truncated = truncated + 1 break end
+                -- The replaced algorithm, verbatim, as the oracle.
+                table.sort(remOld, function(a, b) return dist(a, p) < dist(b, p) end)
+                local oreOld = table.remove(remOld, 1)
+                local oreNew = flow.takeNearest(remNew, p)
+                assert_eq(oreNew.x, oreOld.x, "trial " .. trial .. ": same ore x")
+                assert_eq(oreNew.y, oreOld.y, "trial " .. trial .. ": same ore y")
+                assert_eq(oreNew.z, oreOld.z, "trial " .. trial .. ": same ore z")
+                p = { x = oreNew.x, y = oreNew.y, z = oreNew.z }
+                steps = steps + 1
+            end
+        end
+        print(("[takeNearest] route equivalence: %d tie-free steps matched, "
+            .. "%d trials stopped at a tie"):format(steps, truncated))
+        assert_eq(steps >= 200, true,
+            "only " .. steps .. " tie-free steps compared -- if ties truncated "
+            .. "nearly every trial this test proves nothing and the generator "
+            .. "needs a wider coordinate range")
+    end,
+
+    -- ─── Why an ore was skipped (W3's unanswerable question, 2026-10-08) ─────
+    --
+    -- Every input below is a string base.move.to actually produces, taken from
+    -- tryMove and move.to in turtle_base and wrapped the way move.to wraps it.
+    -- A taxonomy tested only against strings the test author invented proves
+    -- the classifier matches itself.
+    ["skip reasons are classified from the strings move.to really returns"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local cases = {
+            -- move.to wraps tryMove's reason per axis, hence the prefixes.
+            { "stuck X: geofence_breach",            "fenced"  },
+            { "stuck up: geofence_breach",           "fenced"  },
+            { "stuck Z: blocked by turtle (forward)", "turtle" },
+            { "stuck down: blocked (down)",          "blocked" },
+            { "stuck X: blocked (forward)",          "blocked" },
+            { "aborted",                             "aborted" },
+        }
+        for _, c in ipairs(cases) do
+            assert_eq(flow.classifySkip(c[1]), c[2], "classifying " .. c[1])
+        end
+    end,
+
+    -- "blocked by turtle" also contains "blocked", so the order of the tests
+    -- inside classifySkip decides the answer. A fleet member in the way is a
+    -- very different report from bedrock and must not be folded into it.
+    ["a turtle in the way is not reported as an unbreakable block"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.classifySkip("stuck X: blocked by turtle (forward)"), "turtle")
+    end,
+
+    -- The bucket that must exist. If an upstream reason string changes, it has
+    -- to surface as "unknown" in the log rather than be quietly absorbed by
+    -- whichever bucket happens to match.
+    ["an unrecognised or missing reason becomes unknown, never a nearby bucket"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.classifySkip("stuck X: some new refusal nobody told us about"),
+            "unknown")
+        assert_eq(flow.classifySkip(nil), "unknown",
+            "a nil reason is the case where move.to returned false with no why")
+        assert_eq(flow.classifySkip(false), "unknown")
+    end,
+
+    ["the skip breakdown renders in a stable order so two sectors can be diffed"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.renderSkipReasons({ turtle = 2, fenced = 134, blocked = 1 }),
+            "blocked 1, fenced 134, turtle 2")
+        assert_eq(flow.renderSkipReasons({}), "no reason recorded")
+        assert_eq(flow.renderSkipReasons(nil), "no reason recorded")
+    end,
+
     -- ─── The ore chest in the ledger (recovery layer, W1's card) ─────────────
     --
     -- node_181, 2026-10-08: DUMPING at 22:48:33, a reboot at 22:52 left the

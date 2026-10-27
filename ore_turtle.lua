@@ -1317,33 +1317,48 @@ end
 
 -- ── Mining ───────────────────────────────────────────────────────────────────
 
+-- Returns reached, why. The reason is base.move.to's own and is passed through
+-- rather than discarded: mineOreList buckets it, so a sector that refuses every
+-- ore says WHICH refusal instead of printing a bare count. See
+-- mine_flow.classifySkip.
 local function navToOre(ore, jobId)
     checkFuel(jobId)
     local p = base.getPos()
-    local ok1 = base.move.to(ore.x, p.y, ore.z)
-    if not ok1 then return false end
+    local ok1, why1 = base.move.to(ore.x, p.y, ore.z)
+    if not ok1 then return false, why1 end
     checkFuel(jobId)
-    local ok2 = base.move.to(ore.x, ore.y, ore.z)
-    return ok2
+    local ok2, why2 = base.move.to(ore.x, ore.y, ore.z)
+    return ok2, why2
 end
 
 -- Returns mined, byType, abortReason. abortReason is non-nil only when the
 -- placed loader stopped beaconing: at that point mining is over for this
 -- sector regardless of what is left in the list.
 local function mineOreList(ores, jobId, sx, sz, sy)
-    -- Greedy nearest-neighbour: re-sort after every mine so the miner stays
-    -- in a vein until it's exhausted before jumping to a distant one.
+    -- Greedy nearest-neighbour: re-pick the closest ore after every mine, so
+    -- the miner stays in a vein until it's exhausted before jumping to a
+    -- distant one. The pick is mine_flow.takeNearest -- one pass, no sort; see
+    -- the note there for why sorting the whole list to read element 1 was the
+    -- miners' single largest CPU cost (SPEC-OWNER, mail 2026-10-20).
     -- Skip ores below MIN_ORE_Y — the scanner at Y=8 can still detect them
     -- but navigating there risks hitting indestructible bedrock.
-    local remaining = {}
+    local remaining  = {}
+    local belowFloor = 0
     for _, o in ipairs(ores) do
-        if o.y >= MIN_ORE_Y then table.insert(remaining, o) end
+        if o.y >= MIN_ORE_Y then table.insert(remaining, o)
+        else belowFloor = belowFloor + 1 end
     end
+    -- Counted, not just dropped. Ore below the floor is reported to the server
+    -- as found and then silently never mined, which is its own open card; until
+    -- that is settled the number at least appears in the log instead of being
+    -- the invisible difference between "scanned" and "attempted".
+    local attempted = #remaining
 
     local SCAN_BATCH = 25   -- send one SECTOR_SCAN per N ores to avoid modem flood
-    local mined      = 0
-    local skipped    = 0
-    local byType     = {}
+    local mined       = 0
+    local skipped     = 0
+    local skipReasons = {}  -- bucket -> count; see mine_flow.classifySkip
+    local byType      = {}
     local scanBatch  = {}   -- accumulated since last flush: oreName → count
 
     local function flushScanBatch()
@@ -1368,19 +1383,16 @@ local function mineOreList(ores, jobId, sx, sz, sy)
             return mined, byType, "server_unreachable_autonomous_return"
         end
         local p = base.getPos()
-        table.sort(remaining, function(a, b)
-            local da = math.abs(a.x-p.x) + math.abs(a.y-p.y) + math.abs(a.z-p.z)
-            local db = math.abs(b.x-p.x) + math.abs(b.y-p.y) + math.abs(b.z-p.z)
-            return da < db
-        end)
-        local ore = table.remove(remaining, 1)
+        local ore = mine_flow.takeNearest(remaining, p)
         if inventoryFull() then dumpOres() end
-        local reached = navToOre(ore, jobId)
+        local reached, whyNot = navToOre(ore, jobId)
         if not reached then
             -- Includes geofence refusals: an ore outside the placed loader's
             -- footprint is simply not minable this sector. Skipping it is
             -- correct; chasing it would strand the turtle in an unloaded chunk.
             skipped = skipped + 1
+            local bucket = mine_flow.classifySkip(whyNot)
+            skipReasons[bucket] = (skipReasons[bucket] or 0) + 1
         else
             byType[ore.name]    = (byType[ore.name]    or 0) + 1
             scanBatch[ore.name] = (scanBatch[ore.name] or 0) + 1
@@ -1392,8 +1404,16 @@ local function mineOreList(ores, jobId, sx, sz, sy)
         end
     end
     flushScanBatch()   -- send any remainder before SECTOR_DONE
+    -- Reported with the reason breakdown, and with how many of the scan's ores
+    -- that was. "Skipped 134" next to "of 134 scanned" is the difference
+    -- between a sector that had nothing and a sector that refused everything;
+    -- the old line could not tell those apart and cost W3 an unanswerable
+    -- question (2026-10-08).
     if skipped > 0 then
-        print(string.format("[MINER] Skipped %d unreachable ores (bedrock/fenced/blocked)", skipped))
+        print(string.format(
+            "[MINER] Skipped %d of %d attempted (scan %d, %d below Y=%d): %s",
+            skipped, attempted, #ores, belowFloor, MIN_ORE_Y,
+            mine_flow.renderSkipReasons(skipReasons)))
     end
     return mined, byType, nil
 end

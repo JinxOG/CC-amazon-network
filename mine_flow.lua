@@ -1124,4 +1124,117 @@ function mine_flow.bankPayload(opts)
     return true, face.name
 end
 
+-- Pick and remove the nearest ore from a remaining-ore list, in one pass.
+--
+-- Lives here, away from its only caller, for the reason bankPayload does:
+-- ore_turtle self-executes and cannot be loaded headlessly, so nothing inside
+-- it can be unit-tested. This is the part of mineOreList worth proving.
+--
+-- WHAT IT REPLACES. mineOreList used to table.sort the WHOLE remaining list
+-- after every single ore and then read element 1 -- computing a complete
+-- ordering to answer "which one is nearest", once per ore. The comparator
+-- worked out BOTH operands' distances on every comparison, so each ore's
+-- distance was recomputed O(log N) times per sort.
+--
+-- SPEC-OWNER measured the sandbox spending about 70% of its run time in the
+-- fleet's own Lua and 35% of that in the miners, almost all of it at this line
+-- (mail 2026-10-20). Read that number carefully: it is a share of SANDBOX CPU,
+-- where moves are free. On a real turtle a move costs 0.4 s and dwarfs it, so
+-- this is not 35% of a real job. The reason to care live is the one that mail
+-- gives: CC grants each computer limited time and the event queue is finite, so
+-- a miner grinding through millions of comparisons is a miner not reading its
+-- radio.
+--
+-- BEHAVIOUR IS PRESERVED WHEREVER IT WAS EVER DEFINED. "Sort by distance, take
+-- the first" is exactly "take the minimum". Lua's table.sort is NOT stable, so
+-- which of several equidistant ores won was already arbitrary; this takes the
+-- earliest in list order, which is at least deterministic. The greedy
+-- nearest-neighbour walk -- stay in a vein until it is exhausted rather than
+-- jumping to a distant one -- is unchanged, because it only ever depended on
+-- the pick, never on the order of what was left behind.
+--
+-- Removal swaps in the last element instead of table.remove(list, 1), which
+-- shifted every remaining ore down one slot on every pick: O(N) of copying per
+-- ore, to maintain an order nothing reads. Only membership matters here.
+--
+-- Returns the ore and its distance, or nil for an empty list, so a caller's
+-- `while #list > 0` loop keeps working unchanged.
+function mine_flow.takeNearest(list, pos)
+    local n = #list
+    if n == 0 then return nil end
+    local first    = list[1]
+    local bestIdx  = 1
+    local bestDist = math.abs(first.x - pos.x) + math.abs(first.y - pos.y)
+                   + math.abs(first.z - pos.z)
+    for i = 2, n do
+        local o = list[i]
+        local d = math.abs(o.x - pos.x) + math.abs(o.y - pos.y)
+                + math.abs(o.z - pos.z)
+        if d < bestDist then bestIdx, bestDist = i, d end
+    end
+    local picked  = list[bestIdx]
+    list[bestIdx] = list[n]
+    list[n]       = nil
+    return picked, bestDist
+end
+
+-- Why an ore could not be reached, bucketed from base.move.to's own reason.
+--
+-- mineOreList counted refusals into one number and printed
+-- "Skipped N unreachable ores (bedrock/fenced/blocked)" -- a count with no
+-- reason, and a parenthesis that OVERCLAIMS: nothing in the move layer can
+-- tell bedrock from any other unbreakable block. W3 asked (2026-10-08) whether
+-- two re-mine trips that scanned 134 and 100 ores and mined 0 were the scan
+-- counting ore outside the lease. "134 refused" and "nothing there" are
+-- opposite diagnoses and that line rendered them the same, so the question
+-- could not be answered from a log at all.
+--
+-- The reason was already there and thrown away: base.move.to returns one, and
+-- navToOre kept only the boolean. These are the strings it can actually
+-- produce, from tryMove and move.to in turtle_base -- not a guessed taxonomy:
+--
+--   "geofence_breach"            -> fenced   outside the placed loader's
+--                                            footprint; correct to skip, and
+--                                            it belongs to the NEIGHBOURING
+--                                            sector's lease
+--   "blocked by turtle (<dir>)"  -> turtle    a fleet member in the way; the
+--                                            dig guard refuses rather than
+--                                            mining it
+--   "blocked (<dir>)"            -> blocked   something that will not break.
+--                                            Bedrock is the common case and is
+--                                            NOT identifiable as such here
+--   "aborted"                    -> aborted   a recall or abort, not an
+--                                            unreachable ore at all; counting
+--                                            it as one was always wrong
+--
+-- Anything else becomes "unknown", on purpose: a reason string that changes
+-- upstream must show up as unknown in the log rather than be folded silently
+-- into a bucket that fits. move.to wraps each one as "stuck up: ...",
+-- "stuck X: ..." and so on, so these are substring tests, not equality.
+function mine_flow.classifySkip(why)
+    if type(why) ~= "string" then return "unknown" end
+    if why:find("geofence_breach",   1, true) then return "fenced"  end
+    if why:find("blocked by turtle", 1, true) then return "turtle"  end
+    if why:find("aborted",           1, true) then return "aborted" end
+    if why:find("blocked",           1, true) then return "blocked" end
+    return "unknown"
+end
+
+-- Render the buckets as a stable, readable tail for the skip line.
+--
+-- Sorted by name rather than by count so the same sector always produces the
+-- same string: a log line that reorders itself between runs cannot be diffed,
+-- and diffing two sectors is the whole point of reporting this.
+function mine_flow.renderSkipReasons(counts)
+    local names = {}
+    for name in pairs(counts or {}) do names[#names + 1] = name end
+    if #names == 0 then return "no reason recorded" end
+    table.sort(names)
+    local parts = {}
+    for i, name in ipairs(names) do
+        parts[i] = name .. " " .. tostring(counts[name])
+    end
+    return table.concat(parts, ", ")
+end
+
 return mine_flow

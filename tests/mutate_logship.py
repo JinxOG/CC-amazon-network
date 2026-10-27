@@ -393,7 +393,85 @@ O_ROLL    = "a clean place failure rolls the record back"
 O_WRITE   = "a record that cannot be written stops the placement"
 O_WIRE    = "the ore chest is a registered ledger kind, recorded and recovered first (SOURCE-ONLY, weaker)"
 
+N_PICK  = "takeNearest picks the nearest ore, not the first"
+N_EMPTY = "takeNearest returns nil for an empty list, so the caller's loop ends"
+N_KEEP  = "takeNearest loses no ore and repeats none while draining a list"
+N_TIE   = "equidistant ores resolve to the earliest in list order"
+N_MIN   = "takeNearest always returns a minimum-distance ore, ties included"
+N_WIRED = ("the per-ore pick goes through mine_flow.takeNearest, with no sort "
+           "left behind (SOURCE-ONLY, weaker)")
+N_CLASS   = "skip reasons are classified from the strings move.to really returns"
+N_TURTLE  = "a turtle in the way is not reported as an unbreakable block"
+N_UNKNOWN = "an unrecognised or missing reason becomes unknown, never a nearby bucket"
+N_RENDER  = "the skip breakdown renders in a stable order so two sectors can be diffed"
+N_REASON  = ("a skipped ore's reason reaches the log, not just its count "
+             "(SOURCE-ONLY, weaker)")
+
 MUTANTS = [
+    # ── The per-ore pick (replaces mineOreList's table.sort) ────────────────
+    #
+    # Deliberately NOT a mutant: removing `list[n] = nil`. The list then never
+    # shrinks, `while #list > 0` never ends, and this harness has no per-mutant
+    # timeout -- so the hang would look like a crashed run rather than a result.
+    # Same reasoning as BOOT_GUARD_ALWAYS_ON_HANGS at the bottom of this file.
+    # The behaviour is pinned by N_KEEP, which drains a list to completion.
+    ("the pick takes the FARTHEST ore instead of the nearest", "mine_flow.lua",
+     [('        if d < bestDist then bestIdx, bestDist = i, d end',
+       '        if d > bestDist then bestIdx, bestDist = i, d end')], N_PICK),
+
+    ("equidistant ores go to the LAST one rather than the first", "mine_flow.lua",
+     [('        if d < bestDist then bestIdx, bestDist = i, d end',
+       '        if d <= bestDist then bestIdx, bestDist = i, d end')], N_TIE),
+
+    ("the scan skips the second ore in the list", "mine_flow.lua",
+     [('    for i = 2, n do', '    for i = 3, n do')], N_PICK),
+
+    ("the picked ore is left in the list and the last one dropped", "mine_flow.lua",
+     [('    list[bestIdx] = list[n]', '')], N_KEEP),
+
+    ("the reported distance no longer describes the ore returned", "mine_flow.lua",
+     [('    return picked, bestDist', '    return picked, 0')], N_MIN),
+
+    ("an empty list is indexed instead of refused", "mine_flow.lua",
+     [('    if n == 0 then return nil end', '')], N_EMPTY),
+
+    ("the miner goes back to taking ores in list order", "ore_turtle.lua",
+     [('        local ore = mine_flow.takeNearest(remaining, p)',
+       '        local ore = table.remove(remaining, 1)')], N_WIRED),
+
+    # ── Why an ore was skipped (W3's unanswerable question, 2026-10-08) ─────
+    ("a fleet turtle in the way is reported as an unbreakable block", "mine_flow.lua",
+     [('    if why:find("blocked by turtle", 1, true) then return "turtle"  end\n', '')],
+     N_TURTLE),
+
+    ("an unrecognised reason is absorbed into the blocked bucket", "mine_flow.lua",
+     [('    return "unknown"\nend\n\n-- Render the buckets',
+       '    return "blocked"\nend\n\n-- Render the buckets')], N_UNKNOWN),
+
+    ("a missing reason is indexed as a string instead of refused", "mine_flow.lua",
+     [('    if type(why) ~= "string" then return "unknown" end\n', '')], N_UNKNOWN),
+
+    ("a geofence refusal is no longer recognised", "mine_flow.lua",
+     [('    if why:find("geofence_breach",   1, true) then return "fenced"  end\n', '')],
+     N_CLASS),
+
+    ("the skip breakdown renders in an unstable order", "mine_flow.lua",
+     [('    table.sort(names)', '    table.sort(names, function(a, b) return a > b end)')],
+     N_RENDER),
+
+    ("an empty breakdown renders as nothing at all", "mine_flow.lua",
+     [('    if #names == 0 then return "no reason recorded" end\n', '')], N_RENDER),
+
+    ("the miner discards move.to's reason again", "ore_turtle.lua",
+     [('    local ok1, why1 = base.move.to(ore.x, p.y, ore.z)\n    if not ok1 then return false, why1 end',
+       '    local ok1 = base.move.to(ore.x, p.y, ore.z)\n    if not ok1 then return false end')],
+     N_REASON),
+
+    ("the skip line goes back to a bare count", "ore_turtle.lua",
+     [('            skipped, attempted, #ores, belowFloor, MIN_ORE_Y,\n            mine_flow.renderSkipReasons(skipReasons)))',
+       '            skipped, attempted, #ores, belowFloor, MIN_ORE_Y,\n            "bedrock/fenced/blocked"))')],
+     N_REASON),
+
     ("the ore chest is never recorded before it is placed", "mine_flow.lua",
      [('            if L and L.record then', '            if false then')], O_REC),
 

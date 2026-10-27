@@ -466,4 +466,69 @@ function(assert_eq)
         .. "sector, so a chest recovered after it waits out the whole trip")
 end
 
+-- The per-ore pick must go through mine_flow.takeNearest, and mineOreList must
+-- keep no sort of its own.
+--
+-- This matters more than it looks. takeNearest is covered behaviourally in
+-- test_mine_flow -- minimality, route equivalence, no ore lost -- but none of
+-- that proves the MINER calls it. A call site that quietly went back to
+-- table.sort, or to table.remove(remaining, 1) with no distance check at all,
+-- would leave every one of those tests green while the fleet walked a
+-- different route. So this pins the wiring, and the mutation harness has an
+-- entry for exactly that reversion.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["the per-ore pick goes through mine_flow.takeNearest, with no sort left behind (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    -- string.char(10), not an escape: a literal newline would end this string.
+    local NL   = string.char(10)
+    local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy%)(.-)"
+                           .. NL .. "end" .. NL)
+    assert_eq(body ~= nil, true, "mineOreList moved or vanished")
+
+    assert_eq(body:find("mine_flow.takeNearest(remaining, p)", 1, true) ~= nil, true,
+        "mineOreList must pick the next ore via mine_flow.takeNearest -- that is "
+        .. "the only version of the pick that anything can test")
+    assert_eq(body:find("table.sort", 1, true), nil,
+        "and keep no sort of its own: sorting the whole remaining list to read "
+        .. "element 1 is the cost this replaced (SPEC-OWNER, mail 2026-10-20)")
+    assert_eq(body:find("table.remove(remaining", 1, true), nil,
+        "nor a positional removal: takeNearest owns removal, and an extra one "
+        .. "here would drop an ore per pick")
+end
+
+-- A skipped ore's reason must survive from move.to to the log line.
+--
+-- Three separate links, and a break in any one of them leaves the classifier's
+-- own tests green while the log goes back to reporting a bare count: navToOre
+-- must RETURN the reason, mineOreList must bucket it, and the line must render
+-- the buckets. W3 lost an answerable question to exactly this gap (2026-10-08).
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["a skipped ore's reason reaches the log, not just its count (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    local NL = string.char(10)
+
+    local nav = src:match("local function navToOre%(ore, jobId%)(.-)" .. NL .. "end" .. NL)
+    assert_eq(nav ~= nil, true, "navToOre moved or vanished")
+    assert_eq(nav:find("return false, why1", 1, true) ~= nil, true,
+        "navToOre must pass move.to's reason back, not just false -- the reason "
+        .. "is already there and was being discarded")
+
+    local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy%)(.-)"
+                           .. NL .. "end" .. NL)
+    assert_eq(body ~= nil, true, "mineOreList moved or vanished")
+    assert_eq(body:find("mine_flow.classifySkip(whyNot)", 1, true) ~= nil, true,
+        "the reason must be bucketed, or every skip is unknown")
+    assert_eq(body:find("mine_flow.renderSkipReasons(skipReasons)", 1, true) ~= nil, true,
+        "and the buckets must reach the printed line, or nothing is reported")
+    assert_eq(body:find("bedrock/fenced/blocked", 1, true), nil,
+        "the old line claimed it could identify bedrock; nothing in the move "
+        .. "layer can tell bedrock from any other unbreakable block")
+end
+
 return suite
