@@ -11,20 +11,21 @@ import re
 NAME = "w3_lost_job_ack"
 
 
-def server_computer(control):
-    for d in os.listdir(control.disks):
-        try:
-            head = control.read_disk(int(d), "startup.lua")[:60].decode("utf8", "replace")
-        except (OSError, ValueError):
-            continue
-        if head.startswith("-- central_server.lua"):
-            return int(d)
-    return None
+def server_computer(ctx):
+    """The id of the RUNNING dispatch computer: the last 'Central server online ... ID: node_NNN' line the server itself logged. (A scan of the disks for a
+    startup.lua that starts '-- central_server.lua' also finds decoy computers of the world copy, such as #110, and acted on the wrong one.)"""
+    lines = ctx.log_lines("Central server online")
+    if not lines:
+        return None
+    try:
+        return int(lines[-1].rsplit("node_", 1)[1].split()[0])
+    except (IndexError, ValueError):
+        return None
 
 
 def steps(ctx):
     ctx.wait_registered(14, 300)
-    sid = server_computer(ctx.control)
+    sid = server_computer(ctx)
     ctx.expect(sid is not None, "found the dispatch computer (#%s)" % sid)
     if sid is None:
         return
