@@ -198,6 +198,20 @@ def verify_pinned_bytes(ctx, sha):
         "%s #%s %s" % (r, c, "same" if ok else "DIFFERENT") for r, c, ok in results))
 
 
+def host_snapshot(label, ctx):
+    """One line in the report's notes about what else the PC is doing: CPU load, and the CPU seconds so far of every interpreter / game / bridge process
+    (a simulator or a mutation run sharing the machine made a 1x run inconclusive on 2026-10-27, and nothing in the report said so)."""
+    ps = ("$l=(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average; "
+          "$p=Get-Process | Where-Object { $_.ProcessName -match '^(lua52|luajit|java|node|python)' } | "
+          "Group-Object ProcessName | ForEach-Object { $_.Name + ' x' + $_.Count + ' cpu=' + [int](($_.Group | Measure-Object CPU -Sum).Sum) + 's' }; "
+          "'load=' + $l + '%; ' + ($p -join '; ')")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        out = "(could not read)"
+    ctx.note("host %s: %s" % (label, out))
+
+
 def keep_whole(text, limit=80000):
     """A tool's output is kept whole. Only when it is over `limit` characters are the middle lines dropped (the head, where a verdict's sections
     start, and the tail, where the verdict ends, are both kept, with a marker); the old rule kept just the last 6000 characters and cut the
@@ -373,6 +387,7 @@ def main():
             runmod.pin(run_id, pin)
             ctx.note("fleet pinned to %s through the real update path" % pin)
             verify_pinned_bytes(ctx, pin)
+        host_snapshot("at start", ctx)
         if t2logs:
             ctx._raw.radio_log("on")
             ctx._raw.events_log("on")
@@ -382,6 +397,7 @@ def main():
         scenario.steps(ctx)
     except Exception as e:  # noqa: BLE001
         error = "%s: %s" % (type(e).__name__, e)
+    host_snapshot("at end", ctx)
     tools = tools_output(since_iso)
     try:
         ctx.t2 = t2_summary(ctx)
