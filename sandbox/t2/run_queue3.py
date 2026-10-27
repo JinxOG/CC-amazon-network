@@ -52,7 +52,26 @@ def notify(subject, body):
         print("could not send the notice: %s" % e, flush=True)
 
 
+def keep_failure_evidence(run_id):
+    """Copies what a failed start left behind (the bridge's own output, the tail of the server console) to testserver/failures/ before the run folder is
+    deleted: 'the bridge did not come up' recurred on the first attempt after a run ended and its cause was lost with the folder."""
+    try:
+        dest = os.path.join(os.path.dirname(q.LOGS), "failures")
+        os.makedirs(dest, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for rel, name in (("bridge/bridge.out", "bridge"), ("console.log", "console")):
+            src = os.path.join(q.LOGS, run_id, rel)
+            if os.path.exists(src):
+                with open(src, "rb") as f:
+                    data = f.read()[-20000:]
+                with open(os.path.join(dest, "%s-%s-%s.txt" % (run_id, stamp, name)), "wb") as f:
+                    f.write(data)
+    except OSError:
+        pass
+
+
 def cleanup(run_id):
+    keep_failure_evidence(run_id)
     """Stops whatever a failed run left behind: its server by its own tool, any bridge still running for it, then its folder."""
     subprocess.run([sys.executable, "-I", os.path.join(q.HERE, "run.py"), "stop", run_id], capture_output=True)
     time.sleep(10)
