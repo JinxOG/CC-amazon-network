@@ -41,6 +41,10 @@ def steps(ctx):
     ctx.expect(back >= 1, "the server saw a stuck_no_fix miner come back in service (%d lines)" % back)
     redispatched = len(ctx.log_lines("Dispatched job_"))
     ctx.expect(redispatched >= 2, "the job was dispatched again after the restart (%d dispatch lines in all)" % redispatched)
+    busy = [l for l in ctx.log_lines("rejected by") if "busy" in l.lower()]
+    # W3 (f25c84c): a stale re-send held since the reboot fired on top of a fresh dispatch of the same job to the same miner, which answered busy; the job
+    # was then requeued under a miner still mining it. That is the signature of the bug the first run of this scenario hit.
+    ctx.expect(len(busy) == 0, "no job was rejected as busy by the miner that already had it (%d lines)" % len(busy))
     ctx.expect(len(ctx.log_lines("Loader recovery FAILED")) == 0, "no 'Loader recovery FAILED' line")
     stuck = len(ctx.log_lines("stuck_no_fix"))
     ctx.note("stuck_no_fix lines while waiting for a fix: %d" % stuck)

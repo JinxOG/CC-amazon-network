@@ -167,6 +167,37 @@ def load_scenario(path):
     return mod
 
 
+def verify_pinned_bytes(ctx, sha):
+    """The pin waits for proto.VERSION, which two commits can share (f25c84c and ff54ed0 are both 1.9.153), so it cannot show the commit's code arrived.
+    Compare the files themselves: the server computer's startup.lua against the commit's central_server.lua, and the registered miners' startup.lua
+    against ore_turtle.lua. (The world copy also holds computers with fleet roles that are not part of the running fleet; they are not compared:
+    for the server, any computer with the SERVER role matching is enough, for miners only the ones registered with the server count.)
+    The result goes into the report either way, as a note and a check."""
+    crlf, lf = bytes([13, 10]), bytes([10])
+
+    def commit_file(name):
+        return subprocess.run(["git", "-C", REPO, "show", "%s:%s" % (sha, name)], capture_output=True, check=True).stdout.replace(crlf, lf)
+
+    results = []
+    try:
+        want_server, want_miner = commit_file("central_server.lua"), commit_file("ore_turtle.lua")
+        servers = [i for i in sorted(ctx._raw.computers()) if (ctx._raw.role_of(i) or "").strip().upper() == "SERVER"]
+        same_servers = [i for i in servers if ctx._raw.read_disk(i, "startup.lua").replace(crlf, lf) == want_server]
+        results.append(("SERVER", same_servers[0] if same_servers else (servers[0] if servers else None), bool(same_servers)))
+        for node, t in sorted(ctx.state().get("turtles", {}).items()):
+            if (t.get("role") or "").upper() == "MINER":
+                cid = int(node.replace("node_", ""))
+                ok = ctx._raw.read_disk(cid, "startup.lua").replace(crlf, lf) == want_miner
+                results.append(("MINER", cid, ok))
+    except (subprocess.CalledProcessError, OSError, ValueError) as e:
+        ctx.note("pinned code check could not run: %s" % e)
+        return
+    for role, cid, ok in results:
+        ctx.note("pinned code check: %s #%s startup.lua %s commit %s" % (role, cid, "IS byte-identical to" if ok else "DIFFERS from", sha[:7]))
+    ctx.expect(bool(results) and all(r[2] for r in results), "the pinned commit's code is what is on the server and the registered miners (%s)" % ", ".join(
+        "%s #%s %s" % (r, c, "same" if ok else "DIFFERENT") for r, c, ok in results))
+
+
 def keep_whole(text, limit=80000):
     """A tool's output is kept whole. Only when it is over `limit` characters are the middle lines dropped (the head, where a verdict's sections
     start, and the tail, where the verdict ends, are both kept, with a marker); the old rule kept just the last 6000 characters and cut the
@@ -341,6 +372,7 @@ def main():
         if pin:
             runmod.pin(run_id, pin)
             ctx.note("fleet pinned to %s through the real update path" % pin)
+            verify_pinned_bytes(ctx, pin)
         if t2logs:
             ctx._raw.radio_log("on")
             ctx._raw.events_log("on")
