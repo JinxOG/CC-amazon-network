@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: Docked miners never bank their debris - tidyAtDock always finds the station chest below
 date: 2026-10-08
-status: open
+status: answered
 ---
 
 # Docked miners never bank their debris - tidyAtDock always finds the station chest below
