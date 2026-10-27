@@ -61,7 +61,7 @@ def main():
         for r in runs[1:]:
             s = results[r]
             print("-- %s vs %s: ore by sector %s, ore total %s, dumps %s" % (
-                r, runs[0], "EQUAL" if s["sectors"] == base["sectors"] else "DIFFERENT",
+                r, runs[0], "EQUAL" if dict(s["sectors"]) == dict(base["sectors"]) else "DIFFERENT",
                 "equal" if s["ore_total"] == base["ore_total"] else "%d vs %d" % (s["ore_total"], base["ore_total"]),
                 "equal" if s["dumps"] == base["dumps"] else "%d vs %d" % (s["dumps"], base["dumps"])))
 
