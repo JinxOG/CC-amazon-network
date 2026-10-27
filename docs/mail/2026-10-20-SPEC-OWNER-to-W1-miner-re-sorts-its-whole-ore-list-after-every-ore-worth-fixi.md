@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Miner re-sorts its whole ore list after every ore - worth fixing? Measurements from the sandbox
 date: 2026-10-20
-status: open
+status: answered
 ---
 
 # Miner re-sorts its whole ore list after every ore - worth fixing? Measurements from the sandbox
