@@ -2,7 +2,7 @@
 world. Same story as sandbox/scenarios/reboot_mid_dump.lua (node_181, 2026-10-08). Pin the fleet to ff54ed0 (or later) first, run at 1x.
 
 Real Minecraft cannot reboot "at the drop action", so the cut is made as soon as the server logs a miner's DUMPING phase (polled every game second),
-a few game seconds later the computer is turned on again; up to three dumps are cut until the ledger has recovered a chest. WHAT IS ASSERTED, and
+a few game seconds later the computer is turned on again; up to eight dumps are cut (each a little later after the line: the chest is placed some seconds after DUMPING is logged, and the miner has no modem during the dump, so nothing can be polled mid-dump) until the ledger has recovered a chest. WHAT IS ASSERTED, and
 why not "the job completes": with two miners the healthy one finishes the job while a crippled one sits benched, so completion passes on broken
 code. The symptom is the refusal (slot_16_must_hold_the_ore_ender_chest) and the proof of the fix is a ledger recovery, so those are counted; a run
 with zero recoveries is reported as not having exercised the fix."""
@@ -14,7 +14,8 @@ def steps(ctx):
     ctx.dispatch("ORDER_MINE", {"x1": 1920, "z1": -2624, "x2": 1984, "z2": -2624, "minerCount": 2})
     cuts = 0
     seen = 0
-    while cuts < 3 and not ctx.log_lines("Ledger: recovered the ore_chest"):
+    DELAYS = [2, 5, 8, 3, 6, 10, 4, 7]       # seconds after the DUMPING line (W1: the chest is not down when the line is logged; the swap before the place varies)
+    while cuts < len(DELAYS) and not ctx.log_lines("Ledger: recovered the ore_chest"):
         lines = ctx.wait_until(lambda: [l for l in ctx.log_lines("phase: DUMPING") if True][seen:] or None, 2 * 3600, poll=1)
         if not lines:
             ctx.note("no further DUMPING phase within two game hours; stopping the cuts")
@@ -23,10 +24,11 @@ def steps(ctx):
         line = lines[-1]
         node = line.split("INFO")[-1].split()[0]
         cid = int(node.replace("node_", ""))
+        ctx.wait_game(DELAYS[cuts], poll=1)
         ctx.control.shutdown([cid])
         cuts += 1
-        ctx.note("cut %d: %s (computer #%d) shut down on its DUMPING phase" % (cuts, node, cid))
-        ctx.wait_game(5)
+        ctx.note("cut %d: %s (computer #%d) shut down %d s after its DUMPING phase" % (cuts, node, cid, DELAYS[cuts - 1]))
+        ctx.wait_game(5, poll=1)
         ctx.control.turn_on([cid])
         ctx.wait_game(120)
 
