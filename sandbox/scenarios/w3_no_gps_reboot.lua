@@ -1,4 +1,4 @@
--- Two W3 cards in one staging: a miner rebooted out in the field while every GPS host is down (6 minutes).
+-- Two W3 cards in one staging (layer 1 FAILED on 1.9.151: the miner stranded; passes with W1's 119bdfa, 1.9.152): a miner rebooted out in the field while every GPS host is down (6 minutes).
 --   "A miner rebooted without a GPS fix flies off blind and is lost" (fix 390cb52, 1.9.132): it must not move at all
 --     until GPS is back ('NOT moving until both are measured'), then measure ('Position and facing measured after') and
 --     recover. On 390cb52~1 it ran boot recovery on a guessed position and flew off.
@@ -40,8 +40,11 @@ return {
     sim:expect(moved <= 1, "it did not move without GPS (moved " .. moved .. " blocks)")
     sim:expect(#notMove.lines >= 1, "it said 'NOT moving until both are measured'")
     local raised = false
-    for i = h0 + 1, #hands.lines do if hands.lines[i]:find(name, 1, true) then raised = true end end
-    sim:expect(raised, "the server raised NEEDS HANDS for " .. name .. " while it waited")
+    for i = h0 + 1, #hands.lines do
+      local l = hands.lines[i]
+      if l:find(name, 1, true) and l:find("stuck_no_fix", 1, true) then raised = true end   -- not the loader alert
+    end
+    sim:expect(raised, "the server raised NEEDS HANDS (stuck_no_fix) for " .. name .. " while it waited")
     local back = sim:run_until(function() return #measured.lines >= 1 end, 10 * 60000)
     sim:expect(back, "once GPS was back it measured ('Position and facing measured after')")
     local home = sim:run_until(function() return #docked.lines > d0 end, 90 * 60000)
