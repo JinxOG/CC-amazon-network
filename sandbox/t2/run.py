@@ -251,9 +251,9 @@ def pin(run_id, sha, wait_s=900):
             break
     else:
         raise SystemExit("pin timed out: wanted %s, saw server %s and turtles %s" % (
-            want, seen and seen[1], sorted(set((seen[0] or {}).values())) if seen else None))
+            want, seen and seen[1], sorted(set((seen[0] or {}).values()), key=str) if seen else None))
     lines = ["commit " + sha, "version " + want,
-             "before: server %s, turtles %s" % (server_before, sorted(set(before.values()))),
+             "before: server %s, turtles %s" % (server_before, sorted(set(before.values()), key=str)),
              "seconds: %d" % (time.time() - t0)]
     with open(os.path.join(run_dir(run_id), "PINNED.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
@@ -280,7 +280,7 @@ def main():
         print(json.dumps({"server_alive": alive(pids["server"]), "bridge_alive": alive(pids["bridge"]), **pids}, indent=1))
     elif cmd == "pin":
         vers, server_v = pin(rid, sys.argv[3])
-        print("pinned: server %s, %d turtles, versions %s" % (server_v, len(vers), sorted(set(vers.values()))))
+        print("pinned: server %s, %d turtles, versions %s" % (server_v, len(vers), sorted(set(vers.values()), key=str)))
     elif cmd == "command":
         params = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
         print(bridge_post("/command", {"type": sys.argv[3], "params": params}))
