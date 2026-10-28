@@ -291,7 +291,9 @@ RZ_FIRST  = "a requeued zone on its first mine pass keeps its zone, and is not s
 RZ_SURVEY = "a requeued zone still in its survey is rebuilt from the store"
 RZ_ONCE   = "a mine-pass requeue returns the dead holder's sector to pending exactly once"
 RZ_SHARED = "a mine-pass requeue on a shared zone leaves the other miner's lease alone"
-RS_REQ    = "a held re-send does not survive a requeue and a fresh dispatch to the same turtle"
+BZ_KEEP   = "a busy reply from the turtle already running that job is not a rejection"
+BZ_REFUSE = "a busy reply to a job the turtle never accepted is still a rejection"
+RS_REQ    ="a held re-send does not survive a requeue and a fresh dispatch to the same turtle"
 RS_RETRY  = "a fresh dispatch retires a held re-send even when the job came back by a retry"
 RF_LOG    ="a miner's in-flight recall is written to the log"
 BJ_NIL    ="a value not yet known goes to /state as null without a warning"
@@ -2074,6 +2076,14 @@ MUTANTS = [
      [('        { src = FILES.turtle_base,    name = "turtle_base.lua" },\n'
        '        { src = FILES.support_turtle, name = "startup.lua"     },',
        '        { src = FILES.support_turtle, name = "startup.lua"     },')], INSTALL),
+
+    ("a busy second copy requeues the running job again", "central_server.lua",
+     [('        if reason == "busy" and job.assignedTo == turtleId and job.status == JOB_STATUS.IN_PROGRESS then\n',
+       '        if false then\n')], BZ_KEEP),
+
+    ("any busy from the assigned turtle is ignored, accepted or not", "central_server.lua",
+     [('        if reason == "busy" and job.assignedTo == turtleId and job.status == JOB_STATUS.IN_PROGRESS then\n',
+       '        if reason == "busy" and job.assignedTo == turtleId then\n')], BZ_REFUSE),
 
     ("a fresh dispatch leaves the held re-send standing", "central_server.lua",
      [('    turtle.reSendJobId = nil\n    jobQueue._hist(jobId, "assigned"', '    jobQueue._hist(jobId, "assigned"')], RS_REQ),

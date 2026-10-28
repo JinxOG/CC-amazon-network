@@ -2078,6 +2078,17 @@ function jobQueue.acknowledge(jobId, turtleId, accepted, reason)
         jobQueue._hist(jobId, "ack", turtleId)
         logInfo(string.format("Job %s accepted by %s", jobId, turtleId))
     else
+        -- A "busy" from the turtle that has ALREADY ACCEPTED this very job is a
+        -- second copy of the order arriving -- a re-send held since a
+        -- re-registration that landed after the dispatch (T2 ts-10x-1.9.154,
+        -- 2026-10-28) -- not a refusal. Requeueing it put the job back in the
+        -- queue under a miner already running it. A turtle busy with something
+        -- else has not accepted this job, and still refuses as before.
+        if reason == "busy" and job.assignedTo == turtleId and job.status == JOB_STATUS.IN_PROGRESS then
+            logInfo(string.format("Job %s: %s answered a second copy 'busy' -- it is already running it; kept",
+                jobId, turtleId))
+            return
+        end
         logWarn(string.format("Job %s rejected by %s: %s", jobId, turtleId, reason or "?"))
         jobQueue.reassign(jobId, turtleId, "rejected")
     end

@@ -995,6 +995,40 @@ return {
         assert_eq(status, "IN_PROGRESS")
     end,
 
+    -- T2 ts-10x-1.9.154, 2026-10-28: the order went out at 00:06:46.710, the
+    -- miner's re-registration (the fleet had just rebooted for a pin) arrived
+    -- 14 ms LATER, so the server held a re-send of the job it had just sent; the
+    -- miner accepted, and the re-send on its first heartbeat was answered
+    -- "busy" -- requeued under a miner already running it. f25c84c clears a held
+    -- re-send at dispatch; this one is created after it. Whatever the order: a
+    -- "busy" from the turtle that has ALREADY ACCEPTED that very job is a second
+    -- copy arriving, not a refusal.
+    ["a busy reply from the turtle already running that job is not a rejection"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.jobQueue.assign("job_0726", "node_118")
+        rebootRegister(T)                                         -- arrives after the dispatch
+        T.jobQueue.acknowledge("job_0726", "node_118", true)       -- it accepts the order
+        T.handlers[proto.MSG.JOB_ACK]({ from = "node_118", payload = {
+            jobId = "job_0726", accepted = false, reason = "busy" } })   -- and answers the stale re-send
+        local job = T.state.jobs["job_0726"]
+        local status, owner = job.status, job.assignedTo
+        restore()
+        assert_eq(status, "IN_PROGRESS", "still running, not requeued")
+        assert_eq(owner, "node_118")
+    end,
+
+    ["a busy reply to a job the turtle never accepted is still a rejection"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.jobQueue.assign("job_0726", "node_118")                 -- ASSIGNED, no acceptance yet
+        T.handlers[proto.MSG.JOB_ACK]({ from = "node_118", payload = {
+            jobId = "job_0726", accepted = false, reason = "busy" } })
+        local status = T.state.jobs["job_0726"].status
+        restore()
+        assert_eq(status, "PENDING", "a turtle busy with something else refuses, and the job goes back")
+    end,
+
     ["a turtle that re-registers mid-job is not sent the held job"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()
