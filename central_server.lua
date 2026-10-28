@@ -4675,10 +4675,11 @@ function server.stageFanOut(ref)
     local f = fs.open(CFG.FANOUT_FILE, "w")
     if f then f.write(ref or "master"); f.close() end
     proto.stageUpdateRef(ref)
-    -- Kept, unlike the fan-out marker: a turtle catching up later (registry.update)
-    -- must be sent the same commit, however many restarts later that is.
-    local g = fs.open(CFG.DEPLOY_REF_FILE, "w")
-    if g then g.write(ref or "master"); g.close() end
+    -- NOT written to DEPLOY_REF_FILE here: this runs BEFORE the server's own
+    -- update, and a failed update keeps the old code (dropFanOut). Written here,
+    -- the next restart named the commit the server had failed to install as the
+    -- last deploy, and queued lagging turtles for code ahead of their server
+    -- (found 2026-10-28). armFanOut records it once the server has booted on it.
 end
 
 function server.armFanOut(nowMs)
@@ -4694,6 +4695,12 @@ function server.armFanOut(nowMs)
     local body = f and f.readAll() or ""
     if f then f.close() end
     state.fanOutRef = proto.isCommitRef(body) and body or nil
+    -- Booted on the deploy, so it IS the last deploy now. Kept, unlike the
+    -- fan-out marker: a turtle catching up later (registry.update) must be
+    -- sent the same commit, however many restarts later that is.
+    state.deployRef = state.fanOutRef
+    local g = fs.open(CFG.DEPLOY_REF_FILE, "w")
+    if g then g.write(state.fanOutRef or "master"); g.close() end
     state.fanOutDueAt = (nowMs or os.epoch("utc")) + CFG.FANOUT_DELAY_SEC * 1000
     logInfo(string.format(
         "Restarted for a deploy -- the fleet is sent UPDATE_ALL in %ds, once its turtles "

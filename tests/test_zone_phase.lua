@@ -1451,6 +1451,33 @@ return {
         assert_eq(still, true, "...but the deploy's commit is kept")
     end,
 
+    -- Found 2026-10-28 (W3), auditing the stale-update card: stageFanOut wrote
+    -- the deploy's commit as "the last deploy" BEFORE the server's own update
+    -- ran, and dropFanOut, on a failed update, removed only the fan-out marker.
+    -- From the next restart a lagging turtle was queued for the commit the
+    -- server had failed to install -- code ahead of its server, the outcome
+    -- dropFanOut exists to prevent. It becomes the last deploy only once the
+    -- server has booted on it.
+    ["a failed server update is not the commit later turtles are sent"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local OLD, NEW = string.rep("a", 40), string.rep("b", 40)
+        server.stageFanOut(OLD)                        -- deploy N: the server boots on it
+        T.state.deployRef = nil
+        server.armFanOut(1000)
+        server.fanOutIfDue(1000 + T.CFG.FANOUT_DELAY_SEC * 1000)
+        server.stageFanOut(NEW)                        -- deploy N+1: the server's own update fails
+        server.dropFanOut()
+        local meanwhile = T.state.deployRef
+        T.state.deployRef = nil                        -- a later restart (the daily one)
+        server.armFanOut(5000)
+        local after = T.state.deployRef
+        restore()
+        assert_eq(meanwhile, OLD, "the running server still names its own deploy")
+        assert_eq(after, OLD, "and after a restart too, not the commit it failed to install")
+    end,
+
     ["older is compared as numbers, not text"] =
     function(assert_eq)
         assert_eq(proto.versionOlder("1.9.58", "1.9.132"), true, "58 < 132, though '5' > '1'")
