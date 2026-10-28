@@ -43,14 +43,14 @@ local function refuelAtDock(role, opts)
     local savedSleep, savedLabel, savedId   = sleep, os.getComputerLabel, os.getComputerID
     local savedPeripheral, savedGps         = peripheral, gps
 
-    local function stacks(n)
+    local function stacks(n, name)
         local t = {}
-        for i = 1, n do t[i] = { name = COAL, count = 64 } end
+        for i = 1, n do t[i] = { name = name or COAL, count = 64 } end
         return t
     end
     local containers = {
         [EC]         = stacks(opts.ecStacks or 1),
-        [DOCK_CHEST] = stacks(opts.dockStacks or 0),
+        [DOCK_CHEST] = stacks(opts.dockStacks or 0, opts.dockItem),
     }
     if opts.dockChestCoal then
         containers[DOCK_CHEST] = { { name = COAL, count = 64 } }
@@ -61,6 +61,7 @@ local function refuelAtDock(role, opts)
         fuel      = opts.fuel or 600,
         realFuel  = true,
         containers = containers,
+        keptFull  = opts.keptFull,
         equipped  = { left = eq.ITEMS.MODEM, right = eq.ITEMS.PICKAXE },
         inv       = { [15] = { name = EC, count = 1 } },
     })
@@ -177,6 +178,67 @@ return {
         assert_eq(ok, true)
         assert_eq(looseCoal(c, { [14] = true }), 0, "no coal outside the reserve slot")
         assert_eq(coalIn(containers[EC]), 40 * 64 - burned - reserve, "the rest went back")
+    end,
+
+    -- The return above never once worked live: 325 refuels and no "Returned"
+    -- line since 1.9.138, and on the test server a miner kept 265 coal after a
+    -- refuel. The coal chests are kept topped up by the base, so they are full
+    -- again before the turtle can hand anything back. The fix is not to take
+    -- more than the tank can burn in the first place.
+    ["a dock chest the base keeps full: only the coal the tank burns is taken"] =
+    function(assert_eq)
+        local ok, before, after, _, c = refuelAtDock(proto.ROLE.DELIVERY,
+            { fuel = 70000, dockStacks = 14, keptFull = { [DOCK_CHEST] = true } })
+        assert_eq(ok, true)
+        assert_eq(after, 100000, "the tank is filled")
+        assert_eq(looseCoal(c), 0, "no coal left aboard")
+    end,
+
+    ["a miner at a kept-full dock chest still stocks its reserve slot and nothing else"] =
+    function(assert_eq)
+        local ok, _, after, _, c = refuelAtDock(proto.ROLE.MINER,
+            { fuel = 70000, dockStacks = 14, keptFull = { [DOCK_CHEST] = true } })
+        assert_eq(ok, true)
+        assert_eq(after, 100000, "the tank is filled")
+        assert_eq(c.inv[14] and c.inv[14].count or 0, 64, "the reserve slot is stocked")
+        assert_eq(looseCoal(c, { [14] = true }), 0, "no coal outside the reserve slot")
+    end,
+
+    -- The test-server case: FORCE_REFUEL on a miner whose dock chest is empty
+    -- goes to its own fuel ender chest, and that one is kept full too.
+    ["a fuel ender chest the base keeps full: only the coal the tank burns is taken"] =
+    function(assert_eq)
+        local ok, _, after, _, c = refuelAtDock(proto.ROLE.MINER,
+            { fuel = 70000, ecStacks = 40, keptFull = { [EC] = true } })
+        assert_eq(ok, true)
+        assert_eq(after, 100000, "the tank is filled")
+        assert_eq(looseCoal(c, { [14] = true }), 0, "no coal outside the reserve slot")
+    end,
+
+    -- The amount is worked out from what one item actually gave, so a chest of
+    -- coal blocks (ten times the fuel each) does not draw ten times too many.
+    ["a kept-full chest of coal blocks: only the blocks the tank burns are taken"] =
+    function(assert_eq)
+        local ok, _, after, _, c = refuelAtDock(proto.ROLE.DELIVERY,
+            { fuel = 70000, dockStacks = 14, dockItem = "minecraft:coal_block",
+              keptFull = { [DOCK_CHEST] = true } })
+        local aboard = 0
+        for s = 1, 16 do
+            if c.inv[s] and c.inv[s].name == "minecraft:coal_block" then aboard = aboard + c.inv[s].count end
+        end
+        assert_eq(ok, true)
+        assert_eq(after, 100000)
+        assert_eq(aboard, 0, "no coal blocks left aboard")
+    end,
+
+    -- A tank whose room is not a whole number of coal: the last one is burned
+    -- part-wasted, as CC does, rather than one too few taken or one left over.
+    ["room for a part coal: the last one is burned, none is left over"] = function(assert_eq)
+        local ok, _, after, _, c = refuelAtDock(proto.ROLE.DELIVERY,
+            { fuel = 70010, dockStacks = 14, keptFull = { [DOCK_CHEST] = true } })
+        assert_eq(ok, true)
+        assert_eq(after, 100000)
+        assert_eq(looseCoal(c), 0, "no coal left aboard")
     end,
 
     -- The actual bug: an empty dock chest used to mean no refuel at all.

@@ -2227,6 +2227,43 @@ function fuel.blockFor(placeFn)
     return "forward", nx, p.y, nz
 end
 
+-- Takes from the chest `suckFn` reaches only the fuel the tank can burn, and
+-- burns it as it goes: one item first, to learn what one gives, then just
+-- enough to fill the tank. The return below never once worked live (325
+-- refuels, no "Returned" line, 1.9.138-1.9.151): the coal chests are kept
+-- topped up by the base, so they are full again before the turtle can hand
+-- anything back. Not taking it is the only return that cannot fail.
+-- A miner's empty coal reserve slot is stocked afterwards, as it always was.
+-- True if the chest gave anything.
+function fuel.drawFrom(suckFn)
+    local gave = false
+    local slot
+    for s = 1, BURN_MAX do
+        if s ~= _self.fuelReserveSlot and turtle.getItemCount(s) == 0 then slot = s; break end
+    end
+    if slot then
+        local per   -- fuel one item gives; learned from the first burn
+        turtle.select(slot)
+        while fuel.level() < fuel.max() do
+            local want = per and math.min(64, math.ceil((fuel.max() - fuel.level()) / per)) or 1
+            if not suckFn(want) then break end
+            gave = true
+            local had, before = turtle.getItemCount(slot), fuel.level()
+            turtle.refuel()
+            local burned = had - turtle.getItemCount(slot)
+            if burned == 0 or turtle.getItemCount(slot) > 0 then break end   -- not fuel, or full
+            per = math.max(1, math.floor((fuel.level() - before) / burned))
+        end
+    end
+    local r = _self.fuelReserveSlot
+    if r and r <= BURN_MAX and turtle.getItemCount(r) == 0 then
+        turtle.select(r)
+        if suckFn(64) then gave = true end
+    end
+    turtle.select(1)
+    return gave
+end
+
 function fuel.returnLeftover(dropFn, where)
     if not dropFn then return 0 end
     local back = 0
@@ -2646,24 +2683,15 @@ function fuel.refuelFromChest()
     end
     sleep(0.5)  -- wait for peripheral/block to register
 
-    -- Suck coal into slots 1-BURN_MAX only.
-    -- Explicitly select each target slot before sucking so CC never auto-fills
-    -- into slots 15 or 16 (reserved for ender chests).
-    local pulled = 0
-    for s = 1, BURN_MAX do
-        if turtle.getItemCount(s) == 0 then
-            turtle.select(s)
-            if suckFn(64) then pulled = pulled + 1 end
-        end
-    end
-    turtle.select(1)
-
-    if pulled == 0 then
+    -- Draw into slots 1-BURN_MAX only, so CC never auto-fills slots 15 or 16
+    -- (reserved for ender chests), and only what the tank burns.
+    local before = fuel.level()
+    if not fuel.drawFrom(suckFn) and before < fuel.max() then
         logWarn("Entangled chest is empty — no coal available!")
     end
 
-    -- Burn slots 1-BURN_MAX only (never touch slots 15 or 16)
-    local before = fuel.level()
+    -- Then whatever loose fuel is aboard, if the chest could not fill the tank.
+    -- Slots 1-BURN_MAX only (never touch slots 15 or 16)
     for slot = 1, BURN_MAX do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)
@@ -2749,22 +2777,16 @@ function fuel.dockRefuel()
     end
     logInfo("Refuelling at dock station...")
 
-    -- Suck coal from dock chest into slots 1-BURN_MAX only
+    -- Draw from the dock chest into slots 1-BURN_MAX only, and only what the
+    -- tank burns
+    local before  = fuel.level()
     local suckFns = { turtle.suckDown, turtle.suckUp, turtle.suck }
     local source  = nil   -- the side that actually gave coal, for the return
     for _, suckFn in ipairs(suckFns) do
-        for s = 1, BURN_MAX do
-            if turtle.getItemCount(s) == 0 then
-                turtle.select(s)
-                if not suckFn(64) then break end
-                source = source or suckFn
-            end
-        end
+        if fuel.drawFrom(suckFn) then source = source or suckFn end
     end
-    turtle.select(1)
 
-    -- Burn slots 1-BURN_MAX only
-    local before = fuel.level()
+    -- Then whatever loose fuel is aboard. Slots 1-BURN_MAX only
     for slot = 1, BURN_MAX do
         if turtle.getItemCount(slot) > 0 then
             turtle.select(slot)

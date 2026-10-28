@@ -60,6 +60,13 @@ function M.install(opts)
         -- "no containers", so suck* returns false exactly as it always has and
         -- no existing test observes any change.
         containers = opts.containers,
+        -- Containers the base keeps topped up and FULL, by block name. Twelfth
+        -- fidelity gap (2026-10-27): containers here were unbounded, so a drop
+        -- back into the coal chest always succeeded -- and the live fleet logged
+        -- 325 refuels and not one returned coal, because the chest an importer
+        -- refills is full again before the turtle hands anything back. A suck
+        -- from one of these never depletes it; a drop into it fails.
+        keptFull = opts.keptFull or {},
         -- Fuel realism, now the DEFAULT. Pass realFuel = false to opt out.
         --
         -- This used to default off, so refuel() returned true and burned nothing
@@ -526,7 +533,8 @@ end
 -- displayName and drop gaps were found -- both after they had already let a real
 -- in-world failure through a green suite:
 --   * containers are unbounded, so a drop into a FULL chest still succeeds here
---     and returns false in-world
+--     and returns false in-world -- unless the test names the block in
+--     keptFull, which models a chest the base keeps full
 --   * fuel is not consumed by turn/dig, only by movement
 -- Add fidelity when a test needs it; do not assume the absence of a gap.
 -- Minimal JSON encoder matching CC:Tweaked's serialiseJSON closely enough for
@@ -594,6 +602,7 @@ function M._drop(c, blockName, n)
     if not i then return false, "No items to drop" end
     local moved = math.min(n or i.count, i.count)
     if moved <= 0 then return false, "No items to drop" end
+    if blockName and c.keptFull[blockName] then return false, "No space for items" end
 
     local contents = blockName and c.containers and c.containers[blockName]
     if contents then
@@ -616,12 +625,26 @@ function M._suck(c, blockName, n)
     if dest and dest.name ~= stack.name then return false end
     local room  = 64 - (dest and dest.count or 0)
     if room <= 0 then return false end
-    local moved = math.min(stack.count, room, n or 64)
-    if moved <= 0 then return false end
+    local want  = math.min(room, n or 64)
+    if want <= 0 then return false end
+    -- Real CC gathers the same item from as many of the chest's stacks as it
+    -- takes to fill the request (InventoryUtil.takeItems); this took from the
+    -- first stack only, so a part stack left by an earlier draw came up short.
+    local moved = 0
+    local i = 1
+    while moved < want and contents[i] do
+        local st = contents[i]
+        if st.name == stack.name then
+            local take = math.min(st.count, want - moved)
+            moved = moved + take
+            if not c.keptFull[blockName] then           -- a kept-full chest is refilled at once
+                st.count = st.count - take
+            end
+        end
+        if st.count <= 0 then table.remove(contents, i) else i = i + 1 end
+    end
     if dest then dest.count = dest.count + moved
     else c.inv[c.selected] = { name = stack.name, count = moved } end
-    stack.count = stack.count - moved
-    if stack.count <= 0 then table.remove(contents, 1) end
     return true
 end
 

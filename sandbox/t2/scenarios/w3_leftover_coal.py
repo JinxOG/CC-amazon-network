@@ -5,7 +5,9 @@ burns only what the tank takes, so with ~700 coal in the station chest there MUS
 'Returned N leftover fuel item(s)' and carry no loose coal outside slot 14 afterwards (read with get_slot).
 Revised 2026-10-27: the first version drained the tank to 2,000 and dispatched a job; the refuel then burned every coal
 the chest held (+56,320, tank 58,318) and there was nothing left over to return -- inconclusive, not a pass or a fault.
-Pin bfc2770 (the live commit). 1x, ~5 game minutes."""
+Revised again 2026-10-27: on bfc2770 this FAILED (73 then 265 coal aboard, no return) -- the station and fuel chests
+are kept full by the base, so nothing can go back. The fix takes only what the tank burns; the 'Returned' line is
+now recorded, not required, and the tank must be full with no loose coal. Pin the fix commit. 1x, ~5 game minutes."""
 NAME = "w3_leftover_coal"
 
 
@@ -22,13 +24,17 @@ def steps(ctx):
     ctx.wait_game(12)                                                    # the next heartbeat reports the new level
     r0 = len([l for l in ctx.log_lines("leftover fuel item(s)") if node in l])
     f0 = len([l for l in ctx.log_lines("FORCE_REFUEL received") if node in l])
+    full_lines = lambda: [l for l in ctx.log_lines("Refuelled +") if node in l and "100000/100000" in l]
+    d0 = len(full_lines())
     ctx.dispatch("FORCE_REFUEL", {"turtleId": node})
     ctx.note("%s (computer #%d): fuel set to 70000, FORCE_REFUEL sent" % (node, cid))
     got = ctx.wait_until(lambda: len([l for l in ctx.log_lines("FORCE_REFUEL received") if node in l]) > f0, 120)
     ctx.expect(bool(got), "%s refuelled at its dock on FORCE_REFUEL" % node)
-    ret = ctx.wait_until(lambda: len([l for l in ctx.log_lines("leftover fuel item(s)") if node in l]) > r0, 180)
-    ctx.expect(bool(ret), "it returned the leftover coal ('Returned N leftover fuel item(s)')")
+    full = ctx.wait_until(lambda: len(full_lines()) > d0, 180)
+    ctx.expect(bool(full), "its tank was filled ('Refuelled +N (now 100000/100000)')")
     ctx.wait_game(10)
+    ret = len([l for l in ctx.log_lines("leftover fuel item(s)") if node in l]) - r0
+    ctx.note("'Returned N leftover' lines since the refuel: %d (recorded, not required)" % ret)
     loose = []
     for nbt_slot in range(16):                       # NBT slots are 0-15; Lua slot 14 (the coal reserve) is NBT 13
         if nbt_slot == 13:
