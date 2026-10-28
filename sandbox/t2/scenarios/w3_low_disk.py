@@ -2,7 +2,12 @@
 sandbox/scenarios/w3_low_disk.lua: a dummy file is written straight into the dispatch computer's disk folder until
 /state diskFree reads about 340 KB (below the 350 KB warning), then about 290 KB (below the 300 KB floor). The server
 checks once a minute: a WARN 'Disk low on the server computer' within 3 minutes, then an ERROR 'below the 300 KB floor'
-within 3 minutes. The files are then removed and the warnings must stop. Pin bfc2770 (the live commit). 1x, ~15 game min."""
+within 3 minutes. The files are then removed and the warnings must stop. Pin bfc2770 (the live commit). 1x, ~15 game min.
+Revised 2026-10-28 (W3), after w3-low-disk-b: a file written into the folder from outside is not counted -- real CC
+measures a computer's disk when it creates the computer, and /state diskFree stayed 576618 throughout, so the card was
+never exercised. After each change the server computer's chunk is now unloaded for 15 s (chunk_unload area), which
+removes the computer and boots it again on a fresh measurement; it is the same as the server computer rebooting. Each
+step also checks diskFree really moved, so a run where the fill is not seen fails instead of passing quietly."""
 import os
 
 NAME = "w3_low_disk"
@@ -28,6 +33,10 @@ def steps(ctx):
     if sid is None:
         return
     folder = os.path.join(ctx.control.disks, str(sid))
+    pos = (ctx.control.computers().get(sid) or {}).get("pos")
+    ctx.expect(pos is not None, "the dispatch computer's position (%r)" % (pos,))
+    if pos is None:
+        return
 
     def free():
         return (ctx.state() or {}).get("diskFree")
@@ -38,13 +47,24 @@ def steps(ctx):
     if not isinstance(f0, (int, float)):
         return
 
+    def remeasure():
+        """Unloads the server computer's chunk for 15 s, so CC creates the computer again and measures its disk afresh."""
+        n0 = len(ctx.log_lines("Central server online"))
+        ctx.control.chunk_unload(area=(pos[0], pos[2], pos[0], pos[2]), dur=15000)
+        back = ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > n0, 180)
+        ctx.expect(bool(back), "the dispatch computer booted again after its chunk came back")
+        ctx.wait_game(15)                                # the next bridge push carries the new figure
+        return free()
+
     def fill_to(target, name):
         need = int(free() - target)
         if need > 0:
             with open(os.path.join(folder, name), "wb") as f:
                 f.write(b"x" * need)
-        ctx.wait_game(8)                                 # the next bridge push carries the new figure
-        return free()
+        got = remeasure()
+        ctx.expect(isinstance(got, (int, float)) and got <= target + 8000,
+                   "diskFree moved to about %d after the fill (%r)" % (target, got))
+        return got
 
     w0 = len(ctx.log_lines("Disk low on the server computer"))
     f1 = fill_to(340000, "w3_filler_1.bin")                             # THE TEST, step 1
@@ -59,6 +79,8 @@ def steps(ctx):
             os.remove(os.path.join(folder, name))
         except OSError:
             pass
+    back = remeasure()
+    ctx.expect(isinstance(back, (int, float)) and back > 350000, "diskFree back above 350 KB once removed (%r)" % back)
     ctx.wait_game(30)
     quiet0 = len(ctx.log_lines("Disk low on the server computer")) + len(ctx.log_lines("below the 300 KB floor"))
     ctx.wait_game(600)
