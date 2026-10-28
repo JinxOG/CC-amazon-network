@@ -167,6 +167,24 @@ def load_scenario(path):
     return mod
 
 
+def settle_after_pin(ctx, quiet_game_seconds=120, limit_game_seconds=900):
+    """After a pin the server updates, then sends UPDATE_ALL and the turtles update and reboot one after another for a few minutes. A job ordered in that
+    window meets rebooting miners (stale re-sends, 'busy' rejections, a recreated zone): ts-10x-1.9.154 lost its ore sector that way (2026-10-28). Wait until
+    no node has registered for `quiet_game_seconds` of game time (cap `limit_game_seconds`), and say in the notes how long it took."""
+    start = ctx.gametime()
+    last_count = len(ctx.log_lines("Registered node_")) + len(ctx.log_lines("Re-registered node_"))
+    last_change = start
+    while (ctx.gametime() - start) / 20 < limit_game_seconds:
+        time.sleep(3)
+        n = len(ctx.log_lines("Registered node_")) + len(ctx.log_lines("Re-registered node_"))
+        now = ctx.gametime()
+        if n != last_count:
+            last_count, last_change = n, now
+        elif (now - last_change) / 20 >= quiet_game_seconds:
+            break
+    ctx.note("settled after the pin: no node registered for %d game seconds (waited %d game seconds in all)" % ((ctx.gametime() - last_change) / 20, (ctx.gametime() - start) / 20))
+
+
 def verify_pinned_bytes(ctx, sha):
     """The pin waits for proto.VERSION, which two commits can share (f25c84c and ff54ed0 are both 1.9.153), so it cannot show the commit's code arrived.
     Compare the files themselves: the server computer's startup.lua against the commit's central_server.lua, and the registered miners' startup.lua
@@ -387,6 +405,7 @@ def main():
             runmod.pin(run_id, pin)
             ctx.note("fleet pinned to %s through the real update path" % pin)
             verify_pinned_bytes(ctx, pin)
+            settle_after_pin(ctx)
         host_snapshot("at start", ctx)
         if t2logs:
             ctx._raw.radio_log("on")
