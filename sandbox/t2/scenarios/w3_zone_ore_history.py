@@ -2,11 +2,14 @@
 sandbox/scenarios/w3_zone_ore_history.lua. A job mines until /state shows its zone has mined at least 100 ore and a
 sector has then finished; the job is cancelled and, once the miner is home, the same ground is ordered again. The new
 job's zone is built from the store: after its first scan report its mined ore must still include what was mined before.
-On the code before the fix it reads only the new job's scans. Pin a build carrying 6747a37. 1x, ~2 game hours."""
+On the code before the fix it reads only the new job's scans. Pin a build carrying 6747a37. 1x, ~2 game hours; 10x is fine.
+Revised 2026-10-28 (W3): the order was three sectors, and in w3-zone-ore-history-10x the sector with the ore was mined LAST,
+so the cancel came with nothing left; the re-order closed at once with no scan to judge. Now six sectors, and the check
+also needs the re-order to have sectors remaining."""
 import re
 
 NAME = "w3_zone_ore_history"
-ORDER = {"x1": 1920, "z1": -2624, "x2": 1984, "z2": -2624, "minerCount": 1}
+ORDER = {"x1": 1920, "z1": -2624, "x2": 2080, "z2": -2624, "minerCount": 1}   # six sectors: some must remain after the cancel
 
 
 def mined(ctx, job):
@@ -46,6 +49,10 @@ def steps(ctx):
     if not again:
         return
     job2 = re.search(r"Dispatched (job_\d+)", again[0]).group(1)
+    left = [l for l in ctx.log_lines("Mine zone " + job2 + ":")]
+    ctx.note("re-order: %s" % (left[-1][-90:] if left else "?"))
+    ctx.expect(bool(left) and not re.search(r": 0/\d+ sectors remaining", left[-1]),
+               "the re-order has sectors left to mine (INCONCLUSIVE otherwise: re-run)")
     scanned = ctx.wait_until(lambda: [l for l in ctx.log_lines("scan by") if job2 in l], 3 * 3600)
     ctx.expect(bool(scanned), "the second job reported a scan")
     ctx.wait_game(10)
