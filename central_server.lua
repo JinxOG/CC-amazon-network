@@ -71,6 +71,10 @@ local CFG = {
     UPDATE_REBOOT_MS  = 120000,
     -- The commit of the last deploy, kept across restarts (see catch-up below).
     DEPLOY_REF_FILE   = "deploy_ref.txt",
+    -- The sectors in flight, written at most once a minute (see
+    -- saveSectorProgress). Local on purpose: a cloud write is a peripheral call.
+    SECTOR_PROGRESS_FILE     = "sector_progress.dat",
+    SECTOR_PROGRESS_INTERVAL = 60,
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -1099,6 +1103,189 @@ local function migrateZonesToCloud()
     end
 end
 
+-- The sector ("x,z") a scan key ("x,z,y") belongs to.
+local function sectorOfScanKey(k)
+    return type(k) == "string" and k:match("^(%-?%d+,%-?%d+),") or nil
+end
+
+-- This run's ore, per sector, from its scan reports: at each depth, found is
+-- the larger of what was seen there and what was mined there.
+local function runSectorOre(zone)
+    local out = {}
+    local seenAll  = zone.sectorSeen  or {}
+    local minedAll = zone.sectorMined or {}
+
+    local keys = {}
+    for k in pairs(seenAll)  do keys[k] = true end
+    for k in pairs(minedAll) do keys[k] = true end
+
+    for k in pairs(keys) do
+        local sKey = sectorOfScanKey(k) or k
+        local e = out[sKey] or { found = {}, mined = {} }
+        out[sKey] = e
+        local seen = seenAll[k]  or {}
+        local m    = minedAll[k] or {}
+        local names = {}
+        for name in pairs(seen) do names[name] = true end
+        for name in pairs(m)    do names[name] = true end
+        for name in pairs(names) do
+            local got = m[name] or 0
+            e.mined[name] = (e.mined[name] or 0) + got
+            e.found[name] = (e.found[name] or 0) + math.max(seen[name] or 0, got)
+        end
+    end
+    return out
+end
+
+-- One sector's ore from what the store held when this zone was built (p) and
+-- what this run has reported (r). Both only for a sector finished before and
+-- scanned again (a rescan, a re-mine): mined adds up, and found is what it
+-- held then, unless what was mined then plus what is left now is more.
+local function combineSectorOre(p, r)
+    if not p then return r end
+    if not r then return p end
+    local found, mined, names = {}, {}, {}
+    for _, t in ipairs({ p.found or {}, p.mined or {}, r.found or {}, r.mined or {} }) do
+        for name in pairs(t) do names[name] = true end
+    end
+    for name in pairs(names) do
+        local pm = (p.mined or {})[name] or 0
+        mined[name] = pm + ((r.mined or {})[name] or 0)
+        found[name] = math.max((p.found or {})[name] or 0, pm + ((r.found or {})[name] or 0))
+    end
+    return { found = found, mined = mined }
+end
+
+-- THE ZONE'S ORE, from every sector once. The totals used to be recomputed
+-- from this run's scan reports alone, so a zone built again from the store
+-- inherited the store's totals and lost them at its first scan report -- and
+-- the next finished sector wrote the smaller figure over the store (1,384 ore
+-- found after the 2026-09-30 requeue, where it read 21,250 before). zone.prior
+-- is the store's per-sector record as it stood when this zone was built.
+local function recomputeZoneOre(zone)
+    local found, mined = {}, {}
+    local run   = runSectorOre(zone)
+    local prior = zone.prior or {}
+    local keys  = {}
+    for k in pairs(run)   do keys[k] = true end
+    for k in pairs(prior) do keys[k] = true end
+    for k in pairs(keys) do
+        local e = combineSectorOre(prior[k], run[k])
+        for name, v in pairs(e.found or {}) do found[name] = (found[name] or 0) + v end
+        for name, v in pairs(e.mined or {}) do mined[name] = (mined[name] or 0) + v end
+    end
+    zone.oreFound, zone.oreMined = found, mined
+end
+
+local function copyOre(t)
+    local out = {}
+    for k, v in pairs(t or {}) do out[k] = v end
+    return out
+end
+
+-- What a zone built from `pz` starts from: each finished sector's ore, plus,
+-- for a zone stored before per-sector ore existed, its totals as one block
+-- ("legacy") -- never in a scan key, so never counted twice.
+local function priorFrom(pz)
+    local prior = {}
+    if not pz then return prior end
+    for k, e in pairs(pz.sectorOre or {}) do
+        prior[k] = { found = copyOre(e.found), mined = copyOre(e.mined) }
+    end
+    local legacy = pz.legacyOre
+    if not legacy and pz.sectorOre == nil and (next(pz.oreFound or {}) or next(pz.oreMined or {})) then
+        legacy = { found = pz.oreFound, mined = pz.oreMined }
+    end
+    if legacy then prior.legacy = { found = copyOre(legacy.found), mined = copyOre(legacy.mined) } end
+    return prior
+end
+
+-- THE SECTORS IN FLIGHT, kept across a restart (W3 card, found 2026-09-30).
+-- A sector's scan reports lived only in memory until it finished -- up to two
+-- hours -- because the working copy (active_zones.dat) is written at sector
+-- boundaries. 3,575 ore of the record did not survive the 2026-09-30 outage.
+-- This writes just the sectors being worked, when something new has been
+-- reported, at most once a minute (the main loop's isDue). Local, not the
+-- cloud store's "sp" namespace W6 built for it: a cloud write is a peripheral
+-- call, and a peripheral call eats the radio messages that arrive during it.
+local function saveSectorProgress()
+    local dirty = false
+    for _, zone in pairs(state.miningZones) do
+        if zone.progressDirty then dirty = true; break end
+    end
+    if not dirty then return false end
+    local out, seen = {}, {}
+    for _, zone in pairs(state.miningZones) do
+        if not seen[zone] then
+            seen[zone] = true
+            zone.progressDirty = nil
+            local held = {}
+            for _, la in pairs(zone.lastAssignments or {}) do held[la.x .. "," .. la.z] = true end
+            local e = { zone = zone.persistentKey, seen = {}, mined = {} }
+            local any = false
+            for k, v in pairs(zone.sectorSeen or {}) do
+                if held[sectorOfScanKey(k) or ""] then e.seen[k] = v; any = true end
+            end
+            for k, v in pairs(zone.sectorMined or {}) do
+                if held[sectorOfScanKey(k) or ""] then e.mined[k] = v; any = true end
+            end
+            if any and zone.persistentKey then out[#out + 1] = e end
+        end
+    end
+    local tmp = CFG.SECTOR_PROGRESS_FILE .. ".tmp"
+    local f = fs.open(tmp, "w")
+    if not f then error("could not open " .. tmp) end
+    f.write(textutils.serialise(out)); f.close()
+    if fs.exists(CFG.SECTOR_PROGRESS_FILE) then fs.delete(CFG.SECTOR_PROGRESS_FILE) end
+    fs.move(tmp, CFG.SECTOR_PROGRESS_FILE)
+    return true
+end
+
+-- Puts the sectors in flight back into the working copies on `zones` (all of
+-- them when nil). Both copies only ever grow, so the larger of each figure is
+-- the later one. A sector already finished is skipped: its ore is in the store
+-- and counted from there -- the file can be up to a minute old.
+local function overlaySectorProgress(zones)
+    if not fs.exists(CFG.SECTOR_PROGRESS_FILE) then return 0 end
+    local f = fs.open(CFG.SECTOR_PROGRESS_FILE, "r")
+    local data = f and textutils.unserialise(f.readAll() or "")
+    if f then f.close() end
+    if type(data) ~= "table" then return 0 end
+    local byKey = {}
+    for _, zone in pairs(zones or state.miningZones) do
+        if zone.persistentKey then byKey[zone.persistentKey] = zone end
+    end
+    local n = 0
+    for _, e in ipairs(data) do
+        local zone = type(e) == "table" and byKey[e.zone]
+        if zone then
+            local pz = state.persistentZones[zone.persistentKey]
+            local done = {}
+            for k in pairs(zone.doneKeys or {}) do
+                local s = k:match("^MINE:(.+)$"); if s then done[s] = true end
+            end
+            for _, s in ipairs((pz and pz.doneSectors) or {}) do done[s.x .. "," .. s.z] = true end
+            local function merge(into, from)
+                for k, map in pairs(from or {}) do
+                    local sKey = sectorOfScanKey(k)
+                    if sKey and not done[sKey] and type(map) == "table" then
+                        local cur = into[k] or {}
+                        for name, v in pairs(map) do cur[name] = math.max(cur[name] or 0, v) end
+                        into[k] = cur
+                        n = n + 1
+                    end
+                end
+            end
+            zone.sectorSeen  = zone.sectorSeen  or {}
+            zone.sectorMined = zone.sectorMined or {}
+            merge(zone.sectorSeen, e.seen)
+            merge(zone.sectorMined, e.mined)
+            recomputeZoneOre(zone)
+        end
+    end
+    return n
+end
+
 -- ─── Active Mining Zone Persistence ──────────────────────────────────────────
 -- Saves the runtime state.miningZones to disk so that a server restart can
 -- replay SECTOR_ASSIGN to reconnecting mid-job miners.
@@ -1195,6 +1382,10 @@ local function loadMiningZones()
     end
 
     if n > 0 then logInfo(string.format("Restored %d active mining zone(s)", n)) end
+    local back = overlaySectorProgress()
+    if back > 0 then
+        logInfo(string.format("Restored the ore of the sectors in flight (%d depth record(s))", back))
+    end
 end
 
 -- Called after SECTOR_DONE: snapshot the runtime zone's accumulated ore totals
@@ -1341,21 +1532,46 @@ local function mergeToPersistentZone(jobId, sx, sz, foundOres)
     if not zone or not zone.persistentKey then return end
     local pz = state.persistentZones[zone.persistentKey]
     if not pz then return end
+    local sKey = sx .. "," .. sz
+    -- The first finished sector of a zone stored before per-sector ore: what
+    -- it held until now becomes its "legacy" block, kept as it is.
+    if pz.sectorOre == nil then
+        local legacy = zone.prior and zone.prior.legacy
+        if not legacy then
+            -- A working copy from before this change has no prior: its own
+            -- finished sectors are what the store's totals hold.
+            local done, run = {}, runSectorOre(zone)
+            for _, s in ipairs(pz.doneSectors or {}) do done[s.x .. "," .. s.z] = true end
+            legacy = { found = {}, mined = {} }
+            for k, e in pairs(run) do
+                if done[k] and k ~= sKey then
+                    for name, v in pairs(e.found) do legacy.found[name] = (legacy.found[name] or 0) + v end
+                    for name, v in pairs(e.mined) do legacy.mined[name] = (legacy.mined[name] or 0) + v end
+                end
+            end
+        end
+        pz.legacyOre = { found = copyOre(legacy.found), mined = copyOre(legacy.mined) }
+        pz.sectorOre = {}
+    end
+    recomputeZoneOre(zone)
+    local e = combineSectorOre((zone.prior or {})[sKey], runSectorOre(zone)[sKey]) or { found = {}, mined = {} }
+    pz.sectorOre[sKey] = { found = copyOre(e.found), mined = copyOre(e.mined) }
+    -- A re-mined sector is already in doneSectors, and used to return here
+    -- without saving -- so what the re-mine took never reached the store.
     local alreadyDone = false
     for _, s in ipairs(pz.doneSectors) do
         if s.x == sx and s.z == sz then alreadyDone = true; break end
     end
-    if alreadyDone then return end
-    table.insert(pz.doneSectors, { x = sx, z = sz })
-    -- Per-sector ore map: lets targeted mine skip sectors without desired ore
-    if foundOres and next(foundOres) then
-        pz.sectorOreMap = pz.sectorOreMap or {}
-        pz.sectorOreMap[sx .. "," .. sz] = foundOres
+    if not alreadyDone then
+        table.insert(pz.doneSectors, { x = sx, z = sz })
+        -- Per-sector ore map: lets targeted mine skip sectors without desired ore
+        if foundOres and next(foundOres) then
+            pz.sectorOreMap = pz.sectorOreMap or {}
+            pz.sectorOreMap[sKey] = foundOres
+        end
     end
-    pz.oreFound = {}
-    for k, v in pairs(zone.oreFound) do pz.oreFound[k] = v end
-    pz.oreMined = {}
-    for k, v in pairs(zone.oreMined) do pz.oreMined[k] = v end
+    pz.oreFound = copyOre(zone.oreFound)
+    pz.oreMined = copyOre(zone.oreMined)
     pz.lastActivity = os.epoch("utc")
     savePersistentZones(zone.persistentKey)
 end
@@ -1469,31 +1685,6 @@ end
 -- a level whose max is already known, so it changes nothing it should not.
 local function scanKey(p)
     return string.format("%d,%d,%d", p.sectorX or 0, p.sectorZ or 0, p.scanY or 0)
-end
-
-local function recomputeZoneOre(zone)
-    local found, mined = {}, {}
-    local seenAll  = zone.sectorSeen  or {}
-    local minedAll = zone.sectorMined or {}
-
-    local keys = {}
-    for k in pairs(seenAll)  do keys[k] = true end
-    for k in pairs(minedAll) do keys[k] = true end
-
-    for k in pairs(keys) do
-        local seen = seenAll[k]  or {}
-        local m    = minedAll[k] or {}
-        local names = {}
-        for name in pairs(seen) do names[name] = true end
-        for name in pairs(m)    do names[name] = true end
-        for name in pairs(names) do
-            local got = m[name] or 0
-            mined[name] = (mined[name] or 0) + got
-            found[name] = (found[name] or 0) + math.max(seen[name] or 0, got)
-        end
-    end
-
-    zone.oreFound, zone.oreMined = found, mined
 end
 
 -- ─── Phase ETA ───────────────────────────────────────────────────────────────
@@ -1779,8 +1970,10 @@ local function recordScanReport(zone, p)
         zone.sectorMined[k] = m
     end
 
+    zone.progressDirty = true   -- saveSectorProgress
     recomputeZoneOre(zone)
 end
+
 
 -- ─── Sector leases ───────────────────────────────────────────────────────────
 --
@@ -2721,7 +2914,10 @@ local function ensureMineZone(jobId, params)
             surveyDone      = 0,
             surveyTotal     = 0,
             lastAssignments = {},
+            prior           = priorFrom(pz),
         }
+        recomputeZoneOre(state.miningZones[jobId])
+        overlaySectorProgress({ state.miningZones[jobId] })
         saveMiningZones()
         logInfo(string.format("Targeted mine zone %s: %d sector(s) with [%s] (key=%s)",
             jobId, #targeted, table.concat(oreFilter, ","), key))
@@ -2824,7 +3020,12 @@ local function ensureMineZone(jobId, params)
         surveyTotal     = #surveySectors,
         surveyOnly      = params.surveyOnly == true,
         lastAssignments = {},   -- [minerId] = {x, z, isSurvey}
+        -- What the store held when this zone was built, sector by sector:
+        -- counted alongside this run's scans, never instead of them.
+        prior           = priorFrom(pz),
     }
+    recomputeZoneOre(state.miningZones[jobId])
+    overlaySectorProgress({ state.miningZones[jobId] })
 
     -- Create persistent zone entry if this is the first dispatch to these bounds
     if not pz then
@@ -3776,6 +3977,7 @@ handlers[proto.MSG.SECTOR_DONE] = function(msg)
     local sectorKey = donePhase .. ":" .. p.sectorX .. "," .. p.sectorZ
     local alreadyCounted = zone.doneKeys[sectorKey]
     zone.doneKeys[sectorKey] = true
+    zone.progressDirty = true   -- the progress file drops it at the next write
 
     if donePhase == "SURVEY" then
         if not alreadyCounted then zone.surveyDone = zone.surveyDone + 1 end
@@ -6438,6 +6640,11 @@ function server.run()
                 if not ok_ss then logError("Stale support WC: " .. tostring(err_ss)) end
                 lastStaleWC = wc
             end
+            if isDue(wc, state.lastProgressWC or 0, CFG.SECTOR_PROGRESS_INTERVAL) then
+                local ok_p, err_p = pcall(saveSectorProgress)
+                if not ok_p then logWarn("Sector progress not saved: " .. tostring(err_p)) end
+                state.lastProgressWC = wc
+            end
             if isDue(wc, lastOreWatchdogWC, 60) then
                 local ok_o, err_o = timed("oreWatchdog", checkOreThresholds)
                 if not ok_o then logError("Ore watchdog WC: " .. tostring(err_o)) end
@@ -6617,6 +6824,10 @@ if _G.__CC_SERVER_TEST then
         fanOutUpdateAll  = fanOutUpdateAll,
         mineJobLive      = mineJobLive,
         dumpZoneOreMap   = dumpZoneOreMap,
+        ensureMineZone   = ensureMineZone,
+        loadMiningZones  = loadMiningZones,
+        saveSectorProgress = saveSectorProgress,
+        recomputeZoneOre = recomputeZoneOre,
     }
     return server
 end
