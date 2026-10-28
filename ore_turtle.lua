@@ -894,7 +894,9 @@ end
 
 -- Deploys the ore ender chest, so it must be able to dig it back up: always
 -- called through withDigTool by dumpOres below.
-local function dumpToEC()
+-- noDig: bank only into a face that is already free, never clearing one. For
+-- the dock, where every face that is occupied is somebody's property.
+local function dumpToEC(noDig)
     sweepCoalToSlot14()
 
     -- Banking moved to mine_flow.bankPayload so it can be tested.
@@ -917,6 +919,7 @@ local function dumpToEC()
         chestSlot = S_ORE_EC,
         afterDig  = rescueProtectedItems,
         ledger    = oreChestLedger,
+        noDig     = noDig,
         shouldDump = function(s, item)
             local isHardware = item and protectedItemNames[item.name] ~= nil
             local reserved   = PROTECTED[s] == true
@@ -990,9 +993,9 @@ end
 -- middle of a move (base.setDigRoomFn), which can happen during the silent
 -- flight home -- reporting a phase there would clear the comms-gap flag the
 -- server relies on to not declare the turtle lost.
-local function dumpOres(quiet)
+local function dumpOres(quiet, noDig)
     if not quiet then reportPhase(proto.PHASE.DUMPING) end
-    withDigTool("ore dump", dumpToEC)
+    withDigTool("ore dump", function() return dumpToEC(noDig) end)
 end
 
 -- Tidy up on arrival at the dock.
@@ -1018,18 +1021,29 @@ local function tidyAtDock()
     end
     if not carrying then return end
 
-    -- Never dig here. dumpToEC digs the block below to place the ore chest, and
-    -- at a dock that block is very often the station chest dockRefuel draws
-    -- from. Keeping a stack of cobblestone is strictly better than destroying
-    -- the operator's chest.
-    if turtle.detectDown() then
-        print("[MINER] Dock tidy: no free space below for the ore chest — "
-            .. "travel debris kept aboard")
-        return
-    end
-
+    -- Never dig here -- but that is a reason not to DIG, not a reason not to
+    -- bank, and for a long time it was both.
+    --
+    -- What was here: a refusal whenever turtle.detectDown() was true. At a dock
+    -- the block below is the station chest dockRefuel draws from, so it is
+    -- ALWAYS true, so the branch that banks could never run. W3 measured it on
+    -- 2026-10-08 -- twelve "travel debris kept aboard" lines across miners
+    -- 177-183 and not a single "banking travel debris". Miners docked carrying
+    -- debris that never drained, which is what the user reported.
+    --
+    -- bankPayload already tried all three faces, so "also try up and forward"
+    -- was never the missing piece. The trap is one step earlier: for an
+    -- occupied face it clears with digGuarded, and digGuarded refuses fleet
+    -- TURTLES, not containers -- so without the refusal above, the face loop
+    -- would have dug the operator's chest to bank a stack of cobblestone. The
+    -- guard was right and far too broad at the same time.
+    --
+    -- noDig is the narrow version: take a face that is already free, never
+    -- clear one. Forward and up usually are free at a bay. If none is, the
+    -- payload stays aboard exactly as before -- the old behaviour becomes the
+    -- fallback instead of the rule.
     print("[MINER] Dock tidy: banking travel debris")
-    dumpOres()
+    dumpOres(nil, true)
 end
 
 -- Mining slots that must be free before a refuel is allowed to start.

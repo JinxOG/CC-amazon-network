@@ -1540,7 +1540,7 @@ function(assert_eq)
     local src = f:read("*a")
     f:close()
 
-    local fnAt = src:find("local function dumpToEC%(%)")
+    local fnAt = src:find("local function dumpToEC%(")
     assert_eq(fnAt ~= nil, true, "dumpToEC moved or vanished")
     local endAt = src:find("\nlocal function ", fnAt + 10) or #src
     local body  = src:sub(fnAt, endAt)
@@ -1674,7 +1674,7 @@ function(assert_eq)
     local src = f:read("*a")
     f:close()
 
-    local fnAt = src:find("local function dumpToEC%(%)")
+    local fnAt = src:find("local function dumpToEC%(")
     assert_eq(fnAt ~= nil, true, "dumpToEC moved or vanished")
     local endAt = src:find("\nlocal function ", fnAt + 10) or #src
     local body  = src:sub(fnAt, endAt)
