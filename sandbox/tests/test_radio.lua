@@ -80,6 +80,22 @@ return {
     t.ok(out(c):find("y"), "channel 9 should still arrive")
   end,
 
+  -- The fleet sends serialised strings (proto.send), so a rule's type has to be read out of the string: its
+  -- top-level `type = "X"` line, never a nested field of the same name.
+  ["a type rule drops a serialised message of that type, and only that type"] = function(t)
+    local sched = net()
+    local a = node(sched, 1, LISTEN(5))
+    local s = node(sched, 3, [[
+      local m = peripheral.find("modem")
+      sleep(1); m.transmit(5, 5, textutils.serialise({ type = "JOB_COMPLETE", payload = { jobId = "j1" } }))
+      sleep(1); m.transmit(5, 5, textutils.serialise({ type = "HEARTBEAT", payload = { type = "JOB_COMPLETE" } }))
+    ]])
+    sched.radio:add_rule{ drop_rate = 1, type = "JOB_COMPLETE" }
+    a:boot(); s:boot(); sched:run{ until_ms = 10000 }
+    t.ok(not out(a):find("jobId", 1, true), "the JOB_COMPLETE string was delivered: " .. out(a))
+    t.ok(out(a):find('"HEARTBEAT"', 1, true), "the heartbeat, with a nested type field, should still arrive: " .. out(a))
+  end,
+
   ["latency delays delivery by latency_ms"] = function(t)
     local sched = net()
     local a = node(sched, 1, [[

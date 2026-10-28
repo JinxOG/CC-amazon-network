@@ -71,7 +71,14 @@ function Radio:transmit(from_comp, side, channel, reply, msg)
   local sched = self.sched
   local now = from_comp.sched.clock:now()
   local copy = deep_copy(msg)
-  local mtype = type(copy) == "table" and copy.type or nil
+  -- The fleet sends its messages as serialised strings (proto.encode), not tables, so a rule's `type` used to match
+  -- nothing it sent. The message's own type is its top-level `type = "X"` line: textutils.serialise indents top-level
+  -- keys by two spaces, deeper ones by more, so a nested field called type cannot be taken for it.
+  local mtype = nil
+  if type(copy) == "table" then mtype = copy.type
+  elseif type(copy) == "string" then
+    mtype = copy:match('\n  type = "([%w_]+)"') or copy:match('^{%s*type%s*=%s*"([%w_]+)"')
+  end
   local heard = false
   for _, comp in ipairs(sched.computers) do
     for mname, p in pairs(comp.peripherals) do
