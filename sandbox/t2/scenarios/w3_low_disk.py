@@ -5,8 +5,8 @@ checks once a minute: a WARN 'Disk low on the server computer' within 3 minutes,
 within 3 minutes. The files are then removed and the warnings must stop. Pin bfc2770 (the live commit). 1x, ~15 game min.
 Revised 2026-10-28 (W3), after w3-low-disk-b: a file written into the folder from outside is not counted -- real CC
 measures a computer's disk when it creates the computer, and /state diskFree stayed 576618 throughout, so the card was
-never exercised. After each change the server computer's chunk is now unloaded for 15 s (chunk_unload area), which
-removes the computer and boots it again on a fresh measurement; it is the same as the server computer rebooting. Each
+never exercised. After each change the game server is now restarted (world_restart; the 15 s chunk unload tried first did
+not reboot the computer), which creates the computer again on a fresh measurement -- as the daily restart does. Each
 step also checks diskFree really moved, so a run where the fill is not seen fails instead of passing quietly."""
 import os
 
@@ -33,10 +33,7 @@ def steps(ctx):
     if sid is None:
         return
     folder = os.path.join(ctx.control.disks, str(sid))
-    pos = (ctx.control.computers().get(sid) or {}).get("pos")
-    ctx.expect(pos is not None, "the dispatch computer's position (%r)" % (pos,))
-    if pos is None:
-        return
+    c = ctx.control
 
     def free():
         return (ctx.state() or {}).get("diskFree")
@@ -48,12 +45,14 @@ def steps(ctx):
         return
 
     def remeasure():
-        """Unloads the server computer's chunk for 15 s, so CC creates the computer again and measures its disk afresh."""
+        """Restarts the game server (a clean stop, the world saved), so CC creates the dispatch computer again and measures
+        its disk afresh. Unloading its chunk did not do it: w3-low-disk-c unloaded it three times and the computer never
+        rebooted ('Central server online' never came)."""
         n0 = len(ctx.log_lines("Central server online"))
-        ctx.control.chunk_unload(area=(pos[0], pos[2], pos[0], pos[2]), dur=15000)
-        back = ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > n0, 180)
-        ctx.expect(bool(back), "the dispatch computer booted again after its chunk came back")
-        ctx.wait_game(15)                                # the next bridge push carries the new figure
+        c.world_restart()
+        back = ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > n0, 600)
+        ctx.expect(bool(back), "the dispatch computer booted again after the restart")
+        ctx.wait_game(20)                                # the next bridge pushes carry the new figure
         return free()
 
     def fill_to(target, name):
