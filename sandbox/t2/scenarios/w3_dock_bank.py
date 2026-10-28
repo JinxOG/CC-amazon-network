@@ -33,7 +33,13 @@ def steps(ctx):
     chest0 = c.block_data(below)
     ctx.note("%s (computer #%d), dock %s; below it: %s" % (node, cid, dock, chest0[:120]))
 
-    home = ctx.wait_until(lambda: [l for l in ctx.log_lines("phase: RETURNING") if node in l], 3 * 3600)
+    # Home early rather than after the whole sector: one sector took over three game hours on this world (w3-dock-bank,
+    # 2026-10-28, still mining when the 3 h wait ran out). A cancelled job's return docks through the same tidy (sim:
+    # sandbox/scenarios/w3_dock_bank_cancel.lua, passes on 0dc2575, fails on c50c898).
+    scanned = ctx.wait_until(lambda: [l for l in ctx.log_lines("scan by") if job in l], 3600)
+    ctx.expect(bool(scanned), "%s reached its sector" % node)
+    ctx.dispatch("CANCEL_JOB", {"jobId": job})
+    home = ctx.wait_until(lambda: [l for l in ctx.log_lines("phase: RETURNING") if node in l], 1800)
     ctx.expect(bool(home), "%s turned for home" % node)
     if not home:
         return
