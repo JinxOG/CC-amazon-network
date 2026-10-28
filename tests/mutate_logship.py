@@ -2225,11 +2225,28 @@ def heal_inflight():
         return False
     with io.open(INFLIGHT, encoding="utf-8") as f:
         rec = json.load(f)
-    io.open(rec["path"], "w", encoding="utf-8", newline="").write(rec["raw"])
+    write_file(rec["path"], rec["raw"])
     os.remove(INFLIGHT)
     print("RECOVERED  a previous run was killed mid-mutant (%s); %s restored "
           "from its pre-mutation copy" % (rec.get("label", "?"), rec["path"]))
     return True
+
+
+def write_file(path, text):
+    """Writes a source file, retrying a refused write. On this machine OneDrive briefly locks a file it is syncing,
+    and an unretried write raised 'OSError: [Errno 22] Invalid argument' twice (2026-10-22 central_server.lua,
+    2026-10-28 mine_flow.lua) -- both times in the RESTORE, leaving a mutant in the working tree. The inflight marker
+    heals it on the next run, but a run that dies there has checked nothing after it."""
+    import time
+    for attempt in range(20):
+        try:
+            with io.open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            return
+        except OSError:
+            if attempt == 19:
+                raise
+            time.sleep(0.5)
 
 
 def main():
@@ -2286,7 +2303,7 @@ def main():
         import json, os
         with io.open(INFLIGHT, "w", encoding="utf-8") as f:
             json.dump({"path": path, "raw": raw, "label": label}, f)
-        io.open(path, "w", encoding="utf-8", newline="").write(mutated)
+        write_file(path, mutated)
         try:
             ok, err = compiles(path)
             if not ok:
@@ -2299,7 +2316,7 @@ def main():
                 problems.append(
                     f"SURVIVED   {label}: '{target}' stayed green; red were {red}")
         finally:
-            io.open(path, "w", encoding="utf-8", newline="").write(raw)
+            write_file(path, raw)
             if os.path.exists(INFLIGHT):
                 os.remove(INFLIGHT)
 
