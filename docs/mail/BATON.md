@@ -16,6 +16,26 @@ protocol §2, *The holder runs the cycle without stopping*.
 
 **Only the head engineer moves the baton, and only with the user's say-so.**
 
+## The streamlined card cycle (the user, 2026-10-27, to cut token use)
+
+**One engineer works at a time: the baton holder.** For each card, the holder alone:
+
+1. writes the layer-1 test, runs it in the simulator, and shows it fails on the old code and passes on the new;
+2. runs layer 2 **itself** on the local test server, with `sandbox/t2/scenario.py`. Only the holder uses the
+   test server, so there is no queue and no hand-off;
+3. checks its own results, writes the VALIDATION block, and moves the card to **"Done - not server validated"**;
+4. leaves the rest to the watcher, which confirms it from the live logs and moves it to Done.
+
+**No relaying.** The holder does not ask SANDBOX or anyone else to run tests, and does not send progress
+messages. Mail is only for:
+- a question that only another engineer can answer;
+- a ruling needed from the spec owner;
+- the user.
+
+**SANDBOX** maintains the simulator and test-server tools only when asked. It is not a test service.
+
+**Everyone else stays asleep** until the head engineer, with the user's say-so, hands them the baton.
+
 ## History
 
 | From | To | Date | Why |
