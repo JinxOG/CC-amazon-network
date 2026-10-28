@@ -11,3 +11,7 @@ def steps(ctx):
     ctx.expect(len(ctx.log_lines("Dispatched job_")) >= 1, "a job was dispatched")
     sectors = [l for l in ctx.log_lines("Sector (") if "done by" in l and "ore mined" in l]
     ctx.expect(len(sectors) >= 3, "at least 3 sector 'done' lines logged (%d)" % len(sectors))
+    # the harness posts ONE order; the server must have received exactly one (ts-10x-1.9.154 saw the same ORDER_MINE handed over twice, 6 s apart, and the
+    # second job made the run misleading)
+    orders = len(ctx.log_lines("Bridge cmd: ORDER_MINE"))
+    ctx.expect(orders == 1, "the server received the ORDER_MINE exactly once (%d)" % orders)
