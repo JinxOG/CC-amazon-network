@@ -91,6 +91,9 @@ local function refuelAtDock(role, opts)
 
     local base = require("turtle_base")
     pcall(base.init, role)
+    -- Coal already aboard (road debris), put there AFTER init: base.init's own
+    -- fuel.refuel() burns whatever loose fuel the turtle boots with.
+    for slot, n in pairs(opts.loose or {}) do c.inv[slot] = { name = COAL, count = n } end
 
     -- The world is built AFTER init, not before: initPosition() calls
     -- detectFacing(), which physically moves the turtle to work out which way
@@ -118,7 +121,10 @@ local function refuelAtDock(role, opts)
     -- base.init runs fuel.refuel(), which burns nothing here (no loose coal),
     -- so the level going into dockRefuel is still the configured one.
     local before = turtle.getFuelLevel()
-    local ok     = base.fuel.dockRefuel()
+    -- direct: the fuel ender chest itself, as FORCE_REFUEL and ensureFuel reach
+    -- it in the field, rather than the dock path in front of it.
+    local ok
+    if opts.direct then ok = base.fuel.refuelFromChest() else ok = base.fuel.dockRefuel() end
     local after  = turtle.getFuelLevel()
 
     os.epoch, os.startTimer, os.pullEvent = savedEpoch, savedTimer, savedPull
@@ -148,14 +154,17 @@ return {
     -- Leftover coal (2026-10-08, the user): a refuel sucked coal into every empty
     -- slot, burned only what the tank had room for, and kept the rest -- so a
     -- turtle came away with its inventory full of coal it could not use.
+    -- Since 5de182e a refuel takes only what the tank burns, so the return is a
+    -- safety net for coal already aboard (road debris) when the tank fills:
+    -- two stacks here, which the full tank cannot burn.
     ["leftover coal goes back into the dock chest"] = function(assert_eq)
         local ok, before, after, containers, c = refuelAtDock(proto.ROLE.DELIVERY,
-            { fuel = 70000, dockStacks = 14 })
+            { fuel = 70000, dockStacks = 14, loose = { [5] = 64, [6] = 64 } })
         local burned = math.ceil((100000 - before) / 80)
         assert_eq(ok, true)
         assert_eq(after, 100000, "the tank is filled")
         assert_eq(looseCoal(c), 0, "no coal left aboard")
-        assert_eq(coalIn(containers[DOCK_CHEST]), 14 * 64 - burned, "the rest went back")
+        assert_eq(coalIn(containers[DOCK_CHEST]), 14 * 64 - burned + 128, "the coal aboard went back")
     end,
 
     ["a miner keeps its coal reserve slot and returns the rest"] = function(assert_eq)
@@ -172,12 +181,12 @@ return {
     ["leftover coal goes back into the fuel ender chest before it is picked up"] =
     function(assert_eq)
         local ok, before, after, containers, c = refuelAtDock(proto.ROLE.MINER,
-            { fuel = 600, ecStacks = 40 })
+            { fuel = 70000, ecStacks = 40, loose = { [6] = 64 }, direct = true })
         local burned = math.ceil((after - before) / 80)
         local reserve = c.inv[14] and c.inv[14].count or 0
         assert_eq(ok, true)
         assert_eq(looseCoal(c, { [14] = true }), 0, "no coal outside the reserve slot")
-        assert_eq(coalIn(containers[EC]), 40 * 64 - burned - reserve, "the rest went back")
+        assert_eq(coalIn(containers[EC]), 40 * 64 - burned - reserve + 64, "the coal aboard went back")
     end,
 
     -- The return above never once worked live: 325 refuels and no "Returned"

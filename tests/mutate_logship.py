@@ -218,6 +218,13 @@ ST_SERVER = "a stuck turtle's report raises NEEDS HANDS with where it is, once"
 CL_DOCK   = "leftover coal goes back into the dock chest"
 CL_RES    = "a miner keeps its coal reserve slot and returns the rest"
 CL_EC     = "leftover coal goes back into the fuel ender chest before it is picked up"
+CL_KEPT   = "a dock chest the base keeps full: only the coal the tank burns is taken"
+ZO_REBUILT  = "a zone built again keeps the ore of the sectors finished before it"
+ZO_RESCAN   = "a rescan of a sector finished before the rebuild does not count it twice"
+ZO_LEGACY   = "a zone stored before per-sector ore keeps its totals"
+ZO_RESTART  = "a sector's mined ore survives a restart before the sector finishes"
+ZO_THROTTLE = "progress is written only when there is something new"
+ZO_STALE    = "a finished sector left in the progress file is not counted again"
 UP_FIRST  = "a turtle with a queued update is not offered work until it has it"
 UP_LOOP   = "a turtle whose last update failed is not offered it again on that registration"
 RB_AGAIN  = "a miner recovering again with no job left is still not offered work"
@@ -1622,7 +1629,40 @@ MUTANTS = [
      [('    fuel.returnLeftover(fuel.dropFor(suckFn), "the fuel ender chest")\n', '')], CL_EC),
 
     ('the dock forgets which side gave coal', 'turtle_base.lua',
-     [('                source = source or suckFn\n', '')], CL_DOCK),
+     [('        if fuel.drawFrom(suckFn) then source = source or suckFn end\n', '        fuel.drawFrom(suckFn)\n')], CL_DOCK),
+
+    # -- A refuel takes only what the tank burns (5de182e) --------------------
+    ('a refuel takes a full stack at a time again', 'turtle_base.lua',
+     [('            local want = per and math.min(64, math.ceil((fuel.max() - fuel.level()) / per)) or 1\n',
+       '            local want = 64\n')], CL_KEPT),
+
+    ('the reserve slot is not stocked', 'turtle_base.lua',
+     [('        if suckFn(64) then gave = true end\n', '')], CL_RES),
+
+    # -- A zone's ore record: history and the sectors in flight (W3) ---------
+    ('a zone built again forgets what the store held', 'central_server.lua',
+     [('        prior           = priorFrom(pz),\n    }\n', '    }\n')], ZO_REBUILT),
+
+    ('a rescan of a finished sector counts it twice', 'central_server.lua',
+     [('        found[name] = math.max((p.found or {})[name] or 0, pm + ((r.found or {})[name] or 0))\n',
+       '        found[name] = ((p.found or {})[name] or 0) + ((r.found or {})[name] or 0)\n')], ZO_RESCAN),
+
+    ('a zone stored before per-sector ore loses its totals', 'central_server.lua',
+     [('    if legacy then prior.legacy = { found = copyOre(legacy.found), mined = copyOre(legacy.mined) } end\n', '')],
+     ZO_LEGACY),
+
+    ('the sectors in flight are never written', 'central_server.lua',
+     [('    if not dirty then return false end\n', '    do return false end\n')], ZO_RESTART),
+
+    ('the sectors in flight are written with nothing new', 'central_server.lua',
+     [('    if not dirty then return false end\n', '')], ZO_THROTTLE),
+
+    ('a restart does not put the sectors in flight back', 'central_server.lua',
+     [('    local back = overlaySectorProgress()\n', '    local back = 0\n')], ZO_RESTART),
+
+    ('a finished sector in the progress file is counted again', 'central_server.lua',
+     [('                    if sKey and not done[sKey] and type(map) == "table" then\n',
+       '                    if sKey and type(map) == "table" then\n')], ZO_STALE),
 
     ('leftovers go back to the wrong side', 'turtle_base.lua',
      [('    if suckFn == turtle.suckDown then return turtle.dropDown end\n', '    if suckFn == turtle.suckDown then return turtle.dropUp end\n')], CL_DOCK),
