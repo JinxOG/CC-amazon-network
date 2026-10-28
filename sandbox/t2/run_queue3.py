@@ -75,7 +75,7 @@ def cleanup(run_id):
     # also the scenario PROCESS of that run: a stray scenario.py left by a driver that was replaced while its run was starting kept polling the bridge on port 3000
     # and, when the next run's bridge came up there, posted its own ORDER_MINE to it (the duplicate order in ts-10x-1.9.154, 2026-10-28)
     subprocess.run(["powershell", "-NoProfile", "-Command",
-                    "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'scenario\.py' -and $_.CommandLine -match '--run-id %s( |$)' } | "
+                    "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'scenario[.]py' -and $_.CommandLine -match '--run-id %s( |$)' } | "
                     "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" % run_id], capture_output=True)
     """Stops whatever a failed run left behind: its server by its own tool, any bridge still running for it, then its folder."""
     subprocess.run([sys.executable, "-I", os.path.join(q.HERE, "run.py"), "stop", run_id], capture_output=True)
