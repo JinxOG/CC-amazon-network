@@ -531,4 +531,64 @@ function(assert_eq)
         .. "layer can tell bedrock from any other unbreakable block")
 end
 
+-- The dock tidy must bank with noDig, and must NOT refuse on what is below.
+--
+-- The behaviour of noDig is covered in test_mine_flow; what cannot be covered
+-- there is that tidyAtDock passes it and has dropped the refusal. Restore that
+-- early return and every noDig test stays green while docked miners go back to
+-- never banking -- which is how it survived unnoticed from 2026-10-08.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["the dock tidy banks with noDig instead of refusing on the station chest (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    local NL   = string.char(10)
+    local body = src:match("local function tidyAtDock%(%)(.-)" .. NL .. "end" .. NL)
+    assert_eq(body ~= nil, true, "tidyAtDock moved or vanished")
+
+    assert_eq(body:find("dumpOres(nil, true)", 1, true) ~= nil, true,
+        "tidyAtDock must bank with noDig set, or it digs the station chest")
+    assert_eq(body:find("if turtle.detectDown() then", 1, true), nil,
+        "and must NOT refuse on a block below: at a dock that is always the "
+        .. "station chest, so the refusal cancelled every bank (W3 measured 12 "
+        .. "'kept aboard' and 0 'banking' across miners 177-183)")
+
+    -- The reorient runs first and unconditionally: it needs no chest and cannot
+    -- fail destructively, so hardware gets home even when banking is impossible.
+    local rescueAt = body:find("rescueProtectedItems()", 1, true)
+    local dumpAt   = body:find("dumpOres(", 1, true)
+    assert_eq(rescueAt ~= nil and dumpAt ~= nil and rescueAt < dumpAt, true,
+        "rescueProtectedItems must still come before the bank")
+end
+
+-- noDig has to survive THREE hops to reach the bank:
+--   tidyAtDock -> dumpOres(quiet, noDig) -> dumpToEC(noDig) -> bankPayload{noDig}
+--
+-- Added because a mutant proved it was needed: setting the flag to false where
+-- dumpToEC builds its opts left every noDig test in test_mine_flow green and
+-- the tidyAtDock test green too, while docked miners went straight back to
+-- digging the station chest. Asserting the two ends is not asserting the chain.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["noDig survives every hop from the dock tidy to the bank (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+    local NL = string.char(10)
+
+    assert_eq(src:find("local function dumpOres(quiet, noDig)", 1, true) ~= nil, true,
+        "dumpOres must accept noDig")
+    assert_eq(src:find("return dumpToEC(noDig)", 1, true) ~= nil, true,
+        "dumpOres must forward it to dumpToEC, not drop it at the equipment swap")
+    assert_eq(src:find("local function dumpToEC(noDig)", 1, true) ~= nil, true,
+        "dumpToEC must accept noDig")
+
+    local body = src:match("local function dumpToEC%(noDig%)(.-)" .. NL .. "end" .. NL)
+    assert_eq(body ~= nil, true, "dumpToEC moved or vanished")
+    assert_eq(body:find("noDig     = noDig,", 1, true) ~= nil, true,
+        "and must pass the flag itself into bankPayload -- a hardcoded true or "
+        .. "false here silently decides the dock's behaviour for every caller")
+end
+
 return suite

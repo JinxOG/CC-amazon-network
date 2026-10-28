@@ -406,6 +406,12 @@ N_UNKNOWN = "an unrecognised or missing reason becomes unknown, never a nearby b
 N_RENDER  = "the skip breakdown renders in a stable order so two sectors can be diffed"
 N_REASON  = ("a skipped ore's reason reaches the log, not just its count "
              "(SOURCE-ONLY, weaker)")
+D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
+D_BACK  = "noDig still takes the chest back after the drop"
+D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
+D_WIRED = ("the dock tidy banks with noDig instead of refusing on the station chest "
+           "(SOURCE-ONLY, weaker)")
+D_CHAIN = "noDig survives every hop from the dock tidy to the bank (SOURCE-ONLY, weaker)"
 
 MUTANTS = [
     # ── The per-ore pick (replaces mineOreList's table.sort) ────────────────
@@ -438,6 +444,32 @@ MUTANTS = [
     ("the miner goes back to taking ores in list order", "ore_turtle.lua",
      [('        local ore = mine_flow.takeNearest(remaining, p)',
        '        local ore = table.remove(remaining, 1)')], N_WIRED),
+
+    # ── Banking at a dock without digging (W3's measurement, 2026-10-08) ────
+    ("noDig is ignored and an occupied face is dug anyway", "mine_flow.lua",
+     [('        if f.detect() and opts.noDig then', '        if false then')], D_FREE),
+
+    ("the chest is left standing because noDig also blocks the dig back",
+     "mine_flow.lua",
+     [('    mine_flow.digGuarded(face.name)\n    -- Asked whether or not the dig worked',
+       '    if not opts.noDig then mine_flow.digGuarded(face.name) end\n    -- Asked whether or not the dig worked')],
+     D_BACK),
+
+    ("a noDig bank with no free face drops the payload on the floor",
+     "mine_flow.lua",
+     [('    if not face then return false, "chest_not_placed" end',
+       '    if not face then face = BANK_FACES[1] end')], D_KEEP),
+
+    ("the dock tidy banks WITH digging allowed", "ore_turtle.lua",
+     [('    dumpOres(nil, true)', '    dumpOres()')], D_WIRED),
+
+    ("the dock tidy refuses again whenever anything is below", "ore_turtle.lua",
+     [('    print("[MINER] Dock tidy: banking travel debris")',
+       '    if turtle.detectDown() then return end\n    print("[MINER] Dock tidy: banking travel debris")')],
+     D_WIRED),
+
+    ("the miner stops passing noDig through to the bank", "ore_turtle.lua",
+     [('        noDig     = noDig,', '        noDig     = false,')], D_CHAIN),
 
     # ── Why an ore was skipped (W3's unanswerable question, 2026-10-08) ─────
     ("a fleet turtle in the way is reported as an unbreakable block", "mine_flow.lua",
