@@ -418,7 +418,7 @@ N_REASON  = ("a skipped ore's reason reaches the log, not just its count "
 D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
 D_BACK  = "noDig still takes the chest back after the drop"
 D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
-D_WIRED = ("the dock tidy banks with noDig instead of refusing on the station chest "
+DT_WIRED = ("the dock tidy banks with noDig instead of refusing on the station chest "
            "(SOURCE-ONLY, weaker)")
 D_CHAIN = "noDig survives every hop from the dock tidy to the bank (SOURCE-ONLY, weaker)"
 
@@ -470,12 +470,12 @@ MUTANTS = [
        '    if not face then face = BANK_FACES[1] end')], D_KEEP),
 
     ("the dock tidy banks WITH digging allowed", "ore_turtle.lua",
-     [('    dumpOres(nil, true)', '    dumpOres()')], D_WIRED),
+     [('    dumpOres(nil, true)', '    dumpOres()')], DT_WIRED),
 
     ("the dock tidy refuses again whenever anything is below", "ore_turtle.lua",
      [('    print("[MINER] Dock tidy: banking travel debris")',
        '    if turtle.detectDown() then return end\n    print("[MINER] Dock tidy: banking travel debris")')],
-     D_WIRED),
+     DT_WIRED),
 
     ("the miner stops passing noDig through to the bank", "ore_turtle.lua",
      [('        noDig     = noDig,', '        noDig     = false,')], D_CHAIN),
