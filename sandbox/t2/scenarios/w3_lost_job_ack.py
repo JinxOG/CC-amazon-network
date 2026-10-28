@@ -7,7 +7,12 @@ JOB_ACK, the STATUS_UPDATE and the next heartbeat (+5.9 s) were all lost, and th
 (jitter is +/-40%), past the 10 s deadline: the server was right to time it out; the test, not the code, was wrong.
 With 3 s the window after the loss is about 8 s, longer than the widest heartbeat gap. That run also passed "carried on
 to its first sector" while the miner was in fact recalled: it logged 'phase: RETURNING' in the same second. So the
-miner must now also not be recalled and not return within a minute of its first sector. Its next heartbeat names the job:
+miner must now also not be recalled and not return within a minute of its first sector.
+Revised again 2026-10-28 (W3), after w3-lost-job-ack-d-r: with 3 s the order reached the server ONE TICK after the loss
+ended (the server reads the bridge every 3 s, so the order lands 0-3 s after it is sent) and the ACK went through --
+inconclusive. The JOB_ACK goes out in the same tick as the JOB_ASSIGN, so the loss must outlast 3 s; 4 s leaves 6-9 s
+for a heartbeat (3-7 s apart) before the 10 s deadline. A rare ACK timeout here can still be heartbeat timing, not the
+code: read t2control/radio.jsonl for a heartbeat between the loss's end and the timeout before calling it a fault. Its next heartbeat names the job:
 the server must log "accepted on that evidence", log no "ACK timeout", and the job must stay open (the miner reaches its
 first sector; no "Job complete"). If the ACK slipped through (neither line appears) the run is INCONCLUSIVE, not a pass:
 re-run it. Pin bfc2770 (the live commit). 1x, ~15 game minutes; the job is cancelled at the end."""
@@ -35,7 +40,7 @@ def steps(ctx):
     ctx.expect(sid is not None, "found the dispatch computer (#%s)" % sid)
     if sid is None:
         return
-    ctx.control.radio_loss(0, 3000, 1, channel=1, to=sid)                # THE TEST: 3 s with nothing reaching the server
+    ctx.control.radio_loss(0, 4000, 1, channel=1, to=sid)                # THE TEST: 4 s with nothing reaching the server
     ctx.dispatch("ORDER_MINE", {"x1": 1920, "z1": -2624, "x2": 1984, "z2": -2624, "minerCount": 2})
     went = ctx.wait_until(lambda: ctx.log_lines("Dispatched job_"), 600)
     ctx.expect(bool(went), "the job was dispatched")
