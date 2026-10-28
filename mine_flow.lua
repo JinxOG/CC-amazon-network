@@ -1058,7 +1058,21 @@ function mine_flow.bankPayload(opts)
     local face
     for _, f in ipairs(BANK_FACES) do
         turtle.select(chestSlot)
-        if f.detect() then
+        if f.detect() and opts.noDig then
+            -- opts.noDig: take a free face or none. Used at the dock, where the
+            -- block below is the station chest dockRefuel draws from and
+            -- digGuarded would not save it -- that guard refuses fleet TURTLES,
+            -- not containers.
+            --
+            -- Skipping rather than returning is the whole point. tidyAtDock used
+            -- to refuse the entire bank whenever anything was below, which at a
+            -- dock is always, so the branch that banks could never run: W3
+            -- measured twelve "travel debris kept aboard" lines across miners
+            -- 177-183 on 2026-10-08 and not one "banking". Forward and up are
+            -- usually free there, and the loop reaches them on its own.
+            log("Bank: " .. f.name .. " is occupied and digging is not allowed "
+                .. "here — trying another face")
+        elseif f.detect() then
             -- Clear it if we can. Bedrock and other unbreakable blocks simply
             -- refuse, which is the whole reason "down" cannot be the only face:
             -- the deepest scan level bottoms out in the bedrock layer, where
@@ -1116,6 +1130,11 @@ function mine_flow.bankPayload(opts)
     end
 
     turtle.select(chestSlot)
+    -- NOT subject to opts.noDig, and it must not become so. This digs back the
+    -- chest THIS function just placed on a face it had already confirmed free.
+    -- noDig is about not destroying what was there before us; leaving the chest
+    -- standing instead would strand it and hand the job to ledger recovery for
+    -- no reason.
     mine_flow.digGuarded(face.name)
     -- Asked whether or not the dig worked: the ledger checks the home slot and
     -- keeps the record when the chest is still standing. Deciding that here as

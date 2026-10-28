@@ -353,6 +353,85 @@ return {
             .. "needs a wider coordinate range")
     end,
 
+    -- ─── Banking at a dock without digging (W3's measurement, 2026-10-08) ────
+    --
+    -- W3 counted twelve "travel debris kept aboard" lines across miners 177-183
+    -- and zero "banking", because tidyAtDock refused whenever anything was
+    -- below and at a dock that is the station chest, always. opts.noDig is the
+    -- narrow fix: take a face that is already free, never clear one.
+    ["noDig banks on a free face while something is below, instead of refusing"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked = bankingDrops(c)
+        -- A dock bay: the station chest below, clear ahead.
+        c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)] = "minecraft:chest"
+        c.inv[5] = { name = "minecraft:cobblestone", count = 12 }
+
+        local ok, face = flow.bankPayload({ chestSlot = 16, noDig = true,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, true, "the bank must happen, not be cancelled by the chest below")
+        assert_eq(face, "forward", "down is occupied, so the next free face takes it")
+        assert_eq(#banked, 1, "and the debris reached the chest")
+        assert_eq(c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)], "minecraft:chest",
+            "the station chest must still be there -- destroying it to bank "
+            .. "cobblestone is the trade the old guard existed to prevent")
+    end,
+
+    -- The guard's whole purpose, kept. digGuarded refuses fleet turtles, not
+    -- containers, so without noDig the face loop digs the operator's chest.
+    ["without noDig the face loop still digs a container that is in the way"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        bankingDrops(c)
+        c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)] = "minecraft:chest"
+        c.inv[5] = { name = "minecraft:cobblestone", count = 12 }
+
+        local ok, face = flow.bankPayload({ chestSlot = 16,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, true)
+        assert_eq(face, "down", "the old path takes down by digging it")
+        assert_eq(c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)], nil,
+            "and the chest is gone -- which is exactly why the dock passes noDig")
+    end,
+
+    -- No free face: the payload stays aboard. The old refusal becomes the
+    -- fallback rather than the rule, so this must not regress to dropping ore.
+    ["noDig keeps the payload aboard when every face is occupied"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local banked, ground = bankingDrops(c)
+        c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)] = "minecraft:chest"
+        c.world[wkey(c.pos.x, c.pos.y + 1, c.pos.z)] = "minecraft:stone"
+        c.world[wkey(c.pos.x, c.pos.y, c.pos.z - 1)] = "minecraft:stone"
+        c.inv[5] = { name = "minecraft:cobblestone", count = 12 }
+
+        local ok, why = flow.bankPayload({ chestSlot = 16, noDig = true,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, false)
+        assert_eq(why, "chest_not_placed")
+        assert_eq(#banked, 0)
+        assert_eq(#ground, 0, "and NOTHING is dropped on the floor -- a kept "
+            .. "payload is a bad trip, ore on the ground is gone")
+        assert_eq(c.inv[5] ~= nil, true, "the debris is still aboard")
+    end,
+
+    -- noDig must not stop the chest being dug BACK. It was placed on a face
+    -- confirmed free, so that dig destroys nothing that was not ours; leaving
+    -- it standing would strand it for no reason.
+    ["noDig still takes the chest back after the drop"] = function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        bankingDrops(c)
+        c.world[wkey(c.pos.x, c.pos.y - 1, c.pos.z)] = "minecraft:chest"
+        c.inv[5] = { name = "minecraft:cobblestone", count = 12 }
+
+        local ok, face = flow.bankPayload({ chestSlot = 16, noDig = true,
+            shouldDump = function(s) return s >= 5 and s <= 13 end })
+        assert_eq(ok, true)
+        assert_eq(face, "forward")
+        assert_eq(c.world[wkey(c.pos.x, c.pos.y, c.pos.z - 1)], nil,
+            "the ore chest must not be left standing at the dock")
+    end,
+
     -- ─── Why an ore was skipped (W3's unanswerable question, 2026-10-08) ─────
     --
     -- Every input below is a string base.move.to actually produces, taken from
