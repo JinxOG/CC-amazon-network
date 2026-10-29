@@ -65,6 +65,8 @@ local CFG = {
     -- server.stageFanOut. The marker survives the reboot; the delay lets the
     -- turtles re-register first, so the fan-out finds them online.
     FANOUT_FILE       = "update_fanout.pending",
+    -- What master points to, for pinning a deploy that names no commit.
+    MASTER_REF_URL    = "https://api.github.com/repos/JinxOG/CC-amazon-network/commits/master",
     FANOUT_DELAY_SEC  = 45,
     -- After an update is delivered, how long the turtle is left alone to reboot
     -- into it before it can be offered work again (registry.getIdle).
@@ -4916,6 +4918,48 @@ function server.fanOutIfDue(nowMs)
     fanOutUpdateAll(state.fanOutRef)
 end
 
+-- AN UNPINNED DEPLOY IS PINNED HERE (2026-10-28). An UPDATE_ALL naming no
+-- commit -- the bridge's /self-update sends none -- installed "master" from
+-- raw.githubusercontent.com, whose 5-minute cache can hand back the previous
+-- release, or a mixture file by file (1.9.127, 2026-10-03); and a turtle busy
+-- at the deploy took whatever master was when it next went idle (node_178 got
+-- the next, unreleased push 15 hours after 1.9.154). GitHub's API names the
+-- commit master points to NOW; pinning the deploy to it makes the server and
+-- every turtle, then and later, install exactly that. Called just before the
+-- server's own update, which reboots it -- so the yield in http.get costs
+-- nothing. If GitHub cannot be asked, the deploy goes ahead as before, unpinned,
+-- and says so. Returns the commit the deploy is pinned to, or nil.
+function server.pinUnpinnedDeploy()
+    local staged = nil
+    if fs.exists(CFG.FANOUT_FILE) then
+        local f = fs.open(CFG.FANOUT_FILE, "r")
+        staged = f and f.readAll() or nil
+        if f then f.close() end
+    end
+    if proto.isCommitRef(staged) then return staged end
+    local sha, why = nil, "no http"
+    if http and http.get then
+        local ok, h, err = pcall(http.get, CFG.MASTER_REF_URL,
+            { ["Accept"] = "application/vnd.github.sha", ["User-Agent"] = "turtle-os" })
+        if ok and h then
+            local body = h.readAll() or ""
+            h.close()
+            sha = body:match("^%s*(%x+)%s*$")
+            if not proto.isCommitRef(sha) then sha, why = nil, "unexpected answer" end
+        else
+            why = tostring(ok and err or h)
+        end
+    end
+    if not sha then
+        logWarn("UPDATE_ALL names no commit, and it could not be pinned (" .. tostring(why)
+            .. ") -- installing master as it stands, unpinned")
+        return nil
+    end
+    server.stageFanOut(sha)
+    logInfo("UPDATE_ALL named no commit -- pinned to master's commit " .. sha)
+    return sha
+end
+
 -- The server's own update failed and it is staying on its old code. Sending
 -- the fleet new code now would leave it ahead of the server, so it is not sent.
 function server.dropFanOut()
@@ -6404,6 +6448,7 @@ function server.run()
                         end
                         if pendingUpdate then
                             pendingUpdate = false
+                            pcall(server.pinUnpinnedDeploy)
                             logWarn("UPDATE_ALL — updating server in 3s...")
                             sleep(3)
                             if fs.exists("updater.lua") then shell.run("updater") end

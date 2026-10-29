@@ -219,6 +219,7 @@ CL_DOCK   = "leftover coal goes back into the dock chest"
 CL_RES    = "a miner keeps its coal reserve slot and returns the rest"
 CL_EC     = "leftover coal goes back into the fuel ender chest before it is picked up"
 CL_KEPT   = "a dock chest the base keeps full: only the coal the tank burns is taken"
+UP_PIN      = "an unpinned deploy is pinned to master's commit at the moment of the deploy"
 ZO_REBUILT  = "a zone built again keeps the ore of the sectors finished before it"
 ZO_RESCAN   = "a rescan of a sector finished before the rebuild does not count it twice"
 ZO_LEGACY   = "a zone stored before per-sector ore keeps its totals"
@@ -1638,6 +1639,13 @@ MUTANTS = [
 
     ('the reserve slot is not stocked', 'turtle_base.lua',
      [('        if suckFn(64) then gave = true end\n', '')], CL_RES),
+
+    # -- An unpinned deploy is pinned to master's commit (W3, 2026-10-28) ----
+    ('an unpinned deploy is never pinned', 'central_server.lua',
+     [('    if proto.isCommitRef(staged) then return staged end\n', '    do return staged end\n')], UP_PIN),
+
+    ('the resolved commit is not staged', 'central_server.lua',
+     [('    server.stageFanOut(sha)\n    logInfo("UPDATE_ALL named no commit', '    logInfo("UPDATE_ALL named no commit')], UP_PIN),
 
     # -- A zone's ore record: history and the sectors in flight (W3) ---------
     ('a zone built again forgets what the store held', 'central_server.lua',

@@ -40,6 +40,15 @@ function M.route(sched, method, url, body, headers)
     return 200, { ["Content-Type"] = "text/plain" }, data
   end
 
+  -- GitHub's API, one question only: which commit a branch points to (the server pins a deploy that names none,
+  -- 2026-10-28). The answer is sched.master_sha, which a scenario may set; the code under test is served for any ref.
+  if host == "api.github.com" then
+    local ref = path:match("^/repos/[^/]+/[^/]+/commits/([^/?]+)")
+    if not ref then return 404, {}, '{"message":"Not Found"}' end
+    sched:trace("http github-api commits/" .. ref)
+    return 200, { ["Content-Type"] = "text/plain" }, (sched.master_sha or string.rep("5", 40))
+  end
+
   sched:trace("http blocked " .. method .. " " .. url)
   return nil, "sandbox: network closed"
 end
@@ -118,7 +127,7 @@ function M.install(comp, E)
 
   function H.checkURL(url)
     local host = Safety.parse_url(url)
-    if host == "127.0.0.1" or host == "localhost" or host == "raw.githubusercontent.com" then return true end
+    if host == "127.0.0.1" or host == "localhost" or host == "raw.githubusercontent.com" or host == "api.github.com" then return true end
     return nil, "sandbox: network closed"
   end
 

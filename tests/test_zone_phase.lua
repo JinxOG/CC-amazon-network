@@ -1451,6 +1451,63 @@ return {
         assert_eq(still, true, "...but the deploy's commit is kept")
     end,
 
+    -- An UPDATE_ALL naming no commit (the bridge's /self-update) installed
+    -- "master" from raw.githubusercontent.com's 5-minute cache -- the previous
+    -- release, or a mixture -- and a busy turtle took whatever master was when
+    -- it next went idle (node_178, 15 hours later, 2026-10-28). The server now
+    -- asks GitHub which commit master is, and pins the deploy to it.
+    ["an unpinned deploy is pinned to master's commit at the moment of the deploy"] =
+    function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local SHA = string.rep("c", 40)
+        local asked
+        local savedHttp = http
+        http = { get = function(url)
+            asked = url
+            return { readAll = function() return SHA .. "\n" end, close = function() end }
+        end }
+        server.stageFanOut(nil)
+        local pinned = server.pinUnpinnedDeploy()
+        local f = fs.open(T.CFG.FANOUT_FILE, "r"); local fan = f.readAll(); f.close()
+        local g = fs.open(proto.UPDATE_REF_FILE, "r"); local own = g and g.readAll(); if g then g.close() end
+        http = savedHttp
+        restore()
+        assert_eq(pinned, SHA)
+        assert_eq(asked ~= nil and asked:find("/commits/master", 1, true) ~= nil, true, "asked GitHub for master")
+        assert_eq(fan, SHA, "the fleet is sent that commit")
+        assert_eq(own, SHA, "and the server installs that commit itself")
+    end,
+
+    ["a deploy that names its commit is left as it is"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local REF = string.rep("d", 40)
+        local asked = false
+        local savedHttp = http
+        http = { get = function() asked = true end }
+        server.stageFanOut(REF)
+        local pinned = server.pinUnpinnedDeploy()
+        http = savedHttp
+        restore()
+        assert_eq(asked, false, "no question to GitHub")
+        assert_eq(pinned, REF)
+    end,
+
+    ["if GitHub cannot be asked, the deploy goes ahead unpinned and says so"] = function(assert_eq)
+        local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
+        local server = package.loaded["central_server"]
+        local savedHttp = http
+        http = { get = function() return nil, "Could not connect" end }
+        server.stageFanOut(nil)
+        local pinned = server.pinUnpinnedDeploy()
+        local said = logged(T, "could not be pinned")
+        http = savedHttp
+        restore()
+        assert_eq(pinned, nil)
+        assert_eq(said ~= nil, true, "a WARN names it")
+    end,
+
     -- Found 2026-10-28 (W3), auditing the stale-update card: stageFanOut wrote
     -- the deploy's commit as "the last deploy" BEFORE the server's own update
     -- ran, and dropFanOut, on a failed update, removed only the fan-out marker.
