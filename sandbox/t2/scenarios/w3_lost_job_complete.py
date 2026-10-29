@@ -115,8 +115,13 @@ def steps(ctx):
     early = [l for l in ctx.log_lines("Job complete: " + job) if ts(l) <= t_sent + datetime.timedelta(seconds=60)]
     ctx.expect(not early, "the server did not close it then")
     closed = ctx.wait_until(lambda: ctx.log_lines("Job complete: " + job), 30 * 60)
+    # Two recoveries are possible and both are the server's: the idle-stuck watchdog, or -- when the loss makes the
+    # turtle re-register, as in w3-lost-job-complete-b -- the re-send of the still-open job, which the turtle runs
+    # to an immediate MINE_COMPLETE and docks again (a wasted trip out of the depot). Either is a recovery; which one is noted.
     stuck = [l for l in ctx.log_lines("Idle-stuck MINE job " + job)]
-    ctx.expect(bool(stuck), "the idle-stuck watchdog caught it (%s)" % (stuck[0][-110:] if stuck else "none"))
+    resent = [l for l in ctx.log_lines("Re-sent job " + job)]
+    ctx.note("recovered by: %s" % ("the idle-stuck watchdog" if stuck else ("the re-send after re-registering" if resent else "neither seen")))
+    ctx.expect(bool(stuck) or bool(resent), "the server recovered it (idle-stuck watchdog or re-send after re-registering)")
     mins = (ts(closed[0]) - t_sent).total_seconds() / 60 if closed else None
     ctx.note("closed %s min after the lost JOB_COMPLETE" % ("%.1f" % mins if mins is not None else "never"))
     ctx.expect(bool(closed) and mins <= 15, "%s was closed within 15 minutes (%s)" % (job, "%.1f min" % mins if mins else "never"))
