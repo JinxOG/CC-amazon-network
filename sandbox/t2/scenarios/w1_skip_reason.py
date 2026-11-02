@@ -16,10 +16,19 @@ ONE SECTOR, NOT THREE, AND WHY (run w1_skip_reason-1102-101833). The first run o
 zone and was INCONCLUSIVE, through two faults in this file rather than anything in the fleet. The server gave the zone
 one miner (its own ratio: one per three sectors), that miner surveyed all three and then mined them one at a time, and
 the 3-hour wait below expired with the sector holding the planted ore still in flight -- so "0 new-format lines" meant
-the code under test had not run yet, not that it was broken. The order is now the single sector that holds the ore
-(x1=x2=1920, z1=z2=-2624: buildSectorGrid floors and ceils to the 32 step, so one centre in, one sector out), which
-removes the queue ordering from the question and brings the run inside half an hour. The second fault was counting the
-order line the instant after posting it -- see the check at the end.
+the code under test had not run yet, not that it was broken. The order is now a single sector (buildSectorGrid floors
+and ceils to the 32 step, so one centre in, one sector out), which removes the queue ordering from the question. The
+second fault was counting the order line the instant after posting it -- see the check at the end.
+
+WHICH SECTOR, AND WHY NOT (1920,-2624) (run w1-skip-b). The obvious single sector was the one the ore was already in.
+It is the wrong one twice over, and the second run proved it: the miner logged "MINING (2013 ores at Y=16)" and spent
+seven minutes mining and dumping the FIRST of its four scan levels, nowhere near the planted ore at y=0 -- and then
+its computer blocked inside a filesystem open call for 51 minutes, which stalled the whole Minecraft server by 61,430
+ticks until ComputerCraft terminated it (see docs/mail for the measurements; cause not established here).
+(1952,-2624) is used instead, on evidence from the first run rather than hope: it and (1984,-2624) each reported
+"0 ore mined" and finished in about four minutes. Empty ground is what this test wants -- the planted ore is then the
+only thing in the sector that can produce a skip line, so the signal cannot be confused with natural ore, and the run
+costs minutes rather than hours.
 
 WHY 1x AND WHY NOT TO COMPLETION. 1x because at a higher tick rate the game clock outruns the fleet's os.epoch
 deadlines (see NOT STAGED), and a deadline firing early could turn this refusal into the "aborted" bucket and fail the
@@ -42,9 +51,9 @@ Cleanup returns the shell to stone, which is cosmetic rather than necessary: the
 """
 NAME = "w1_skip_reason"
 
-ORE = (1925, 0, -2619)                       # inside ZONE's one sector (centre 1920,-2624, radius 16), y=0 scan level
-ZONE = {"x1": 1920, "z1": -2624, "x2": 1920, "z2": -2624, "minerCount": 1}
-SECTOR = "Sector (1920,-2624)"               # its 'done by ... ore mined' line, for evidence either way
+ORE = (1957, 0, -2619)                       # inside ZONE's one sector (centre 1952,-2624, radius 16), y=0 scan level
+ZONE = {"x1": 1952, "z1": -2624, "x2": 1952, "z2": -2624, "minerCount": 1}
+SECTOR = "Sector (1952,-2624)"               # its 'done by ... ore mined' line, for evidence either way
 NEW_FMT = " attempted (scan "                # appears only in the 1.9.154 line
 OLD_FMT = "unreachable ores"                 # the bare-count line this replaced
 
