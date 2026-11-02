@@ -61,9 +61,11 @@ def query(since, until, contains=None, source=None, level=None, regex=None, get=
             notes.append(f"{day}: no data ({type(e).__name__})")
             continue
         got = r.get("lines", [])
-        if r.get("matched", len(got)) > len(got):
+        # A full page is truncated until proven otherwise: the bridge stops counting at the limit and then
+        # reports matched == returned == limit with truncated: false (seen 2026-11-02 on 2026-10-31's log).
+        if r.get("matched", len(got)) > len(got) or len(got) >= PAGE or r.get("truncated"):
             truncated = True
-            notes.append(f"{day}: server matched {r.get('matched')} but returned {len(got)}")
+            notes.append(f"{day}: server matched {r.get('matched')} and returned {len(got)} (a full page counts as cut)")
         for l in got:
             t = parse_ts(l["ts"])
             if t < since or t > until:

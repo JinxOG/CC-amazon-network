@@ -36,6 +36,14 @@ class LogqTest(unittest.TestCase):
         self.assertTrue(trunc)
         self.assertIn("9000", notes[0])
 
+    def test_a_full_page_is_truncated_even_when_the_server_says_it_is_not(self):
+        # The bridge reports matched == returned == limit with truncated: false when it stops counting.
+        lines = [L("2026-10-31T10:00:00Z", "x")] * logq.PAGE
+        get, _ = fake({"2026-10-31": {"matched": logq.PAGE, "truncated": False, "lines": lines}})
+        _, trunc, _ = logq.query(datetime.datetime(2026, 10, 31, 9, tzinfo=UTC),
+                                 datetime.datetime(2026, 10, 31, 11, tzinfo=UTC), get=get)
+        self.assertTrue(trunc)
+
     def test_a_window_crossing_midnight_queries_both_days_and_clips_both_ends(self):
         get, calls = fake({
             "2026-10-21": {"matched": 2, "lines": [L("2026-10-21T22:00:00Z", "early"), L("2026-10-21T23:30:00Z", "in1")]},
