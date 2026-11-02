@@ -1,6 +1,6 @@
 # The baton
 
-**Holder: W3 — Fleet & Dispatch. Since 2026-09-15.**
+**Holder: W1 — Mining. Since 2026-11-02** (W3 held it 2026-09-15 to 2026-11-02).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
 working through W3's cards on the board until they are Done.
@@ -41,3 +41,4 @@ messages. Mail is only for:
 | From | To | Date | Why |
 |---|---|---|---|
 | — | W3 | 2026-09-15 | First holder. The cleanup's Wave 2 queue is almost entirely W3's |
+| W3 | W1 | 2026-11-02 | W3's workable cards are all through both layers; the user hands the baton to W1 to work its cards the same lean way |
