@@ -1,0 +1,96 @@
+The sandbox host went to sleep for 51 minutes and destroyed a 1x test-server
+run. Its symptoms impersonate three separate fleet faults.
+
+CAUSE: ESTABLISHED. Windows suspended to RAM (S3) mid-run. Nothing was wrong
+with the fleet, the Lua, or the disk. An earlier version of this note pointed
+at the host's disk; that was wrong and is corrected below.
+
+WHERE  test server (t2) run w1-skip-b, 2026-11-02, fleet pinned to
+       e08bbd32c0142122d1d1a9d4679afcc7d79528fe (1.9.156), tickrate 20 (1x).
+       Scenario w1_skip_reason, ordering the single sector (1920,-2624).
+       Run folder: G:/TurtleOS-Sandbox/testserver/runs/w1-skip-b
+
+WHAT THE FLEET LOGS SHOWED (all of it misleading)
+
+  21:57:28Z  node_183 phase MINING (2013 ores at Y=16)
+  22:04:34Z  node_183's last line of any kind
+             ---- 51 minutes of silence from the whole fleet ----
+  22:56:09Z  ComputerCraft terminates computer #183: "ran over by 3067.56 s"
+  22:56:10Z  Minecraft: "Can't keep up! Running 3071535ms or 61430 ticks behind"
+  22:56:10Z  the CC server computer marks ALL 17 turtles offline in 18 ms
+  22:56:10Z  job_0206 back to queue (from node_183: turtle_timeout)
+
+WHAT THE HOST'S OWN EVENT LOG SHOWED (Windows System log, local time = UTC-8)
+
+  14:04:58  BTHUSB 3        a command to the Bluetooth adapter timed out
+  14:04:54  Kernel-Power 42 "The system is entering sleep."
+  14:56:09  Kernel-General 1 system time changed to 22:56:09Z from 22:05:0x
+  14:56:09  Kernel-Power 131 Firmware S3 times. ResumeCount: 1
+  14:56:10  e1rexpress 27   "Network link is disconnected."
+  14:56:11  Power-Troubleshooter 1 "The system has returned from a low power state."
+
+The clock jumped 51 minutes because the machine was suspended for 51 minutes.
+Every fleet symptom follows from that one fact: the Java process was frozen, so
+on resume ComputerCraft compared wall-clock timestamps and concluded computer
+#183 had run 3067 seconds without yielding; Minecraft found itself 61,430 ticks
+behind; and every heartbeat deadline the CC server computer was holding had
+expired at once.
+
+WHY THE STACK DUMP LOOKED LIKE A DISK PROBLEM, AND WHY IT WAS NOT
+
+ComputerCraft's watchdog dumps the worker thread's stack as it terminates a
+computer, and that stack was inside a Windows CreateFile:
+
+  at sun.nio.fs.WindowsNativeDispatcher.CreateFile0(Native Method)
+  at dan200.computercraft.core.filesystem.WritableFileMount.openFile:198
+  at dan200.computercraft.core.apis.FSAPI.open:377
+
+That is where the thread happened to be standing when the machine suspended --
+a snapshot of a frozen process, not a call that was taking 51 minutes. G: is a
+healthy SATA SSD (Crucial BX500 2TB) with 65 GB free, and the System log holds
+no disk warning in the window. The disk theory was wrong.
+
+THREE FLEET FAULTS IT IMPERSONATES
+
+  1. A hung miner. "Terminating computer #183, ran over by 3067 s" reads as a
+     Lua loop with no yield. Across the other 95 run folders every termination
+     overran by 3 to 6 seconds, which is the ordinary watchdog; 3067 seconds is
+     three orders of magnitude out and should itself be the tell.
+  2. A disconnect cluster. 17 turtles offline is the signature of a fault we
+     fixed, and gate_check treats a rise in "8+ node episodes" as a regression.
+     All 17 land inside 18 ms -- one registry sweep by a server computer whose
+     deadlines all expired together, not 17 radios failing.
+  3. A turtle timeout losing a job. "job_0206 back to queue (turtle_timeout)"
+     is the server correctly handling a miner that really had stopped talking.
+
+HOW TO CHECK, IN ONE COMMAND, BEFORE BLAMING THE FLEET
+
+  powershell Get-WinEvent -FilterHashtable @{LogName='System';
+    ProviderName='Microsoft-Windows-Kernel-Power'} | Where-Object Id -in 42,107,131
+
+  Id 42 is "entering sleep". If one sits inside the silent window, the run is
+  void and nothing in it can be read as evidence either way.
+
+WHY IT WILL HAPPEN AGAIN UNLESS SOMETHING CHANGES
+
+The machine's idle-sleep timeout is 60 minutes on AC (powercfg
+SUB_SLEEP STANDBYIDLE = 0x00000e10). That timer measures USER idleness: a
+Minecraft server pinned at 100% of a core does not reset it, and neither does a
+scenario driver waiting on a job. So the runs at risk are exactly the runs that
+matter most -- 1x runs, which must be 1x because above 20 ticks/s the game
+clock outruns the fleet's os.epoch deadlines, and which therefore take hours
+with nobody touching the keyboard.
+
+Looking back through the record with this in hand, run w3-head-on-b (started
+00:31, 797 minutes) reached 256,607 ticks behind, four times this run's debt,
+with no computer terminated. An overnight 13-hour run on a machine that sleeps
+after an hour of idleness is the obvious reading, and it means some share of
+the long-run evidence already on file may be void for the same reason. That is
+a claim about one unexamined run, not a measurement: it needs the same
+event-log check before anyone trusts or discards it.
+
+WHAT WOULD FIX IT. Hold the machine awake for the duration of a run -- the
+desktop app can do this per session, and the harness could take the hold itself
+when it starts a server. Failing that, every run report should carry the
+event-log check above, so a void run is marked void instead of being read as a
+fleet fault. Both are the test harness's call, not the fleet's.

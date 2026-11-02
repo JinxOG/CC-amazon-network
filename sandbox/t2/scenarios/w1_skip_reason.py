@@ -21,11 +21,11 @@ and ceils to the 32 step, so one centre in, one sector out), which removes the q
 second fault was counting the order line the instant after posting it -- see the check at the end.
 
 WHICH SECTOR, AND WHY NOT (1920,-2624) (run w1-skip-b). The obvious single sector was the one the ore was already in.
-It is the wrong one twice over, and the second run proved it: the miner logged "MINING (2013 ores at Y=16)" and spent
-seven minutes mining and dumping the FIRST of its four scan levels, nowhere near the planted ore at y=0 -- and then
-its computer blocked inside a filesystem open call for 51 minutes, which stalled the whole Minecraft server by 61,430
-ticks until ComputerCraft terminated it (see docs/mail for the measurements; cause not established here).
-(1952,-2624) is used instead, on evidence from the first run rather than hope: it and (1984,-2624) each reported
+It is the wrong one, and the second run proved it: the miner logged "MINING (2013 ores at Y=16)" and spent seven
+minutes mining and dumping the FIRST of its four scan levels, nowhere near the planted ore at y=0. (That run also died
+51 minutes later, but for a reason outside the fleet entirely -- the host suspended to RAM; see
+docs/measurements/2026-11-02-host-sleep-destroys-a-1x-run.txt, which is worth reading before trusting any long 1x
+run.) (1952,-2624) is used instead, on evidence from the first run rather than hope: it and (1984,-2624) each reported
 "0 ore mined" and finished in about four minutes. Empty ground is what this test wants -- the planted ore is then the
 only thing in the sector that can produce a skip line, so the signal cannot be confused with natural ore, and the run
 costs minutes rather than hours.
