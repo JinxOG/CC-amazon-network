@@ -1348,25 +1348,33 @@ end
 -- Returns mined, byType, abortReason. abortReason is non-nil only when the
 -- placed loader stopped beaconing: at that point mining is over for this
 -- sector regardless of what is left in the list.
-local function mineOreList(ores, jobId, sx, sz, sy)
+-- scanTotal / floorDropped: what the caller already knows about this scan --
+-- how many deduplicated ore blocks it saw, and how many of those it removed for
+-- being below MIN_ORE_Y before calling. Passed in rather than recomputed so the
+-- skip line's denominators describe the SCAN, not the pre-filtered remnant of
+-- it. Without them this function can only report the list it was handed, and
+-- "0 below the floor" would be true of that list while the scan had dozens --
+-- the exact kind of number that reads as "the ground was empty".
+local function mineOreList(ores, jobId, sx, sz, sy, scanTotal, floorDropped)
     -- Greedy nearest-neighbour: re-pick the closest ore after every mine, so
     -- the miner stays in a vein until it's exhausted before jumping to a
     -- distant one. The pick is mine_flow.takeNearest -- one pass, no sort; see
     -- the note there for why sorting the whole list to read element 1 was the
     -- miners' single largest CPU cost (SPEC-OWNER, mail 2026-10-20).
-    -- Skip ores below MIN_ORE_Y — the scanner at Y=8 can still detect them
-    -- but navigating there risks hitting indestructible bedrock.
+    --
+    -- The floor filter below is now a SECOND line of defence: the caller drops
+    -- below-floor ore at scan time so it is never reported as found. It stays
+    -- because this function must be safe for any caller, and because a miner
+    -- navigating below -58 risks indestructible bedrock. Anything it catches is
+    -- added to the caller's count rather than replacing it.
     local remaining  = {}
-    local belowFloor = 0
+    local belowFloor = floorDropped or 0
     for _, o in ipairs(ores) do
         if o.y >= MIN_ORE_Y then table.insert(remaining, o)
         else belowFloor = belowFloor + 1 end
     end
-    -- Counted, not just dropped. Ore below the floor is reported to the server
-    -- as found and then silently never mined, which is its own open card; until
-    -- that is settled the number at least appears in the log instead of being
-    -- the invisible difference between "scanned" and "attempted".
     local attempted = #remaining
+    local scanned   = scanTotal or (attempted + belowFloor)
 
     local SCAN_BATCH = 25   -- send one SECTOR_SCAN per N ores to avoid modem flood
     local mined       = 0
@@ -1426,7 +1434,7 @@ local function mineOreList(ores, jobId, sx, sz, sy)
     if skipped > 0 then
         print(string.format(
             "[MINER] Skipped %d of %d attempted (scan %d, %d below Y=%d): %s",
-            skipped, attempted, #ores, belowFloor, MIN_ORE_Y,
+            skipped, attempted, scanned, belowFloor, MIN_ORE_Y,
             mine_flow.renderSkipReasons(skipReasons)))
     end
     return mined, byType, nil
@@ -2354,16 +2362,46 @@ local function mineJob(job)
             reportPhase(proto.PHASE.SCANNING, string.format("%d,%d Y=%d", sx, sz, sy))
             local rawOres = scanSector()
             -- Deduplicate: only keep ore blocks not seen at a previous depth level.
-            local ores      = {}
-            local scanFound = {}
+            --
+            -- AND DO NOT REPORT ORE WE ARE FORBIDDEN TO DIG. The scanner sees
+            -- further than the miner is allowed to go: radius 16 from the
+            -- deepest level (Y=-52) reaches Y=-68, while MIN_ORE_Y is -58. Only
+            -- that level crosses the floor; the other three cannot.
+            --
+            -- sectorFound travels to the server as SECTOR_DONE.foundOres, and it
+            -- used to be built BEFORE the floor was applied -- so the server was
+            -- told about ore the miner would then silently drop. It saw "ore
+            -- remains" on the rescan, re-queued the sector, the miner dropped
+            -- the same ore again and reported 0 mined, and that loop only ended
+            -- at "re-mine exhausted". W6 measured 12 wasted sectors and ~35
+            -- miner-minutes on node_139 alone (2026-09-10); on 2026-09-11 jobs
+            -- 0043/0044 found 454 ores across 20 types and mined 0 of every one.
+            --
+            -- Counted and printed, never silently dropped: a sector whose deep
+            -- ore is unreachable should say so, or the next person reads
+            -- "found 0" and concludes the ground was empty.
+            local fresh = {}
             for _, o in ipairs(rawOres) do
                 local key = o.x .. "," .. o.y .. "," .. o.z
                 if not seenOres[key] then
                     seenOres[key] = true
-                    table.insert(ores, o)
-                    scanFound[o.name]    = (scanFound[o.name]    or 0) + 1
-                    sectorFound[o.name] = (sectorFound[o.name] or 0) + 1
+                    fresh[#fresh + 1] = o
                 end
+            end
+            -- The split lives in mine_flow so it can be tested; ore_turtle
+            -- cannot be loaded headlessly.
+            local ores, belowFloor = mine_flow.dropBelowFloor(fresh, MIN_ORE_Y)
+            local scanFound = {}
+            for _, o in ipairs(ores) do
+                scanFound[o.name]   = (scanFound[o.name]   or 0) + 1
+                sectorFound[o.name] = (sectorFound[o.name] or 0) + 1
+            end
+            if belowFloor > 0 then
+                print(string.format(
+                    "[SCAN] %d ore below the Y=%d dig floor at scan level Y=%d "
+                    .. "— not reported as found, so the server cannot re-queue "
+                    .. "this sector for ore nobody may dig",
+                    belowFloor, MIN_ORE_Y, sy))
             end
             -- Report scan results immediately so the dashboard updates in real time.
             if next(scanFound) then
@@ -2374,7 +2412,8 @@ local function mineJob(job)
             if #ores > 0 and not surveyMode then
                 base.sendProgress(string.format("Mining %d ores at Y=%d", #ores, sy))
                 reportPhase(proto.PHASE.MINING, string.format("%d ores at Y=%d", #ores, sy))
-                local c, byType, mineAbort = mineOreList(ores, jobId, sx, sz, sy)
+                local c, byType, mineAbort = mineOreList(ores, jobId, sx, sz, sy,
+                    #ores + belowFloor, belowFloor)
                 count = count + c
                 for name, n in pairs(byType) do
                     sectorMined[name] = (sectorMined[name] or 0) + n

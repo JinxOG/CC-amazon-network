@@ -1256,4 +1256,39 @@ function mine_flow.renderSkipReasons(counts)
     return table.concat(parts, ", ")
 end
 
+-- Split a scan's ore into what may be dug and what is below the dig floor.
+--
+-- Returns kept, dropped (a list and a count). Lives here, away from its caller,
+-- for the reason bankPayload and takeNearest do: ore_turtle self-executes and
+-- cannot be loaded headlessly, so logic left inside it can only ever be checked
+-- by reading the source.
+--
+-- WHY IT EXISTS. The geo scanner sees further than the miner is permitted to
+-- go: radius 16 from the deepest scan level (Y=-52) reaches Y=-68, while the
+-- bedrock safety floor is Y=-58. Only that level crosses it; the other three
+-- (16, 0, -32) cannot. Ore below the floor used to be counted as FOUND, sent to
+-- the server in SECTOR_DONE.foundOres, and only then silently dropped at mining
+-- time -- so the server saw "ore remains", re-queued the sector, the miner
+-- dropped the same ore again and reported 0 mined. That loop ended only at
+-- "re-mine exhausted". W6 measured 12 wasted sectors and ~35 miner-minutes on
+-- node_139 alone (2026-09-10); on 2026-09-11 jobs 0043/0044 found 454 ores
+-- across 20 types and mined 0 of every single one.
+--
+-- The count comes back rather than being thrown away, because a sector whose
+-- deep ore is unreachable must be able to SAY so. Reporting nothing would
+-- replace a wrong number with a missing one, and the next person to read
+-- "found 0" would conclude the ground was empty.
+--
+-- minY is required. Defaulting it would let a caller that forgot it silently
+-- keep ore the miner cannot reach, which is the bug this function is for.
+function mine_flow.dropBelowFloor(ores, minY)
+    if type(minY) ~= "number" then return nil, "no_floor" end
+    local kept, dropped = {}, 0
+    for _, o in ipairs(ores or {}) do
+        if o.y and o.y < minY then dropped = dropped + 1
+        else kept[#kept + 1] = o end
+    end
+    return kept, dropped
+end
+
 return mine_flow

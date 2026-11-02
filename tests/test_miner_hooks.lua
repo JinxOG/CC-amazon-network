@@ -484,7 +484,7 @@ function(assert_eq)
     local src = f:read("a"); f:close()
     -- string.char(10), not an escape: a literal newline would end this string.
     local NL   = string.char(10)
-    local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy%)(.-)"
+    local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy(.-)"
                            .. NL .. "end" .. NL)
     assert_eq(body ~= nil, true, "mineOreList moved or vanished")
 
@@ -519,7 +519,7 @@ function(assert_eq)
         "navToOre must pass move.to's reason back, not just false -- the reason "
         .. "is already there and was being discarded")
 
-    local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy%)(.-)"
+    local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy(.-)"
                            .. NL .. "end" .. NL)
     assert_eq(body ~= nil, true, "mineOreList moved or vanished")
     assert_eq(body:find("mine_flow.classifySkip(whyNot)", 1, true) ~= nil, true,
@@ -589,6 +589,48 @@ function(assert_eq)
     assert_eq(body:find("noDig     = noDig,", 1, true) ~= nil, true,
         "and must pass the flag itself into bankPayload -- a hardcoded true or "
         .. "false here silently decides the dock's behaviour for every caller")
+end
+
+-- Ore below the dig floor must be removed BEFORE it is counted as found.
+--
+-- The order is the whole fix. dropBelowFloor's own tests cannot see it: build
+-- scanFound/sectorFound from the unfiltered list and every one of them stays
+-- green while the server is told again about ore nobody may dig, re-queues the
+-- sector, and the miner reports 0 mined until "re-mine exhausted" (W6,
+-- 2026-09-10: 12 wasted sectors; jobs 0043/0044 found 454 and mined 0).
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["below-floor ore is dropped before it is counted as found (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("a"); f:close()
+
+    local dropAt = src:find("mine_flow.dropBelowFloor(fresh, MIN_ORE_Y)", 1, true)
+    assert_eq(dropAt ~= nil, true,
+        "the scan must split its ore at the dig floor via mine_flow.dropBelowFloor")
+
+    local foundAt = src:find("sectorFound[o.name] = (sectorFound[o.name] or 0) + 1", 1, true)
+    assert_eq(foundAt ~= nil, true, "the found-ore tally moved or vanished")
+    assert_eq(dropAt < foundAt, true,
+        "the floor split must come BEFORE the tally -- counting first is the bug: "
+        .. "the server is told about ore the miner will then refuse, sees 'ore "
+        .. "remains', and re-queues the sector forever")
+
+    -- Ordering alone is not enough, and a mutant proved it: swapping the tally
+    -- to iterate the UNFILTERED list leaves the order untouched and restores the
+    -- bug completely. `fresh` is built by a loop over rawOres and must never be
+    -- iterated itself -- anything counted from it is ore the miner will refuse.
+    assert_eq(src:find("ipairs(fresh)", 1, true), nil,
+        "nothing may iterate the unfiltered scan: the tally must read the list "
+        .. "dropBelowFloor returned, or the server is told about ore nobody may dig")
+    assert_eq(src:find("for _, o in ipairs(ores) do", 1, true) ~= nil, true,
+        "the found-ore tally must read the filtered list")
+
+    -- And the dropped count must be said out loud. Removing it from the tally
+    -- without reporting it swaps a wrong number for a missing one, and "found 0"
+    -- then reads as "the ground was empty".
+    assert_eq(src:find("ore below the Y=%d dig floor", 1, true) ~= nil, true,
+        "the below-floor count must be printed, not silently discarded")
 end
 
 return suite

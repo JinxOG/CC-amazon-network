@@ -432,6 +432,54 @@ return {
             "the ore chest must not be left standing at the dock")
     end,
 
+    -- ─── Ore below the dig floor is not "found" (W6, 2026-09-10) ────────────
+    --
+    -- The scanner sees to Y=-68 from the deepest level; the miner may not go
+    -- below Y=-58. Ore down there used to be counted as found, sent to the
+    -- server, and only then dropped -- so the server re-queued the sector for
+    -- ore nobody may dig, forever, until "re-mine exhausted".
+    ["dropBelowFloor keeps reachable ore and counts what is below the floor"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local kept, dropped = flow.dropBelowFloor({
+            { name = "a", x = 1, y = -36, z = 1 },   -- the deepest level's view
+            { name = "b", x = 2, y = -58, z = 2 },   -- exactly the floor: diggable
+            { name = "c", x = 3, y = -59, z = 3 },   -- one below: not
+            { name = "d", x = 4, y = -68, z = 4 },   -- the bottom of its view
+        }, -58)
+        assert_eq(#kept, 2)
+        assert_eq(kept[1].name, "a")
+        assert_eq(kept[2].name, "b", "Y == MIN_ORE_Y is reachable, not below it")
+        assert_eq(dropped, 2)
+    end,
+
+    ["dropBelowFloor keeps every ore when none is below the floor"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local kept, dropped = flow.dropBelowFloor({
+            { y = 16 }, { y = 0 }, { y = -32 },
+        }, -58)
+        assert_eq(#kept, 3)
+        assert_eq(dropped, 0)
+    end,
+
+    ["dropBelowFloor survives a nil or empty scan"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local kept, dropped = flow.dropBelowFloor(nil, -58)
+        assert_eq(#kept, 0); assert_eq(dropped, 0)
+        kept, dropped = flow.dropBelowFloor({}, -58)
+        assert_eq(#kept, 0); assert_eq(dropped, 0)
+    end,
+
+    -- A missing floor must REFUSE, not default. A caller that forgot it would
+    -- otherwise keep ore the miner cannot reach -- the exact bug this is for.
+    ["dropBelowFloor refuses rather than guessing a floor"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local kept, why = flow.dropBelowFloor({ { y = -100 } }, nil)
+        assert_eq(kept, nil)
+        assert_eq(why, "no_floor")
+    end,
+
     -- ─── Why an ore was skipped (W3's unanswerable question, 2026-10-08) ─────
     --
     -- Every input below is a string base.move.to actually produces, taken from

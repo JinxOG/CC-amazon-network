@@ -416,6 +416,9 @@ N_UNKNOWN = "an unrecognised or missing reason becomes unknown, never a nearby b
 N_RENDER  = "the skip breakdown renders in a stable order so two sectors can be diffed"
 N_REASON  = ("a skipped ore's reason reaches the log, not just its count "
              "(SOURCE-ONLY, weaker)")
+F_KEEP   = "dropBelowFloor keeps reachable ore and counts what is below the floor"
+F_REFUSE = "dropBelowFloor refuses rather than guessing a floor"
+F_ORDER  = "below-floor ore is dropped before it is counted as found (SOURCE-ONLY, weaker)"
 D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
 D_BACK  = "noDig still takes the chest back after the drop"
 D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
@@ -454,6 +457,27 @@ MUTANTS = [
     ("the miner goes back to taking ores in list order", "ore_turtle.lua",
      [('        local ore = mine_flow.takeNearest(remaining, p)',
        '        local ore = table.remove(remaining, 1)')], N_WIRED),
+
+    # ── Ore below the dig floor is not "found" (W6, 2026-09-10) ────────────
+    ("the dig floor itself is treated as below the floor", "mine_flow.lua",
+     [('if o.y and o.y < minY then dropped = dropped + 1',
+       'if o.y and o.y <= minY then dropped = dropped + 1')], F_KEEP),
+
+    ("the floor test is inverted, keeping only unreachable ore", "mine_flow.lua",
+     [('if o.y and o.y < minY then dropped = dropped + 1',
+       'if o.y and o.y > minY then dropped = dropped + 1')], F_KEEP),
+
+    ("a missing floor is guessed instead of refused", "mine_flow.lua",
+     [('    if type(minY) ~= "number" then return nil, "no_floor" end',
+       '    if false then return nil, "no_floor" end')], F_REFUSE),
+
+    ("the miner stops splitting its scan at the dig floor", "ore_turtle.lua",
+     [('local ores, belowFloor = mine_flow.dropBelowFloor(fresh, MIN_ORE_Y)',
+       'local ores, belowFloor = fresh, 0')], F_ORDER),
+
+    ("found ore is tallied from the unfiltered scan again", "ore_turtle.lua",
+     [('            for _, o in ipairs(ores) do',
+       '            for _, o in ipairs(fresh) do')], F_ORDER),
 
     # ── Banking at a dock without digging (W3's measurement, 2026-10-08) ────
     ("noDig is ignored and an occupied face is dug anyway", "mine_flow.lua",
