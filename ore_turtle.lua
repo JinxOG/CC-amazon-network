@@ -1378,8 +1378,66 @@ end
 -- rather than discarded: mineOreList buckets it, so a sector that refuses every
 -- ore says WHICH refusal instead of printing a bare count. See
 -- mine_flow.classifySkip.
+-- Dig an ore that is ALREADY next to us instead of stepping into its cell.
+--
+-- Stepping in costs a dig and a move; digging from where we stand costs the
+-- dig alone. With sandbox/timings.lua as fitted on T2 at 1x that is 600 ms
+-- against 200 ms, so one move -- 400 ms and 1 fuel -- per ore it applies to.
+-- In a vein of 5-10 contiguous blocks the next ore is usually adjacent to the
+-- one just taken, which is where this is meant to pay.
+--
+-- DELIBERATELY ONLY WHEN WE ARE ALREADY ADJACENT. GeoMiner approaches every
+-- ore to a neighbouring cell on purpose, and that is NOT what this does,
+-- because it would often cost more: reaching a chosen neighbour through solid
+-- stone is itself a dig plus a move, and then the dig makes three actions where
+-- stepping in needed two. This version can never cost more than before -- one
+-- dig replaces a dig and a move, and no extra turn is made that move.to would
+-- not have made anyway -- so the only open question is how often it applies and
+-- whether standing one cell further from the vein costs moves later. That is
+-- what sandbox/scenarios/w1_adjacent_dig_measure.lua is for, and the card says
+-- measure before shipping.
+--
+-- Returns true when the ore is gone and taken; false, reason when the guard
+-- refused because a fleet member is in that cell; and NIL when this does not
+-- apply -- not adjacent, nothing there, the wrong block, or the dig failed --
+-- so the caller falls back to the move-in path and behaves exactly as before.
+--
+-- The block is identified before it is dug, which the move-in path never did.
+-- move.to digs whatever occupies the cell and the loop then counts it as
+-- ore.name, so a stale scan entry has always been able to credit a block of
+-- stone to an ore type. Here the name must match or this path declines, and the
+-- fallback keeps the old behaviour rather than inventing a new refusal.
+-- Looked up per call, never captured at load: a test that installs its own
+-- turtle stubs after this file loads would otherwise be driving the real ones.
+local function inspectAt(dir)
+    local fn = dir == "up" and turtle.inspectUp
+        or dir == "down" and turtle.inspectDown
+        or turtle.inspect
+    return fn()
+end
+
+local function digAdjacentOre(ore)
+    -- The geometry is mine_flow.adjacentDir, where it can be tested without a
+    -- world; what is left here is the turning, the look and the dig.
+    local dir, face = mine_flow.adjacentDir(base.getPos(), ore)
+    if not dir then return nil end
+    if face then base.move.face(face) end
+
+    local seen, block = inspectAt(dir)
+    if not (seen and type(block) == "table" and block.name == ore.name) then return nil end
+
+    local dug, why = mine_flow.digGuarded(dir)
+    if dug then return true end
+    -- A fleet member in that cell is a real refusal and must be reported as
+    -- one, not retried by walking into it.
+    if why == "would_dig_turtle" then return false, why end
+    return nil
+end
+
 local function navToOre(ore, jobId)
     checkFuel(jobId)
+    local near, nearWhy = digAdjacentOre(ore)
+    if near ~= nil then return near, nearWhy end
     local p = base.getPos()
     local ok1, why1 = base.move.to(ore.x, p.y, ore.z)
     if not ok1 then return false, why1 end

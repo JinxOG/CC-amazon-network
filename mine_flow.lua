@@ -1291,4 +1291,37 @@ function mine_flow.dropBelowFloor(ores, minY)
     return kept, dropped
 end
 
+--- Which way an ore lies when it is ALREADY next to us, or nil when it is not.
+---
+--- Returns "up", "down", or "forward" plus the move.face direction to turn to
+--- first. nil means the ore is not adjacent -- anything other than exactly one
+--- cell away on exactly one axis, including the ore being in our own cell,
+--- which cannot happen and must not be reported as adjacent if it does.
+---
+--- WHY IT EXISTS, AND WHY HERE. navToOre steps INTO each ore's cell, and
+--- base.move.to digs whatever is in the way, so arriving is what mines the ore:
+--- a dig and a move, 600 ms on the T2-fitted timings. Digging an ore we already
+--- stand beside costs the dig alone, 200 ms. In a vein of 5-10 contiguous
+--- blocks the next ore is usually adjacent to the one just taken, which is
+--- where that pays. The geometry lives here, away from the turtle calls,
+--- because ore_turtle cannot be loaded headlessly and a rule this easy to get
+--- quietly wrong -- an off-by-one, a swapped axis, a direction mapped to the
+--- wrong face -- must be testable without a world.
+---
+--- The directions are move.face's own, as move.to uses them: 0 north (-z),
+--- 1 east (+x), 2 south (+z), 3 west (-x). They are returned rather than
+--- applied so this function touches nothing.
+function mine_flow.adjacentDir(p, ore)
+    if type(p) ~= "table" or type(ore) ~= "table" then return nil end
+    if not (p.x and p.y and p.z and ore.x and ore.y and ore.z) then return nil end
+    local dx, dy, dz = ore.x - p.x, ore.y - p.y, ore.z - p.z
+    if math.abs(dx) + math.abs(dy) + math.abs(dz) ~= 1 then return nil end
+    if dy == 1 then return "up" end
+    if dy == -1 then return "down" end
+    if dx == 1 then return "forward", 1 end
+    if dx == -1 then return "forward", 3 end
+    if dz == 1 then return "forward", 2 end
+    return "forward", 0
+end
+
 return mine_flow

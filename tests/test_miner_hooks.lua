@@ -655,6 +655,61 @@ function(assert_eq)
         "the below-floor count must be printed, not silently discarded")
 end
 
+-- DIGGING AN ORE WE ALREADY STAND BESIDE (adjacent-block dig card).
+--
+-- The geometry is mine_flow.adjacentDir and has its own tests. What cannot be
+-- tested without a world is the three safeguards around it, and each one is a
+-- way this could quietly go wrong:
+--
+--   * the block must be IDENTIFIED before it is dug. move.to digs whatever
+--     occupies the cell and the loop then credits it to ore.name, so a stale
+--     scan entry has always been able to book a block of stone as an ore. This
+--     path must check the name and decline otherwise.
+--   * a fleet member in that cell must come back as a REFUSAL, not as a
+--     fallback -- falling through would walk into it, and the move layer's own
+--     guard is the only thing that has ever stopped a miner mining a miner.
+--   * everything else must come back NIL, so the caller uses the old move-in
+--     path and behaves exactly as before. A `false` there would turn "nothing
+--     was there" into a skip and corrupt the buckets the skip-reason card
+--     exists to make trustworthy.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["the adjacent dig identifies the block, refuses a turtle, and otherwise declines (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+    local NL = string.char(10)
+
+    local body = src:match("local function digAdjacentOre%(ore%)(.-)" .. NL .. "end" .. NL)
+    assert_eq(body ~= nil, true, "digAdjacentOre moved or vanished")
+
+    assert_eq(body:find("mine_flow.adjacentDir(base.getPos(), ore)", 1, true) ~= nil, true,
+        "the geometry must come from mine_flow.adjacentDir, where it is tested")
+
+    assert_eq(body:find("block.name == ore.name", 1, true) ~= nil, true,
+        "the block must be identified before it is dug, or a stale scan entry "
+        .. "books a block of stone as an ore")
+    local lookAt = body:find("inspectAt(dir)", 1, true)
+    local digAt  = body:find("mine_flow.digGuarded(dir)", 1, true)
+    assert_eq(lookAt ~= nil and digAt ~= nil and lookAt < digAt, true,
+        "and identified BEFORE the dig, not after it")
+
+    assert_eq(body:find('why == "would_dig_turtle"', 1, true) ~= nil, true,
+        "a fleet member in that cell must be reported as a refusal")
+    assert_eq(body:find("return false, why", 1, true) ~= nil, true,
+        "and reported as false with its reason, so the skip bucket is right")
+
+    -- The dig guard, not turtle.dig: this is the one site where digging the
+    -- wrong thing costs a fleet member rather than a block of stone.
+    assert_eq(body:find("turtle.dig", 1, true), nil,
+        "it must dig through mine_flow.digGuarded, never turtle.dig directly")
+
+    -- And the caller has to use the three-valued answer. `if near then` would
+    -- treat a refusal as "not applicable" and walk into the turtle.
+    assert_eq(src:find("if near ~= nil then return near, nearWhy end", 1, true) ~= nil, true,
+        "navToOre must distinguish nil (not applicable) from false (refused)")
+end
+
 -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE.
 --
 -- scanSector returned a bare {} from seven different refusals -- no scanner in

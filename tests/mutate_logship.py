@@ -423,6 +423,11 @@ S_LEVEL  = "a scan level that did not run is never counted as scanned (SOURCE-ON
 S_RETRY  = S_LEVEL
 C_SLOT   = "ore that lands in a reserved slot is still dumped (SOURCE-ONLY, weaker)"
 M_CRASH  = "a miner flushes its log before rebooting after a crash"
+A_DIR    = "adjacentDir refuses anything that is not exactly one cell on one axis"
+A_FACE   = "adjacentDir names the face for each of the six neighbours"
+A_MALF   = "adjacentDir treats a malformed position or ore as not adjacent"
+A_SAFE   = ("the adjacent dig identifies the block, refuses a turtle, and otherwise "
+            "declines (SOURCE-ONLY, weaker)")
 D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
 D_BACK  = "noDig still takes the chest back after the drop"
 D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
@@ -502,6 +507,37 @@ MUTANTS = [
 
     ("the sector is abandoned on the first refusal, with no retry", "ore_turtle.lua",
      [('                for try = 1, SCAN_RETRIES do', '                for try = 1, 0 do')], S_RETRY),
+
+    # ── Digging an ore we already stand beside (adjacent-block dig card) ───
+    ("its own cell counts as adjacent", "mine_flow.lua",
+     [('    if math.abs(dx) + math.abs(dy) + math.abs(dz) ~= 1 then return nil end',
+       '    if math.abs(dx) + math.abs(dy) + math.abs(dz) > 1 then return nil end')], A_DIR),
+
+    ("two cells in a line count as adjacent", "mine_flow.lua",
+     [('    if math.abs(dx) + math.abs(dy) + math.abs(dz) ~= 1 then return nil end',
+       '    if math.abs(dx) + math.abs(dy) + math.abs(dz) > 2 then return nil end')], A_DIR),
+
+    ("up and down are swapped", "mine_flow.lua",
+     [('    if dy == 1 then return "up" end', '    if dy == 1 then return "down" end')], A_FACE),
+
+    ("+x is mapped to the west face", "mine_flow.lua",
+     [('    if dx == 1 then return "forward", 1 end', '    if dx == 1 then return "forward", 3 end')], A_FACE),
+
+    ("+z is mapped to the north face", "mine_flow.lua",
+     [('    if dz == 1 then return "forward", 2 end', '    if dz == 1 then return "forward", 0 end')], A_FACE),
+
+    ("a missing coordinate is treated as adjacent rather than refused", "mine_flow.lua",
+     [('    if not (p.x and p.y and p.z and ore.x and ore.y and ore.z) then return nil end', '')], A_MALF),
+
+    ("the adjacent dig stops identifying the block before digging it", "ore_turtle.lua",
+     [('    if not (seen and type(block) == "table" and block.name == ore.name) then return nil end',
+       '    if not seen then return nil end')], A_SAFE),
+
+    ("a fleet member beside the ore is walked into instead of refused", "ore_turtle.lua",
+     [('    if why == "would_dig_turtle" then return false, why end', '')], A_SAFE),
+
+    ("the caller treats a refusal as not-applicable", "ore_turtle.lua",
+     [('    if near ~= nil then return near, nearWhy end', '    if near then return near, nearWhy end')], A_SAFE),
 
     # ── The miner's crash line is shipped before the reboot (§5.2 card 5) ──
     ("the miner's fatal line is queued and never sent", "ore_turtle.lua",

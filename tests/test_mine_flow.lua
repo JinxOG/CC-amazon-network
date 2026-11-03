@@ -2259,4 +2259,70 @@ return {
         assert_eq(foundCobble, true, "the slot-2 occupant must be relocated, not destroyed")
         assert_eq(cobbleCount, 5, "not a single item of the occupant may be lost")
     end,
+
+    -- ─── Digging an ore we already stand beside (adjacent-block dig card) ────
+    --
+    -- navToOre steps INTO each ore's cell and base.move.to digs whatever is in
+    -- the way, so arriving is what mines it: a dig and a move, 600 ms on the
+    -- T2-fitted timings. An ore we already stand beside costs the dig alone,
+    -- 200 ms. The geometry lives in mine_flow precisely so it can be checked
+    -- without a world -- an off-by-one, a swapped axis or a direction mapped to
+    -- the wrong face would otherwise only show up as a miner turning the wrong
+    -- way in a sector nobody is watching.
+    --
+    -- The directions are move.face's own, as move.to uses them:
+    -- 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
+    ["adjacentDir names the face for each of the six neighbours"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local p = { x = 10, y = 20, z = 30 }
+        local dir, face
+
+        dir, face = flow.adjacentDir(p, { x = 10, y = 21, z = 30 })
+        assert_eq(dir, "up"); assert_eq(face, nil, "up needs no turn")
+        dir, face = flow.adjacentDir(p, { x = 10, y = 19, z = 30 })
+        assert_eq(dir, "down"); assert_eq(face, nil, "down needs no turn")
+
+        dir, face = flow.adjacentDir(p, { x = 11, y = 20, z = 30 })
+        assert_eq(dir, "forward"); assert_eq(face, 1, "+x is east, face 1")
+        dir, face = flow.adjacentDir(p, { x = 9, y = 20, z = 30 })
+        assert_eq(dir, "forward"); assert_eq(face, 3, "-x is west, face 3")
+        dir, face = flow.adjacentDir(p, { x = 10, y = 20, z = 31 })
+        assert_eq(dir, "forward"); assert_eq(face, 2, "+z is south, face 2")
+        dir, face = flow.adjacentDir(p, { x = 10, y = 20, z = 29 })
+        assert_eq(dir, "forward"); assert_eq(face, 0, "-z is north, face 0")
+    end,
+
+    -- Everything that is NOT one cell away on one axis. These are the cases
+    -- that must return nil so the caller falls back to the move-in path: a
+    -- diagonal is two moves away and digging "towards" it would dig the wrong
+    -- block, and two cells away in a straight line would dig the block in
+    -- between and count it as the ore.
+    ["adjacentDir refuses anything that is not exactly one cell on one axis"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local p = { x = 0, y = 0, z = 0 }
+        assert_eq(flow.adjacentDir(p, { x = 0, y = 0, z = 0 }), nil,
+            "its own cell is not adjacent, whatever else is true")
+        assert_eq(flow.adjacentDir(p, { x = 1, y = 1, z = 0 }), nil, "a diagonal is two moves")
+        assert_eq(flow.adjacentDir(p, { x = 1, y = 1, z = 1 }), nil, "a corner is three")
+        assert_eq(flow.adjacentDir(p, { x = 2, y = 0, z = 0 }), nil,
+            "two cells in a line would dig the block in between and call it the ore")
+        assert_eq(flow.adjacentDir(p, { x = 0, y = -2, z = 0 }), nil, "and the same downwards")
+        assert_eq(flow.adjacentDir(p, { x = 16, y = 0, z = 16 }), nil, "far away is not adjacent")
+    end,
+
+    -- A missing coordinate must read as "not adjacent", never as 0. Lua would
+    -- raise on the arithmetic, and a raise inside navToOre is a lost ore and a
+    -- bucket of "unknown" at best.
+    ["adjacentDir treats a malformed position or ore as not adjacent"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local p = { x = 0, y = 0, z = 0 }
+        assert_eq(flow.adjacentDir(nil, { x = 1, y = 0, z = 0 }), nil)
+        assert_eq(flow.adjacentDir(p, nil), nil)
+        assert_eq(flow.adjacentDir(p, { x = 1, z = 0 }), nil, "no y")
+        assert_eq(flow.adjacentDir({ x = 0, y = 0 }, { x = 1, y = 0, z = 0 }), nil, "no z on us")
+        assert_eq(flow.adjacentDir(p, "nonsense"), nil)
+    end,
 }
