@@ -37,7 +37,7 @@ function loadPure(mutation) {
     }
     // path is referenced by logFileFor; LOG_DIR stands in for the real one.
     return new Function('path', 'LOG_DIR',
-        block + '\nreturn { parseLogLine, logFileFor, LOG_QUERY_MAX, LOG_QUERY_DEFAULT };');
+        block + '\nreturn { parseLogLine, logFileFor, sortLogWindow, LOG_QUERY_MAX, LOG_QUERY_DEFAULT };');
 }
 
 const mutIdx = process.argv.indexOf('--mutate');
@@ -212,6 +212,51 @@ const M = loadPure(mutIdx > -1 ? process.argv[mutIdx + 1].split('|||') : null)(p
         'a synchronous read here blocks /update');
     check('the tail path keeps a bounded window, not the whole match set',
         route.includes('out.shift()'));
+    // The sort has to happen after the window is chosen and before either
+    // renderer, or one of the two output paths quietly keeps file order.
+    check('the route sorts the window before rendering it',
+        route.includes('sortLogWindow(out, sortBy)')
+        && route.indexOf('sortLogWindow(out, sortBy)') < route.indexOf('if (asText)'));
+}
+
+// ── sort by time (must-do #4) ───────────────────────────────────────────────
+//
+// The file is not chronological: turtles batch every 15 s, the server pushes
+// every 3 s, so a turtle's line lands after server lines that happened later.
+// Unsorted grouping produced episodes with NEGATIVE durations, which is how the
+// bug was found.
+{
+    const { sortLogWindow } = M;
+
+    // The reported shape: a turtle line that belongs earlier arrives later.
+    const outOfOrder = () => ([
+        { ts: '2026-10-02T10:00:03.000Z', source: 'server',   msg: 'c' },
+        { ts: '2026-10-02T10:00:01.000Z', source: 'node_118', msg: 'a' },
+        { ts: '2026-10-02T10:00:02.000Z', source: 'node_118', msg: 'b' },
+    ]);
+
+    const sorted = sortLogWindow(outOfOrder(), 'ts');
+    check('out-of-order lines come back in time order',
+        sorted.map(e => e.msg).join('') === 'abc', sorted.map(e => e.msg).join(''));
+
+    // Consecutive differences must never be negative — the actual defect.
+    let backwards = 0;
+    for (let i = 1; i < sorted.length; i++) if (sorted[i].ts < sorted[i - 1].ts) backwards++;
+    check('no backward step remains', backwards === 0, `${backwards} backward step(s)`);
+
+    // Equal timestamps keep file order: with the clock unable to separate two
+    // lines, the order they were written is the only one that means anything.
+    const tied = sortLogWindow([
+        { ts: '2026-10-02T10:00:01.000Z', msg: 'first' },
+        { ts: '2026-10-02T10:00:01.000Z', msg: 'second' },
+    ], 'ts');
+    check('equal timestamps keep file order (stable)',
+        tied.map(e => e.msg).join(',') === 'first,second', tied.map(e => e.msg).join(','));
+
+    check('sort=file returns the file order untouched',
+        sortLogWindow(outOfOrder(), 'file').map(e => e.msg).join('') === 'cab');
+
+    check('an empty window is handled', sortLogWindow([], 'ts').length === 0);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILED`);

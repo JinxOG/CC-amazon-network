@@ -1110,6 +1110,32 @@ const AUDIT_MIN_LINES   = 50;
 // "2026-09-08T08:02:49.923Z  server    WARN   message text"
 const LOG_LINE_RE = /^(\S+)\s{2}(\S+)\s+(\S+)\s+([\s\S]*)$/;
 
+// Put a result window back into time order.
+//
+// The FILE is not chronological. Turtles batch their lines every 15 s while the
+// server pushes every 3 s, so a turtle's line lands after server lines that
+// happened later — 37 backward steps in one day, up to 4 s apart. The writer
+// sorts each batch before appending, which fixes order WITHIN a batch and can do
+// nothing about order BETWEEN batches.
+//
+// Unsorted output produced episodes with negative durations once already, so
+// this is the default and `sort=file` is the opt-out, rather than a flag callers
+// must remember on every query.
+//
+// WHAT THIS DOES NOT FIX, stated because the difference is invisible in a
+// passing result: `order=head|tail` still chooses WHICH lines by position in the
+// file, not by time. With tail, a line that arrived late but belongs earlier can
+// displace one that belongs later. The skew is bounded by the batching interval
+// (measured at up to 4 s), so for any window wider than that the selection is
+// the same set; for a window of seconds it may not be.
+//
+// Stable by design: equal timestamps keep file order, which is the only order
+// that carries meaning once the clock cannot separate two lines.
+function sortLogWindow(entries, sortBy) {
+    if (sortBy === 'file') return entries;
+    return entries.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+}
+
 function parseLogLine(line) {
     const m = LOG_LINE_RE.exec(line);
     if (!m) return null;
@@ -1185,6 +1211,8 @@ app.get('/logs/:date', (req, res) => {
     const until    = q.until  ? String(q.until)              : null;
     const head     = String(q.order || 'tail') === 'head';
     const asText   = String(q.format || 'json') === 'text';
+    // Time order by default; `sort=file` returns the file's own order.
+    const sortBy   = String(q.sort || 'ts') === 'file' ? 'file' : 'ts';
     let limit = parseInt(q.limit, 10);
     if (!Number.isFinite(limit) || limit <= 0) limit = LOG_QUERY_DEFAULT;
     limit = Math.min(limit, LOG_QUERY_MAX);
@@ -1305,6 +1333,10 @@ app.get('/logs/:date', (req, res) => {
                 sources: out2,
             });
         }
+        // After the window is chosen, before anything renders it: both callers
+        // get the same order, and nothing downstream has to remember to sort.
+        sortLogWindow(out, sortBy);
+
         if (asText) {
             res.type('text/plain').send(out.map(e =>
                 `${e.ts}  ${e.source.padEnd(9)} ${e.level.padEnd(6)} ${e.msg}`).join('\n'));
@@ -1315,6 +1347,10 @@ app.get('/logs/:date', (req, res) => {
                 returned: out.length,
                 truncated: matched > out.length,
                 order: head ? 'head' : 'tail',
+                // Reported so a caller can tell which order it got rather than
+                // inferring it from the data — the same reason `matched` is
+                // reported next to `returned`.
+                sort: sortBy,
                 lines: out,
             });
         }
