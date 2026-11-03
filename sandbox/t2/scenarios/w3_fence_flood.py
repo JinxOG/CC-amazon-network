@@ -16,7 +16,8 @@ FORCELOAD = (256, -2800, 296, -2780)
 SECONDS = 30
 # The loop yields with a queued event, not sleep(0): sleep takes a tick, which would cap the old code at 20 a second
 # and hide the spin the card is about.
-SCRIPT = '''local base = require("turtle_base")
+SCRIPT = '''local okRun, why = pcall(function()
+local base = require("turtle_base")
 base.gpsSync()
 local p = base.getPos()
 base.geofence.setLease(p.x - 16, p.z - 16, p.x + 15, p.z + 15, p.y)
@@ -41,6 +42,12 @@ local q = base.getPos()
 local f = fs.open("w3_result.txt", "w")
 f.write(string.format("%%d|%%d|%%d|%%d|%%s", refused, lines, os.epoch("utc") - t0, q.y or -1, held:gsub("|", "/")))
 f.close()
+end)
+if not okRun then
+    local f = fs.open("w3_error.txt", "w")
+    f.write(tostring(why))
+    f.close()
+end
 ''' % (SECONDS * 1000)
 
 
@@ -56,22 +63,30 @@ def steps(ctx):
     prog = os.path.join(tmp, "flood.lua")
     with open(prog, "w", encoding="utf-8", newline="\n") as f:
         f.write(SCRIPT)
-    cid = c.spawn_turtle(X, Y, Z, "MINER", fuel=100000, startup=prog)       # THE TEST: climb into a ceiling, 30 s
+    # The donor is a REGISTERED miner, so the turtle runs the pinned code: the default donor is the lowest-numbered MINER disk in
+    # the world copy, a stray one the update never reached (w3-fence-flood-c got 1.9.148-era files and no geofence.lua).
+    miners = sorted(int(n.replace("node_", "")) for n, t in (ctx.state() or {}).get("turtles", {}).items() if (t.get("role") or "").upper() == "MINER")
+    ctx.expect(bool(miners), "a registered miner to copy the code from (%s)" % miners)
+    if not miners:
+        return
+    cid = c.spawn_turtle(X, Y, Z, "MINER", fuel=100000, donor=miners[0], startup=prog)   # THE TEST: climb into a ceiling, 30 s
     ctx.note("spawned #%d at %d,%d,%d under a lease ceiling of y=%d" % (cid, X, Y, Z, Y))
 
     def result():
-        try:
-            return c.read_disk(cid, "w3_result.txt").decode()
-        except OSError:
-            return None
+        for name in ("w3_result.txt", "w3_error.txt"):
+            try:
+                return ("ERROR " if name == "w3_error.txt" else "") + c.read_disk(cid, name).decode()
+            except OSError:
+                pass
+        return None
 
     deadline = time.time() + 300
     while time.time() < deadline and not result():
         time.sleep(2)
     r = result()
     ctx.note("result (refused|lines|ms|y|held line): %s" % r)
-    ctx.expect(bool(r), "the turtle finished its 30 s and wrote a result")
-    if not r:
+    ctx.expect(bool(r) and not r.startswith("ERROR"), "the turtle finished its 30 s and wrote a result")
+    if not r or r.startswith("ERROR"):
         c.shutdown([cid])
         return
     refused, lines, ms, y, held = r.split("|", 4)
