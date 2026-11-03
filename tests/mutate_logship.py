@@ -422,6 +422,7 @@ F_ORDER  = "below-floor ore is dropped before it is counted as found (SOURCE-ONL
 S_LEVEL  = "a scan level that did not run is never counted as scanned (SOURCE-ONLY, weaker)"
 S_RETRY  = S_LEVEL
 C_SLOT   = "ore that lands in a reserved slot is still dumped (SOURCE-ONLY, weaker)"
+M_CRASH  = "a miner flushes its log before rebooting after a crash"
 D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
 D_BACK  = "noDig still takes the chest back after the drop"
 D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
@@ -501,6 +502,13 @@ MUTANTS = [
 
     ("the sector is abandoned on the first refusal, with no retry", "ore_turtle.lua",
      [('                for try = 1, SCAN_RETRIES do', '                for try = 1, 0 do')], S_RETRY),
+
+    # ── The miner's crash line is shipped before the reboot (§5.2 card 5) ──
+    ("the miner's fatal line is queued and never sent", "ore_turtle.lua",
+     [('    pcall(base.flushLogs)\n', '')], M_CRASH),
+
+    ("the flush is named but never called", "ore_turtle.lua",
+     [('    pcall(base.flushLogs)', '    local _ = base.flushLogs')], M_CRASH),
 
     # ── Slot 14 is exempt from banking only while it holds fuel (node_119) ──
     ("the whole coal slot is exempt from banking again", "ore_turtle.lua",

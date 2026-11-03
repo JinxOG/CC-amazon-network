@@ -108,6 +108,51 @@ return {
     -- Support's shape reboots after a clean return too, and the signed-off
     -- handler puts os.reboot() outside the `if not ok` for delivery the same
     -- way. A clean return is not a crash, so it must not claim to be one.
+    -- THE MINER HALF (W1 card, cleanup design §5.2 card 5, must-do #3).
+    --
+    -- Split from the delivery/support card and left undone until now. The
+    -- miner's handler printed the error, printed "Rebooting in 20s", slept and
+    -- rebooted -- and print is logship's, so both lines sat in the on-disk
+    -- queue while the control loop that would have sent them was the thing that
+    -- had just died. os.reboot() then cleared the screen and the queue was the
+    -- only copy. A miner that crashed came back looking like one that had
+    -- merely rebooted, with nothing anywhere saying why.
+    --
+    -- Same harness, same assertions and the same ordering requirement as
+    -- support and delivery above, on purpose: three roles with one crash
+    -- contract is the point of the card, and a different test here would make
+    -- them incomparable.
+    ["a miner flushes its log before rebooting after a crash"] =
+    function(assert_eq)
+        local calls, printed, rebooted, escaped = runScript("ore_turtle.lua", "crash")
+        assert_eq(escaped, nil,
+            "a control-loop crash must not escape ore_turtle -- that leaves the "
+            .. "miner at a shell prompt until somebody flies out to it")
+        assert_eq(rebooted, true, "it must reboot")
+        local f, r = indexOf(calls, "flushLogs"), indexOf(calls, "reboot")
+        assert_eq(f ~= nil, true,
+            "the crash handler must flush the log -- the loop that would have "
+            .. "sent the fatal line is the thing that just died. Calls were: "
+            .. table.concat(calls, ", "))
+        assert_eq(f ~= nil and r ~= nil and f < r, true,
+            "and flush BEFORE rebooting, or the reboot wipes the queue")
+        local said = table.concat(printed, "\n")
+        assert_eq(said:find("[MINER] Fatal crash: " .. BOOM, 1, true) ~= nil, true,
+            "and say why, in support's words with the miner prefix -- got: " .. said)
+    end,
+
+    -- The flush must not fire when nothing crashed: it would ship an empty
+    -- batch on every clean exit, and it would also mean the ordering assertion
+    -- above could pass without the crash path having run at all.
+    ["a miner whose run loop returns reboots without a crash report"] =
+    function(assert_eq)
+        local calls, printed, rebooted, escaped = runScript("ore_turtle.lua", "return")
+        assert_eq(escaped, nil, "a clean return must not raise")
+        assert_eq(rebooted, true, "and must still reboot")
+        assert_eq(table.concat(printed, "\n"):find("Fatal crash", 1, true), nil,
+            "and must not report a crash that did not happen")
+    end,
+
     ["a delivery turtle whose run loop returns reboots without a crash report"] =
     function(assert_eq)
         local calls, printed, rebooted, escaped = runScript("delivery_turtle.lua", "return")

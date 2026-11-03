@@ -2728,6 +2728,14 @@ if not ok then
     -- The 20s pause keeps the error readable before the screen clears.
     print("[MINER] Fatal crash: " .. tostring(err))
     print("[MINER] Rebooting in 20s...")
+    -- SHIP IT BEFORE REBOOTING. print is logship's, so both lines above are
+    -- queued on disk, and the control loop that would have flushed them died
+    -- with base.run -- so the single most valuable line a miner ever writes was
+    -- the one least likely to reach the log. os.reboot() below then clears the
+    -- screen, and the only copy was the queue. pcall'd because a flush that
+    -- raises must not cost the reboot: a miner left sitting at a shell is worse
+    -- than a crash nobody read.
+    pcall(base.flushLogs)
     sleep(20)
 end
 os.reboot()
