@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -261,16 +262,33 @@ def verify_pinned_bytes(ctx, sha):
     def commit_file(name):
         return subprocess.run(["git", "-C", REPO, "show", "%s:%s" % (sha, name)], capture_output=True, check=True).stdout.replace(crlf, lf)
 
+    # Since 171af0b (W3's disk card) the updater writes every .lua file stripped of comments and indentation, so the commit's file
+    # arrives in one of two forms: as committed, or as the commit's own updater strips it. Either is that commit's code.
+    updater = commit_file("updater.lua")
+
+    def forms(name):
+        raw = commit_file(name)
+        if b"__UPDATER_MINIFY_ONLY" not in updater:
+            return (raw,)
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "updater.lua"), "wb") as f:
+                f.write(updater)
+            with open(os.path.join(d, "strip.lua"), "w", encoding="utf-8", newline="\n") as f:
+                f.write('_G.__UPDATER_MINIFY_ONLY = true\nlocal m = dofile(arg[1])\nio.write(m(io.read("*a")))\n')
+            out = subprocess.run(["lua", os.path.join(d, "strip.lua"), os.path.join(d, "updater.lua")], input=raw,
+                                 capture_output=True, check=True).stdout
+        return (raw, out.replace(crlf, lf))
+
     results = []
     try:
-        want_server, want_miner = commit_file("central_server.lua"), commit_file("ore_turtle.lua")
+        want_server, want_miner = forms("central_server.lua"), forms("ore_turtle.lua")
         servers = [i for i in sorted(ctx._raw.computers()) if (ctx._raw.role_of(i) or "").strip().upper() == "SERVER"]
-        same_servers = [i for i in servers if ctx._raw.read_disk(i, "startup.lua").replace(crlf, lf) == want_server]
+        same_servers = [i for i in servers if ctx._raw.read_disk(i, "startup.lua").replace(crlf, lf) in want_server]
         results.append(("SERVER", same_servers[0] if same_servers else (servers[0] if servers else None), bool(same_servers)))
         for node, t in sorted(ctx.state().get("turtles", {}).items()):
             if (t.get("role") or "").upper() == "MINER":
                 cid = int(node.replace("node_", ""))
-                ok = ctx._raw.read_disk(cid, "startup.lua").replace(crlf, lf) == want_miner
+                ok = ctx._raw.read_disk(cid, "startup.lua").replace(crlf, lf) in want_miner
                 results.append(("MINER", cid, ok))
     except (subprocess.CalledProcessError, OSError, ValueError) as e:
         ctx.note("pinned code check could not run: %s" % e)
@@ -459,6 +477,7 @@ def main():
     runmod.start(run_id, install=install)
     ctx = Ctx(run_id)
     ctx.install = install
+    ctx.pin = pin
     error = None
     try:
         ctx.wait_registered()
