@@ -111,4 +111,4 @@ job_0059, **15 are one miner finishing one sector twice back to back**, which is
 what two copies of one order produce. That the other 6 have the same cause is
 likely but **not shown**. Fixed in 1.9.109 (release A, not yet deployed when this was written); `tools/gate_check.py`
 section [2b] now counts doubled first orders and fails the gate on any.
-See `docs/mail/2026-09-16-W3-to-SPEC-OWNER-found-the-double-issue-every-miner-holds-a-spare-copy-of-its.md`.
+See `docs/mail/archive/2026-09-16-W3-to-SPEC-OWNER-found-the-double-issue-every-miner-holds-a-spare-copy-of-its.md`.

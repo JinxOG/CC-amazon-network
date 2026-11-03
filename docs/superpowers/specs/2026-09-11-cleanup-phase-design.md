@@ -234,7 +234,7 @@ target.
 **Engineers may dispatch the mining jobs that keep the run fed.** The user
 granted agents the authority to start jobs on 2026-09-14; W3 supplied the
 mechanism in
-`docs/mail/2026-09-14-W3-to-SPEC-OWNER-how-an-engineer-dispatches-a-mining-job-and-why-the-server-c.md`
+`docs/mail/archive/2026-09-14-W3-to-SPEC-OWNER-how-an-engineer-dispatches-a-mining-job-and-why-the-server-c.md`
 and was right to say that a mail supplies mechanism, not permission. The gate no
 longer depends on the user being awake.
 

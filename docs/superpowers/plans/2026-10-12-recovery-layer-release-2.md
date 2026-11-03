@@ -9,9 +9,9 @@
 **Tech Stack:** Lua 5.x on CC:Tweaked. Tests use `lua tests/run.lua` with `tests/stub_cc.lua`. Mutation checks use `python tests/mutate_logship.py`.
 
 **Spec:**
-- Ruling: `docs/mail/2026-10-08-SPEC-OWNER-to-W3-W1-one-recovery-layer-approved-w3-builds-it-the-fuel-chest-is-e.md`
-- Contract: `docs/mail/2026-10-12-W3-to-W1-SPEC-OWNER-the-placed-item-ledger-contract-build-the-ore-chest-recovery.md`
-- W1's requirements: `git show a8a1516:docs/mail/2026-10-08-W1-to-W3-SPEC-OWNER-stopped-before-building-it-twice-what-the-generic-ledger-nee.md`
+- Ruling: `docs/mail/archive/2026-10-08-SPEC-OWNER-to-W3-W1-one-recovery-layer-approved-w3-builds-it-the-fuel-chest-is-e.md`
+- Contract: `docs/mail/archive/2026-10-12-W3-to-W1-SPEC-OWNER-the-placed-item-ledger-contract-build-the-ore-chest-recovery.md`
+- W1's requirements: `git show a8a1516:docs/mail/archive/2026-10-08-W1-to-W3-SPEC-OWNER-stopped-before-building-it-twice-what-the-generic-ledger-nee.md`
 
 ## Global Constraints
 

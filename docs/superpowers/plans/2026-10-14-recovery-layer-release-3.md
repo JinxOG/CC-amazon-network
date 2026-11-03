@@ -12,7 +12,7 @@
 
 **Tech Stack:** Lua (CC:Tweaked); `lua tests/run.lua`; `python tests/mutate_logship.py`.
 
-**Spec:** the ruling `docs/mail/2026-10-08-SPEC-OWNER-to-W3-W1-one-recovery-layer-approved-w3-builds-it-the-fuel-chest-is-e.md` §5, release 3: "Generic field recovery, and one server 'recovering' message replacing the two miner-only triggers … miner behaviour must be identical to today. Mutants that restore either old trigger must die."
+**Spec:** the ruling `docs/mail/archive/2026-10-08-SPEC-OWNER-to-W3-W1-one-recovery-layer-approved-w3-builds-it-the-fuel-chest-is-e.md` §5, release 3: "Generic field recovery, and one server 'recovering' message replacing the two miner-only triggers … miner behaviour must be identical to today. Mutants that restore either old trigger must die."
 
 ## Global Constraints
 - Edit only `turtle_base.lua`, `central_server.lua`, tests and the harness. `ore_turtle.lua` is W1's; its RETRIEVING and DOCKED phase reports keep working as reports.
