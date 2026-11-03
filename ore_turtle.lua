@@ -940,11 +940,27 @@ local function dumpToEC(noDig)
             -- so it ended up in a mining slot instead. Observed in-world.
             --
             -- The same reasoning covers slots 3 and 4, which are also empty
-            -- during their swap windows. S_COAL is excluded because coal in it
-            -- is the fuel buffer working exactly as intended, and hardware is
-            -- excluded wherever it sits -- that is what protectedItemNames is
-            -- for, and rescueProtectedItems puts it back afterwards.
-            local foreignInReserved = reserved and s ~= S_COAL and not isHardware
+            -- during their swap windows. Hardware is excluded wherever it sits
+            -- -- that is what protectedItemNames is for, and
+            -- rescueProtectedItems puts it back afterwards.
+            --
+            -- S_COAL IS EXEMPT ONLY WHILE IT HOLDS FUEL. Coal in the buffer is
+            -- that slot working as intended and must stay. Anything else in it
+            -- is mined material, and exempting the slot outright meant such
+            -- material was never banked at all: node_119 was found with a full
+            -- stack of redstone in slot 14 (user screenshot, 2026-10-03),
+            -- costing a slot for the rest of its life.
+            --
+            -- tendFuelSlot already evicts a non-combustible occupant into a
+            -- payload slot, and did so from 2026-08-24 -- before that sighting.
+            -- It could not help here: it moves the item only when a payload
+            -- slot is FREE, and the moment the miner banks is precisely the
+            -- moment none are. So the eviction misses exactly the case that
+            -- strands the item, and the bank has to be able to take it.
+            local coalSlotHoldingFuel =
+                s == S_COAL and mine_flow.isFuelItem(item and item.name)
+            local foreignInReserved =
+                reserved and not coalSlotHoldingFuel and not isHardware
 
             return (not reserved and not isHardware) or foreignInReserved
         end,

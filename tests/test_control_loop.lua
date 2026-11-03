@@ -1550,10 +1550,21 @@ function(assert_eq)
     -- Hardware must still be exempt wherever it sits.
     assert_eq(body:find("protectedItemNames%[item%.name%]") ~= nil, true,
         "hardware must stay exempt from dumping")
-    -- The coal buffer must NOT be emptied: coal in slot 14 is working as
-    -- intended, and dumping it would throw away the fuel just drawn from the EC.
-    assert_eq(body:find("s ~= S_COAL") ~= nil, true,
-        "the coal buffer slot must be exempt from the foreign-item dump")
+    -- The coal buffer must NOT be emptied OF FUEL: coal in slot 14 is working
+    -- as intended, and dumping it would throw away what was just drawn from the
+    -- EC. The exemption used to be the slot itself (`s ~= S_COAL`), which went
+    -- too far -- mined material that landed there was never banked at all, and
+    -- node_119 was found with a full stack of redstone in slot 14 (user
+    -- screenshot, 2026-10-03), costing a slot for the rest of its life. The
+    -- exemption is now the CONTENTS, so it must be conditioned on isFuelItem
+    -- and nothing weaker.
+    assert_eq(body:find("coalSlotHoldingFuel") ~= nil, true,
+        "the coal buffer's exemption must be about what is in the slot")
+    assert_eq(body:find("s == S_COAL and mine_flow%.isFuelItem") ~= nil, true,
+        "only FUEL in slot 14 is exempt -- exempting the slot outright strands "
+        .. "mined material there, which is what it did")
+    assert_eq(body:find("s ~= S_COAL") == nil, true,
+        "no unconditional slot-14 exemption may remain, or the strand is back")
 end
 
 -- The refuel make-room hook is installed (SOURCE-ONLY, weaker).

@@ -421,6 +421,7 @@ F_REFUSE = "dropBelowFloor refuses rather than guessing a floor"
 F_ORDER  = "below-floor ore is dropped before it is counted as found (SOURCE-ONLY, weaker)"
 S_LEVEL  = "a scan level that did not run is never counted as scanned (SOURCE-ONLY, weaker)"
 S_RETRY  = S_LEVEL
+C_SLOT   = "ore that lands in a reserved slot is still dumped (SOURCE-ONLY, weaker)"
 D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
 D_BACK  = "noDig still takes the chest back after the drop"
 D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
@@ -500,6 +501,15 @@ MUTANTS = [
 
     ("the sector is abandoned on the first refusal, with no retry", "ore_turtle.lua",
      [('                for try = 1, SCAN_RETRIES do', '                for try = 1, 0 do')], S_RETRY),
+
+    # ── Slot 14 is exempt from banking only while it holds fuel (node_119) ──
+    ("the whole coal slot is exempt from banking again", "ore_turtle.lua",
+     [('            local coalSlotHoldingFuel =\n                s == S_COAL and mine_flow.isFuelItem(item and item.name)',
+       '            local coalSlotHoldingFuel = s == S_COAL')], C_SLOT),
+
+    ("the coal is banked and the junk is kept", "ore_turtle.lua",
+     [('                s == S_COAL and mine_flow.isFuelItem(item and item.name)',
+       '                s == S_COAL and not mine_flow.isFuelItem(item and item.name)')], C_SLOT),
 
     # ── Banking at a dock without digging (W3's measurement, 2026-10-08) ────
     ("noDig is ignored and an occupied face is dug anyway", "mine_flow.lua",
