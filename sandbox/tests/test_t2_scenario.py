@@ -61,5 +61,56 @@ class JobSummary(unittest.TestCase):
         self.assertEqual(s["sector_done_lines"], 2)
 
 
+class FakeControl:
+    def __init__(self):
+        self.sent = []
+
+    def command(self, text):
+        self.sent.append(text)
+        return "ok"
+
+
+def recording_ctx():
+    c = scenario.Ctx.__new__(scenario.Ctx)
+    c.interventions = []
+    c.g0 = None
+    c._c = FakeControl()
+    c.control = scenario.Interventions(c, c._c)
+    return c
+
+
+class ConsoleCommandsAreInterventions(unittest.TestCase):
+    """The report's INTERVENTIONS must list a raw console command that changes the world (W1's card): `command` used to be a read for every text, so a run that
+    used fill, setblock and forceload still said nobody had reached into it. Reads must stay out."""
+    CHANGES = ["fill 1 2 3 4 5 6 stone", "setblock 1 2 3 stone", "/setblock 1 2 3 air", "clone 1 2 3 4 5 6 7 8 9 replace move", "forceload add 10 10",
+               "forceload remove 10 10", "data modify block 1 2 3 Fuel set value 5", "data merge block 1 2 3 {}", "data remove block 1 2 3 x",
+               "summon minecraft:pig", "kill @e", "give @p stone", "time set day", "gamerule doDaylightCycle false", "tp @p 0 0 0", "teleport @p 0 0 0",
+               "computercraft shutdown #5", "computercraft turn-on #5", "execute in minecraft:overworld run setblock 1 2 3 stone", "t2 radio loss 0.5 10"]
+    READS = ["data get block 1 2 3 Fuel", "time query gametime", "forceload query 1 2", "computercraft dump", "execute if block 1 2 3 air", "list",
+             "forge tps", "gamerule doDaylightCycle", "t2 status", "t2 chunk list", "say hello", "execute if loaded 1 70 1 run say hi"]
+
+    def test_every_world_changing_command_is_recorded(self):
+        for text in self.CHANGES:
+            c = recording_ctx()
+            c.control.command(text)
+            self.assertEqual([i["verb"] for i in c.interventions], ["command"], text)
+            self.assertIn(text, c.interventions[0]["args"][0])
+            self.assertEqual(c._c.sent, [text], "the command is still sent")
+
+    def test_a_read_only_probe_records_nothing(self):
+        for text in self.READS:
+            c = recording_ctx()
+            c.control.command(text)
+            self.assertEqual(c.interventions, [], text)
+            self.assertEqual(c._c.sent, [text])
+
+    def test_the_run_report_no_longer_says_nobody_reached_in_after_a_fill(self):
+        c = recording_ctx()
+        c.control.command("data get block 1 2 3 Items")
+        c.control.command("fill 0 0 0 1 1 1 air")
+        c.control.command("forceload add 5 5")
+        self.assertEqual([i["args"][0] for i in c.interventions], ["'fill 0 0 0 1 1 1 air'", "'forceload add 5 5'"])
+
+
 if __name__ == "__main__":
     unittest.main()

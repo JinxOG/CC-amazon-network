@@ -44,8 +44,66 @@ NOT_STAGED = [
     "Exact replay: two runs of the same scenario differ in timing; a timing claim needs at least two runs.",
 ]
 
+# `command` is NOT in this set: a raw console command is a read or a change depending on its text, so it is split by verb (see world_changing_command).
 READ_ONLY = {"computers", "read_disk", "list_disk", "block_data", "get_fuel", "get_slot", "role_of", "gps_hosts", "free_spot",
-             "command", "rcon", "harvest_radio", "tick_rate"}
+             "rcon", "harvest_radio", "tick_rate"}
+
+# Console verbs that change the world, a player, a computer or the server. A run that used one of these did not run unaided, so the report must say so
+# (the old rule listed `command` as a read, and a run that used fill, setblock and forceload still reported "nobody reached into the run").
+CHANGING_VERBS = {"fill", "setblock", "clone", "summon", "kill", "give", "tp", "teleport", "setworldspawn", "spawnpoint", "weather", "difficulty",
+                  "effect", "enchant", "attribute", "item", "loot", "place", "ride", "replaceitem", "xp", "experience", "clear", "tag", "team",
+                  "scoreboard", "bossbar", "gamemode", "defaultgamemode", "op", "deop", "ban", "ban-ip", "pardon", "kick", "whitelist", "stop",
+                  "save-off", "save-on", "setidletimeout", "spreadplayers", "fillbiome", "damage", "jfr", "perf", "reload", "function", "schedule",
+                  "tickrate", "forge", "t2"}
+# Verbs whose first argument decides: a query word is a read, anything else a change.
+READ_SUBCOMMANDS = {
+    "data": {"get"},
+    "time": {"query"},
+    "forceload": {"query"},
+    "gamerule": None,                    # `gamerule name` reads, `gamerule name value` sets: decided by the argument count
+    "computercraft": {"dump", "view", "track", "tp"},
+    "execute": None,                     # decided by the command after `run`
+    "worldborder": {"get"},
+    "list": None, "seed": None, "help": None, "say": None, "tell": None, "tellraw": None, "msg": None, "me": None, "title": None, "locate": None,
+    "scoreboard": None,
+}
+
+
+def world_changing_command(text):
+    """True when a console command changes something. `fill`, `setblock`, `clone`, `summon`, `kill`, `give`, `tp`, `data modify|merge|remove`, `time set|add`,
+    `forceload add|remove`, `gamerule name value`, `computercraft shutdown|turn-on|queue` and `execute ... run <a changing command>` do; `data get`, `time query`,
+    `forceload query`, `computercraft dump`, `list`, `say` and the like do not. An unknown verb counts as a change (better a noisy INTERVENTIONS than a quiet wrong one)."""
+    words = (text or "").strip().lstrip("/").split()
+    if not words:
+        return False
+    verb = words[0].lower()
+    if verb == "execute":
+        if " run " in " " + " ".join(words) + " ":
+            tail = " ".join(words).split(" run ", 1)[1]
+            return world_changing_command(tail)
+        return False                     # `execute if ...` with no `run` is only a test
+    if verb == "gamerule":
+        return len(words) >= 3
+    if verb in ("list", "seed", "help", "say", "tell", "tellraw", "msg", "me", "title", "locate"):
+        return False
+    if verb in READ_SUBCOMMANDS and READ_SUBCOMMANDS[verb] is not None:
+        sub = words[1].lower() if len(words) > 1 else ""
+        return sub not in READ_SUBCOMMANDS[verb]
+    if verb == "scoreboard":
+        return not (len(words) > 2 and words[1].lower() in ("objectives", "players") and words[2].lower() in ("list", "get"))
+    if verb == "tickrate":
+        return len(words) > 1            # `tickrate` alone reports the rate
+    if verb == "forge":
+        return len(words) > 1 and words[1].lower() in ("generate", "setdimension", "mods_change")   # tps, track, entity list, dimensions, mods are reads
+    if verb == "t2":
+        low = [w.lower() for w in words]
+        return len(words) > 1 and not (low[-1] in ("status", "list") or low[1:3] == ["chunk", "tickets"])
+    return verb in CHANGING_VERBS or verb not in KNOWN_READS
+
+
+KNOWN_READS = {"forge", "list", "seed", "help", "say", "tell", "tellraw", "msg", "me", "title", "locate", "data", "time", "forceload", "computercraft",
+               "execute", "worldborder", "gamerule", "scoreboard", "tickrate", "t2", "debug", "datapack", "publish", "trigger", "recipe", "advancement",
+               "playsound", "particle", "stopsound", "w", "teammsg", "tm"}
 
 
 class Interventions:
@@ -58,6 +116,13 @@ class Interventions:
         attr = getattr(self._c, name)
         if not callable(attr) or name in READ_ONLY or name.startswith("_"):
             return attr
+        if name == "command":
+            def command_wrapper(text, *args, **kwargs):
+                if world_changing_command(text):
+                    self._ctx.interventions.append({"verb": "command", "args": [repr(text)] + [repr(a) for a in args],
+                                                    "kwargs": {k: repr(v) for k, v in kwargs.items()}, "game_seconds": self._ctx.game_seconds()})
+                return attr(text, *args, **kwargs)
+            return command_wrapper
 
         def wrapper(*args, **kwargs):
             self._ctx.interventions.append({"verb": name, "args": [repr(a) for a in args], "kwargs": {k: repr(v) for k, v in kwargs.items()},
