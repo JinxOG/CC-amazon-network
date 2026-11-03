@@ -1,0 +1,113 @@
+The live fleet's GPS stopped working for every turtle on 2026-10-29, and the
+server's own GPS check still reports it healthy.
+
+CAUSE: NOT DETERMINED. This is a measurement, not a diagnosis. The mechanism is
+for whoever owns the GPS hosts; what follows is only what the logs and /state
+say, and the two disagree.
+
+MEASURED 2026-11-02/11-03 from the live bridge (http://192.168.86.35:3000),
+read-only, via tools/logq.py. Nothing was deployed and nothing was changed.
+
+1. THE STEP CHANGE, AND ITS DATE
+
+"GPS locate failed -- continuing with dead-reckoned position", whole days:
+
+    2026-10-26          0
+    2026-10-27          7
+    2026-10-28         16
+    2026-10-29      1,382
+    2026-10-30     >5,000   (the /logs page caps at 5,000)
+    2026-10-31     >5,000
+    2026-11-01     >5,000
+    2026-11-02     >5,000
+
+Within 10-29, by hour: nothing until 20:00Z, 26 at 21:00Z, 683 at 22:00Z, 673
+at 23:00Z. Every hour before 21:00Z that day is 0.
+
+2. IT IS TOTAL, NOT INTERMITTENT
+
+The same filter against the successful line, "GPS resync: x,y,z":
+
+    2026-10-28 (whole day)        112 succeeded,     16 failed
+    2026-11-02 01:00-02:00Z         0 succeeded,  4,698 failed  (one hour)
+
+So the turtles have gone from mostly succeeding to never succeeding. Not one
+resync has landed in the sampled hour.
+
+3. IT IS EVERY TURTLE, NOT A PLACE
+
+In that one hour, failures per node:
+
+    node_94 554   node_183 554  node_182 554  node_181 554  node_179 554
+    node_178 554  node_96 552   node_146 552  node_145 552  node_143 552
+    node_142 552  node_141 552  node_140 552  node_109 552  node_104 552
+    node_103 552  node_102 552
+
+All 17 registered turtles, 552-554 each, which is one failure every 6.5
+seconds per turtle -- the control loop's periodic resync, failing every time.
+About 113,000 log lines a day of nothing but this.
+
+These turtles are DOCKED at the base, not out on the flight lane.
+
+4. AND THE SERVER DISAGREES
+
+/state, read at 2026-11-03 02:27Z:
+
+    gps = {"ok": true, "hosts": 4, "checkedAt": 1793672877871}
+
+The server's own GPS check says four hosts answered it, within the minute. So
+whatever is wrong, it is not "the hosts are switched off": something answers
+the server computer and nothing answers the turtles. Two callers, two results.
+That contradiction is the most useful thing here and it is why this note does
+not offer a cause.
+
+The server also logged, once on 10-29 at 21:57:55Z -- inside the ramp above --
+
+    GPS CHECK FAILED: no_fix: 0 of 4 GPS hosts answered -- no job is sent out
+    until GPS is back
+
+and then once a day since, each time inside the daily restart window, which is
+the ordinary case of the server checking before the hosts are up.
+
+5. WHAT IT MEANS FOR WORK
+
+"Dispatched job" lines: 0 on 10-28, 10-29, 10-30, 11-01 and 11-02. The fleet
+has dispatched nothing for at least six days. Some of that is deliberate -- the
+standing instruction since 2026-10-28 is test server only, no live deploys --
+so the zero on 10-28 predates this fault and is not evidence of it. But the
+server's own rule is "no job is sent out until GPS is back", so while this
+holds, a mining order would not be dispatched even if one were given.
+
+6. WHAT IT MEANS FOR THE FLIGHT-LANE CARD (W1)
+
+The card "Miners lose GPS and freeze on one stretch of the flight lane
+(x ~1300-1550, y 200, z -2813)" is framed as a coverage gap over one stretch of
+sky. Two findings bear on it, in opposite directions:
+
+  - Its own evidence can no longer be examined. /logs keeps 14 days
+    (retentionDays: 14, earliest day on file 2026-10-21); the incidents it
+    rests on are 2026-10-14 to 2026-10-16. Those lines are gone. The card's
+    measurements have to be taken as written or re-gathered.
+  - Its premise does not fit what is happening now. GPS locate is failing at
+    the DOCK, for every turtle, continuously. A card about one stretch of lane
+    cannot be worked on, or tested against the live system, while coverage is
+    failing at the base too -- any lane measurement taken now would be
+    measuring this instead.
+
+The honest position is that the lane card is blocked on this, not that this
+explains it: the two windows do not overlap, and in 10-14..10-16 the base had
+GPS (112 successful resyncs a day as late as 10-28).
+
+7. THE OTHER THING WORTH SOMEONE'S TIME
+
+113,000 lines a day of one repeated warning is its own problem. There is an
+unassigned card, "A refused move retries hundreds of times a second and floods
+the log", about the same shape of fault. A warning that fires every 6.5 seconds
+per turtle forever is not a warning anybody can read, and it is pushing
+everything else out of a 14-day window.
+
+NEEDS THE USER. GPS hosts are world infrastructure: placing, moving or
+chunk-loading them is not something that can be done from here, and the
+Operator card "GPS 1 - Add 2-4 more GPS hosts, all chunk-loaded" is already
+open on it. This note exists so that card and the lane card are worked from
+measurements rather than from the framing they were written with.
