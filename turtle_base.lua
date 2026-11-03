@@ -1452,6 +1452,17 @@ function base.sidestepOutOfColumn()
     return false
 end
 
+-- Refused targets recently logged, for the geofence refusal below: key -> {loggedAt,
+-- lastAt, held}. Cleared when it passes 32 keys -- a miner meets a handful per
+-- sector, and a clear only means one extra line.
+local _fenceRefusals, _fenceRefusalKeys = {}, 0
+local function fenceRefusalSlot(key)
+    if _fenceRefusals[key] == nil then
+        _fenceRefusalKeys = _fenceRefusalKeys + 1
+        if _fenceRefusalKeys > 32 then _fenceRefusals, _fenceRefusalKeys = {}, 1 end
+    end
+end
+
 local function tryMove(digFn, dir)
     -- NO TURTLE MOVES AFTER BOOT ON A GUESS (recovery layer release 2). Only
     -- miners ever called waitForPositionFix; delivery and support moved on
@@ -1511,11 +1522,31 @@ local function tryMove(digFn, dir)
             local nx, nz = projectStep(dir)
             where = string.format("%d,%d", nx, nz)
         end
-        logWarn(string.format("Geofence: refusing move to %s (%s)", where,
-            a and string.format("anchor chunk %d,%d r%d", a.cx, a.cz, a.chunkRadius)
+        local fence = a and string.format("anchor chunk %d,%d r%d", a.cx, a.cz, a.chunkRadius)
               or (ls and string.format("lease %d,%d..%d,%d ceil %s",
                     ls.x1, ls.z1, ls.x2, ls.z2, tostring(ls.ceilingY))
-                  or "fence")))
+                  or "fence")
+        -- ONE LINE PER REFUSED TARGET IN TEN SECONDS (2026-11-02). node_118
+        -- logged ~294 of these in three seconds across three targets and
+        -- burned 237 log slots in under a minute -- the window in which any
+        -- other line from it would have been lost. The refusal returned at once,
+        -- so the caller retrying it spun. Now the same target refused again
+        -- within a second waits half a second, and is logged once per ten
+        -- seconds; the next line says how many were held back.
+        local key, nowMs = where .. "|" .. fence, os.epoch("utc")
+        fenceRefusalSlot(key)
+        local seen = _fenceRefusals[key]
+        if seen and nowMs - seen.lastAt < 1000 then sleep(0.5) end
+        if not seen or nowMs - seen.loggedAt >= 10000 then
+            local held = (seen and seen.held > 0)
+                and string.format(" -- %d identical refusal(s) held back", seen.held) or ""
+            logWarn(string.format("Geofence: refusing move to %s (%s)%s", where, fence, held))
+            seen = { loggedAt = nowMs, held = 0 }
+            _fenceRefusals[key] = seen
+        else
+            seen.held = seen.held + 1
+        end
+        seen.lastAt = nowMs
         return false, "geofence_breach"
     end
 

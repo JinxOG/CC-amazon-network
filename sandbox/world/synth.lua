@@ -97,10 +97,12 @@ function Synth.layout(waypoints, opts)
   -- miners and the loaders they carry
   for i = 1, n_miners do
     local d = worker_docks[next_worker]; next_worker = next_worker + 1
-    local loader_id, loader_label = 20 + i, "loader_" .. i
+    -- IDs as they always were for a small fleet (so every existing run is unchanged); a big fleet (the capacity
+    -- study's 150) gets its own ranges, or miner, loader, delivery and support IDs collide with each other and the GPS hosts.
+    local loader_id, loader_label = (i <= 9) and (20 + i) or (2000 + i), "loader_" .. i
     add{ id = loader_id, kind = "turtle", role = "loader", label = loader_label, carried = true,
       turtle = { equipped = { left = MODEM, right = "advancedperipherals:chunk_controller" } } }
-    add{ id = 10 + i, kind = "turtle", role = "miner", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
+    add{ id = (i <= 9) and (10 + i) or (1000 + i), kind = "turtle", role = "miner", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
       turtle = {
         equipped = { left = MODEM, right = "advancedperipherals:chunk_controller" },
         inv = {
@@ -118,14 +120,14 @@ function Synth.layout(waypoints, opts)
   local n_support = opts.support or (remaining - n_delivery)
   for i = 1, n_delivery do
     local d = worker_docks[next_worker]; next_worker = next_worker + 1
-    add{ id = 30 + i, kind = "turtle", role = "delivery", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
+    add{ id = (i <= 19) and (30 + i) or (3000 + i), kind = "turtle", role = "delivery", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
       turtle = { equipped = { left = MODEM, right = PICK }, inv = {
         [15] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" },
         [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "delivery" } } } }
   end
   for i = 1, n_support do
     local d = support_docks[next_support]; next_support = next_support + 1
-    add{ id = 50 + i, kind = "turtle", role = "support", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
+    add{ id = (i <= 49) and (50 + i) or (4000 + i), kind = "turtle", role = "support", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
       turtle = { equipped = { left = MODEM, right = PICK }, inv = {
         [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" } } } }
   end
