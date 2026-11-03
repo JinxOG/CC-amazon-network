@@ -43,12 +43,31 @@
 --     belongs to the sandbox owner; if the time difference comes out small
 --     enough to argue about, that counter is what settles it.
 --
--- WHY THIS ZONE. The same three sectors as real_world_three_sectors.lua, on the
--- imported 2026-10-18 world: ordered as sector CENTRES (1920..1984, z -2624),
--- because the server pads an order by the scan radius and snaps it to the 32
--- step -- handing it the footprint turns 3 sectors into 15, twelve of them
--- outside the imported world. Two miners, as that scenario uses, and the zone
--- the card names.
+-- WHY THE SYNTHETIC WORLD AND NOT THE ZONE THE CARD NAMES. The first attempt
+-- used real_world_three_sectors.lua's zone on the imported 2026-10-18 world,
+-- and it measured nothing at all: both arms came back byte-identical, 6645 ore
+-- blocks and 231.5 minutes, twice. The cause is established, in the code and in
+-- the artefact. import_layout.lua marks every computer of an imported world
+-- `installed = true`, and fleet.lua writes the repository's files only when
+-- `not spec.installed` -- its own comment says so: "entries with
+-- installed = true already have their disk (an imported world)". So a scenario
+-- on an imported world runs the fleet code FROZEN IN THAT SNAPSHOT, and the
+-- working tree is never installed. Checked on the run itself: the miner's
+-- startup.lua (ore_turtle is installed under that name) contained no
+-- adjacentDir, no digAdjacentOre and none of the instrumentation. Both arms ran
+-- the same old code, so of course they matched -- and `--code rev:...` is
+-- equally powerless there, which means the "before" arm was not what it was
+-- labelled either.
+--
+-- On the synthetic world the fleet code IS installed from the tree, which is
+-- why the other W1 scenarios could fail on the old code and pass on the new.
+-- The zone is therefore four sectors in the first synthetic mining area
+-- (x 100..163, z -2832..-2769): centres 128 and 160 on x, -2816 and -2784 on z,
+-- all on the 32 grid. Four rather than the card's three, because only two
+-- centres fit along each axis of that area; said plainly rather than quietly
+-- substituted. Two miners, as real_world_three_sectors uses. Synthetic ore
+-- grows in veins of 5-10 contiguous blocks, which is the geometry this card
+-- turns on.
 --
 -- HOW TO RUN THE PAIR. Same seed, same world, nothing else on the machine:
 --     sandbox/sim run sandbox/scenarios/w1_adjacent_dig_measure.lua --code rev:<before>
@@ -63,8 +82,9 @@ package.path = "sandbox/?.lua;" .. package.path
 local Drops = require("world.drops")
 local DATA = (os.getenv("SANDBOX_DATA") or "G:/TurtleOS-Sandbox"):gsub("\\", "/")
 return {
-  world = DATA .. "/worlds/2026-10-18_1700/sim",
-  seed  = 1,
+  world  = "synthetic",
+  seed   = 1,
+  miners = 2,
   steps = function(sim)
     local complete = sim:capture_log("Job complete: ")
     local problems = {}
@@ -77,7 +97,7 @@ return {
 
     local t0 = sim.clock:now()
     sim:dispatch{ type = "ORDER_MINE",
-      params = { x1 = 1920, z1 = -2624, x2 = 1984, z2 = -2624, minerCount = 2 } }
+      params = { x1 = 128, z1 = -2816, x2 = 160, z2 = -2784, minerCount = 2 } }
 
     local function oreDelivered()
       local n = 0
@@ -143,7 +163,11 @@ return {
     -- blocks on this same zone, so the same bar is used and the two stay
     -- comparable. Below it, the miners did not work the zone and neither figure
     -- above means anything.
-    sim:expect(sim.results.ore_at_6h > 1000,
+    -- The bar is 200, not real_world_three_sectors' 1000: that figure was set
+    -- on the imported world's zone and means nothing here. 200 blocks over four
+    -- synthetic sectors is low enough not to fail a working run and high enough
+    -- that a run which mined almost nothing cannot pass.
+    sim:expect(sim.results.ore_at_6h > 200,
       "the miners worked the zone within the 6-hour checkpoint ("
       .. sim.results.ore_at_6h .. " ore blocks delivered; "
       .. (done and ("job completed in " .. sim.results.job_minutes .. " min")

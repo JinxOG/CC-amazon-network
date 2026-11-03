@@ -706,8 +706,9 @@ function(assert_eq)
 
     -- And the caller has to use the three-valued answer. `if near then` would
     -- treat a refusal as "not applicable" and walk into the turtle.
-    assert_eq(src:find("if near ~= nil then return near, nearWhy end", 1, true) ~= nil, true,
-        "navToOre must distinguish nil (not applicable) from false (refused)")
+    assert_eq(src:find("if near ~= nil then return near, nearWhy, \"beside\" end", 1, true) ~= nil, true,
+        "navToOre must distinguish nil (not applicable) from false (refused), and "
+        .. "say which path it took")
 end
 
 -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE.
