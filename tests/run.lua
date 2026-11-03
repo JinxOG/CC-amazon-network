@@ -38,6 +38,7 @@ local files = {
     "tests.test_zone_phase",
     "tests.test_zone_ore",
     "tests.test_server_disk",
+    "tests.test_minify",
     "tests.test_gps3_journal",
 }
 

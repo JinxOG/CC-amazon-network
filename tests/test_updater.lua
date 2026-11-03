@@ -166,6 +166,15 @@ end
 
 local suite = {}
 
+-- What the updater writes for a Lua file since 2026-11-02: the file without its
+-- comments and indentation (updater.lua's minify), line breaks kept.
+local function minified(text)
+    _G.__UPDATER_MINIFY_ONLY = true
+    local m = assert(loadfile("updater.lua"))()
+    _G.__UPDATER_MINIFY_ONLY = nil
+    return m(text)
+end
+
 suite["an updater that predates a new module still ships it"] = function(assert_eq)
     local disk = {
         ["role.txt"]         = "DELIVERY" .. NL,
@@ -189,8 +198,8 @@ suite["an updater that predates a new module still ships it"] = function(assert_
 
     assert_eq(disk["turtle_base.lua"], "-- turtle_base, requires logship",
         "and it must still have shipped the role files")
-    assert_eq(disk["updater.lua"], readRepoFile("updater.lua"),
-        "and updated itself")
+    assert_eq(disk["updater.lua"], minified(readRepoFile("updater.lua")),
+        "and updated itself (stripped, as every Lua file is written)")
     assert_eq(log.rebooted, true,
         "and rebooted, because everything it set out to write is on disk")
 end
@@ -260,7 +269,8 @@ end
 suite["an updater that is already current does not relaunch"] = function(assert_eq)
     local disk = {
         ["role.txt"]        = "DELIVERY" .. NL,
-        ["updater.lua"]     = readRepoFile("updater.lua"),
+        -- what the updater itself wrote last time: the stripped copy
+        ["updater.lua"]     = minified(readRepoFile("updater.lua")),
         ["turtle_base.lua"] = "-- old turtle_base",
     }
     local log = { out = {}, ran = {}, rebooted = false }
