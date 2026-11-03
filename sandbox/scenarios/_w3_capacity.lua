@@ -4,7 +4,7 @@
 -- disk tidy running hourly.
 --   * mining: four zones at a time, two miners each, three sectors per zone, each on fresh ground; a finished zone
 --     is replaced by the next;
---   * delivery: an order every 30 minutes (64 cobblestone to a point east of the depot), several in flight at once;
+--   * delivery: an order every 30 minutes (64 cobblestone), to four points east of the depot in turn;
 --   * the server restarts once a simulated day, as the live one does at ~12:00 UTC.
 -- Every simulated hour the size of every file on the server's disk, the free space, and the number of jobs by type
 -- and state are written to <run>/capacity.csv, so a run cut short still leaves its data. The report's results give
@@ -29,7 +29,7 @@ return function(quota, days)
       sim:run_for(5 * 60000)
 
       local area = sim.world:meta().areas[1]
-      local nextZone = 0
+      local nextZone, nextDest = 0, 0
       local function orderZone()
         local x = area.x1 + 64 * 3 * (nextZone % 40)
         local z = area.z1 + 64 * 3 * math.floor(nextZone / 40)
@@ -76,9 +76,12 @@ return function(quota, days)
           local m = jobs()
           while m < 4 do orderZone(); m = m + 1 end
           if tick % 3 == 0 then
+            -- Four destinations in turn: the server runs one delivery per destination, and on the first run (one
+            -- destination) a single delivery held by a boxed-in turtle (node_35, day 2 07:01) queued every later one.
+            nextDest = nextDest % 4 + 1
             sim:dispatch{ type = "ORDER_DELIVERY", params = {
               items = { { name = "minecraft:cobblestone", count = 64 } },
-              destination = { x = 320, y = 67, z = -2800 } } }
+              destination = { x = 304 + 16 * nextDest, y = 67, z = -2800 } } }
           end
         end
         if hour % 24 == 12 then sim:reboot(server.name) end      -- the daily restart

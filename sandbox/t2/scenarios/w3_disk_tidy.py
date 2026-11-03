@@ -3,7 +3,7 @@
 real game. After the pin (the real update path), the dispatch computer's startup.lua must be the commit's server STRIPPED
 (the runner's pinned-code check accepts either form; this one asks for the stripped form) and /state must carry the disk
 report. Then the leftovers the tidy is for are planted straight into its disk folder -- the installer's old
-central_server.lua, an interrupted save's .tmp, a .bak beside its live file, a 30 KB crash.log -- and the computer is
+central_server.lua, an interrupted save's .tmp, a .bak beside its live file, a crash.log of forty long lines -- and the computer is
 switched off and on, as a reboot would: the tidy runs at boot and must remove the first three, trim crash.log to its newest
 8 KB, and leave every live file. Last, one mining job must go out and complete, so the stripped server is shown working end
 to end. Pin the commit under test; --tickrate 200 is fine (the job is one sector)."""
@@ -20,7 +20,11 @@ _spec.loader.exec_module(_low)
 server_computer = _low.server_computer                     # the RUNNING dispatch computer, not a stray SERVER disk
 
 LIVE = ("startup.lua", "protocol.lua", "updater.lua", "cloudstore.lua", "jobs.dat")
-CRASH_LINE = "[1788683956366 2026-09-06 01:39:16] server.run crashed: planted by w3_disk_tidy, line %05d\n"
+# Forty LONG lines (~36 KB): fewer than bootReport's own 50-line cap (CRASH_LOG_MAX_LINES), so only the tidy's 8 KB trim
+# can shrink it. w3-disk-tidy-a planted 334 short lines and the 50-line cap did the trimming -- that check passed for the
+# wrong reason.
+CRASH_LINES = 40
+CRASH_LINE = "[1788683956366 2026-09-06 01:39:16] server.run crashed: planted by w3_disk_tidy, line %05d " + "x" * 800 + "\n"
 
 
 def steps(ctx):
@@ -66,9 +70,10 @@ def steps(ctx):
     with open(os.path.join(folder, "jobs.dat.bak"), "wb") as f:
         f.write(jobs)
     with open(os.path.join(folder, "crash.log"), "w", encoding="utf-8", newline="\n") as f:
-        for i in range(30 * 1024 // len(CRASH_LINE % 0) + 1):
+        for i in range(CRASH_LINES):
             f.write(CRASH_LINE % i)
-    ctx.note("planted: central_server.lua (%d), w3_plant.tmp (5000), jobs.dat.bak (%d), crash.log (~30 KB)" % (len(raw), len(jobs)))
+    ctx.note("planted: central_server.lua (%d), w3_plant.tmp (5000), jobs.dat.bak (%d), crash.log (%d lines, %d bytes)" % (
+        len(raw), len(jobs), CRASH_LINES, CRASH_LINES * len(CRASH_LINE % 0)))
     n_online, n_freed = len(ctx.log_lines("Central server online")), len(ctx.log_lines("Disk tidy: freed"))
     c.shutdown([sid])                                                       # THE TEST: a reboot with leftovers on disk
     ctx.wait_game(5)
@@ -85,6 +90,8 @@ def steps(ctx):
         ctx.expect(name not in files, "%s was removed" % name)
     crash = len(c.read_disk(sid, "crash.log")) if "crash.log" in files else 0
     ctx.expect(0 < crash <= 8192, "crash.log was trimmed to its newest 8 KB (%d bytes)" % crash)
+    trimmed = ctx.log_lines("Disk tidy: crash.log trimmed")
+    ctx.expect(bool(trimmed), "by the tidy, which says so (%s)" % (trimmed[-1:] or "no line"))
     for name in LIVE:
         ctx.expect(name in files, "the live file %s is still there" % name)
 
