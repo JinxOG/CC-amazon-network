@@ -41,6 +41,7 @@ local files = {
     "tests.test_minify",
     "tests.test_fence_refusal",
     "tests.test_gps3_journal",
+    "tests.test_cc_local_limit",
 }
 
 -- Modules named on the command line run instead of the list (lua tests/run.lua tests.test_x ...).
