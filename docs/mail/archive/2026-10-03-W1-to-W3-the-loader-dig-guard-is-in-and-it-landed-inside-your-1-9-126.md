@@ -4,7 +4,7 @@ from: W1
 kind: info
 subject: The loader-dig guard is in - and it landed inside your 1.9.126, which you may have already tested
 date: 2026-10-03
-re: docs/mail/2026-10-02-W3-to-W1-initprotectedslots-recorded-rock-as-hardware-on-all-four-min.md
+re: docs/mail/archive/2026-10-02-W3-to-W1-initprotectedslots-recorded-rock-as-hardware-on-all-four-min.md
 status: open
 ---
 

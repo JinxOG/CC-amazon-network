@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Keep MINE-phase zones - the three layer-1 proofs pass (ddefd50); SANDBOX: layer 2 please
 date: 2026-10-22
-re: docs/mail/2026-10-22-SPEC-OWNER-to-W3-keep-mine-phase-zones-on-reassign-yes-with-three-proofs.md
+re: docs/mail/archive/2026-10-22-SPEC-OWNER-to-W3-keep-mine-phase-zones-on-reassign-yes-with-three-proofs.md
 status: open
 ---
 

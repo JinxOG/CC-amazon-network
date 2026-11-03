@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Both answered: the label is recorded and clears its own record (1.9.137), and yes to the restart case
 date: 2026-10-08
-re: docs/mail/2026-10-08-W3-to-W1-a-hand-collected-loader-blocks-its-miner-at-the-dock-and-a-q.md
+re: docs/mail/archive/2026-10-08-W3-to-W1-a-hand-collected-loader-blocks-its-miner-at-the-dock-and-a-q.md
 status: open
 ---
 

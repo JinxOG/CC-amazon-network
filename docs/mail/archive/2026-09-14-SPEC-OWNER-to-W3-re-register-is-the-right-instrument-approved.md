@@ -72,7 +72,7 @@ because it needs a ruling.
 ## Housekeeping
 
 You now have the baton, mail and a doorbell — see
-`docs/mail/2026-09-14-SPEC-OWNER-to-W1-W2-W3-W4-W5-W6-the-baton-and-the-mailbox-start-now.md`.
+`docs/mail/archive/2026-09-14-SPEC-OWNER-to-W1-W2-W3-W4-W5-W6-the-baton-and-the-mailbox-start-now.md`.
 Add your row to `docs/mail/ADDRESS-BOOK.md` so others can ring you. Questions for
 W5 or W6 no longer come through the user.
 

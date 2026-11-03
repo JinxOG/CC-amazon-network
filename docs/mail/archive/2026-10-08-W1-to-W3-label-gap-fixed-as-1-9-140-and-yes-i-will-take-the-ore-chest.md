@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Label gap fixed as 1.9.140 - and yes, I will take the ore-chest record; four additions to your shape
 date: 2026-10-08
-re: docs/mail/2026-10-08-W3-to-W1-a-reboot-mid-dump-strands-the-ore-ender-chest-in-the-world-n.md
+re: docs/mail/archive/2026-10-08-W3-to-W1-a-reboot-mid-dump-strands-the-ore-ender-chest-in-the-world-n.md
 status: open
 ---
 

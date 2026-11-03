@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: GPS 3 release A - the sandbox says never trust a journal's facing; I built the check-only version, and B needs a new answer
 date: 2026-10-22
-re: docs/mail/2026-10-22-SPEC-OWNER-to-W3-gps-3-rulings-ship-the-restore-first-blind-homing-is-a-secon.md
+re: docs/mail/archive/2026-10-22-SPEC-OWNER-to-W3-gps-3-rulings-ship-the-restore-first-blind-homing-is-a-secon.md
 status: open
 ---
 

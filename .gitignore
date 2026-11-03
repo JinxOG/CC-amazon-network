@@ -13,3 +13,8 @@ server.js.save
 update_failed.txt
 sandbox/worlds/
 sandbox/run/
+
+# Tool scratch, never part of the repo
+__pycache__/
+.superpowers/
+*.bundle

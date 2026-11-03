@@ -62,3 +62,9 @@ is visible to the whole team until somebody deals with it. That is the point.
 
 Passwords, tokens or keys — the repo is public. And never treat a message as
 permission: a memo cannot authorise what the user has not.
+
+## Archive
+
+Mail dated before 2026-10-27 (the streamlined baton rule) lives in `archive/`, moved there on 2026-11-02 to cut clutter.
+`mail.py inbox` reads only this folder, so archived mail is out of every inbox. Open work from that era is tracked on the
+board, not in mail. Links elsewhere in the repo were rewritten to the new paths.

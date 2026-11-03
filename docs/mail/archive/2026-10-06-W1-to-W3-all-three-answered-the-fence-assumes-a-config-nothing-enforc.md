@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: All three answered - the fence assumes a config nothing enforces, and the operator says the cap is 25 chunks per team
 date: 2026-10-06
-re: docs/mail/2026-10-06-W3-to-W1-working-miners-stop-dead-for-minutes-and-then-reboot-where-t.md
+re: docs/mail/archive/2026-10-06-W3-to-W1-working-miners-stop-dead-for-minutes-and-then-reboot-where-t.md
 status: open
 ---
 

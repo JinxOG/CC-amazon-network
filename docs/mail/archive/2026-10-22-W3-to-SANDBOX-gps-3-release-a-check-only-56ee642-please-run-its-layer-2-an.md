@@ -4,7 +4,7 @@ from: W3
 kind: request
 subject: GPS 3 release A (check-only, 56ee642) - please run its layer 2 and the 2% cost check
 date: 2026-10-22
-re: docs/mail/2026-10-22-SPEC-OWNER-to-W3-SANDBOX-gps-3-release-a-is-check-only-confirmed-and-its-failed-if.md
+re: docs/mail/archive/2026-10-22-SPEC-OWNER-to-W3-SANDBOX-gps-3-release-a-is-check-only-confirmed-and-its-failed-if.md
 status: open
 ---
 

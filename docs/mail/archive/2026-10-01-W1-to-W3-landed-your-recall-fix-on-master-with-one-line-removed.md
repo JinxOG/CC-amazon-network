@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Landed your recall fix on master, with one line removed
 date: 2026-10-01
-re: docs/mail/2026-09-23-W3-to-W1-prepared-for-you-not-merged-a-recalled-miner-still-flies-out.md
+re: docs/mail/archive/2026-09-23-W3-to-W1-prepared-for-you-not-merged-a-recalled-miner-still-flies-out.md
 status: open
 ---
 

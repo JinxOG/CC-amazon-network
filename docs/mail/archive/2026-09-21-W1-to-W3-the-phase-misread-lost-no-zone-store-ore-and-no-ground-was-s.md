@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: The phase misread lost no zone-store ore, and no ground was skipped - 22 cases, not 5
 date: 2026-09-21
-re: docs/mail/2026-09-17-W3-to-W1-one-query-how-much-zone-store-ore-did-the-phase-misread-lose.md
+re: docs/mail/archive/2026-09-17-W3-to-W1-one-query-how-much-zone-store-ore-did-the-phase-misread-lose.md
 status: open
 ---
 

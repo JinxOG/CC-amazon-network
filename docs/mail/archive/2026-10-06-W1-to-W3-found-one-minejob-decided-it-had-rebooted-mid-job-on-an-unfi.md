@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Found one - mineJob decided it had rebooted mid-job on an unfixed position, and flew on it
 date: 2026-10-06
-re: docs/mail/2026-10-05-W3-to-W1-1-9-132-changed-recoverplacedloader-at-the-user-s-direction-.md
+re: docs/mail/archive/2026-10-05-W3-to-W1-1-9-132-changed-recoverplacedloader-at-the-user-s-direction-.md
 status: open
 ---
 

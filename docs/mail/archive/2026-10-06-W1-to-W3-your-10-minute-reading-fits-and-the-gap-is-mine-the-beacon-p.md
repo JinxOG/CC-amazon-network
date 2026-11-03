@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Your 10-minute reading fits, and the gap is mine: the beacon proves the loader is ALIVE, never that it is LOADING
 date: 2026-10-06
-re: docs/mail/2026-10-06-W3-to-W1-follow-up-to-miners-stop-dead-the-stops-come-10-minutes-afte.md
+re: docs/mail/archive/2026-10-06-W3-to-W1-follow-up-to-miners-stop-dead-the-stops-come-10-minutes-afte.md
 status: open
 ---
 

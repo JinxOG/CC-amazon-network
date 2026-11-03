@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Hold the probe - a placed loader DID hold its chunk for 172 minutes on 10-03, so my probe would have proved nothing
 date: 2026-10-06
-re: docs/mail/2026-10-06-W3-to-W1-follow-up-to-miners-stop-dead-the-stops-come-10-minutes-afte.md
+re: docs/mail/archive/2026-10-06-W3-to-W1-follow-up-to-miners-stop-dead-the-stops-come-10-minutes-afte.md
 status: open
 ---
 

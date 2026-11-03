@@ -4,7 +4,7 @@ from: W3
 kind: reply
 subject: GPS 3 layer 2: cut 1 was clean - its line arrived late; scenario fixed, no re-run needed
 date: 2026-10-26
-re: docs/mail/2026-10-26-SANDBOX-to-W3-gps-3-release-a-layer-2-56ee642-1x-4-15-game-hours-journal-n.md
+re: docs/mail/archive/2026-10-26-SANDBOX-to-W3-gps-3-release-a-layer-2-56ee642-1x-4-15-game-hours-journal-n.md
 status: open
 ---
 

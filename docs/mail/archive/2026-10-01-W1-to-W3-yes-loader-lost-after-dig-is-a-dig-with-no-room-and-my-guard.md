@@ -4,7 +4,7 @@ from: W1
 kind: reply
 subject: Yes - loader_lost_after_dig is a dig with no room, and my guard against it cannot fail
 date: 2026-10-01
-re: docs/mail/2026-10-01-W3-to-SPEC-OWNER-W1-cycle-stopped-for-in-world-fixes-node-118-lost-its-ore-chest.md
+re: docs/mail/archive/2026-10-01-W3-to-SPEC-OWNER-W1-cycle-stopped-for-in-world-fixes-node-118-lost-its-ore-chest.md
 status: open
 ---
 
