@@ -77,7 +77,7 @@ local CFG = {
     -- saveSectorProgress). Local on purpose: a cloud write is a peripheral call.
     SECTOR_PROGRESS_FILE     = "sector_progress.dat",
     SECTOR_PROGRESS_INTERVAL = 60,
-    DISK_TIDY_INTERVAL       = 3600,   -- seconds between disk tidies (tidyDisk); the first runs at boot
+    DISK_TIDY_INTERVAL       = 3600,   -- seconds between disk tidies (disk.tidy); the first runs at boot
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -808,12 +808,18 @@ local _lastDiskLevel = 0          -- 0 fine, 1 warned, 2 below the floor
 -- grew without walking to it in the game. /state carries free space, the file
 -- count and total, and the five largest files. Measured at most once a minute:
 -- fs.list and fs.getSize are cheap but the push runs every few seconds.
-local DISK_REPORT_EVERY = 60000
-local _diskReport, _diskReportAt = nil, nil
-local function diskReport(force)
+--
+-- ONE TOP-LEVEL LOCAL FOR ALL OF THIS, ON PURPOSE (2026-11-03). CC's Lua counts the
+-- locals alive in server.run TOGETHER with this file's top-level locals, and
+-- refuses to load the file past 200 ("function at line N has more than 200 local
+-- variables"); desktop Lua does not, so nothing here notices. As six locals the
+-- disk code took server.run to 203 and the server no longer booted on the game.
+-- tests/test_cc_local_limit.lua now measures it the game's way.
+local disk = { REPORT_EVERY = 60000, CRASH_LOG_KEEP = 8192 }
+function disk.report(force)
     local now = os.epoch("utc")
-    if _diskReport and not force and now - (_diskReportAt or 0) < DISK_REPORT_EVERY then
-        return _diskReport
+    if disk.last and not force and now - (disk.lastAt or 0) < disk.REPORT_EVERY then
+        return disk.last
     end
     local r = { free = -1, files = 0, bytes = 0, largest = {} }
     pcall(function() r.free = fs.getFreeSpace("/") end)
@@ -832,7 +838,7 @@ local function diskReport(force)
     end)
     table.sort(sizes, function(a, b) return a.size > b.size end)
     for i = 1, math.min(5, #sizes) do r.largest[i] = sizes[i] end
-    _diskReport, _diskReportAt = r, now
+    disk.last, disk.lastAt = r, now
     return r
 end
 
@@ -852,8 +858,7 @@ end
 --   * mine_zones.dat (and its .bak) -- the disk fallback of the zone store --
 --     once the cloud store is healthy and holds every zone in it.
 -- Returns the bytes freed.
-local CRASH_LOG_KEEP = 8192
-local function tidyDisk()
+function disk.tidy()
     local freed, notes = 0, {}
     local function size(p)
         local ok, n = pcall(fs.getSize, p)
@@ -897,9 +902,9 @@ local function tidyDisk()
     end
 
     local crashSize = fs.exists(CRASH_LOG_FILE) and size(CRASH_LOG_FILE) or 0
-    if crashSize > CRASH_LOG_KEEP then
+    if crashSize > disk.CRASH_LOG_KEEP then
         local s = readAll(CRASH_LOG_FILE) or ""
-        local tail = s:sub(-CRASH_LOG_KEEP)
+        local tail = s:sub(-disk.CRASH_LOG_KEEP)
         local cut = tail:find("\n", 1, true)
         tail = cut and tail:sub(cut + 1) or tail
         local f = fs.open(CRASH_LOG_FILE, "w")
@@ -4842,6 +4847,15 @@ local function isDue(now, lastRun, intervalSec)
     return (now - lastRun) >= (intervalSec * 1000)
 end
 
+-- The main loop's disk tidy: the first loop turn after boot, then once an hour.
+-- Here and not inline so its pcall's two locals are not server.run's (see disk).
+function disk.tidyIfDue(wc)
+    if not isDue(wc, state.lastTidyWC or 0, CFG.DISK_TIDY_INTERVAL) then return end
+    local ok, err = pcall(disk.tidy)
+    if not ok then logWarn("Disk tidy failed: " .. tostring(err)) end
+    state.lastTidyWC = wc
+end
+
 -- WHY DID THE LAST RUN END? Said once at boot, into the live log.
 --
 -- This used to replay the newest crash.log line as "Restarted after a crash"
@@ -6195,8 +6209,8 @@ function server.run()
                         healthField("zoneStoreHealthy",   state.zoneStoreHealthy) ..
                         healthField("persistenceHealthy", state.persistenceHealthy) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
-                        -- free space, file count and total, and the five largest files (diskReport)
-                        ',"disk":'         .. js(diskReport(), "null", "disk") ..
+                        -- free space, file count and total, and the five largest files (disk.report)
+                        ',"disk":'         .. js(disk.report(), "null", "disk") ..
                         ',"modemOpen":'    .. tostring(modemOpen) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
                         ',"turtleLogs":'   .. js(logsOut,              "{}",  "turtleLogs") .. '}'
@@ -6658,17 +6672,20 @@ function server.run()
                 local hStart = os.epoch("utc")
                 ensureModemLive()
                 local tModem = os.epoch("utc")
+                -- One ok, err pair reused: this block is where server.run holds
+                -- the most locals, and CC refuses the file past 200 counted with
+                -- the top level's (tests/test_cc_local_limit.lua).
                 local ok, err = pcall(registry.checkTimeouts)
                 if not ok then logError("Health check: " .. tostring(err)) end
                 local tTimeouts = os.epoch("utc")
-                local ok2, err2 = pcall(jobQueue.checkGhosts)
-                if not ok2 then logError("Ghost check: " .. tostring(err2)) end
+                ok, err = pcall(jobQueue.checkGhosts)
+                if not ok then logError("Ghost check: " .. tostring(err)) end
                 local tGhosts = os.epoch("utc")
-                local ok3, err3 = pcall(checkOrphanedMiners)
-                if not ok3 then logError("Orphan check: " .. tostring(err3)) end
+                ok, err = pcall(checkOrphanedMiners)
+                if not ok then logError("Orphan check: " .. tostring(err)) end
                 local tOrphans = os.epoch("utc")
-                local ok4, err4 = pcall(registry.autoRefuelIdle)
-                if not ok4 then logError("Auto-refuel: " .. tostring(err4)) end
+                ok, err = pcall(registry.autoRefuelIdle)
+                if not ok then logError("Auto-refuel: " .. tostring(err)) end
                 local tRefuel = os.epoch("utc")
 
                 lastHealthMs = tRefuel - hStart
@@ -6815,12 +6832,7 @@ function server.run()
                 if not ok_ss then logError("Stale support WC: " .. tostring(err_ss)) end
                 lastStaleWC = wc
             end
-            -- The disk tidy: the first loop turn after boot, then once an hour.
-            if isDue(wc, state.lastTidyWC or 0, CFG.DISK_TIDY_INTERVAL) then
-                local ok_d, err_d = pcall(tidyDisk)
-                if not ok_d then logWarn("Disk tidy failed: " .. tostring(err_d)) end
-                state.lastTidyWC = wc
-            end
+            disk.tidyIfDue(wc)
             if isDue(wc, state.lastProgressWC or 0, CFG.SECTOR_PROGRESS_INTERVAL) then
                 local ok_p, err_p = pcall(saveSectorProgress)
                 if not ok_p then logWarn("Sector progress not saved: " .. tostring(err_p)) end
@@ -6988,8 +7000,8 @@ if _G.__CC_SERVER_TEST then
         saveMiningZones = saveMiningZones,
         pushWitness = pushWitness,
         warnIfDiskTight = warnIfDiskTight,
-        diskReport = diskReport,
-        tidyDisk   = tidyDisk,
+        diskReport = disk.report,
+        tidyDisk   = disk.tidy,
         dropBackupAfterVerify = dropBackupAfterVerify,
         -- The continuous-log delta selector. Every interesting property lives
         -- here: the cap that keeps the payload bounded, and the fixed-window

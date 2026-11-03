@@ -99,7 +99,7 @@ return {
 
     ["the disk report goes to /state (SOURCE-ONLY, weaker)"] = function(assert_eq)
         local f = io.open("central_server.lua", "rb"); local src = f:read("*a"); f:close()
-        assert_eq(src:find([[',"disk":'%s*%.%.%s*js%(diskReport]]) ~= nil, true, "the push carries a disk field")
+        assert_eq(src:find([[',"disk":'%s*%.%.%s*js%(disk%.report%(]]) ~= nil, true, "the push carries a disk field")
     end,
 
     -- PART 2: the tidy. It deletes only from a named list, logs bytes freed, and
@@ -214,7 +214,8 @@ return {
 
     ["the tidy runs at boot and once an hour (SOURCE-ONLY, weaker)"] = function(assert_eq)
         local f = io.open("central_server.lua", "rb"); local src = f:read("*a"); f:close()
-        assert_eq(src:find("pcall(tidyDisk)", 1, true) ~= nil, true, "called, protected")
+        assert_eq(src:find("pcall(disk.tidy)", 1, true) ~= nil, true, "called, protected")
         assert_eq(src:find("CFG.DISK_TIDY_INTERVAL", 1, true) ~= nil, true, "on its own interval")
+        assert_eq(src:find("\n%s*disk%.tidyIfDue%(wc%)") ~= nil, true, "from the main loop")
     end,
 }
