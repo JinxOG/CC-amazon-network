@@ -21,7 +21,7 @@ The third is not detectable from outside, which is why staging now asserts its o
 sandbox/t2/scenarios/w1_skip_reason.py).
 
 Exit codes: 0 the run ended on its own or the time limit was reached; 2 the host slept; 3 the fleet went quiet;
-4 the server process is gone.
+4 the server process is gone; 6 the fleet never came up at all.
 """
 import argparse
 import glob
@@ -38,16 +38,29 @@ SLEEP_IDS = (42, 107, 131)   # 42 entering sleep, 107 resumed, 131 firmware S3 t
 
 
 def log_state(run):
-    """(total lines, newest mtime) across the bridge's own log files."""
-    lines, newest = 0, 0.0
+    """(total lines, fleet lines, newest mtime) across the bridge's own log files.
+
+    FLEET lines are counted apart from the total on purpose. The bridge writes
+    its own "busy rollup" once a minute whether or not anything else is alive,
+    so a run whose CC SERVER COMPUTER never started still grows its log
+    steadily and looks healthy to a plain line count. That is not theoretical:
+    run w1-scan-a came up with computer #95 off, pushed nothing for 15 minutes,
+    and sat there until the pin timed out, while every rollup ticked along.
+    A line whose source is a node or the server computer is the only evidence
+    that the fleet itself is running.
+    """
+    lines, fleet, newest = 0, 0, 0.0
     for f in glob.glob(os.path.join(run, "bridge", "logs", "*.txt")):
         try:
             with open(f, encoding="utf8", errors="replace") as h:
-                lines += sum(1 for _ in h)
+                for line in h:
+                    lines += 1
+                    if "node_" in line or "server#" in line or "warehouse#" in line:
+                        fleet += 1
             newest = max(newest, os.path.getmtime(f))
         except OSError:
             pass
-    return lines, newest
+    return lines, fleet, newest
 
 
 def slept_since(epoch):
@@ -78,6 +91,8 @@ def main():
     ap.add_argument("run_id")
     ap.add_argument("--idle-min", type=float, default=10.0, help="minutes of no new fleet log lines before failing")
     ap.add_argument("--poll", type=int, default=120, help="seconds between checks")
+    ap.add_argument("--dead-min", type=float, default=8.0,
+                    help="minutes with NO node/server line before calling the fleet dead")
     ap.add_argument("--max-hours", type=float, default=6.0)
     a = ap.parse_args()
 
@@ -90,19 +105,32 @@ def main():
     except (OSError, ValueError):
         pass
 
-    last_lines, _ = log_state(run)
+    last_lines, last_fleet, _ = log_state(run)
     last_growth = time.time()
-    print("watching %s (idle limit %.0f min, poll %ds)" % (a.run_id, a.idle_min, a.poll), flush=True)
+    print("watching %s (idle limit %.0f min, fleet silence limit %.0f min, poll %ds)"
+          % (a.run_id, a.idle_min, a.dead_min, a.poll), flush=True)
 
     while time.time() - t0 < a.max_hours * 3600:
         time.sleep(a.poll)
         now = time.time()
-        lines, newest = log_state(run)
-        if lines > last_lines:
-            last_lines, last_growth = lines, now
+        lines, fleet, newest = log_state(run)
+        if fleet > last_fleet:
+            last_fleet, last_growth = fleet, now
+        elif lines > last_lines:
+            last_lines = lines
         idle = (now - last_growth) / 60.0
-        print("%s  +%5.1f min  %6d fleet lines  quiet %4.1f min"
-              % (time.strftime("%H:%M:%S"), (now - t0) / 60.0, lines, idle), flush=True)
+        print("%s  +%5.1f min  %6d fleet lines (%d total)  quiet %4.1f min"
+              % (time.strftime("%H:%M:%S"), (now - t0) / 60.0, fleet, lines, idle), flush=True)
+
+        # The fleet never came up at all. Separate from QUIET because the cause
+        # and the response are different: a run with no fleet lines has nothing
+        # to measure and should be restarted, not waited on.
+        if fleet == 0 and (now - t0) / 60.0 >= a.dead_min:
+            print("NO FLEET: %.1f min in and not one line from a node or the server computer "
+                  "(%d bridge lines). The CC server computer is probably off -- check "
+                  "`computercraft dump` for it before trusting anything in this run."
+                  % ((now - t0) / 60.0, lines), flush=True)
+            return 6
 
         slept = slept_since(t0)
         if slept:
