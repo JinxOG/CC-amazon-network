@@ -79,36 +79,75 @@ return {
     sim:dispatch{ type = "ORDER_MINE",
       params = { x1 = 1920, z1 = -2624, x2 = 1984, z2 = -2624, minerCount = 2 } }
 
-    local done = sim:run_until(function() return #complete.lines >= 1 end, 8 * 3600 * 1000)
-    local t1 = sim.clock:now()
-
-    local mined = 0
-    for name, n in pairs(sim.sched.storage.amounts) do
-      if Drops.is_ore_item(name) then mined = mined + n - (sim.initial_storage[name] or 0) end
+    local function oreDelivered()
+      local n = 0
+      for name, amount in pairs(sim.sched.storage.amounts) do
+        if Drops.is_ore_item(name) then n = n + amount - (sim.initial_storage[name] or 0) end
+      end
+      return n
     end
 
-    sim.results.job_completed   = done and true or false
-    sim.results.job_ms          = t1 - t0
-    sim.results.job_minutes     = string.format("%.1f", (t1 - t0) / 60000)
-    sim.results.ore_gained      = mined
+    -- TWO FIGURES, BECAUSE ONE OF THEM MIGHT NOT EXIST.
+    --
+    -- The clean comparison is fixed WORK: run the job to completion on both
+    -- arms and compare how long it took, with the ore delivered coming out the
+    -- same as the check that nothing was traded away. That needs the job to
+    -- finish, and real_world_three_sectors -- the same zone, the same two
+    -- miners -- does NOT assert that it finishes: it runs six hours and checks
+    -- the ore. Nobody has established that this zone completes inside any
+    -- particular budget, and the first sector alone held 2013 ores at one
+    -- level on the test server.
+    --
+    -- So the fixed-TIME figure is taken first and always: ore delivered at a
+    -- six-hour checkpoint, which is a throughput and exists whatever happens.
+    -- Then the run continues to a generous ceiling in case the job does
+    -- complete, which gives the fixed-work figure as well. Neither is asserted
+    -- as a pass or fail -- this file measures, it does not judge -- but a run
+    -- that produced no ore at all has measured nothing, and that IS asserted.
+    local CHECKPOINT = 6 * 3600 * 1000
+    local CEILING    = 24 * 3600 * 1000
+
+    local doneEarly = sim:run_until(function() return #complete.lines >= 1 end, CHECKPOINT)
+    sim.results.ore_at_6h = oreDelivered()
+
+    local done = doneEarly
+    if not done then
+      done = sim:run_until(function() return #complete.lines >= 1 end, CEILING - CHECKPOINT)
+    end
+    local t1 = sim.clock:now()
+
+    sim.results.job_completed = done and true or false
+    sim.results.ore_total     = oreDelivered()
+    if done then
+      sim.results.job_ms      = t1 - t0
+      sim.results.job_minutes = string.format("%.1f", (t1 - t0) / 60000)
+    else
+      sim.results.job_ms      = "not completed within 24 h"
+      sim.results.job_minutes = "n/a"
+    end
     for k, cap in pairs(problems) do
       sim.results["problem_" .. (k:gsub("%W", "_"))] = #cap.lines
     end
 
-    -- The job has to FINISH for the time to mean anything: a budget that ran
-    -- out gives the budget back, not a duration, and two arms that both hit the
-    -- ceiling would compare as equal however different they are.
-    sim:expect(done,
-      "the job completed inside the 8-hour budget, so its duration is a "
-      .. "duration and not the budget (completed: " .. tostring(done)
-      .. ", elapsed " .. sim.results.job_minutes .. " min)")
+    -- HOW TO READ THE PAIR.
+    --   both arms completed  -> compare job_minutes; ore_total must match, or
+    --                           the faster arm bought its speed with lost ore.
+    --   neither completed    -> compare ore_at_6h; more ore in the same time is
+    --                           the same claim in the other direction.
+    --   one completed        -> compare ore_at_6h only. A completion time
+    --                           against a timeout is not a comparison.
+    -- And in every case check the problem_ counts: a mining change that trades
+    -- time for refusals, aborts or re-mines has not saved anything.
 
-    -- And it has to have mined something, or the time is the time to do
-    -- nothing. real_world_three_sectors sets its bar at 1000 blocks on this
-    -- same zone; the same bar is used here so the two are comparable.
-    sim:expect(mined > 1000,
-      "and the miners actually worked the zone (" .. mined .. " ore blocks "
-      .. "delivered) -- the figure to compare between arms, and it must come "
-      .. "out the SAME on both: a faster job that mines less is not faster")
+    -- The only thing asserted. real_world_three_sectors sets its bar at 1000
+    -- blocks on this same zone, so the same bar is used and the two stay
+    -- comparable. Below it, the miners did not work the zone and neither figure
+    -- above means anything.
+    sim:expect(sim.results.ore_at_6h > 1000,
+      "the miners worked the zone within the 6-hour checkpoint ("
+      .. sim.results.ore_at_6h .. " ore blocks delivered; "
+      .. (done and ("job completed in " .. sim.results.job_minutes .. " min")
+              or "job did not complete within 24 h")
+      .. ") -- below this bar there is nothing to compare")
   end,
 }
