@@ -560,6 +560,28 @@ function(assert_eq)
     local dumpAt   = body:find("dumpOres(", 1, true)
     assert_eq(rescueAt ~= nil and dumpAt ~= nil and rescueAt < dumpAt, true,
         "rescueProtectedItems must still come before the bank")
+
+    -- AND IT HAS TO NOTICE THE FUEL BUFFER. The "am I carrying anything?" scan
+    -- ran over the mining slots (5-13) only, so a miner whose single stranded
+    -- item sat in slot 14 returned to its bay, concluded it carried nothing and
+    -- left again with the stack aboard -- node_119 with a full stack of
+    -- redstone there (user screenshot, 2026-10-03). Making the dump FILTER
+    -- willing to take slot 14 does nothing on its own: this early return fires
+    -- first, so both halves are needed and both are asserted.
+    assert_eq(body:find("turtle.getItemCount(S_COAL) > 0", 1, true) ~= nil, true,
+        "the carrying check must look at the fuel buffer too, or the dock tidy "
+        .. "returns before the bank it was going to do")
+    -- The NEGATION is asserted, not just the call. A mutant that dropped the
+    -- `not` survived an assertion on the call alone: a buffer full of coal then
+    -- counts as cargo, and every docked miner deploys the ore chest to bank
+    -- nothing. Coal there is the buffer working, not cargo.
+    assert_eq(body:find("if not mine_flow.isFuelItem(it and it.name) then carrying = true end",
+        1, true) ~= nil, true,
+        "the buffer counts as carried only when what is in it will NOT burn")
+    local coalAt = body:find("turtle.getItemCount(S_COAL) > 0", 1, true)
+    local retAt  = body:find("if not carrying then return end", 1, true)
+    assert_eq(coalAt ~= nil and retAt ~= nil and coalAt < retAt, true,
+        "and it must be checked BEFORE the early return, not after it")
 end
 
 -- noDig has to survive THREE hops to reach the bank:

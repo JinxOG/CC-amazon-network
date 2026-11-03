@@ -507,6 +507,14 @@ MUTANTS = [
      [('            local coalSlotHoldingFuel =\n                s == S_COAL and mine_flow.isFuelItem(item and item.name)',
        '            local coalSlotHoldingFuel = s == S_COAL')], C_SLOT),
 
+    ("the dock tidy stops noticing the fuel buffer", "ore_turtle.lua",
+     [('    if not carrying and turtle.getItemCount(S_COAL) > 0 then',
+       '    if false then')], DT_WIRED),
+
+    ("the dock tidy treats coal in the buffer as cargo", "ore_turtle.lua",
+     [('        if not mine_flow.isFuelItem(it and it.name) then carrying = true end',
+       '        if mine_flow.isFuelItem(it and it.name) then carrying = true end')], DT_WIRED),
+
     ("the coal is banked and the junk is kept", "ore_turtle.lua",
      [('                s == S_COAL and mine_flow.isFuelItem(item and item.name)',
        '                s == S_COAL and not mine_flow.isFuelItem(item and item.name)')], C_SLOT),

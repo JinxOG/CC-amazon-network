@@ -1041,6 +1041,17 @@ local function tidyAtDock()
     for s = MINE_FIRST, MINE_LAST do
         if turtle.getItemCount(s) > 0 then carrying = true; break end
     end
+    -- AND THE FUEL BUFFER, when what is in it will not burn. This scan covered
+    -- slots 5-13 only, so a miner whose one stranded item sat in slot 14 --
+    -- which is exactly the fault this is here for -- returned to its bay, found
+    -- "nothing carried", and left again with the stack still aboard, however
+    -- willing the dump filter downstream had become. Fixing the filter without
+    -- this fixes nothing at the dock. Coal is not "carried": it is the buffer
+    -- doing its job.
+    if not carrying and turtle.getItemCount(S_COAL) > 0 then
+        local it = turtle.getItemDetail(S_COAL)
+        if not mine_flow.isFuelItem(it and it.name) then carrying = true end
+    end
     if not carrying then return end
 
     -- Never dig here -- but that is a reason not to DIG, not a reason not to
