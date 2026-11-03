@@ -127,13 +127,14 @@ return {
 
     ["a hook that fails does not stop the move"] =
     function(assert_eq)
-        local ok
+        local ran, ok
         local base = fresh({})
         local lines = captured(function()
             base.setDigRoomFn(function() error("chest missing") end)
-            ok = base.move.forward()
+            ran, ok = pcall(base.move.forward)
             base.setDigRoomFn(nil)
         end)
+        assert_eq(ran, true, "the hook's failure must not escape the move (" .. tostring(not ran and ok or "") .. ")")
         assert_eq(ok, true, "a turtle that cannot bank must still be able to move")
         assert_eq(count(lines, "Dig make-room hook failed"), 1, "and it says so")
     end,

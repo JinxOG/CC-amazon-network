@@ -543,7 +543,7 @@ MUTANTS = [
      [('    if why == "would_dig_turtle" then return false, why end', '')], A_SAFE),
 
     ("the caller treats a refusal as not-applicable", "ore_turtle.lua",
-     [('    if near ~= nil then return near, nearWhy end', '    if near then return near, nearWhy end')], A_SAFE),
+     [('    if near ~= nil then return near, nearWhy, "beside" end', '    if near then return near, nearWhy, "beside" end')], A_SAFE),
 
     # ── The miner's crash line is shipped before the reboot (§5.2 card 5) ──
     ("the miner's fatal line is queued and never sent", "ore_turtle.lua",
@@ -619,13 +619,13 @@ MUTANTS = [
      [('    if #names == 0 then return "no reason recorded" end\n', '')], N_RENDER),
 
     ("the miner discards move.to's reason again", "ore_turtle.lua",
-     [('    local ok1, why1 = base.move.to(ore.x, p.y, ore.z)\n    if not ok1 then return false, why1 end',
-       '    local ok1 = base.move.to(ore.x, p.y, ore.z)\n    if not ok1 then return false end')],
+     [('    local ok1, why1 = base.move.to(ore.x, p.y, ore.z)\n    if not ok1 then return false, why1, "stepped" end',
+       '    local ok1 = base.move.to(ore.x, p.y, ore.z)\n    if not ok1 then return false, nil, "stepped" end')],
      N_REASON),
 
     ("the skip line goes back to a bare count", "ore_turtle.lua",
-     [('            skipped, attempted, #ores, belowFloor, MIN_ORE_Y,\n            mine_flow.renderSkipReasons(skipReasons)))',
-       '            skipped, attempted, #ores, belowFloor, MIN_ORE_Y,\n            "bedrock/fenced/blocked"))')],
+     [('            skipped, attempted, scanned, belowFloor, MIN_ORE_Y,\n            mine_flow.renderSkipReasons(skipReasons)))',
+       '            skipped, attempted, scanned, belowFloor, MIN_ORE_Y,\n            "bedrock/fenced/blocked"))')],
      N_REASON),
 
     ("the ore chest is never recorded before it is placed", "mine_flow.lua",
@@ -1241,11 +1241,11 @@ MUTANTS = [
 
     ("the late-rescan fix leaves no trace", "central_server.lua",
      [('                logInfo(string.format(\n                    "Late rescan (%d,%d)',
-       '                (function() end)(string.format(\n                    "Late rescan (%d,%d)')], Z_LATE_RS),
+       '                ;(function() end)(string.format(\n                    "Late rescan (%d,%d)')], Z_LATE_RS),
 
     ("sendComplete logs nothing", "turtle_base.lua",
      [('    logInfo(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),',
-       '    (function() end)(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),')], SC_LINE),
+       '    ;(function() end)(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),')], SC_LINE),
 
     ("sendComplete never reports a failed send", "turtle_base.lua",
      [('        sent and "" or " -- the send FAILED (no modem)"))', '        ""))')], SC_LINE),
@@ -2371,7 +2371,7 @@ MUTANTS = [
     # manifest test whose scanner finds nothing agrees with every manifest.
     ("the require scanner matches nothing", "tests/test_deploy_manifest.lua",
      [("    for name in src:gmatch('require%s*%(%s*\"([%w_]+)\"') do out[#out + 1] = name end",
-       "    if src then return out end")], MANIFEST),
+       "    if src then return out, guarded end")], MANIFEST),
 
     ("the role parse finds nothing", "tests/test_deploy_manifest.lua",
      [("    for name, body in rolesBlock:gmatch(", '    for name, body in (""):gmatch(')], MANIFEST),

@@ -597,16 +597,20 @@ return {
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = { copy(S2) },
             lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = false, jobId = JA } } })
-        T.jobQueue.reassign(JA, A, "boot_recovery")
-        local kept = T.state.miningZones[JA]
-        local phase = kept and kept.phase
-        local saidKeep = logged(T, "keeps its mine zone")
-        -- The job comes back to a miner (here the same one, rebooted and home).
-        T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "IN_PROGRESS", A
-        T.state.registry[A].jobId, T.state.registry[A].status = JA, proto.STATUS.WORKING
-        local got = request(T, A, JA)
-        local resurveyed = logged(T, "3/3 sectors remaining")
+        local kept, phase, saidKeep, got, resurveyed
+        local ran, why = pcall(function()
+            T.jobQueue.reassign(JA, A, "boot_recovery")
+            kept = T.state.miningZones[JA]
+            phase = kept and kept.phase
+            saidKeep = logged(T, "keeps its mine zone")
+            -- The job comes back to a miner (here the same one, rebooted and home).
+            T.state.jobs[JA].status, T.state.jobs[JA].assignedTo = "IN_PROGRESS", A
+            T.state.registry[A].jobId, T.state.registry[A].status = JA, proto.STATUS.WORKING
+            got = request(T, A, JA)
+            resurveyed = logged(T, "3/3 sectors remaining")
+        end)
         restore()
+        assert_eq(ran, true, "the requeue and the next request run without raising (" .. tostring(why) .. ")")
         assert_eq(kept ~= nil, true, "the runtime zone is kept: the store does not know the survey is done")
         assert_eq(phase, "MINE")
         assert_eq(saidKeep ~= nil, true, "and it says so -- the VALIDATION line")
@@ -945,10 +949,11 @@ return {
         local w = fs.open("crash.log", "w")
         w.write("[1788683956366 2026-09-06 01:39:16] server.run crashed: Terminated\n")
         w.close()
-        local verdict = server.bootReport(1790700000000)
+        local reported, verdict = pcall(server.bootReport, 1790700000000)
         local blamed = logged(T, "Restarted after a crash")
         local said = logged(T, "undated against this restart")
         restore()
+        assert_eq(reported, true, "a missing stamp is reported, not raised on (" .. tostring(not reported and verdict or "") .. ")")
         assert_eq(verdict, "unknown", "without a stamp no crash on record can be dated")
         assert_eq(blamed, nil, "so none may be blamed")
         assert_eq(said ~= nil, true, "the newest one is still shown, labelled as undated")
@@ -2208,9 +2213,10 @@ return {
             phase = "MINE", pending = { copy(S3) },
             lastAssignments = { [A] = { x = S1.x, z = S1.z, isSurvey = true } },  -- 1.9.109 shape
         })
-        done(T, A, JA, S1)
+        local counted, why = pcall(done, T, A, JA, S1)
         local line = logged(T, "Late completion")
         restore()
+        assert_eq(counted, true, "an unstamped order is handled, not raised on (" .. tostring(not counted and why or "") .. ")")
         assert_eq(zone.done, 1, "no stamp: the old rule applies, unchanged")
         assert_eq(line, nil, "and nothing is claimed about a phase nobody recorded")
     end,

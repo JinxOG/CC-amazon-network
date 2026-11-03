@@ -119,8 +119,10 @@ end
 -- source we started from.
 local function runUpdater(disk, remote, log, depth)
     depth = (depth or 0) + 1
-    assert(depth <= 4, "updater relaunched " .. depth .. " times — not converging")
     log.runs = depth
+    -- A runaway relaunch stops here and is left in log.runs for the test's own
+    -- assert_eq to fail on; raising would be an error, not a caught mutant.
+    if depth > 4 then return end
 
     local src = disk["updater.lua"]
     assert(src, "no updater.lua on the fake disk")
@@ -202,6 +204,7 @@ suite["an updater that predates a new module still ships it"] = function(assert_
         "and updated itself (stripped, as every Lua file is written)")
     assert_eq(log.rebooted, true,
         "and rebooted, because everything it set out to write is on disk")
+    assert_eq(log.runs, 2, "relaunching once, into the file it just wrote, and no more")
 end
 
 suite["the relaunch happens before any role file lands"] = function(assert_eq)
