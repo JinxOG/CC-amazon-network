@@ -498,7 +498,7 @@ def main():
         if tick:
             ctx.tickrate(tick)
         scenario.steps(ctx)
-    except Exception as e:  # noqa: BLE001
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - run.pin raises SystemExit on a timeout; the report and the stop must still happen
         error = "%s: %s" % (type(e).__name__, e)
     host_snapshot("at end", ctx)
     tools = tools_output(since_iso)
