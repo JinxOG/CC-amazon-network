@@ -1434,16 +1434,23 @@ local function digAdjacentOre(ore)
     return nil
 end
 
+-- Returns reached, why, how. `how` is "beside" when the ore was dug from where
+-- the miner already stood and "stepped" when it had to move in, and it exists
+-- because the adjacent-block card asks how OFTEN the shortcut applies -- a
+-- question the first measurement could not answer. Both arms of that run came
+-- back byte-identical (6645 ore, 231.5 min), which says either the saving is
+-- exactly nil or the path never fired, and nothing in the log could tell those
+-- apart. A count that is reported cannot be mistaken for a count that is zero.
 local function navToOre(ore, jobId)
     checkFuel(jobId)
     local near, nearWhy = digAdjacentOre(ore)
-    if near ~= nil then return near, nearWhy end
+    if near ~= nil then return near, nearWhy, "beside" end
     local p = base.getPos()
     local ok1, why1 = base.move.to(ore.x, p.y, ore.z)
-    if not ok1 then return false, why1 end
+    if not ok1 then return false, why1, "stepped" end
     checkFuel(jobId)
     local ok2, why2 = base.move.to(ore.x, ore.y, ore.z)
-    return ok2, why2
+    return ok2, why2, "stepped"
 end
 
 -- Returns mined, byType, abortReason. abortReason is non-nil only when the
@@ -1479,6 +1486,7 @@ local function mineOreList(ores, jobId, sx, sz, sy, scanTotal, floorDropped)
 
     local SCAN_BATCH = 25   -- send one SECTOR_SCAN per N ores to avoid modem flood
     local mined       = 0
+    local beside      = 0   -- of those, dug without stepping in
     local skipped     = 0
     local skipReasons = {}  -- bucket -> count; see mine_flow.classifySkip
     local byType      = {}
@@ -1508,7 +1516,8 @@ local function mineOreList(ores, jobId, sx, sz, sy, scanTotal, floorDropped)
         local p = base.getPos()
         local ore = mine_flow.takeNearest(remaining, p)
         if inventoryFull() then dumpOres() end
-        local reached, whyNot = navToOre(ore, jobId)
+        local reached, whyNot, how = navToOre(ore, jobId)
+        if reached and how == "beside" then beside = beside + 1 end
         if not reached then
             -- Includes geofence refusals: an ore outside the placed loader's
             -- footprint is simply not minable this sector. Skipping it is
@@ -1537,6 +1546,16 @@ local function mineOreList(ores, jobId, sx, sz, sy, scanTotal, floorDropped)
             "[MINER] Skipped %d of %d attempted (scan %d, %d below Y=%d): %s",
             skipped, attempted, scanned, belowFloor, MIN_ORE_Y,
             mine_flow.renderSkipReasons(skipReasons)))
+    end
+    -- How often the shortcut applied, reported rather than inferred. The
+    -- adjacent-block card asks exactly this, and its first measurement could
+    -- not answer it: both arms came back byte-identical, which is what "the
+    -- saving is nil" and "the path never fired" both look like from outside.
+    -- Printed only when something was mined, so an empty sector stays quiet.
+    if mined > 0 then
+        print(string.format(
+            "[MINER] Mined %d: %d dug from beside, %d stepped into",
+            mined, beside, mined - beside))
     end
     return mined, byType, nil
 end
