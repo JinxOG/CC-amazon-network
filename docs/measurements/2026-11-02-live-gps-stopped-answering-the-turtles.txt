@@ -1,9 +1,32 @@
 The live fleet's GPS stopped working for every turtle on 2026-10-29, and the
 server's own GPS check still reports it healthy.
 
-CAUSE: NOT DETERMINED. This is a measurement, not a diagnosis. The mechanism is
-for whoever owns the GPS hosts; what follows is only what the logs and /state
-say, and the two disagree.
+CAUSE: ESTABLISHED (operator, 2026-11-03). Nobody logged in for more than
+seven days, so the chunks holding the GPS host computers unloaded and the hosts
+stopped running. The turtles could not get a fix because there was nothing to
+answer them. Logging back in reloaded those chunks and the failures stopped.
+
+AND SECTION 4 BELOW WAS WRONG. It made much of an apparent contradiction --
+"something answers the server and nothing answers the turtles" -- and there was
+no contradiction. The /state readings quoted there were taken at 02:27Z and
+05:32Z on 11-03, BOTH AFTER the last failure (before 01:30Z), so they describe
+the world after the fix. What the server said DURING the outage is exactly what
+unloaded hosts produce, and it said it every day:
+
+  10-29 21:57  GPS CHECK FAILED: no_fix: 0 of 4 GPS hosts answered
+  10-30 12:03  ...0 of 4...   10-30 19:55  ...0 of 4...   10-30 19:56  ...0 of 4...
+  10-31 12:03  ...0 of 4...   11-01 13:03  ...0 of 4...   11-02 13:05  ...0 of 4...
+
+Zero of four, consistently. The server and the turtles agreed throughout. The
+error was mine: comparing a live reading against log lines from hours earlier
+and calling the mismatch a finding. Compare like with like, or do not compare.
+
+It also explains the detail flagged as odd below -- only about one check failure
+a day. That check runs when the server has a job to dispatch, plus once at the
+daily restart, and nothing was being ordered.
+
+The measurements themselves stand; only the inference drawn in section 4 does
+not. They are kept below as taken.
 
 MEASURED 2026-11-02/11-03 from the live bridge (http://192.168.86.35:3000),
 read-only, via tools/logq.py. Nothing was deployed and nothing was changed.

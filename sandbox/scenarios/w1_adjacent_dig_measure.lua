@@ -95,6 +95,48 @@ return {
 
     sim:run_for(10 * 60000)                      -- boot, find GPS, register
 
+    -- PLANT THE ORE, because this world has none. Measured on the first
+    -- synthetic attempt: 44 scans of these four sectors, every one "Found 0 ore
+    -- blocks", and the job finished in 28.7 minutes having delivered nothing.
+    -- There was no throughput to compare and no vein for the shortcut to apply
+    -- to.
+    --
+    -- Planting is the better experiment anyway. What this card turns on is vein
+    -- GEOMETRY -- whether standing one cell further out costs back the move it
+    -- saved -- so setting that deliberately beats hoping a world supplies it.
+    -- Twenty 2x2x2 clusters: eight contiguous blocks each, so every block in a
+    -- cluster is adjacent to another, which is the shape real ore grows in
+    -- (veins of 5-10) and the shape the shortcut is meant to exploit. If the
+    -- adjacent dig cannot pay here it cannot pay anywhere, which makes a null
+    -- result meaningful rather than merely absent.
+    --
+    -- Fixed coordinates, not a random scatter: both arms must plant the SAME
+    -- ore or the comparison is between two different worlds. All of it sits at
+    -- y 0..1, inside the Y=0 scan level's reach and far above the -58 dig
+    -- floor, so the below-floor split cannot touch it.
+    local planted = 0
+    for gx = 0, 4 do
+      for gz = 0, 3 do
+        local ox, oz = 118 + gx * 5, -2826 + gz * 5
+        for dx = 0, 1 do
+          for dy = 0, 1 do
+            for dz = 0, 1 do
+              local x, y, z = ox + dx, dy, oz + dz
+              if sim.world:get(x, y, z) == "minecraft:stone" then
+                sim:set_block(x, y, z, "minecraft:iron_ore")
+                planted = planted + 1
+              end
+            end
+          end
+        end
+      end
+    end
+    sim.results.planted_ore = planted
+    sim:expect(planted >= 150,
+      "planted a vein field for the miners to work (" .. planted .. " of 160 "
+      .. "blocks in 20 clusters of 8) -- with nothing planted this world is "
+      .. "bare and neither arm measures anything")
+
     local t0 = sim.clock:now()
     sim:dispatch{ type = "ORDER_MINE",
       params = { x1 = 128, z1 = -2816, x2 = 160, z2 = -2784, minerCount = 2 } }
@@ -163,11 +205,11 @@ return {
     -- blocks on this same zone, so the same bar is used and the two stay
     -- comparable. Below it, the miners did not work the zone and neither figure
     -- above means anything.
-    -- The bar is 200, not real_world_three_sectors' 1000: that figure was set
+    -- The bar is 150 against 160 planted, not real_world_three_sectors' 1000: that
     -- on the imported world's zone and means nothing here. 200 blocks over four
     -- synthetic sectors is low enough not to fail a working run and high enough
     -- that a run which mined almost nothing cannot pass.
-    sim:expect(sim.results.ore_at_6h > 200,
+    sim:expect(sim.results.ore_at_6h > 150,
       "the miners worked the zone within the 6-hour checkpoint ("
       .. sim.results.ore_at_6h .. " ore blocks delivered; "
       .. (done and ("job completed in " .. sim.results.job_minutes .. " min")
