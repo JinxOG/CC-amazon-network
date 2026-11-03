@@ -8,10 +8,16 @@ here with a deliberate break and the name of the test that must go red for it.
 
     python tests/mutate_logship.py
 
-Three outcomes, and the middle one is the reason this file exists rather than a
+Four outcomes, and SURVIVED is the reason this file exists rather than a
 handful of manual edits:
 
-  KILLED     the intended test went red. What you want.
+  KILLED     the intended test PASSED on unmutated code and then FAILED AN
+             ASSERTION under the mutant. What you want. (Until 2026-11-02 any
+             red counted, so a test that errored "killed" every mutant aimed at
+             it without having caught anything.)
+  UNCHECKED  the intended test could not have caught it: red before the
+             mutation, missing, did not run, or ERRORED under the mutant (tests/
+             run.lua prints "ERROR" on a test that blew up). Not a pass.
   SURVIVED   the code was broken and every test stayed green. A gap -- unless
              the mutant is EQUIVALENT (see READY_GUARD_EQUIVALENT below), in
              which case surviving is correct and the entry should say so.
@@ -2393,6 +2399,40 @@ def run_suite():
     return r.stdout + r.stderr
 
 
+# EACH TEST'S OWN OUTCOME (2026-11-02, W3). tests/run.lua prints "PASS  <name>", or "FAIL  <name>" with the reason on
+# the next line -- "      ERROR <msg>" when the test blew up rather than failed an assert_eq. Returns
+# {name: ("pass" | "assert" | "error", detail)}.
+def parse_results(output):
+    res, lines = {}, output.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("PASS  "):
+            res[line[6:]] = ("pass", "")
+        elif line.startswith("FAIL  "):
+            detail = lines[i + 1].strip() if i + 1 < len(lines) and lines[i + 1].startswith("      ") else ""
+            kind = "error" if detail.startswith("ERROR ") else "assert"
+            res[line[6:]] = (kind, detail[6:] if kind == "error" else detail)
+    return res
+
+
+# THE VERDICT FOR ONE MUTANT (the spec owner's ruling, 2026-11-02, W3's card "The mutation harness counts an erroring
+# test as a kill"). KILLED only if the intended test PASSED on unmutated code and then FAILED BY ASSERTION. A test that
+# errors is red without having caught anything: until 4bc847d all 24 source-reading tests raised "bad argument #1 to
+# read" before any assertion, and four mutants were scored KILLED by one of them. Returns (verdict, reason).
+def verdict(baseline, after, target):
+    if target not in baseline:
+        return "UNCHECKED", "no test named %r ran on unmutated code" % target
+    if baseline[target][0] != "pass":
+        return "UNCHECKED", "the intended test was already red before the mutation (%s: %s)" % baseline[target]
+    if target not in after:
+        return "UNCHECKED", "the intended test did not run under the mutant"
+    kind, detail = after[target]
+    if kind == "pass":
+        return "SURVIVED", "the intended test stayed green"
+    if kind == "error":
+        return "UNCHECKED", "the intended test errored instead of failing an assertion: %s" % detail
+    return "KILLED", detail
+
+
 # A RUN THAT IS KILLED LEAVES A MUTANT BEHIND, unless it leaves this too.
 #
 # Each mutation is reverted in a `finally`, and a killed process never reaches
@@ -2462,14 +2502,18 @@ def main():
     # that is red before the mutation is red after it too. Thirteen mutants were
     # certified by a test that could not pass. A red suite makes "the intended
     # test went red" mean nothing at all.
-    red = [l for l in run_suite().splitlines() if l.startswith("FAIL  ")]
+    #
+    # PER TEST since 2026-11-02: each mutant's intended test must itself pass on
+    # unmutated code (verdict() above), so one red test elsewhere no longer stops
+    # the run -- it is listed, and any mutant aimed at it is UNCHECKED.
+    baseline = parse_results(run_suite())
+    red = sorted(n for n, (k, _) in baseline.items() if k != "pass")
     if red:
-        print("BASELINE NOT GREEN -- refusing to mutate. Fix these first:")
-        for l in red:
-            print("  " + l)
-        return 1
+        print("BASELINE: %d test(s) red on unmutated code; a mutant aimed at one is UNCHECKED:" % len(red))
+        for n in red:
+            print("  %s (%s)" % (n, baseline[n][0]))
 
-    problems = []
+    problems, killed = [], 0
     for label, path, steps, target in selected:
         # The RAW bytes, restored verbatim in the finally below. Reading in text
         # mode turns CRLF into LF, and writing that back left every mutated
@@ -2497,12 +2541,16 @@ def main():
             if not ok:
                 problems.append(f"MALFORMED  {label}: mutant does not compile -- {err}")
                 continue
-            red = [l for l in run_suite().splitlines() if l.startswith("FAIL  ")]
-            if any(l.startswith("FAIL  " + target) for l in red):
+            after = parse_results(run_suite())
+            v, why = verdict(baseline, after, target)
+            red = sorted(n for n, (k, _) in after.items() if k != "pass")
+            if v == "KILLED":
+                killed += 1
                 print(f"KILLED     {label}  ({len(red)} red)")
+            elif v == "SURVIVED":
+                problems.append(f"SURVIVED   {label}: '{target}' stayed green; red were {red}")
             else:
-                problems.append(
-                    f"SURVIVED   {label}: '{target}' stayed green; red were {red}")
+                problems.append(f"UNCHECKED  {label}: {why}")
         finally:
             write_file(path, raw)
             if os.path.exists(INFLIGHT):
@@ -2511,8 +2559,10 @@ def main():
     print()
     if problems:
         print("\n".join(problems))
+        print()
+        print("%d of %d mutants killed by an assertion in their intended test" % (killed, len(selected)))
         return 1
-    print(f"{len(selected)} mutants, every one killed by its intended test")
+    print(f"{len(selected)} mutants, every one killed by an assertion in its intended test")
     return 0
 
 

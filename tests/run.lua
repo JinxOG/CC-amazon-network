@@ -43,12 +43,26 @@ local files = {
     "tests.test_gps3_journal",
 }
 
+-- Modules named on the command line run instead of the list (lua tests/run.lua tests.test_x ...).
+if arg and #arg > 0 then files = { table.unpack and table.unpack(arg) or unpack(arg) } end
+
 local passed, failed = 0, 0
+
+-- AN ASSERTION IS NOT AN ERROR (2026-11-02, W3, the mutation-harness card). A
+-- failed assert_eq is raised as a marked value; anything else that stops a test
+-- -- a nil call, a bad path, Lua 5.3 spelling on this 5.2 interpreter -- is an
+-- ERROR, and is printed as one, so tests/mutate_logship.py can tell a test that
+-- caught a mutant from a test that blew up. The assertion's line is unchanged.
+local ASSERTION = {}
+ASSERTION.__index = ASSERTION
+ASSERTION.__tostring = function(e) return e.text end
 
 local function assert_eq(got, want, msg)
     if got ~= want then
-        error(string.format("%s: expected %s, got %s",
-            msg or "assertion", tostring(want), tostring(got)), 2)
+        local info = debug and debug.getinfo and debug.getinfo(2, "Sl")
+        local where = info and (info.short_src .. ":" .. tostring(info.currentline) .. ": ") or ""
+        error(setmetatable({ text = where .. string.format("%s: expected %s, got %s",
+            msg or "assertion", tostring(want), tostring(got)) }, ASSERTION), 0)
     end
 end
 
@@ -65,7 +79,11 @@ for _, mod in ipairs(files) do
                 print("PASS  " .. name)
             else
                 failed = failed + 1
-                print("FAIL  " .. name .. "\n      " .. tostring(err))
+                if getmetatable(err) == ASSERTION then
+                    print("FAIL  " .. name .. "\n      " .. tostring(err))
+                else
+                    print("FAIL  " .. name .. "\n      ERROR " .. tostring(err))
+                end
             end
         end
     end
