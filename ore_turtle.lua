@@ -60,6 +60,12 @@ local SKY_Y        = 200   -- altitude for inter-sector sky travel
 local SURVEY_TRAVEL_Y = 175  -- survey/first-sector travel altitude
 local FUEL_WARN    = 3000  -- self-refuel threshold
 local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
+-- A turtle standing on the scan square is almost always one passing through a
+-- shared shaft, so the level is retried before the sector is given up. Three
+-- tries five seconds apart: long enough for a transit, short enough that a
+-- parked turtle is not waited on for minutes.
+local SCAN_RETRIES    = 3
+local SCAN_RETRY_WAIT = 5
 local SCANNER_NAME = equipment.ITEMS.SCANNER
 local MIN_ORE_Y    = -58   -- 1.18+ world: bedrock ends at Y=-60; safe floor is -58
 
@@ -1226,11 +1232,21 @@ local function recoverPlacedScanner()
     end
 end
 
+-- Returns ores, failReason. failReason is nil ONLY when the scanner was placed,
+-- the scan ran and the result was read -- an empty list with no reason is a
+-- level that genuinely holds no ore.
+--
+-- It used to return a bare {} from seven different refusals, every one of them
+-- rendering exactly like empty ground, and the caller counted the level as
+-- scanned. The sector then completed as done with 0 ore and the server never
+-- re-queued it: job_0058, node_138 reported (1888,-2912) done with 0 ore while
+-- node_139 had found 81 there (W3, 2026-09-16). Refusing to dig a turtle is
+-- correct and stays; what was wrong was the accounting afterwards.
 local function scanSector()
     local item = turtle.getItemDetail(S_SCANNER)
     if not item or item.name ~= SCANNER_NAME then
         print("[SCAN] ERROR: geo scanner not in slot 1 (found: " .. tostring(item and item.name) .. ")")
-        return {}
+        return {}, "no_scanner_in_slot"
     end
 
     turtle.select(S_SCANNER)
@@ -1248,7 +1264,7 @@ local function scanSector()
                 .. "skipping this scan level")
             base.sendProgress(string.format(
                 "scan_blocked_by_turtle at %d,%d,%d", pb.x, pb.y, pb.z))
-            return {}
+            return {}, "blocked_by_turtle"
         end
     end
 
@@ -1258,7 +1274,7 @@ local function scanSector()
     local p0 = base.getPos()
     if not scannerRecord(p0.x, p0.y - 1, p0.z) then
         print("[SCAN] ERROR: could not persist scanner placement — refusing to place")
-        return {}
+        return {}, "placement_not_persisted"
     end
 
     if not turtle.placeDown() then
@@ -1266,7 +1282,7 @@ local function scanSector()
         -- nothing is out there and the record just written is a false positive.
         scannerClear()
         print("[SCAN] ERROR: failed to place geo scanner below")
-        return {}
+        return {}, "place_failed"
     end
     print("[SCAN] Scanner placed — wrapping peripheral...")
     sleep(0.5)
@@ -1277,7 +1293,7 @@ local function scanSector()
         turtle.select(S_SCANNER)
         -- A refusal keeps the record, which is what boot recovery needs.
         if mine_flow.digGuarded("down") then scannerClear() end
-        return {}
+        return {}, "peripheral_wrap_failed"
     end
     print("[SCAN] Scanning radius " .. SCAN_RADIUS .. "...")
 
@@ -1294,11 +1310,11 @@ local function scanSector()
 
     if not scanOk then
         print("[SCAN] ERROR: sc.scan() threw: " .. tostring(raw))
-        return {}
+        return {}, "scan_threw"
     end
     if not raw then
         print("[SCAN] ERROR: sc.scan() returned nil")
-        return {}
+        return {}, "scan_returned_nil"
     end
     print("[SCAN] Raw scan: " .. #raw .. " blocks")
 
@@ -2360,7 +2376,41 @@ local function mineJob(job)
             base.sendProgress(string.format("%sScanning %d,%d depth %d/%d (Y=%d)",
                 modeTag, sx, sz, i, #SCAN_LEVELS, sy))
             reportPhase(proto.PHASE.SCANNING, string.format("%d,%d Y=%d", sx, sz, sy))
-            local rawOres = scanSector()
+            local rawOres, scanFail = scanSector()
+            -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE. scanSector
+            -- used to hand back a bare empty list from seven different refusals,
+            -- so the loop counted the level as scanned, the sector was reported
+            -- done with 0 ore, and the server never re-queued it -- job_0058,
+            -- where node_138 reported (1888,-2912) done with 0 ore and node_139
+            -- had found 81 there. The refusal to dig a turtle is right; this is
+            -- the accounting that followed it.
+            --
+            -- Retried first, because the usual cause is a turtle crossing the
+            -- scan square on its way somewhere and the sector is still perfectly
+            -- workable ten seconds later. Only a refusal that outlasts the
+            -- retries abandons the sector -- through `abort`, the same path
+            -- loader_beacon_lost already takes: go home, report the job failed
+            -- but recoverable, and let the server re-dispatch the sector to
+            -- somebody. That is the whole fix: the sector must not come back
+            -- marked finished.
+            if scanFail then
+                for try = 1, SCAN_RETRIES do
+                    print(string.format(
+                        "[SCAN] Level Y=%d did not run (%s) — retry %d of %d in %ds",
+                        sy, scanFail, try, SCAN_RETRIES, SCAN_RETRY_WAIT))
+                    sleep(SCAN_RETRY_WAIT)
+                    rawOres, scanFail = scanSector()
+                    if not scanFail then
+                        print(string.format("[SCAN] Level Y=%d ran on retry %d", sy, try))
+                        break
+                    end
+                end
+            end
+            if scanFail then
+                abort = string.format("scan_level_incomplete: %s at Y=%d after %d retries",
+                    scanFail, sy, SCAN_RETRIES)
+                break
+            end
             -- Deduplicate: only keep ore blocks not seen at a previous depth level.
             --
             -- AND DO NOT REPORT ORE WE ARE FORBIDDEN TO DIG. The scanner sees

@@ -419,6 +419,8 @@ N_REASON  = ("a skipped ore's reason reaches the log, not just its count "
 F_KEEP   = "dropBelowFloor keeps reachable ore and counts what is below the floor"
 F_REFUSE = "dropBelowFloor refuses rather than guessing a floor"
 F_ORDER  = "below-floor ore is dropped before it is counted as found (SOURCE-ONLY, weaker)"
+S_LEVEL  = "a scan level that did not run is never counted as scanned (SOURCE-ONLY, weaker)"
+S_RETRY  = S_LEVEL
 D_FREE  = "noDig banks on a free face while something is below, instead of refusing"
 D_BACK  = "noDig still takes the chest back after the drop"
 D_KEEP  = "noDig keeps the payload aboard when every face is occupied"
@@ -478,6 +480,26 @@ MUTANTS = [
     ("found ore is tallied from the unfiltered scan again", "ore_turtle.lua",
      [('            for _, o in ipairs(ores) do',
        '            for _, o in ipairs(fresh) do')], F_ORDER),
+
+    # ── A scan level that did not run is not a level with no ore (W3, job_0058)
+    ("the turtle guard goes back to a silent empty scan", "ore_turtle.lua",
+     [('            return {}, "blocked_by_turtle"', '            return {}')], S_LEVEL),
+
+    ("a scan that threw goes back to a silent empty scan", "ore_turtle.lua",
+     [('        return {}, "scan_threw"', '        return {}')], S_LEVEL),
+
+    ("two refusals report the same reason, so the log cannot say which", "ore_turtle.lua",
+     [('        return {}, "place_failed"', '        return {}, "scan_threw"')], S_LEVEL),
+
+    ("the caller takes the ore list and drops the reason", "ore_turtle.lua",
+     [('            local rawOres, scanFail = scanSector()',
+       '            local rawOres = scanSector()\n            local scanFail = nil')], S_LEVEL),
+
+    ("a level that never ran no longer abandons the sector", "ore_turtle.lua",
+     [('            if scanFail then\n                abort = string.format("scan_level_incomplete: %s at Y=%d after %d retries",\n                    scanFail, sy, SCAN_RETRIES)\n                break\n            end', '')], S_LEVEL),
+
+    ("the sector is abandoned on the first refusal, with no retry", "ore_turtle.lua",
+     [('                for try = 1, SCAN_RETRIES do', '                for try = 1, 0 do')], S_RETRY),
 
     # ── Banking at a dock without digging (W3's measurement, 2026-10-08) ────
     ("noDig is ignored and an occupied face is dug anyway", "mine_flow.lua",

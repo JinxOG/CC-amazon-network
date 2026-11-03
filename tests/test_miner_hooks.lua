@@ -633,4 +633,69 @@ function(assert_eq)
         "the below-floor count must be printed, not silently discarded")
 end
 
+-- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE.
+--
+-- scanSector returned a bare {} from seven different refusals -- no scanner in
+-- slot 1, the placement record not persisting, placeDown failing, the
+-- peripheral not wrapping, the scan throwing, the scan returning nil, and the
+-- guard that refuses to dig a fleet member off the scan square. Every one of
+-- them rendered exactly like a level with no ore in it, so the loop counted the
+-- level as scanned and the sector was reported DONE with 0 ore. The server
+-- cannot tell those apart, so it never re-queued the sector: job_0058, node_138
+-- reported (1888,-2912) done with 0 ore while node_139 had found 81 ore there
+-- (W3, 2026-09-16).
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["a scan level that did not run is never counted as scanned (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+
+    local from, to = src:find("local function scanSector%(%).-\nend\n")
+    assert_eq(from ~= nil, true, "scanSector moved or was renamed")
+    local body = src:sub(from, to)
+
+    -- Not one bare empty return may survive in it. This is the exact shape of
+    -- the bug, so it is asserted directly rather than by counting reasons: a
+    -- single `return {}` left behind restores one silent refusal.
+    assert_eq(body:find("return {}%s*\n") == nil, true,
+        "every refusal in scanSector must return a reason beside the empty "
+        .. "list -- a bare `return {}` is indistinguishable from empty ground, "
+        .. "which is the whole fault")
+
+    -- And each one has to say something DIFFERENT, or the caller can report
+    -- that a level failed but never which way, and the next person is back to
+    -- guessing from a log that says nothing.
+    local seen, n = {}, 0
+    for reason in body:gmatch('return {}, "([%w_]+)"') do
+        assert_eq(seen[reason], nil, "two refusals share the reason '" .. reason .. "'")
+        seen[reason] = true; n = n + 1
+    end
+    assert_eq(n >= 7, true,
+        "all seven refusal paths must carry a reason (found " .. n .. ")")
+    assert_eq(seen.blocked_by_turtle, true,
+        "the turtle guard is the one this card was raised for and must be named")
+
+    -- The caller is the half that actually fixes the accounting. A reason it
+    -- cannot clear must abandon the sector through `abort` -- the path
+    -- loader_beacon_lost already takes, which goes home and reports the job
+    -- failed BUT RECOVERABLE, so the server re-dispatches the sector.
+    local callAt = src:find("local rawOres, scanFail = scanSector()", 1, true)
+    assert_eq(callAt ~= nil, true,
+        "the caller must take scanSector's reason, not just its list")
+    local tail = src:sub(callAt, callAt + 2000)
+    assert_eq(tail:find("abort = string.format(\"scan_level_incomplete", 1, true) ~= nil, true,
+        "an unclearable refusal must set abort, so the sector is NOT reported "
+        .. "done and the server re-queues it")
+
+    -- Retried before it is given up. A turtle on the scan square is usually one
+    -- crossing a shaft; abandoning the sector on the first refusal would turn a
+    -- two-second encounter into a re-dispatched job. A fix that only aborts
+    -- passes the check above and is still wrong in the common case.
+    assert_eq(tail:find("for try = 1, SCAN_RETRIES do", 1, true) ~= nil, true,
+        "the level must be retried before the sector is abandoned")
+    assert_eq(src:find("local SCAN_RETRIES", 1, true) ~= nil, true,
+        "SCAN_RETRIES must be a named constant, not a literal in the loop")
+end
+
 return suite
