@@ -910,6 +910,34 @@ app.post('/storage', (req, res) => {
     res.json({ ok: true });
 });
 
+// ─── Turtle snapshot merge (W3's 2026-10-02 report) ──────────────────────────
+//
+// This used to be `{ ...state.turtles[id], ...data, lastSeen: now }`, which made
+// the snapshot authoritative for every field the server SENDS and useless for
+// every field it STOPS sending.
+//
+// central_server writes these as `t.needsHands or nil`, and a Lua nil is an
+// absent JSON key — so a field going from set to unset simply is not in `data`,
+// and the spread kept the old value for ever. On 2026-10-02 two turtles were
+// released and dispatched, and /state still showed both NEEDS HANDS; the
+// server's view was right and the bridge's was stale until it restarted. The
+// same shape applied to blockReason, blockedUntil, jobId, phase and chunkX/Z.
+//
+// Taking `data` as-is is only safe because the server rebuilds every turtle from
+// its registry on each push — verified in central_server's push builder, which
+// constructs `turtles[id] = { ... }` fresh rather than sending a delta. If that
+// ever becomes a delta, this clears fields that were merely omitted, so the two
+// must change together.
+//
+// lastSeen is the one field the bridge owns: nothing upstream sends it.
+function mergeTurtleSnapshot(incoming, now) {
+    const out = {};
+    for (const [id, data] of Object.entries(incoming || {})) {
+        out[id] = { ...data, lastSeen: now };
+    }
+    return out;
+}
+
 // CC central_server.lua pushes state here every 2s
 const CC_RESTART_GAP_MS = 20 * 1000;  // >20s between updates → CC server restarted
 
@@ -941,16 +969,15 @@ app.post('/update', async (req, res) => {
         // Incoming snapshot is authoritative — replace entirely so turtles absent
         // from the payload (e.g. after a CC server reboot) vanish immediately
         // rather than lingering until a 10-minute prune.
-        const newTurtles = {};
-        for (const [id, data] of Object.entries(turtles)) {
-            newTurtles[id] = { ...state.turtles[id], ...data, lastSeen: now };
-            if (data.online === false) {
+        const newTurtles = mergeTurtleSnapshot(turtles, now);
+        for (const [id, t] of Object.entries(newTurtles)) {
+            if (t.online === false) {
                 if (markerExists[id]) {
                     rcon(`dmarker delete id:${id} set:${CFG.dynmap.set}`).catch(() => {});
                     markerExists[id] = false;
                 }
             } else {
-                upsertMarker(id, newTurtles[id]).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
+                upsertMarker(id, t).catch((e) => console.error('[RCON] upsertMarker uncaught:', e.message));
             }
         }
         // Remove dynmap markers for turtles that dropped off the snapshot
@@ -1348,23 +1375,67 @@ app.post('/command', (req, res) => {
 app.get('/ping', (req, res) => res.json({ ok: true, uptime: process.uptime() }));
 
 // Self-update: git pull + queue UPDATE_ALL for CC computers + restart dashboard
+// A commit this deploy may pin the fleet to, or {} meaning "fetch master".
+//
+// raw.githubusercontent serves master with max-age=300, and EACH FILE IS CACHED
+// SEPARATELY — so a deploy made seconds after a push installs the previous
+// release, and a computer can end up with a mixture of old and new files under
+// one version string. On 2026-10-03 that hit the dispatch server and all fifteen
+// turtles. A commit URL is immutable and has none of that.
+//
+// W3 closed the card from the server side on 2026-10-29 (1c32775): an UPDATE_ALL
+// with no ref makes the server ask GitHub's API what master points to. This is
+// still worth sending, and not only as belt-and-braces:
+//
+//   * it pins to the commit THIS BRIDGE JUST PULLED, so a push landing between
+//     the pull and the server's lookup cannot leave the bridge running one
+//     commit and the fleet another;
+//   * it needs no network call at the far end, so a deploy still pins when
+//     GitHub's API is unreachable — where the server side warns and goes
+//     unpinned.
+//
+// Validated to exactly 40 lowercase hex before it can go anywhere near a URL,
+// and git writes lowercase. The server validates it again at the far end.
+function updateAllParams(sha) {
+    const ref = String(sha || '').trim();
+    return /^[0-9a-f]{40}$/.test(ref) ? { ref } : {};
+}
+
 app.post('/self-update', (req, res) => {
     exec('git pull origin master', { cwd: __dirname }, (err, stdout, stderr) => {
         const output = (stdout + stderr).trim();
         console.log('[SELF-UPDATE] git pull:\n' + output);
 
+      exec('git rev-parse HEAD', { cwd: __dirname }, (e2, shaOut) => {
         // Queue UPDATE_ALL so CC computers update on the next bridge push
-        pendingCommands.push({ type: 'UPDATE_ALL', params: {}, ts: Date.now() });
-        console.log('[SELF-UPDATE] UPDATE_ALL queued for CC computers');
+        const params = updateAllParams(shaOut);
+        pendingCommands.push({ type: 'UPDATE_ALL', params, ts: Date.now() });
 
-        res.json({ ok: true, output });
+        // An unpinned deploy is the failure this exists to prevent, so it is
+        // never silent: falling back without saying so would look exactly like
+        // a good deploy. The server can still rescue it via GitHub's API.
+        if (params.ref) {
+            console.log(`[SELF-UPDATE] UPDATE_ALL queued, pinned to ${params.ref}`);
+        } else {
+            console.warn('[SELF-UPDATE] UPDATE_ALL queued UNPINNED — could not read HEAD'
+                + (e2 ? ` (${e2.message})` : '')
+                + '. The server will try to resolve master itself; if that also fails the'
+                + ' fleet fetches master and may install a stale or mixed release.');
+        }
+
+        res.json({ ok: true, output, ref: params.ref || null });
 
         // Wait for CC to pick up the command (bridge polls every 2s, use 5s buffer)
         // then exit — pm2 / nodemon / the start script will restart automatically.
+        //
+        // Inside the rev-parse callback, deliberately: exiting is on a timer, and
+        // starting that timer before the command is queued would race the restart
+        // against the thing the restart exists to deliver.
         setTimeout(() => {
             console.log('[SELF-UPDATE] Exiting for restart...');
             process.exit(0);
         }, 5000);
+      });
     });
 });
 
