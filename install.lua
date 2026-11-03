@@ -46,8 +46,10 @@ local PROFILES = {
         -- start at all -- observed 2026-08-27, "module 'cloudstore' not found"
         -- on boot, because the require shipped before the deployment entry did.
         { src = FILES.cloudstore,     name = "cloudstore.lua"     },
-        { src = FILES.central_server, name = "central_server.lua" },
-        { src = FILES.startup_server, name = "startup.lua"        },
+        -- The server IS startup.lua, as every update writes it (updater.lua). Installing
+        -- it as central_server.lua beside a startup_server.lua launcher left, after
+        -- the first update, a 346 KB copy nothing ran (2026-11-02, W3's disk card).
+        { src = FILES.central_server, name = "startup.lua"        },
     },
     admin = {
         { src = FILES.protocol, name = "protocol.lua" },
@@ -132,6 +134,35 @@ for _, f in ipairs(files) do
     local ok  = download(url, f.name)
     print(ok and "OK" or "FAILED")
     if not ok then failed = true end
+end
+
+-- Lua goes to disk without its comments and indentation, line breaks kept --
+-- the same strip the updater applies to every update (minify, in updater.lua,
+-- which is installed first). A file that cannot be stripped is left as it came.
+if not failed then
+    _G.__UPDATER_MINIFY_ONLY = true
+    local okM, minify = pcall(function()
+        local h = fs.open("updater.lua", "r")
+        local text = h and h.readAll()
+        if h then h.close() end
+        local chunk = text and load(text, "@updater.lua", "t", _ENV)
+        return chunk and chunk()
+    end)
+    _G.__UPDATER_MINIFY_ONLY = nil
+    if okM and type(minify) == "function" then
+        for _, f in ipairs(files) do
+            if f.name:match("%.lua$") and fs.exists(f.name) then
+                local h = fs.open(f.name, "r")
+                local text = h and h.readAll() or ""
+                if h then h.close() end
+                local okS, small = pcall(minify, text)
+                if okS and type(small) == "string" and #small > 0 and #small < #text then
+                    local w = fs.open(f.name, "w")
+                    if w then w.write(small); w.close() end
+                end
+            end
+        end
+    end
 end
 
 print("")

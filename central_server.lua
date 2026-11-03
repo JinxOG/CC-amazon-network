@@ -77,6 +77,7 @@ local CFG = {
     -- saveSectorProgress). Local on purpose: a cloud write is a peripheral call.
     SECTOR_PROGRESS_FILE     = "sector_progress.dat",
     SECTOR_PROGRESS_INTERVAL = 60,
+    DISK_TIDY_INTERVAL       = 3600,   -- seconds between disk tidies (tidyDisk); the first runs at boot
     ACK_TIMEOUT       = 10,     -- seconds to wait for JOB_ACK before reassigning
     DISPATCH_INTERVAL = 2,      -- seconds between dispatcher ticks
     MAX_JOB_RETRIES   = 3,
@@ -833,6 +834,100 @@ local function diskReport(force)
     for i = 1, math.min(5, #sizes) do r.largest[i] = sizes[i] end
     _diskReport, _diskReportAt = r, now
     return r
+end
+
+-- THE SERVER KEEPS ITS OWN DISK TIDY (2026-11-02, W3's disk card, part 2): no
+-- in-game visits. At boot and once an hour it deletes from a NAMED LIST only,
+-- logs each file with the bytes freed, and never touches a file a running job
+-- needs (jobs.dat, active_zones.dat, sector_progress.dat and the rest are not on
+-- the list):
+--   * central_server.lua, the installer's copy, once startup.lua is the server
+--     itself -- every update writes the server as startup.lua and never touches
+--     this one again: 346 KB of dead code on a 1 MB disk. Kept while startup.lua
+--     still requires it (a server installed and never updated runs it).
+--   * *.tmp -- a save is one synchronous step, so any found between steps was
+--     left by an interrupted save.
+--   * X.bak while X is there and not empty -- otherwise the backup is the copy.
+--   * crash.log beyond its newest 8 KB, cut at a line.
+--   * mine_zones.dat (and its .bak) -- the disk fallback of the zone store --
+--     once the cloud store is healthy and holds every zone in it.
+-- Returns the bytes freed.
+local CRASH_LOG_KEEP = 8192
+local function tidyDisk()
+    local freed, notes = 0, {}
+    local function size(p)
+        local ok, n = pcall(fs.getSize, p)
+        return (ok and type(n) == "number") and n or 0
+    end
+    local function readAll(p)
+        local f = fs.open(p, "r")
+        if not f then return nil end
+        local s = f.readAll()
+        f.close()
+        return s
+    end
+    local function remove(p, why)
+        local n = size(p)
+        pcall(fs.delete, p)
+        if not fs.exists(p) then
+            freed = freed + n
+            notes[#notes + 1] = string.format("removed %s (%d bytes: %s)", p, n, why)
+        end
+    end
+    local names = {}
+    pcall(function()
+        for _, name in ipairs(fs.list("")) do
+            if not (fs.isDir and fs.isDir(name)) then names[#names + 1] = name end
+        end
+    end)
+
+    if fs.exists("central_server.lua") and fs.exists("startup.lua") then
+        local s = readAll("startup.lua") or ""
+        if s ~= "" and not s:find("require%s*%(?%s*[\"']central_server[\"']") then
+            remove("central_server.lua", "the installer's copy; startup.lua is the server")
+        end
+    end
+    for _, name in ipairs(names) do
+        if name:match("%.tmp$") then
+            remove(name, "left by an interrupted save")
+        elseif name:match("%.bak$") then
+            local base = name:sub(1, -5)
+            if fs.exists(base) and size(base) > 0 then remove(name, base .. " is there") end
+        end
+    end
+
+    local crashSize = fs.exists(CRASH_LOG_FILE) and size(CRASH_LOG_FILE) or 0
+    if crashSize > CRASH_LOG_KEEP then
+        local s = readAll(CRASH_LOG_FILE) or ""
+        local tail = s:sub(-CRASH_LOG_KEEP)
+        local cut = tail:find("\n", 1, true)
+        tail = cut and tail:sub(cut + 1) or tail
+        local f = fs.open(CRASH_LOG_FILE, "w")
+        if f then
+            f.write(tail); f.close()
+            freed = freed + (crashSize - #tail)
+            notes[#notes + 1] = string.format("%s trimmed to its newest %d bytes (%d freed)",
+                CRASH_LOG_FILE, #tail, crashSize - #tail)
+        end
+    end
+
+    if fs.exists(ZONE_SAVE_FILE) and state.zoneStoreHealthy == true and cloudstore.available() then
+        local ok, data = pcall(textutils.unserialise, readAll(ZONE_SAVE_FILE) or "")
+        if ok and type(data) == "table" then
+            local inCloud = {}
+            for _, k in ipairs(cloudstore.listKeys(cloudstore.NS.ZONE) or {}) do inCloud[k] = true end
+            local all = true
+            for k in pairs(data) do if not inCloud[k] then all = false; break end end
+            if all then
+                remove(ZONE_SAVE_FILE, "every zone in it is in the cloud store")
+                if fs.exists(ZONE_SAVE_FILE .. ".bak") then remove(ZONE_SAVE_FILE .. ".bak", "its file is gone to the cloud") end
+            end
+        end
+    end
+
+    for _, note in ipairs(notes) do logInfo("Disk tidy: " .. note) end
+    if freed > 0 then logInfo(string.format("Disk tidy: freed %d bytes", freed)) end
+    return freed
 end
 
 local DISK_WARN_BYTES  = 350000
@@ -6720,6 +6815,12 @@ function server.run()
                 if not ok_ss then logError("Stale support WC: " .. tostring(err_ss)) end
                 lastStaleWC = wc
             end
+            -- The disk tidy: the first loop turn after boot, then once an hour.
+            if isDue(wc, state.lastTidyWC or 0, CFG.DISK_TIDY_INTERVAL) then
+                local ok_d, err_d = pcall(tidyDisk)
+                if not ok_d then logWarn("Disk tidy failed: " .. tostring(err_d)) end
+                state.lastTidyWC = wc
+            end
             if isDue(wc, state.lastProgressWC or 0, CFG.SECTOR_PROGRESS_INTERVAL) then
                 local ok_p, err_p = pcall(saveSectorProgress)
                 if not ok_p then logWarn("Sector progress not saved: " .. tostring(err_p)) end
@@ -6888,6 +6989,7 @@ if _G.__CC_SERVER_TEST then
         pushWitness = pushWitness,
         warnIfDiskTight = warnIfDiskTight,
         diskReport = diskReport,
+        tidyDisk   = tidyDisk,
         dropBackupAfterVerify = dropBackupAfterVerify,
         -- The continuous-log delta selector. Every interesting property lives
         -- here: the cap that keeps the payload bounded, and the fixed-window
