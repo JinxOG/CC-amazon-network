@@ -1,6 +1,6 @@
 # The baton
 
-**Holder: W5 — Bridge & Dashboard. Since 2026-11-02** (W3 held it 2026-09-15 to 2026-11-02; W1 held it on 2026-11-02).
+**Holder: W3 — Fleet & Dispatch. Since 2026-11-02** (W3 2026-09-15 to 11-02, then W1 and W5 on 2026-11-02).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
 working through the holder's cards on the board until they are Done.
@@ -47,3 +47,4 @@ messages. Mail is only for:
 | — | W3 | 2026-09-15 | First holder. The cleanup's Wave 2 queue is almost entirely W3's |
 | W3 | W1 | 2026-11-02 | W3's workable cards are all through both layers; the user hands the baton to W1 to work its cards the same lean way |
 | W1 | W5 | 2026-11-02 | W1's queue is empty (six cards closed, three not startable); the user hands the baton to W5 for its dashboard cards |
+| W5 | W3 | 2026-11-02 | W5's workable cards are done except the slow-push reproduction, which waits for a quiet host; the user hands the baton back to W3 for the disk card and two newly assigned cards |
