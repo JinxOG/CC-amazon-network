@@ -17,11 +17,26 @@ WHY THERE IS NO SIMULATOR LAYER FOR THIS CARD. The simulator cannot stage a turt
 nothing equivalent for slots. The test server can, through the control mod (control.set_slot), so this card's end-to-end
 proof lives here and its layer 1 is unit tests plus mutants (4 of 4 killed). That is stated rather than quietly skipped.
 
-WHAT IS STAGED, AND WHAT IT COSTS. Every docked MINER gets a stack of redstone written into slot 14, which REPLACES the
-coal normally buffered there. That is a real intervention and worth saying plainly: it removes each miner's fuel buffer,
-not its fuel -- the fuel LEVEL is a separate field and is untouched -- and refuelFromEC refills the buffer from the
-ender chest on the next refuel. Every miner is staged rather than just one because the server chooses which miner takes
-the job by its own ratio, and there is no way to ask it in advance.
+WHAT IS STAGED, AND WHAT IT COSTS. Every docked MINER gets a stack of redstone written into slot 14. Measured on run
+w1-scan-b, node_179 docked: slot 14 is EMPTY on a docked miner, so this displaces nothing -- the buffer is burnt down
+by the time it is home, and refuelFromEC fills it again on the way out. The fuel LEVEL is a separate field and is not
+touched either way. Every miner is staged rather than just one because the server chooses which miner takes the job by
+its own ratio, and there is no way to ask it in advance.
+
+THE SLOT NUMBERING, MEASURED RATHER THAN ASSUMED. control.set_slot writes NBT, where Items[].Slot is 0-based, while
+Lua turtle slots are 1-based -- so Lua slot 14 is NBT slot 13. That off-by-one is the kind of thing that quietly stages
+the wrong slot and produces a confident pass about nothing, so it was checked against a real miner's inventory on run
+w1-scan-b: NBT 0 holds the geo scanner (ore_turtle's S_SCANNER = 1), NBT 1 the chunk loader (slot 2, as its home-slot
+code says), NBT 2 the diamond pickaxe (slot 3), and NBT 14 and 15 the two ender chests (S_FUEL_EC = 15 and
+S_ORE_EC = 16). Every one of those is exactly one less than its Lua slot.
+
+WHICH OF THE TWO GATES THIS PROVES, SAID PLAINLY. soloReturn calls dumpOres() unconditionally at the end of a sector,
+so on a normal trip the FIELD bank is what takes the redstone and this run exercises gate 1, the dump filter. Gate 2 --
+tidyAtDock's carrying check, which scanned slots 5-13 and so never looked at slot 14 -- only runs when the field dump
+did not, and provoking that here would mean staging the stack onto a turtle in flight, whose position moves between the
+several commands set_slot needs. So gate 2 is covered by its unit test and by two mutants (the buffer scan removed, and
+its sense inverted) and NOT by this run. What this run proves is the thing the user photographed: material in slot 14
+does not survive a round trip.
 
 Staged while the miners are DOCKED, on purpose. set_slot works through the block entity at the turtle's position, so it
 takes a position, clears the slot over several commands and then writes. A turtle in flight moves between those
