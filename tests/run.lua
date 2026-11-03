@@ -39,6 +39,7 @@ local files = {
     "tests.test_zone_ore",
     "tests.test_server_disk",
     "tests.test_minify",
+    "tests.test_fence_refusal",
     "tests.test_gps3_journal",
 }
 
