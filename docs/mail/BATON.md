@@ -1,9 +1,13 @@
 # The baton
 
-**Holder: W1 — Mining. Since 2026-11-02** (W3 held it 2026-09-15 to 2026-11-02).
+**Holder: W5 — Bridge & Dashboard. Since 2026-11-02** (W3 held it 2026-09-15 to 2026-11-02; W1 held it on 2026-11-02).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
-working through W3's cards on the board until they are Done.
+working through the holder's cards on the board until they are Done.
+
+**Androids are on hold, not retired** (the user, 2026-11-02). The user is building a refresh of the CC Androids
+mod and androids are coming back. Nobody removes, trims or changes an android file or android dashboard entry
+until the refresh ships and the user says go. The "retired Android files" card is on the back burner.
 
 The holder drives. Everyone else is asleep until woken, does the one thing they
 were woken for, replies, and stops.
@@ -42,3 +46,4 @@ messages. Mail is only for:
 |---|---|---|---|
 | — | W3 | 2026-09-15 | First holder. The cleanup's Wave 2 queue is almost entirely W3's |
 | W3 | W1 | 2026-11-02 | W3's workable cards are all through both layers; the user hands the baton to W1 to work its cards the same lean way |
+| W1 | W5 | 2026-11-02 | W1's queue is empty (six cards closed, three not startable); the user hands the baton to W5 for its dashboard cards |
