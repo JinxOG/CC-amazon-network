@@ -50,11 +50,16 @@ return {
 
     sim:run_for(120000)
 
+    -- c.tstate as well as the role, which is how w3_dock_bank and
+    -- w3_leftover_coal pick a miner: it is the turtle state, so it excludes
+    -- anything that is a miner by role but not a running turtle. c.env because
+    -- sim:eval needs an environment to reach into, and picking a computer
+    -- without one would fail inside the injection rather than here.
     local m
     for _, c in ipairs(sim.sched.computers) do
-      if not m and tostring(c.role) == "miner" then m = c end
+      if not m and c.role == "miner" and c.tstate and c.env then m = c end
     end
-    sim:expect(m ~= nil, "found a miner to crash")
+    sim:expect(m ~= nil, "found a running miner turtle to crash")
     if not m then return end
     sim.results.node = m.name
 
