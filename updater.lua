@@ -13,6 +13,79 @@
 --
 -- Example:  echo DELIVERY > role.txt
 
+-- ─── Minify ──────────────────────────────────────────────────────────────────
+-- THE CODE IS WRITTEN TO DISK WITHOUT ITS COMMENTS (2026-11-02, the user's ruling
+-- on W3's disk card). The default CC disk is 1,000,000 bytes and the server's
+-- own code took ~425 KB of it (central_server.lua alone 351 KB), leaving state
+-- ~500 KB at most; most of those bytes are comments and indentation. The repo
+-- copy stays readable. Every LINE BREAK IS KEPT, so the line number in a crash
+-- report still points at the repo's line. Strings, long strings and everything
+-- inside them are copied exactly. Kept in this file, not a module: the updater
+-- that runs an update is the previous one, and a new module cannot ship in the
+-- same update as its first require.
+local function minify(src)
+    local out, n, i = {}, #src, 1
+    local lineStart = #out            -- index in out where the current line began
+    local function emit(s) out[#out + 1] = s end
+    local function longBracket(at)    -- "[" "="* "[" at `at`: its level, or nil
+        local eq = src:match("^%[(=*)%[", at)
+        return eq and #eq or nil
+    end
+    local function trimLine()         -- drop the code's trailing spaces on this line
+        while #out > lineStart and out[#out]:match("^[ \t]+$") do out[#out] = nil end
+        if #out > lineStart then out[#out] = out[#out]:gsub("[ \t]+$", "") end
+    end
+    local atLineStart = true
+    while i <= n do
+        local c = src:sub(i, i)
+        if c == "\n" then
+            trimLine(); emit("\n"); lineStart = #out; atLineStart = true; i = i + 1
+        elseif atLineStart and (c == " " or c == "\t" or c == "\r") then
+            i = i + 1
+        elseif c == "\r" then
+            i = i + 1
+        elseif c == "-" and src:sub(i + 1, i + 1) == "-" then
+            local level = longBracket(i + 2)
+            if level then
+                local close = "]" .. string.rep("=", level) .. "]"
+                local e = src:find(close, i + 4 + level, true) or n
+                local body = src:sub(i, e + #close - 1)
+                local nl = select(2, body:gsub("\n", "\n"))
+                if nl == 0 then emit(" ") else
+                    for _ = 1, nl do trimLine(); emit("\n"); lineStart = #out end
+                    atLineStart = true
+                end
+                i = e + #close
+            else
+                local e = src:find("\n", i, true) or (n + 1)
+                i = e                  -- the newline itself is handled above
+            end
+        elseif c == '"' or c == "'" then
+            local j = i + 1
+            while j <= n do
+                local d = src:sub(j, j)
+                if d == "\\" then j = j + 2
+                elseif d == c or d == "\n" then break
+                else j = j + 1 end
+            end
+            emit(src:sub(i, j)); atLineStart = false; i = j + 1
+        elseif c == "[" and longBracket(i) then
+            local level = longBracket(i)
+            local close = "]" .. string.rep("=", level) .. "]"
+            local e = src:find(close, i + 2 + level, true) or n
+            local body = src:sub(i, e + #close - 1)
+            emit(body); atLineStart = false; i = e + #close
+            local last = body:match(".*\n()")
+            if last then lineStart = #out end     -- a long string's own lines are not trimmed
+        else
+            emit(c); atLineStart = false; i = i + 1
+        end
+    end
+    trimLine()
+    return table.concat(out)
+end
+if _G.__UPDATER_MINIFY_ONLY then return minify end
+
 local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
 
 -- PINNED TO A COMMIT when the deploy named one (see proto.stageUpdateRef). A
@@ -161,6 +234,13 @@ local function download(src, dst)
         print("FAILED (empty response)")
         noteFailure(src, "empty response")
         return false
+    end
+
+    -- Lua goes to disk without its comments (minify, above). If stripping ever
+    -- fails, the file is written as it came: a bigger file beats no file.
+    if dst:match("%.lua$") then
+        local okMin, small = pcall(minify, content)
+        if okMin and type(small) == "string" and #small > 0 then content = small end
     end
 
     -- Every write below is pcall'd. An unprotected fs write throws "Out of space"
