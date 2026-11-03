@@ -51,7 +51,15 @@ return {
   steps = function(sim)
     local didnt_run = sim:capture_log("did not run")
     local retried   = sim:capture_log("retry 1 of ")
-    local requeued  = sim:capture_log("back to queue")
+    -- The SERVER's own retry line, not "back to queue". The first draft watched
+    -- for the latter and failed with 0 lines while the re-dispatch had plainly
+    -- happened: "back to queue" belongs to the reassign path, and a recoverable
+    -- JOB_FAILED on a job with retries left logs
+    --   Job job_0001 retry 1/3: scan_level_incomplete: blocked_by_turtle at Y=16
+    -- and hands the sector to the next miner. The reason string is checked
+    -- inside it below, so this cannot pass on some unrelated failure.
+    local requeued  = sim:capture_log("retry 1/")
+    local redispatched = sim:capture_log("Dispatched job_0001 [MINE] -> node_12")
     local done      = sim:capture_log("Sector (128,-2816) done by")
     local scanning  = sim:capture_log("128,-2816 Y=16")
 
@@ -100,14 +108,36 @@ return {
       "and retried the level rather than abandoning the sector on the first "
       .. "refusal (retry lines: " .. #retried.lines .. ")")
 
-    -- POSITIVE 3: the server got the sector back. This is the accounting the
-    -- card is about: a sector nobody could scan has to return to the queue.
+    -- POSITIVE 3: the server got the sector back, FOR THIS REASON. This is the
+    -- accounting the card is about: a sector nobody could scan has to return to
+    -- the queue instead of being closed as mined.
     local back = sim:run_until(function() return #requeued.lines >= 1 end,
                                6 * 3600 * 1000)
     sim.results.requeued = table.concat(requeued.lines, " | ")
     sim:expect(back,
-      "the server put the job back on the queue (lines: " .. #requeued.lines
-      .. ") -- a recoverable failure is how the sector gets re-dispatched")
+      "the server retried the job rather than closing it (lines: "
+      .. #requeued.lines .. ") -- a recoverable failure is how the sector gets "
+      .. "re-dispatched")
+
+    -- And for OUR reason. Without this the check above would pass on any
+    -- recoverable failure at all -- a lost beacon, a refused loader -- and say
+    -- nothing about whether the skipped level was what travelled.
+    local named = 0
+    for _, l in ipairs(requeued.lines) do
+      if l:find("scan_level_incomplete", 1, true) then named = named + 1 end
+    end
+    sim.results.retry_named_reason = named
+    sim:expect(named >= 1,
+      "and the reason it carried was the skipped level itself (lines naming "
+      .. "scan_level_incomplete: " .. named .. " of " .. #requeued.lines .. ")")
+
+    -- Handed to a DIFFERENT miner. Noted rather than gated: which miner the
+    -- dispatcher picks is its business, and with two miners and a permanent
+    -- obstruction the job will exhaust its retries either way. It is recorded
+    -- because it is the thing the card actually wanted -- somebody else goes
+    -- and looks -- and a reader should be able to see whether it happened.
+    sim:run_until(function() return #redispatched.lines >= 1 end, 1800 * 1000)
+    sim.results.redispatched_to_other_miner = #redispatched.lines
 
     -- AND THE ABSENCE, last, with both positives already in hand: the sector
     -- was never reported finished. On the old code this is the line that
