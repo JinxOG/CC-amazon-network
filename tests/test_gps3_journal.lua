@@ -414,7 +414,7 @@ return {
         assert_eq(#offenders("\n-- turtle.forward() in a comment\n"), 0)
 
         -- Every file the updater ships to any machine: that IS the fleet.
-        local f = assert(io.open("updater.lua", "r")); local manifest = f:read("a"); f:close()
+        local f = assert(io.open("updater.lua", "r")); local manifest = f:read("*a"); f:close()
         local names, seen = {}, {}
         for n in manifest:gmatch('"([%w_]+%.lua)"') do
             if not seen[n] then seen[n] = true; names[#names + 1] = n end
@@ -423,7 +423,7 @@ return {
         for _, n in ipairs(names) do
             local h = io.open(n, "r")
             if h then
-                local src = h:read("a"); h:close()
+                local src = h:read("*a"); h:close()
                 checked[n] = true
                 for _, l in ipairs(offenders(src)) do bad[#bad + 1] = n .. ": " .. l end
             end

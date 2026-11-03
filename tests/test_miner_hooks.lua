@@ -353,7 +353,7 @@ end
 suite["a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
     -- Built with string.char(10) rather than an escape: the newline is what
     -- terminates the function at column 0, and a literal one here would end
     -- this string instead.
@@ -380,7 +380,7 @@ end
 suite["a recorded label is checked before the unlabelled refusal (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
     local byLabelAt = src:find("mine_flow.carriedLoaderSlotByLabel(s.label)", 1, true)
     local refuseAt  = src:find("equipment.LOADER_LABEL == nil", 1, true)
     assert_eq(byLabelAt ~= nil, true,
@@ -411,7 +411,7 @@ end
 suite["a late GPS start parks and retries, and still recovers the loader (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
 
     local parkedAt = src:find("no_gps_fix: parked", 1, true)
     local waitAt   = src:find("base.waitForPositionFix(\"boot recovery after a late GPS start\")", 1, true)
@@ -449,7 +449,7 @@ end
 suite["the ore chest is a registered ledger kind, recorded and recovered first (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
 
     assert_eq(src:find('base.ledger.registerKind("ore_chest"', 1, true) ~= nil, true,
         "an unregistered kind is unknown to base.ledger.recover, which refuses it")
@@ -481,7 +481,7 @@ end
 suite["the per-ore pick goes through mine_flow.takeNearest, with no sort left behind (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
     -- string.char(10), not an escape: a literal newline would end this string.
     local NL   = string.char(10)
     local body = src:match("local function mineOreList%(ores, jobId, sx, sz, sy(.-)"
@@ -510,7 +510,7 @@ end
 suite["a skipped ore's reason reaches the log, not just its count (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
     local NL = string.char(10)
 
     local nav = src:match("local function navToOre%(ore, jobId%)(.-)" .. NL .. "end" .. NL)
@@ -542,7 +542,7 @@ end
 suite["the dock tidy banks with noDig instead of refusing on the station chest (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
     local NL   = string.char(10)
     local body = src:match("local function tidyAtDock%(%)(.-)" .. NL .. "end" .. NL)
     assert_eq(body ~= nil, true, "tidyAtDock moved or vanished")
@@ -574,7 +574,7 @@ end
 suite["noDig survives every hop from the dock tidy to the bank (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
     local NL = string.char(10)
 
     assert_eq(src:find("local function dumpOres(quiet, noDig)", 1, true) ~= nil, true,
@@ -603,7 +603,7 @@ end
 suite["below-floor ore is dropped before it is counted as found (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
-    local src = f:read("a"); f:close()
+    local src = f:read("*a"); f:close()
 
     local dropAt = src:find("mine_flow.dropBelowFloor(fresh, MIN_ORE_Y)", 1, true)
     assert_eq(dropAt ~= nil, true,

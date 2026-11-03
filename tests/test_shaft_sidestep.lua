@@ -235,7 +235,7 @@ return {
 
     ["the miner arms the abort for the way out only (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local armAt   = src:find("base.setMoveAbort(base.isRecalled)", 1, true)
         local moveAt  = armAt and src:find("local mOk, mErr = base.move.to(standX, travelY, standZ)", armAt, true)
         local clearAt = moveAt and src:find("base.setMoveAbort(nil)", moveAt, true)
@@ -289,7 +289,7 @@ return {
 
     ["boot recovery waits for a real position before anything else (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local body = src:match("local function recoverPlacedLoader%(%)(.-)\nend\n")
         assert_eq(body ~= nil, true, "recoverPlacedLoader exists")
         local waitAt  = body and body:find("base.waitForPositionFix(", 1, true)
@@ -497,7 +497,7 @@ return {
 
     ["a miner rebooted outside the base with nothing to recover flies home (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local scanAt = src:find("local sok, serr = pcall(recoverPlacedScanner)", 1, true)
         local homeAt = src:find('base.waitForPositionFix("rebooted outside the base with no loader to recover")', 1, true)
         local flyAt  = homeAt and src:find("base.returnToDockFromSky()", homeAt, true)
@@ -518,7 +518,7 @@ return {
     -- own tail fixed in 1.9.22. It now ends the same way.
     ["a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local homeAt = src:find('base.waitForPositionFix("rebooted outside the base with no loader to recover")', 1, true)
         local runAt  = src:find("local ok, err = pcall(base.run, mineJob)", 1, true)
         local body   = homeAt and runAt and src:sub(homeAt, runAt) or ""

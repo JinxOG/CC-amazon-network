@@ -1069,7 +1069,7 @@ return {
     -- are pinned by source. Weaker than a behaviour test, and labelled so.
     ["a turtle reports its hardware only while idle and not busy (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("turtle_base.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("turtle_base.lua", "r"); local src = f:read("*a"); f:close()
         local body = src:match("function base%.hardwareVerdict%(%)(.-)\nend")
         assert_eq(body ~= nil, true, "base.hardwareVerdict exists")
         assert_eq(body and body:find("_self.busy", 1, true) ~= nil, true,
@@ -1081,7 +1081,7 @@ return {
 
     ["the miner's own check is its departure check, and notices a returned loader (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local block = src:match("base%.setHardwareCheck%((.-)\nend%)%(%)%)")
         assert_eq(block ~= nil, true, "the miner sets a hardware check")
         assert_eq(block and block:find("preflightSlots()", 1, true) ~= nil, true,
@@ -1165,7 +1165,7 @@ return {
 
     ["the UPDATE_ALL command stages the fan-out, and a failed update drops it (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("central_server.lua", "r"); local src = f:read("*a"); f:close()
         local branch = src:match('elseif t == "UPDATE_ALL" then(.-)pendingUpdate = true')
         assert_eq(branch ~= nil, true, "the UPDATE_ALL command branch exists")
         assert_eq(branch and branch:find("server.stageFanOut(", 1, true) ~= nil, true,
@@ -1195,8 +1195,8 @@ return {
 
     ["the turtle carries its update failure, and the updater records the reason (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("turtle_base.lua", "r"); local tb = f:read("a"); f:close()
-        f = io.open("updater.lua", "r"); local up = f:read("a"); f:close()
+        local f = io.open("turtle_base.lua", "r"); local tb = f:read("*a"); f:close()
+        f = io.open("updater.lua", "r"); local up = f:read("*a"); f:close()
         assert_eq(tb:find("updateFailed = base.readUpdateFailed(),", 1, true) ~= nil, true,
             "REGISTER carries it")
         assert_eq(up:find("local response, httpErr = http.get(url, NO_CACHE)", 1, true) ~= nil, true,
@@ -1284,7 +1284,7 @@ return {
 
     ["every updater reads the pin, and every computer writes it first (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local function src(n) local f = io.open(n, "r"); local s = f:read("a"); f:close(); return s end
+        local function src(n) local f = io.open(n, "r"); local s = f:read("*a"); f:close(); return s end
         local up = src("updater.lua")
         assert_eq(up:find('REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/" .. REF .. "/"', 1, true) ~= nil,
             true, "the updater fetches from the commit when pinned")
@@ -1322,7 +1322,7 @@ return {
 
     ["the REMOVE_TURTLE command uses it for a turtle it cannot find (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("central_server.lua", "r"); local src = f:read("*a"); f:close()
         local branch = src:match('elseif t == "REMOVE_TURTLE" then(.-)\n            %-%- Cancel active job')
         assert_eq(branch ~= nil, true, "the REMOVE_TURTLE branch exists")
         assert_eq(branch and branch:find("server.releaseLostTurtle(tid)", 1, true) ~= nil, true,
@@ -1544,15 +1544,26 @@ return {
         assert_eq(proto.versionOlder(nil, "1.9.1"), false, "unreadable is never older")
     end,
 
+    -- The timestamp is small ON PURPOSE, and it is not a real millisecond
+    -- epoch. writeAliveStamp formats it with "%d", and the two Luas disagree
+    -- about what that accepts: CC's (Cobalt) takes a 64-bit value, while the
+    -- desktop interpreter these tests run on is stock Lua 5.2, whose %d goes
+    -- through a 32-bit int -- so a genuine 13-digit epoch like 1790700000000
+    -- raises "bad argument #2 to 'format' (not a number in proper range)"
+    -- here and nowhere else. The production path is fine, and that is measured
+    -- rather than assumed: the test server at run w1-skip-c wrote
+    -- "1793666024347 1.9.156" to its own alive.stamp. What this test is for is
+    -- the shape of the line -- both halves, in that order, one space -- so it
+    -- asserts that on a number both runtimes can express.
     ["the alive stamp records the time and the running version"] =
     function(assert_eq)
         local T, zone, restore = twoMiners({ phase = "MINE", pending = {} })
         local server = package.loaded["central_server"]
-        server.writeAliveStamp(1790700000000)
+        server.writeAliveStamp(1790700)
         local f = fs.open(T.CFG.ALIVE_FILE, "r")
         local body = f and f.readAll()
         restore()
-        assert_eq(body, "1790700000000 " .. proto.VERSION,
+        assert_eq(body, "1790700 " .. proto.VERSION,
             "both halves are needed: the time dates a crash, the version names an update")
     end,
 

@@ -432,7 +432,7 @@ return {
     end,
 
     ["the miner records only hardware as protected at boot (SOURCE-ONLY, weaker)"] = function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local body = src:match("local function initProtectedSlots%(%)(.-)\nend\n")
         assert_eq(body ~= nil, true, "initProtectedSlots exists")
         local guardAt = body and body:find("if item and not equipment.isHardwareItem(item.name) then", 1, true)

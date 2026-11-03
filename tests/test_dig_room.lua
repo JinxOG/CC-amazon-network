@@ -179,7 +179,7 @@ return {
     -- pinned by source. Weaker than a behaviour test, and labelled so.
     ["the miner banks before a dig when under two slots are free (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("ore_turtle.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("ore_turtle.lua", "r"); local src = f:read("*a"); f:close()
         local block = src:match("base%.setDigRoomFn%(%(function%(%)(.-)\nend%)%(%)%)")
         assert_eq(block ~= nil, true, "the miner installs a dig room hook")
         assert_eq(block and block:find('dumpIfInventoryTight("digging a path", 2, true)', 1, true) ~= nil,

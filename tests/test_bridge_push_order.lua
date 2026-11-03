@@ -270,7 +270,7 @@ return {
     -- down on the same storageSenderSeenAt guard refreshStorage carries.
     ["refreshCraftable stands down while the warehouse is alive (SOURCE-ONLY, weaker)"] =
     function(assert_eq)
-        local f = io.open("central_server.lua", "r"); local src = f:read("a"); f:close()
+        local f = io.open("central_server.lua", "r"); local src = f:read("*a"); f:close()
         local body = src:match("local function refreshCraftable%(%)(.-)\n    end\n")
         assert_eq(body ~= nil, true, "refreshCraftable exists")
         local guard = body and body:find("state.storageSenderSeenAt", 1, true)
