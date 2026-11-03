@@ -8,6 +8,7 @@
 package.path = "./?.lua;" .. package.path
 local stub = require("tests.stub_cc")
 os.epoch = os.epoch or function() return os.time() * 1000 end
+sleep = sleep or function() end   -- was borrowed from test_bypass_geofence; this file now runs alone
 
 local MODS = { "turtle_base", "logship", "geofence" }
 local function reload()
@@ -101,9 +102,13 @@ return {
     ["a truncated file reads as no record and boots"] = function(assert_eq)
         fresh()
         local f = fs.open("ledger_fuel_chest.dat", "w"); f.write("{ x = 10, y ="); f.close()
-        local base2 = reload()
-        assert_eq(base2.ledger.get("fuel_chest"), nil)
-        assert_eq(next(base2.ledger.all()), nil, "and all() skips it too")
+        local read, got, all = pcall(function()
+            local base2 = reload()
+            return base2.ledger.get("fuel_chest"), base2.ledger.all()
+        end)
+        assert_eq(read, true, "a truncated file must not raise (" .. tostring(not read and got or "") .. ")")
+        assert_eq(got, nil)
+        assert_eq(next(all), nil, "and all() skips it too")
     end,
 
     -- Recovery (task 2) ------------------------------------------------------

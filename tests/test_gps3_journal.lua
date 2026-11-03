@@ -211,8 +211,9 @@ return {
         pcall(base.move.forward)
         undo()
         c.fuel = "unlimited"
-        local _, said, restore = reboot()
-        restore()
+        local booted, why, said, restore = pcall(reboot)
+        if booted then restore() end
+        assert_eq(booted, true, "unlimited fuel boots, not raises (" .. tostring(not booted and why or "") .. ")")
         assert_eq(said("Journal: nothing to check (fuel cannot settle the last move)"), true)
     end,
 
@@ -332,7 +333,7 @@ return {
         local raw = turtle.forward
         turtle.forward = function()
             local j = readJournal()
-            seen = j and (j.pending .. "@" .. j.x .. "," .. j.y .. "," .. j.z .. " fuel " .. j.fuel)
+            seen = j and (tostring(j.pending) .. "@" .. j.x .. "," .. j.y .. "," .. j.z .. " fuel " .. j.fuel)
             return raw()
         end
         base.move.forward()

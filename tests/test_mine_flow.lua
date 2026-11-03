@@ -195,6 +195,14 @@ local function unbreakable(faces)
     end
 end
 
+-- A refusal test guards against a crash, so a crash must fail it as an
+-- assertion, not stop it as an error tests/mutate_logship.py cannot count.
+local function calls(assert_eq, f, ...)
+    local ok, a, b = pcall(f, ...)
+    assert_eq(ok, true, "raised instead of refusing (" .. tostring(not ok and a or "") .. ")")
+    return a, b
+end
+
 
 return {
 
@@ -222,7 +230,7 @@ return {
     ["takeNearest returns nil for an empty list, so the caller's loop ends"] =
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())
-        assert_eq(flow.takeNearest({}, { x = 0, y = 0, z = 0 }), nil)
+        assert_eq(calls(assert_eq, flow.takeNearest, {}, { x = 0, y = 0, z = 0 }), nil)
     end,
 
     -- Removal swaps the last element into the gap. Done wrong that silently
@@ -475,7 +483,7 @@ return {
     -- otherwise keep ore the miner cannot reach -- the exact bug this is for.
     ["dropBelowFloor refuses rather than guessing a floor"] = function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())
-        local kept, why = flow.dropBelowFloor({ { y = -100 } }, nil)
+        local kept, why = calls(assert_eq, flow.dropBelowFloor, { { y = -100 } }, nil)
         assert_eq(kept, nil)
         assert_eq(why, "no_floor")
     end,
@@ -520,9 +528,9 @@ return {
         local flow = loadFlow(E_MINE(), travelInv())
         assert_eq(flow.classifySkip("stuck X: some new refusal nobody told us about"),
             "unknown")
-        assert_eq(flow.classifySkip(nil), "unknown",
+        assert_eq(calls(assert_eq, flow.classifySkip, nil), "unknown",
             "a nil reason is the case where move.to returned false with no why")
-        assert_eq(flow.classifySkip(false), "unknown")
+        assert_eq(calls(assert_eq, flow.classifySkip, false), "unknown")
     end,
 
     ["the skip breakdown renders in a stable order so two sectors can be diffed"] =
@@ -2319,10 +2327,10 @@ return {
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())
         local p = { x = 0, y = 0, z = 0 }
-        assert_eq(flow.adjacentDir(nil, { x = 1, y = 0, z = 0 }), nil)
-        assert_eq(flow.adjacentDir(p, nil), nil)
-        assert_eq(flow.adjacentDir(p, { x = 1, z = 0 }), nil, "no y")
-        assert_eq(flow.adjacentDir({ x = 0, y = 0 }, { x = 1, y = 0, z = 0 }), nil, "no z on us")
-        assert_eq(flow.adjacentDir(p, "nonsense"), nil)
+        assert_eq(calls(assert_eq, flow.adjacentDir, nil, { x = 1, y = 0, z = 0 }), nil)
+        assert_eq(calls(assert_eq, flow.adjacentDir, p, nil), nil)
+        assert_eq(calls(assert_eq, flow.adjacentDir, p, { x = 1, z = 0 }), nil, "no y")
+        assert_eq(calls(assert_eq, flow.adjacentDir, { x = 0, y = 0 }, { x = 1, y = 0, z = 0 }), nil, "no z on us")
+        assert_eq(calls(assert_eq, flow.adjacentDir, p, "nonsense"), nil)
     end,
 }

@@ -44,6 +44,9 @@ local files = {
 }
 
 -- Modules named on the command line run instead of the list (lua tests/run.lua tests.test_x ...).
+-- Only the full list is the suite: six files (crash_handlers, inbox, control_loop,
+-- bridge_push_order, silent_waits, zone_phase) still lean on globals an earlier
+-- file set, and fail alone (2026-11-03). tests/mutate_logship.py runs the full list.
 if arg and #arg > 0 then files = { table.unpack and table.unpack(arg) or unpack(arg) } end
 
 local passed, failed = 0, 0
