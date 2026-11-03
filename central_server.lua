@@ -802,6 +802,39 @@ end
 -- five minutes, and climbing back out of the band re-arms it.
 local _lastDiskWarn  = 0
 local _lastDiskLevel = 0          -- 0 fine, 1 warned, 2 below the floor
+-- THE DISK, SEEN FROM OUTSIDE THE GAME (2026-11-02). The live dispatch computer
+-- fell from 574 KB free to 289 KB in eleven days, and nobody could say which file
+-- grew without walking to it in the game. /state carries free space, the file
+-- count and total, and the five largest files. Measured at most once a minute:
+-- fs.list and fs.getSize are cheap but the push runs every few seconds.
+local DISK_REPORT_EVERY = 60000
+local _diskReport, _diskReportAt = nil, nil
+local function diskReport(force)
+    local now = os.epoch("utc")
+    if _diskReport and not force and now - (_diskReportAt or 0) < DISK_REPORT_EVERY then
+        return _diskReport
+    end
+    local r = { free = -1, files = 0, bytes = 0, largest = {} }
+    pcall(function() r.free = fs.getFreeSpace("/") end)
+    local sizes = {}
+    pcall(function()
+        for _, name in ipairs(fs.list("")) do
+            local isDir = fs.isDir and fs.isDir(name)
+            if not isDir then
+                local ok, n = pcall(fs.getSize, name)
+                if ok and type(n) == "number" then
+                    sizes[#sizes + 1] = { name = name, size = n }
+                    r.files, r.bytes = r.files + 1, r.bytes + n
+                end
+            end
+        end
+    end)
+    table.sort(sizes, function(a, b) return a.size > b.size end)
+    for i = 1, math.min(5, #sizes) do r.largest[i] = sizes[i] end
+    _diskReport, _diskReportAt = r, now
+    return r
+end
+
 local DISK_WARN_BYTES  = 350000
 local DISK_FLOOR_BYTES = 300000
 local DISK_WARN_EVERY  = 300000   -- 5 min; a line per save would bury the log
@@ -6067,6 +6100,8 @@ function server.run()
                         healthField("zoneStoreHealthy",   state.zoneStoreHealthy) ..
                         healthField("persistenceHealthy", state.persistenceHealthy) ..
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
+                        -- free space, file count and total, and the five largest files (diskReport)
+                        ',"disk":'         .. js(diskReport(), "null", "disk") ..
                         ',"modemOpen":'    .. tostring(modemOpen) ..
                         ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
                         ',"turtleLogs":'   .. js(logsOut,              "{}",  "turtleLogs") .. '}'
@@ -6852,6 +6887,7 @@ if _G.__CC_SERVER_TEST then
         saveMiningZones = saveMiningZones,
         pushWitness = pushWitness,
         warnIfDiskTight = warnIfDiskTight,
+        diskReport = diskReport,
         dropBackupAfterVerify = dropBackupAfterVerify,
         -- The continuous-log delta selector. Every interesting property lives
         -- here: the cap that keeps the payload bounded, and the fixed-window
