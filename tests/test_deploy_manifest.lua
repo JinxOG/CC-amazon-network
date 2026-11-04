@@ -151,9 +151,9 @@ suite["every role is sent every module its own files require"] = function(assert
     for _ in pairs(roles) do roleCount = roleCount + 1 end
     -- A parse that silently found nothing would make this test pass for every
     -- possible manifest. DELIVERY, SUPPORT, MINER, LOADER, WAREHOUSE, SERVER,
-    -- ADMIN.
-    assert_eq(roleCount, 7,
-        "expected seven roles in updater.lua's ROLE_FILES — a parse that finds "
+    -- ADMIN, ATC (the base air-traffic control computer, 2026-11-03).
+    assert_eq(roleCount, 8,
+        "expected eight roles in updater.lua's ROLE_FILES — a parse that finds "
         .. "none would make every assertion below vacuous")
 
     local checked, guardedChecked = 0, 0
@@ -217,7 +217,7 @@ suite["install.lua ships the same modules as updater.lua"] = function(assert_eq)
 
     local n = 0
     for _ in pairs(profiles) do n = n + 1 end
-    assert_eq(n, 7, "expected seven install profiles — got " .. n)
+    assert_eq(n, 8, "expected eight install profiles (atc since 2026-11-03) — got " .. n)
 
     local checked = 0
     for role, files in pairs(roles) do
