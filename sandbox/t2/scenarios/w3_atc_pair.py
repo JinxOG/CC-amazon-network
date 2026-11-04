@@ -113,11 +113,13 @@ def steps(ctx):
             d = abs(p[0] - 228) + abs(p[2] + 2782)
             closest = d if closest is None else min(closest, d)
     ctx.expect(samples >= 20, "positions sampled while the ATC was down (%d samples)" % samples)
-    ctx.expect(closest is not None and closest <= 40, "%s came back to the base while the ATC was down (closest %s blocks "
-               "from the arrivals hole): the check below has something to judge" % (miner, closest))
+    # The evidence: the miner reached the base and asked to come in while nobody could answer. (w3-atc-pair-b: it waited at
+    # 204,200,-2813, over the building, 55 blocks from the arrivals hole by x+z -- a distance bar of 40 failed a true wait.)
+    waiting = [l for l in ctx.log_lines("no answer from the ATC") if miner in l]
+    ctx.expect(len(waiting) >= 2 and closest is not None and closest <= 80, "%s came back and waited at the base while the "
+               "ATC was down (closest %s blocks from the arrivals hole; %d 'no answer from the ATC' lines, last %s): the "
+               "check below has something to judge" % (miner, closest, len(waiting), waiting[-1:]))
     ctx.expect(not entered, "no turtle stepped into a base section while the ATC was down (%s)" % (entered or "none"))
-    waiting = [l for l in ctx.log_lines("ATC:") if miner in l]
-    ctx.note("%s's ATC lines while it was down: %s" % (miner, waiting[-3:]))
 
     # 5. Back on: the pair gets home.
     settled0 = len(ctx.log_lines("settled: rebuilt"))
