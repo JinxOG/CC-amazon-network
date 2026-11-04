@@ -197,7 +197,7 @@ class Control:
         dest = os.path.join(self.disks, str(new))
         os.makedirs(dest, exist_ok=True)
         for name, text in (files or {}).items():
-            with open(os.path.join(dest, name), "w") as f:
+            with open(os.path.join(dest, name), "w", encoding="utf8", newline="\n") as f:   # fleet files hold UTF-8 (dashes, arrows)
                 f.write(text)
         shutil.copy(startup, os.path.join(dest, "startup.lua"))
         self.shutdown([new])
