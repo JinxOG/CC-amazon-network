@@ -31,6 +31,7 @@ def steps(ctx):
     x, y, z = c.free_spot()
     ctx.note("delivery of 16 %s to %d,%d,%d" % (have, x, y, z))
     queued0 = len(ctx.log_lines("Job queued: job_"))
+    n_lines0 = len(ctx.log_lines(""))
     ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": have, "count": 16}], "destination": {"x": x, "y": y, "z": z}})
     queued = ctx.wait_until(lambda: ctx.log_lines("Job queued: job_")[queued0:], 120)
     ctx.expect(bool(queued), "the delivery job was queued (%s)" % (queued[:1] if queued else "nothing"))
@@ -41,6 +42,8 @@ def steps(ctx):
     ctx.expect(bool(went), "%s was dispatched to a delivery turtle (%s)" % (job, went[:1] if went else "nothing"))
     done = ctx.wait_until(lambda: [l for l in ctx.log_lines("Job complete: %s" % job)], 2400)
     ctx.expect(bool(done), "%s completed: the warehouse saw the turtle arrive and loaded it" % job)
-    wh = [l for l in ctx.log_lines("") if "warehouse" in l.lower() and ("ERROR" in l or "crash" in l.lower())]
-    ctx.expect(not wh, "the warehouse logged no error or crash (%d: %s)" % (len(wh), wh[:2]))
+    # Only lines after the order: at boot the warehouse quotes its crash.log ('Restarted after a crash -- last: ...'), and
+    # in w3-warehouse-inbox-a that was a September entry older than the test world copy, logged before the order.
+    wh = [l for l in ctx.log_lines("")[n_lines0:] if "warehouse" in l.lower() and ("ERROR" in l or "crash" in l.lower())]
+    ctx.expect(not wh, "the warehouse logged no error or crash after the order (%d: %s)" % (len(wh), wh[:2]))
     ctx.note("warehouse lines for the job: %s" % [l for l in ctx.log_lines(job) if "warehouse" in l.lower()][:6])
