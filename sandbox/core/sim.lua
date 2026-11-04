@@ -33,7 +33,9 @@ function Sim.new(opts)
   disk:mkdir("computers")
   self.clock = Clock.new(opts.start_ms)
   self.rng = Rng.new(self.seed)
-  local sched = Scheduler.new{ clock = self.clock, rng = self.rng, trace = self.run_dir .. "/trace.log" }
+  -- SANDBOX_NO_TRACE=1 writes no trace.log: a 150-turtle run writes several GB of it, and filled G: on 2026-11-03.
+  local tracePath = (os.getenv("SANDBOX_NO_TRACE") == nil) and (self.run_dir .. "/trace.log") or nil
+  local sched = Scheduler.new{ clock = self.clock, rng = self.rng, trace = tracePath }
   self.sched = sched
   sched.sim = self
   sched.world = opts.world
