@@ -270,6 +270,20 @@ function W.internalReturnRouteFrom(dock, fromX, fromZ)
             end
         end
     end
+    -- ANYWHERE ELSE IN A BAY SIDE, off its centre column: along the row it is on to
+    -- the centre column first. Only the dock rows hold docks, and a turtle on one of
+    -- those is on a dock (above), so this row is clear. node_3069 rebooted in an
+    -- aisle behind its dock and drove Z first into the parked front row (world
+    -- restart, sim, 2026-11-03).
+    for b = 1, CFG.NUM_WORKER_BAYS do
+        local cx = CFG.BAY_CENTER_X + (b - 1) * CFG.BAY_SPACING
+        local inSide = (fromZ < W.WHITE_Z and fromZ >= WORKER_ROW_B_Z - 3) or (fromZ > W.RED_Z and fromZ <= SUPPORT_ROW_B_Z + 3)
+        if fromX ~= cx and math.abs(fromX - cx) <= 4 and inSide then
+            local out = { { x = cx, y = CFG.FLOOR_Y, z = fromZ } }
+            for _, wp in ipairs(W.internalReturnRouteFrom(dock, cx, fromZ)) do out[#out + 1] = wp end
+            return out
+        end
+    end
     return {
         -- 1. Move to red taxiway at CURRENT column (Z-only — never crosses rows)
         { x = fromX,           y = CFG.FLOOR_Y, z = W.RED_Z  },

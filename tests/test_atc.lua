@@ -23,6 +23,43 @@ local RETURN3 = { "ARR", "R5", "J5", "R4", "J4", "R3", "J3", "S3" }
 return {
     -- node_4070 homed from support dock 211,-2793 straight into the parked turtle at 211,-2797 and stayed there
     -- (w3_atc_base150, 2026-11-03). A homing route from one dock to another must cross no third dock.
+    -- node_3069 rebooted in an aisle behind its dock (215,-2808) and drove Z first into the parked front row
+    -- (world restart, sim, 2026-11-03). From ANY free cell of a bay side, homing must cross no dock.
+    ["no homing route from anywhere in a bay drives through a dock"] = function(assert_eq)
+        package.loaded["waypoints"] = nil
+        local W = require("waypoints")
+        local isDock = {}
+        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+            for _, d in ipairs(W.docks[role]) do isDock[d.x .. "," .. d.z] = true end
+        end
+        local routes, worst, where = 0, 0, ""
+        for x = 153, 217 do
+            for _, zr in ipairs({ { -2813, -2804 }, { -2800, -2790 } }) do
+                for z = zr[1], zr[2] do
+                    local sec = W.atcSection(x, 67, z)
+                    if sec and not isDock[x .. "," .. z] then
+                        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+                            for _, to in ipairs(W.docks[role]) do
+                                routes = routes + 1
+                                local cx, cz, crossed = x, z, 0
+                                local function step()
+                                    if isDock[cx .. "," .. cz] and not (cx == to.x and cz == to.z) then crossed = crossed + 1 end
+                                end
+                                for _, wp in ipairs(W.internalReturnRouteFrom(to, x, z)) do
+                                    while cx ~= wp.x do cx = cx + (wp.x > cx and 1 or -1); step() end
+                                    while cz ~= wp.z do cz = cz + (wp.z > cz and 1 or -1); step() end
+                                end
+                                if crossed > worst then worst, where = crossed, x .. "," .. z .. " -> " .. to.x .. "," .. to.z end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        assert_eq(routes > 10000, true, "every free bay cell to every dock was tried (" .. routes .. ")")
+        assert_eq(worst, 0, "a homing route crossed a dock: " .. where)
+    end,
+
     ["no homing route from one dock to another drives through a third dock"] = function(assert_eq)
         package.loaded["waypoints"] = nil
         local W = require("waypoints")
