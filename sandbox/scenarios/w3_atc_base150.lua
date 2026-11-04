@@ -104,7 +104,9 @@ return {
       nextDest = nextDest % 4 + 1
       ordered = ordered + 1
       sim:dispatch{ type = "ORDER_DELIVERY", params = { items = { { name = "minecraft:cobblestone", count = 32 + ordered } },
-        destination = { x = 112 + 6 * nextDest, y = 67, z = -2830 } } }
+        -- each on its own row: on one row, turtles going home along it passed under the other destinations'
+        -- columns, where deliveries climb and descend, and 19 piled up there (2026-11-03)
+        destination = { x = 112 + 12 * nextDest, y = 67, z = -2820 - 4 * nextDest } } }
     end
     local function activeMines()
       local n = 0
@@ -265,6 +267,8 @@ return {
               local x, y, z = p.x + d[1], p.y + d[2], p.z + d[3]
               if sim.world:get(x, y, z) == nil and not occupied[x .. "," .. y .. "," .. z] then
                 sim.world:set(x, y, z, "computercraft:turtle_advanced"); placed = placed + 1
+                faultInfo.fakeBlocks = faultInfo.fakeBlocks or {}
+                faultInfo.fakeBlocks[#faultInfo.fakeBlocks + 1] = { x = x, y = y, z = z }
               end
             end
             faultInfo.stuck_victim, faultInfo.stuck_job, faultInfo.stuck_blocks = victim.name, tostring(jobKey), placed
@@ -352,7 +356,12 @@ return {
       local x, y, z = l:match("blocking %a+ at (%-?%d+),(%-?%d+),(%-?%d+)")
       local s = tonumber(l:match("Still waiting (%d+)s"))
       x, y, z = tonumber(x), tonumber(y), tonumber(z)
-      if x and s and s > 30 then
+      -- blocked by the stuck fault's own turtle-shaped blocks, which the ATC cannot know of: that is the fault
+      local byFault = false
+      for _, b in ipairs(faultInfo.fakeBlocks or {}) do
+        if x and math.abs(b.x - x) + math.abs(b.y - y) + math.abs(b.z - z) <= 1 then byFault = true end
+      end
+      if x and s and s > 30 and not byFault then
         if inBase({ x = x, y = y, z = z }) then inBaseBlocked = inBaseBlocked + 1 end
         if (x == 143 and z <= -2803 and z >= -2813 and y >= 60 and y <= 67) or (y == 67 and z == -2803 and x >= 144 and x <= 156) then
           dhBlocked = dhBlocked + 1

@@ -1502,7 +1502,7 @@ local atc = {
     SEEN_FILE = "atc.seen",
     ENABLED  = W.atcSection ~= nil and fs.exists("atc.seen"),
     REPLY_S  = 2,          -- one round trip
-    STUCK_S  = 180,        -- no progress this long: the job goes back to the queue
+    STUCK_S  = 160,        -- no progress this long: the job goes back to the queue
     route    = nil,        -- the booked sections, in order
     nonce    = 0,
     stallAt  = nil,        -- os.clock() when progress stopped
@@ -1827,7 +1827,12 @@ local function tryMove(digFn, dir)
             -- Read the clock ONCE and pass it down; see waitReporter for why a
             -- second read is not free.
             local now = os.clock()
-            if now > turtleDeadline then
+            -- In the base the ATC granted this section, so what blocks it is a turtle
+            -- that cannot move: not a reason to give up and go IDLE in the lane (the
+            -- server would offer it work; it would never say STUCK -- boxed-in test,
+            -- sim, 2026-11-03). It waits, the stuck rule hands its job back and marks
+            -- it ERROR at STUCK_S, and it carries on if the way clears.
+            if now > turtleDeadline and not inBase then
                 -- Logged as well as returned. Callers do report this, but not
                 -- all of them reach the server, and two minutes of standing
                 -- still ending in silence is the case Invariant J is about.
