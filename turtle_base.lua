@@ -2026,7 +2026,19 @@ base.move = move
 
 -- Navigate from current position (dock) to the world via the dispatch hole.
 -- Call this at the start of every job before heading to destination.
+local departImpl
+-- However a departure ends -- out of the hole, or a route that failed half way --
+-- the booking is given back (all but the section it stands in). A failed one kept
+-- the whole outbound route booked for good (node_3069, sim, 2026-11-03).
 function base.depart(noDescend)
+    local ok, a, b = pcall(departImpl, noDescend)
+    atc.finish()
+    atc.group = nil
+    if not ok then error(a, 0) end
+    return a, b
+end
+
+function departImpl(noDescend)
     if not _self.dock then logWarn("No dock assigned, departing from current pos.") return true end
 
     -- Pre-departure fuel reserve check. A flat critical threshold isn't enough for a
@@ -2132,8 +2144,6 @@ function base.depart(noDescend)
     end
 
     logInfo(string.format("Exited depot at %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
-    atc.finish()
-    atc.group = nil
     return true
 end
 

@@ -235,14 +235,17 @@ return {
           faultInfo.world_restart_inside = insideC
           minute = minute + 40
         elseif FAULT == "stuck" then
-          -- the first turtle with a job seen in a taxiway lane: its moves now find a turtle in the way, for ever
-          local victim, jobId
+          -- The first turtle with a job seen in a taxiway lane is BOXED IN by turtle-shaped blocks on every free side,
+          -- for good -- a physical blockade, as a jam of turtles is. (The first version overrode turtle.inspect with
+          -- sim:eval, but turtle_base keeps its inspect functions from load time: the victim never saw a turtle, and
+          -- the "job back in 8 s" was another job, looked up by a list index that had moved.)
+          local victim, jobKey
           for _ = 1, 120 do
             for _, c in ipairs(workers(sim)) do
               local p = c.pos
               if p and p.y == 67 and p.z >= -2803 and p.z <= -2801 and p.x > 143 and p.x < 228 then
-                for id, j in pairs(sim.sched.standin.state.jobs or {}) do
-                  if type(j) == "table" and j.assignedTo == c.name and j.status == "IN_PROGRESS" then victim, jobId = c, id end
+                for _, j in pairs(sim.sched.standin.state.jobs or {}) do
+                  if type(j) == "table" and j.assignedTo == c.name and j.status == "IN_PROGRESS" then victim, jobKey = c, j.id end
                 end
               end
               if victim then break end
@@ -250,23 +253,38 @@ return {
             if victim then break end
             sim:run_for(5000)
           end
-          sim:expect(victim ~= nil, "found a turtle with a job in a taxiway lane to make stuck")
-          if victim then
-            sim:eval(victim.name, "local t = { name = 'computercraft:turtle_advanced' }"
-              .. "; turtle.forward = function() return false, 'Movement obstructed' end"
-              .. "; turtle.back = turtle.forward; turtle.up = turtle.forward; turtle.down = turtle.forward"
-              .. "; turtle.inspect = function() return true, t end; turtle.inspectUp = turtle.inspect"
-              .. "; turtle.inspectDown = turtle.inspect")
+          sim:expect(victim ~= nil and jobKey ~= nil, "found a turtle with a job in a taxiway lane to make stuck ("
+            .. tostring(victim and victim.name) .. ", " .. tostring(jobKey) .. ")")
+          if victim and jobKey then
+            local p, placed = victim.pos, 0
+            local occupied = {}
+            for _, c in ipairs(sim.sched.computers) do if c.pos then occupied[c.pos.x .. "," .. c.pos.y .. "," .. c.pos.z] = true end end
+            for _, d in ipairs({ { 1, 0, 0 }, { -1, 0, 0 }, { 0, 0, 1 }, { 0, 0, -1 }, { 0, 1, 0 }, { 0, -1, 0 } }) do
+              local x, y, z = p.x + d[1], p.y + d[2], p.z + d[3]
+              if sim.world:get(x, y, z) == nil and not occupied[x .. "," .. y .. "," .. z] then
+                sim.world:set(x, y, z, "computercraft:turtle_advanced"); placed = placed + 1
+              end
+            end
+            faultInfo.stuck_victim, faultInfo.stuck_job, faultInfo.stuck_blocks = victim.name, tostring(jobKey), placed
             local t0 = sim.clock:now()
+            local function job()
+              for _, j in pairs(sim.sched.standin.state.jobs or {}) do if type(j) == "table" and j.id == jobKey then return j end end
+            end
             local back = sim:run_until(function()
-              local j = (sim.sched.standin.state.jobs or {})[jobId]
-              return type(j) == "table" and j.assignedTo ~= victim.name
+              local j = job()
+              return j == nil or j.assignedTo ~= victim.name
             end, 10 * 60000)
-            faultInfo.stuck_victim, faultInfo.stuck_job = victim.name, tostring(jobId)
             faultInfo.stuck_job_back_after_s = back and math.floor((sim.clock:now() - t0) / 1000) or -1
-            sim:expect(back and sim.clock:now() - t0 <= 4 * 60000,
-              string.format("the stuck turtle's job %s went back to the queue within 4 minutes (%s s)", tostring(jobId),
+            -- it must have taken the stuck rule's time, not happened for some other reason at once
+            sim:expect(back and sim.clock:now() - t0 <= 4 * 60000 and sim.clock:now() - t0 >= 150000,
+              string.format("the boxed-in turtle's job %s went back to the queue in 2.5..4 minutes (%s s)", tostring(jobKey),
                 tostring(faultInfo.stuck_job_back_after_s)))
+            local said = false
+            for _, l in ipairs(stuck.lines) do if l:find(victim.name, 1, true) then said = true end end
+            sim:expect(said, victim.name .. " reported STUCK")
+            local reg = ((sim.sched.standin.state or {}).turtles or {})[victim.name]
+            faultInfo.stuck_status_at_server = reg and tostring(reg.status) or "?"
+            sim:expect(reg ~= nil and reg.status ~= "IDLE", "and the server no longer counts it IDLE (" .. faultInfo.stuck_status_at_server .. ")")
             faultInfo.victim = victim
           end
         end
@@ -276,10 +294,20 @@ return {
     end
 
     -- the drain: no new orders; everybody home
+    -- With a turtle boxed in for good in a lane, the turtles whose way home crosses that lane cannot get there
+    -- until somebody removes it. Waiting in the holding line (or a dock) is the design's safe place; anywhere
+    -- else is not.
+    local function inHoldingLine(p)
+      return p and p.x > 228 and p.x <= 256 and p.z >= -2781 and p.z <= -2779 and (p.y == 60 or p.y >= 100)
+    end
+    local heldBack = {}
     local function offDock()
       local off = {}
+      heldBack = {}
       for _, c in ipairs(workers(sim)) do
-        if not atDock(c.pos) and c ~= faultInfo.victim then off[#off + 1] = c end
+        if not atDock(c.pos) and c ~= faultInfo.victim then
+          if FAULT == "stuck" and inHoldingLine(c.pos) then heldBack[#heldBack + 1] = c.name else off[#off + 1] = c end
+        end
       end
       return off
     end
@@ -294,6 +322,7 @@ return {
     sim.results.atc = not NO_ATC
     sim.results.jobs_completed = #done.lines
     sim.results.off_dock = #off
+    sim.results.waiting_in_holding_line_behind_stuck = #heldBack
     sim.results.off_dock_where = table.concat(where, " ")
     for k, v in pairs(faultInfo) do if type(v) ~= "table" then sim.results[k] = v end end
     sim:expect(#off == 0, "every turtle ended on a dock cell (" .. #off .. " not: " .. table.concat(where, " ") .. ")")
