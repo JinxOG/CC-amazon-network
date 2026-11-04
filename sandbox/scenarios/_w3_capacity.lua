@@ -18,6 +18,11 @@ return function(quota, days)
     seed = 1,
     miners = 8,
     workers = 150,
+    -- The base under its air-traffic control computer, with the docks the server already knows, as a real base
+    -- runs. The first two runs (2026-11-03) had neither: the base gridlocked and the delivery jobs piled up in
+    -- jobs.dat for that reason, not for any disk reason (the ATC card).
+    atc = os.getenv("W3_NO_ATC") == nil,
+    preset_docks = true,
     steps = function(sim)
       local done = sim:capture_log("Job complete: job_")
       local server
@@ -30,7 +35,7 @@ return function(quota, days)
       sim:run_for(5 * 60000)
 
       local area = sim.world:meta().areas[1]
-      local nextZone, nextDest = 0, 0
+      local nextZone, nextDest, ordered = 0, 0, 0
       local function orderZone()
         local x = area.x1 + 64 * 3 * (nextZone % 40)
         local z = area.z1 + 64 * 3 * math.floor(nextZone / 40)
@@ -77,12 +82,14 @@ return function(quota, days)
           local m = jobs()
           while m < 4 do orderZone(); m = m + 1 end
           if tick % 3 == 0 then
-            -- Four destinations in turn: the server runs one delivery per destination, and on the first run (one
-            -- destination) a single delivery held by a boxed-in turtle (node_35, day 2 07:01) queued every later one.
+            -- Four destinations in turn, each on its own row inside the loaded base (the ATC card's rule: on one
+            -- row turtles going home passed under the other destinations' columns). Each order a little different:
+            -- the server drops a bridge command identical to one it just took.
             nextDest = nextDest % 4 + 1
+            ordered = ordered + 1
             sim:dispatch{ type = "ORDER_DELIVERY", params = {
-              items = { { name = "minecraft:cobblestone", count = 64 } },
-              destination = { x = 112 + 6 * nextDest, y = 67, z = -2830 } } }
+              items = { { name = "minecraft:cobblestone", count = 32 + ordered % 32 } },
+              destination = { x = 112 + 12 * nextDest, y = 67, z = -2820 - 4 * nextDest } } }
           end
         end
         if hour % 24 == 12 then sim:reboot(server.name) end      -- the daily restart
@@ -101,6 +108,8 @@ return function(quota, days)
       sim.results.quota = quota
       sim.results.zones_ordered = nextZone
       sim.results.jobs_completed = #done.lines
+      sim.results.deliveries_ordered = ordered
+      sim.results.atc = os.getenv("W3_NO_ATC") == nil
       sim:expect(minFree > 0, string.format("the disk never filled (lowest free %d of %d)", minFree, quota))
     end,
   }
