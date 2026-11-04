@@ -137,7 +137,11 @@ return {
         assert_eq(core.handle(st, "b", { op = "enter", sec = "N2" }, t).ok, true)
     end,
 
-    ["a silent turtle's booking is dropped, except the section it stands in"] = function(assert_eq)
+    -- It used to keep the sections the silent turtle had entered ("it stands there"). That leaked: a lost leave
+    -- or a never-refreshed one-step entry held a bay column for good, and 35 departures waited in their docks
+    -- (w3_atc_base150, 2026-11-03). A dead turtle left in a lane is still physically in the way, and the next
+    -- turtle's stuck rule hands its job back.
+    ["a silent turtle gives back everything, the sections it entered too"] = function(assert_eq)
         local core, st, t = live()
         core.handle(st, "dead", { op = "request", route = DEPART3 }, t)
         core.handle(st, "dead", { op = "enter", sec = "S3" }, t)
@@ -150,8 +154,19 @@ return {
         core.handle(st, "other", { op = "report" }, later)        -- other is alive
         assert_eq(core.sweep(st, later) >= 1, true, "the silent booking is dropped")
         assert_eq(core.handle(st, "other", { op = "enter", sec = "J2" }, later).ok, true, "J2 is free now")
-        assert_eq(core.handle(st, "third", { op = "enter", sec = "J3" }, later).ok, false,
-            "J3 stays held: the silent turtle is physically in it")
+        assert_eq(core.handle(st, "third", { op = "enter", sec = "J3" }, later).ok, true,
+            "and J3, which it had entered, is free too")
+    end,
+
+    ["a turtle that keeps asking keeps what it holds, its one-step entries included"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "w", { op = "enter", sec = "N4" }, t).ok, true, "a one-step entry outside any booking")
+        local half = t + math.floor(core.CFG.STALE_MS / 2)
+        core.handle(st, "w", { op = "enter", sec = "J4", cur = "N4" }, half)       -- still asking, from N4
+        local later = t + core.CFG.STALE_MS + 1
+        core.handle(st, "w", { op = "enter", sec = "J4", cur = "N4" }, later)
+        core.sweep(st, later)
+        assert_eq(core.handle(st, "x", { op = "enter", sec = "N4" }, later).ok, false, "N4 is still w's")
     end,
 
     ["a cancelled booking frees every section but the one it stands in"] = function(assert_eq)

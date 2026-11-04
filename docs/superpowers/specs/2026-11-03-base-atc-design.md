@@ -43,6 +43,38 @@ Sections come from cell coordinates (`waypoints.lua`, `W.atcSection(x, y, z)`).
 - **Waiting places are outside every section.** These are the docks and the holding line. The holding line is a row of slots at (228 + 2k, 60, -2780), one block north of the taxi row, so a turtle called up never passes another one waiting.
 - **The sky has a second holding line.** Miners returning from the sky use slots at the same x and z, at y 200.
 
+## Changed after the first sim runs (2026-11-03)
+
+These rules replace the ones in "Grants" and "Sections" below.
+
+- **A route is let in only when every section on it is free.** The turtle itself and its partner don't count against it.
+  - So nobody is ever admitted only to wait at a section edge, and the dispatch hole cannot hold a queue.
+  - A request that has waited more than 60 s keeps later overlapping requests out, so a long route is not starved.
+  - The ordered queues stay, for the rebuild after a restart.
+- **The holding line's taxi row is north of the slots (z -2778); the slots are at z -2780.** A turtle reaches its slot from the south: along the row it is on, then up the slot's own column. So:
+  - its approach crosses no section;
+  - it never drives back up the delivery spot's own column, which outbound turtles use;
+  - the support following one block behind stops south of the slot, out of the way when its delivery leaves northwards.
+- **A turtle looks for an ATC before its first step into the base.** Hearing the ATC's hello is not enough on its own.
+  - In the first 150-turtle run, 147 turtles started homing within 2 s of boot. They heard the ATC only at its 60 s repeat, and the boot rush jammed with no gates.
+  - Now the first step into the base asks the ATC, at most once a minute. The ATC also says hello again 3, 8 and 14 s after it boots.
+
+## The three blind spots on the card (A, B, C), and how they are handled
+
+- **A, sky arrivals.** Miners fly home at y 200 straight to the point above the arrivals hole. `move.to` recognises that flight, so `ore_turtle.lua` is untouched, and sends the miner instead to a SKY holding slot beside the column. The slots are at (228 + 2k, y, -2780) and the sky taxi row is part of ARR, so the miner never hovers in the column.
+  - The miner waits in its slot until its whole way home is free, then is called down.
+  - Tunnel and sky arrivals both need ARR first. The ATC takes them in the order the requests came, so it alone decides who uses the hole next.
+- **B, support staging.** The support waits in its dock until its delivery is at the hole and sends HOLE_READY, as today. Its route is then let in only when every section of it is free.
+  - The support is booked as one party with its delivery. It may share the dispatch corner (DH) its partner is holding for it, and nobody else may.
+  - So staging is a granted section with a limit of one party, and nobody queues behind the pair. Later departures wait in their docks.
+- **C, a departures burst test.** `sandbox/scenarios/w3_atc_base150.lua` opens with 20 deliveries ordered at once on the 150-turtle base. Its checks are:
+  - no 'Still waiting' at a section edge over 30 s;
+  - nobody waiting to enter DH;
+  - nobody blocked by a turtle inside the base for over 30 s;
+  - every turtle on a dock at the end.
+
+  The same scenario with `W3_NO_ATC=1` on today's master is the run where these checks fail.
+
 ## Grants: reservations admitted in order
 
 A turtle about to use the base asks for its whole route as an ordered list of sections. It works the list out from the route's waypoints, stepping the cells in `move.to`'s own order: vertical, then x, then z.

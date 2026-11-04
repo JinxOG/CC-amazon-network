@@ -138,6 +138,31 @@ function Synth.layout(waypoints, opts)
       turtle = { equipped = { left = MODEM, right = PICK }, inv = {
         [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" } } } }
   end
+  -- opts.preset_docks: the server starts knowing who sits in which dock, as a real base does (its
+  -- dock_assignments.dat survives restarts). Without it the server hands docks out in registration order, which is
+  -- not the layout's order, and at boot nearly every turtle drives to a new dock at once -- a rush the live fleet
+  -- never sees (W3, the ATC card, 2026-11-03).
+  if opts.preset_docks then
+    local byRole = { DELIVERY = {}, SUPPORT = {} }
+    for _, spec in ipairs(L) do
+      if spec.kind == "turtle" and spec.pos and not spec.carried then
+        local list = (spec.role == "support") and support_docks or worker_docks
+        local key = (spec.role == "support") and "SUPPORT" or "DELIVERY"
+        for i, d in ipairs(list) do
+          if d.x == spec.pos.x and d.z == spec.pos.z then byRole[key][i] = "node_" .. spec.id end
+        end
+      end
+    end
+    local parts = {}
+    for role, slots in pairs(byRole) do
+      local s = {}
+      for i, name in pairs(slots) do s[#s + 1] = string.format("[%d] = %q", i, name) end
+      parts[#parts + 1] = role .. " = { " .. table.concat(s, ", ") .. " }"
+    end
+    for _, spec in ipairs(L) do
+      if spec.role == "server" then spec.files = { ["dock_assignments.dat"] = "{ " .. table.concat(parts, ", ") .. " }" } end
+    end
+  end
   return L
 end
 

@@ -1755,6 +1755,20 @@ local function tryMove(digFn, dir)
     -- world. inBase also turns off the sidesteps below: in a one-block lane a
     -- step sideways is a step into somebody else's section.
     local atcFrom, atcInto = nil, nil
+    if not atc.ENABLED and W.atcSection then
+        -- BEFORE THE FIRST STEP INTO THE BASE, LOOK FOR AN ATC. Waiting to hear its
+        -- hello is not enough: at boot 147 turtles started homing within 2 s and
+        -- heard it only at its 60 s repeat, so the boot rush ran ungated and jammed
+        -- (w3_atc_base150, 2026-11-03). Asked at most once a minute; a base with
+        -- no ATC loses 2 s a minute.
+        local nx, ny, nz = _self.pos.x, _self.pos.y, _self.pos.z
+        if dir == "up" then ny = ny + 1 elseif dir == "down" then ny = ny - 1 else nx, nz = projectStep(dir) end
+        if (atc.section(nx, ny, nz) or atc.here()) and (not atc.probedAt or os.clock() - atc.probedAt >= 60) then
+            atc.probedAt = os.clock()
+            local okAsk, answer = pcall(atc.ask, proto.MSG.ATC_REQUEST, { route = {} })
+            if okAsk and answer then atc.heard() end   -- an error is no answer: never cost the move
+        end
+    end
     if atc.ENABLED then
         local nx, ny, nz = _self.pos.x, _self.pos.y, _self.pos.z
         if dir == "up" then ny = ny + 1 elseif dir == "down" then ny = ny - 1 else nx, nz = projectStep(dir) end

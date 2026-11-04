@@ -671,8 +671,8 @@ return {
     ["a turtle that reaches its dock says docked"] =
     function(assert_eq)
         local r = bootAt(nil, {}, { dx = 2, letMove = true })
-        local ok = pcall(r.base.homeAfterBoot)
-        assert_eq(ok, true)
+        local ok, why = pcall(r.base.homeAfterBoot)
+        assert_eq(ok, true, tostring(why))
         assert_eq(r.said("docked"), true, "so the server can release a recovering turtle of any role")
     end,
 }

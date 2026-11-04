@@ -133,7 +133,8 @@ end
 function core.handle(st, id, p, now)
     p = p or {}
     local rid = st.byTurtle[id]
-    if rid and st.res[rid] then st.res[rid].at = now end
+    -- every entry this turtle holds is alive while it talks, its one-step ones too
+    for _, x in pairs(st.res) do if x.id == id then x.at = now end end
     for _, line in pairs(st.slots) do
         for k, sl in pairs(line) do
             if sl.id == id then
@@ -277,31 +278,25 @@ function core.settle(st, now)
     return n
 end
 
--- Bookings whose turtle has been silent STALE_MS: dropped from every section it
--- has not entered (the ones it sits in stay held -- it is physically there).
+-- A turtle silent STALE_MS gives back EVERYTHING, the sections it entered too.
+-- Keeping those "because it stands there" leaked: a lost leave, or a one-step
+-- entry (facing detection) that was never refreshed, held a bay column for good
+-- and kept 35 departures in their docks (w3_atc_base150, 2026-11-03). A live
+-- turtle waiting at a gate asks every second, so it is never silent; a dead one
+-- left in a lane is still in the way, and the next turtle's stuck rule hands its
+-- job back.
 function core.sweep(st, now)
     local dropped = 0
     for rid, r in pairs(st.res) do
         if now - r.at > CFG.STALE_MS then
-            local keep
-            for s in pairs(r.entered) do keep = s end
-            local before = #r.list
-            for _, s in ipairs(r.list) do
-                if not r.entered[s] then removeFrom(queue(st, s), rid) end
-            end
-            if keep then
-                r.list = {}
-                for s in pairs(r.entered) do r.list[#r.list + 1] = s end
-            else
-                st.res[rid] = nil
-                if st.byTurtle[r.id] == rid then st.byTurtle[r.id] = nil end
-            end
-            if before ~= #r.list or not keep then
-                dropped = dropped + 1
-                note(st, string.format("%s silent %ds: booking dropped%s", r.id, math.floor((now - r.at) / 1000),
-                    keep and (" except " .. keep .. ", where it stands") or ""))
-            end
-            r.at = now
+            for _, s in ipairs(r.list) do removeFrom(queue(st, s), rid) end
+            st.res[rid] = nil
+            if st.byTurtle[r.id] == rid then st.byTurtle[r.id] = nil end
+            dropped = dropped + 1
+            local held = {}
+            for s in pairs(r.entered) do held[#held + 1] = s end
+            note(st, string.format("%s silent %ds: booking dropped%s", r.id, math.floor((now - r.at) / 1000),
+                #held > 0 and (", including " .. table.concat(held, " ") .. " it had entered") or ""))
         end
     end
     return dropped
@@ -309,11 +304,18 @@ end
 
 -- Who holds what, for the screen and the log.
 function core.summary(st)
-    local held = 0
-    for _, q in pairs(st.q) do if #q > 0 then held = held + 1 end end
+    local held, who = 0, {}
+    for s, q in pairs(st.q) do
+        if #q > 0 then
+            held = held + 1
+            local r = st.res[q[1]]
+            who[#who + 1] = s .. "=" .. (r and tostring(r.id) or "?") .. (#q > 1 and ("+" .. (#q - 1)) or "")
+        end
+    end
+    table.sort(who)
     local n = 0
     for _ in pairs(st.res) do n = n + 1 end
-    return held, n
+    return held, n, table.concat(who, " ")
 end
 
 core.CFG = CFG
@@ -399,14 +401,22 @@ local function main()
             lastSweep = now
             core.sweep(st, now)
         end
+        -- Said again 3, 8 and 14 s after boot: the first one goes out while the
+        -- fleet is still opening its radios.
+        local since = now - st.epoch
+        if (since >= 3000 and lastHello < st.epoch + 3000) or (since >= 8000 and lastHello < st.epoch + 8000)
+                or (since >= 14000 and lastHello < st.epoch + 14000) then
+            lastHello = now
+            hello()
+        end
         if now - lastHello >= CFG.HELLO_EVERY then
             lastHello = now
             hello()
         end
         if now - lastSummary >= 60000 then
             lastSummary = now
-            local held, n = core.summary(st)
-            log(string.format("%d section(s) held, %d booking(s)", held, n))
+            local held, n, who = core.summary(st)
+            log(string.format("%d section(s) held, %d booking(s)%s", held, n, held > 0 and (": " .. who) or ""))
         end
         for _, line in ipairs(st.log) do log(line) end
         st.log = {}

@@ -34,6 +34,8 @@ function Fleet.provision(sim, layout, opts)
       if not INSTALL_ROLES[spec.role] then error("unknown role " .. tostring(spec.role) .. " for computer " .. spec.id, 0) end
       comp.disk_obj = comp.disk_obj or require("core.disk").new(comp.disk, comp.quota)
       comp.disk_obj:write("startup.lua", bootstrap(spec.role))
+      -- files a layout puts on the disk before the first boot (the synthetic server's dock list, for one)
+      for name, text in pairs(spec.files or {}) do comp.disk_obj:write(name, text) end
       installing[#installing + 1] = { comp = comp, spec = spec }
     end
   end
