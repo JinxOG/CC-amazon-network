@@ -689,6 +689,25 @@ return {
         assert_eq(r.said("docked"), true, "and then that it is docked, which releases the server's hold")
     end,
 
+    -- Supports whose delivery never called them went "home" from their docks the underground way: down through
+    -- the floor, which a support cannot dig (sim, 2026-11-03). On the floor of the building, home is inside.
+    ["returnToDock from the building's floor goes home inside, never down through the floor"] =
+    function(assert_eq)
+        local r = bootAt(nil, {}, { dx = 2, letMove = true })
+        local lowest = r.c.pos.y
+        local down = turtle.down
+        turtle.down = function(...)
+            local ok, why = down(...)
+            if r.c.pos.y < lowest then lowest = r.c.pos.y end
+            return ok, why
+        end
+        local ok, why = pcall(r.base.returnToDock)
+        turtle.down = down
+        assert_eq(ok, true, tostring(why))
+        assert_eq(lowest, 67, "it never went below the floor")
+        assert_eq(r.said("docked"), true, "and it got home")
+    end,
+
     ["a turtle that reaches its dock says docked"] =
     function(assert_eq)
         local r = bootAt(nil, {}, { dx = 2, letMove = true })

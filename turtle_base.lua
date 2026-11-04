@@ -2194,6 +2194,13 @@ local home = {}
 function home.dock()
     if not _self.dock then logWarn("No dock assigned, staying put.") return true end
 
+    -- Already inside the building, on its floor: the way home is the inside one.
+    -- Down through the floor to the tunnel was tried by supports whose delivery
+    -- never called them (they cannot dig, so it failed in the dock; sim, 2026-11-03).
+    if _self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos) then
+        return home.internal()
+    end
+
     base.setStatus(proto.STATUS.RETURNING)
 
     local FLOOR_Y       = CFG.FLOOR_Y

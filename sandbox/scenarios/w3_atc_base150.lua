@@ -285,9 +285,13 @@ return {
             sim:expect(back and sim.clock:now() - t0 <= 4 * 60000 and sim.clock:now() - t0 >= 150000,
               string.format("the boxed-in turtle's job %s went back to the queue in 2.5..4 minutes (%s s)", tostring(jobKey),
                 tostring(faultInfo.stuck_job_back_after_s)))
-            local said = false
-            for _, l in ipairs(stuck.lines) do if l:find(victim.name, 1, true) then said = true end end
-            sim:expect(said, victim.name .. " reported STUCK")
+            -- its line travels through the server's log outbox: give it a minute to arrive (it is logged the moment
+            -- the job goes back, so checking at once found nothing)
+            local function said()
+              for _, l in ipairs(stuck.lines) do if l:find(victim.name, 1, true) then return true end end
+              return false
+            end
+            sim:expect(sim:run_until(said, 60000) and true or false, victim.name .. " reported STUCK")
             local reg = ((sim.sched.standin.state or {}).turtles or {})[victim.name]
             faultInfo.stuck_status_at_server = reg and tostring(reg.status) or "?"
             sim:expect(reg ~= nil and reg.status ~= "IDLE", "and the server no longer counts it IDLE (" .. faultInfo.stuck_status_at_server .. ")")
