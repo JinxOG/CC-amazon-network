@@ -270,6 +270,19 @@ return {
             "slot 1 is free again, but the next arrival gets the next column")
     end,
 
+    -- A homing route goes up a bay's centre column to the red lane and back down it: S5, J5, S5 again. Leaving S5
+    -- took it out of S5's queue, and coming back it was told "ahead" by nobody, for good (node_3069, world restart,
+    -- sim, 2026-11-03).
+    ["a turtle may come back into a section of its own route it has left, if the section is free"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "h", { op = "request", route = { "S5", "J5" } }, t).ok, true)
+        assert_eq(core.handle(st, "h", { op = "enter", sec = "S5" }, t).ok, true)
+        assert_eq(core.handle(st, "h", { op = "enter", sec = "J5" }, t).ok, true)
+        core.handle(st, "h", { op = "leave", sec = "S5" }, t)
+        assert_eq(core.handle(st, "h", { op = "enter", sec = "S5", cur = "J5" }, t).ok, true, "back into S5: it is free")
+        assert_eq(core.handle(st, "o", { op = "enter", sec = "S5" }, t).ok, false, "and it is h's again")
+    end,
+
     ["a step outside any booking only goes into a free section"] = function(assert_eq)
         local core, st, t = live()
         assert_eq(core.handle(st, "a", { op = "enter", sec = "N2" }, t).ok, true, "one-section step into a free section")

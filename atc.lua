@@ -262,7 +262,23 @@ function core.handle(st, id, p, now)
             r.entered[s] = true
             return { ok = true }
         end
-        return { ok = false, why = "ahead", ahead = #queue(st, s) }
+        -- BACK INTO A SECTION OF ITS OWN ROUTE THAT IT HAS ALREADY LEFT (a homing
+        -- route goes up a bay's centre column to the red lane and back down it).
+        -- Leaving took it out of that section's queue, so "ahead" was a wait for
+        -- nobody, for good: node_3069 sat at J5 after a world restart (sim,
+        -- 2026-11-03). Re-entering is a one-step entry: only into a free section.
+        local q = queue(st, s)
+        local queued = false
+        for _, x in ipairs(q) do if x == rid then queued = true end end
+        if not queued then
+            if #q == 0 then
+                table.insert(q, 1, rid)
+                r.entered[s] = true
+                return { ok = true }
+            end
+            return { ok = false, why = "busy", ahead = #q }
+        end
+        return { ok = false, why = "ahead", ahead = #q }
     end
 
     if p.op == "leave" then

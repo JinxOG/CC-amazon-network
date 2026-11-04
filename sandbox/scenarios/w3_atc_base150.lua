@@ -258,7 +258,9 @@ return {
           if victim and jobKey then
             local p, placed = victim.pos, 0
             local occupied = {}
-            for _, c in ipairs(sim.sched.computers) do if c.pos then occupied[c.pos.x .. "," .. c.pos.y .. "," .. c.pos.z] = true end end
+            for _, c in ipairs(sim.sched.computers) do
+              if c.pos and c.pos.x and c.pos.y and c.pos.z then occupied[c.pos.x .. "," .. c.pos.y .. "," .. c.pos.z] = true end
+            end
             for _, d in ipairs({ { 1, 0, 0 }, { -1, 0, 0 }, { 0, 0, 1 }, { 0, 0, -1 }, { 0, 1, 0 }, { 0, -1, 0 } }) do
               local x, y, z = p.x + d[1], p.y + d[2], p.z + d[3]
               if sim.world:get(x, y, z) == nil and not occupied[x .. "," .. y .. "," .. z] then
