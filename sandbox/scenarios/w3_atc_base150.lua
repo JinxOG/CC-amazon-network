@@ -109,7 +109,9 @@ return {
       sim:run_for(60000)
       minute = minute + 1
       if minute % 10 == 0 then orderDelivery() end
-      while activeMines() < 2 do orderZone() end
+      -- at most two orders a minute: a loop "until two are active" never ended once the synthetic world ran out of
+      -- fresh ground (~1.45 h): the sim clock stopped and the orders filled memory (11.7 GB, 2026-11-03)
+      for _ = 1, 2 do if activeMines() < 2 then orderZone() end end
     end
 
     while minute * 60000 < HOURS * HOUR do
