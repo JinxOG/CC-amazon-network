@@ -2216,10 +2216,13 @@ function home.dock()
         -- never crosses the taxi row; the support stops one block behind, in the
         -- slot's own column; then up the shaft only once the whole way home is
         -- free.
-        -- The slot whose column it stands in, when it stands in one: a support
-        -- (which cannot dig) is in its delivery's, the one tunnel dug all the way.
+        -- The slot whose column it stands in, anywhere SOUTH of the slot: a support
+        -- (which cannot dig) is in its delivery's, dug all the way up -- however far
+        -- it had fallen behind when the delivery stopped (five came home six blocks
+        -- short and met rock one column over, sim 2026-11-03).
         local dx = _self.pos.x - W.ARRIVALS_HOLE.x
-        local here = (dx > 0 and dx % W.ATC.HOLD_STEP == 0 and math.abs(_self.pos.z - W.ATC.HOLD_Z) <= 1)
+        local here = (dx > 0 and dx % W.ATC.HOLD_STEP == 0 and dx / W.ATC.HOLD_STEP <= W.ATC.HOLD_SLOTS
+                and _self.pos.z <= W.ATC.HOLD_Z)
             and (dx / W.ATC.HOLD_STEP) or nil
         local k = base.atc.holdSlot("tunnel", here)
         logInfo("Navigating underground to holding slot " .. k .. "...")
