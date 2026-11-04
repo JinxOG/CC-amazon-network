@@ -72,6 +72,7 @@ return {
     local stuck = sim:capture_log("STUCK ")
     local docked = sim:capture_log("Docked at bay")
     local done = sim:capture_log("Job complete: job_")
+    local deliveries = sim:capture_log("[DELIVER] -> node_")
     local settled = sim:capture_log("settled: rebuilt")
     sim:storage_set("minecraft:cobblestone", 10000000)
     sim:storage_set("minecraft:chest", 100000)
@@ -85,9 +86,13 @@ return {
       nextZone = nextZone + 1
       sim:dispatch{ type = "ORDER_MINE", params = { x1 = x, z1 = z, x2 = x + 64, z2 = z, minerCount = 2 } }
     end
+    -- Each order a little different: the server drops a bridge command identical to one it just took, so twenty
+    -- identical orders were ONE job (2026-11-03).
+    local ordered = 0
     local function orderDelivery()
       nextDest = nextDest % 4 + 1
-      sim:dispatch{ type = "ORDER_DELIVERY", params = { items = { { name = "minecraft:cobblestone", count = 64 } },
+      ordered = ordered + 1
+      sim:dispatch{ type = "ORDER_DELIVERY", params = { items = { { name = "minecraft:cobblestone", count = 32 + ordered } },
         destination = { x = 112 + 6 * nextDest, y = 67, z = -2830 } } }
     end
     local function activeMines()
@@ -118,22 +123,44 @@ return {
       if not faultDone and minute * 60000 >= faultAt then
         faultDone = true
         if FAULT == "atc" and not NO_ATC then
-          -- record every turtle's section-ish box position, then check nobody moves into the base while it is down
-          sim:atc_crash(sim.clock:now() - sim.t0, 5 * 60000)
-          sim:run_for(15000)                                  -- the crash has happened; in-flight steps finish
-          local before = {}
-          for _, c in ipairs(workers(sim)) do before[c.name] = { x = c.pos.x, y = c.pos.y, z = c.pos.z } end
-          local entered = 0
-          for _ = 1, 26 do                                     -- 4m20s of the 5 min down, every 10 s
-            sim:run_for(10000)
+          -- THE CHECK MUST BE ABLE TO FAIL: crash the ATC while a turtle is moving through the base, and require
+          -- that evidence. (The first version crashed it at a quiet moment: nobody wanted in, 0 entries proved
+          -- nothing.) Then, every 2 s for the 5 minutes it is down, no turtle may step into a different section.
+          local Wp = assert(loadfile(sim.sched.code_dir .. "/waypoints.lua", "t",
+            setmetatable({ fs = { exists = function() return false end } }, { __index = _G })))()
+          local function sec(p) return p and Wp.atcSection(p.x, p.y, p.z) or nil end
+          local moving
+          for _ = 1, 900 do                                    -- up to 30 min, every 2 s
+            local seen = {}
+            for _, c in ipairs(workers(sim)) do seen[c.name] = { x = c.pos.x, y = c.pos.y, z = c.pos.z } end
+            sim:run_for(2000)
             for _, c in ipairs(workers(sim)) do
-              local b = before[c.name]
-              if b and not inBase(b) and inBase(c.pos) then entered = entered + 1; before[c.name] = { x = c.pos.x, y = c.pos.y, z = c.pos.z } end
+              local b = seen[c.name]
+              if sec(c.pos) and b and (b.x ~= c.pos.x or b.y ~= c.pos.y or b.z ~= c.pos.z) then moving = c; break end
+            end
+            if moving then break end
+          end
+          sim:expect(moving ~= nil, "a turtle was moving through the base when the ATC went down (evidence: "
+            .. tostring(moving and moving.name) .. ")")
+          sim:atc_crash(sim.clock:now() - sim.t0, 5 * 60000)
+          sim:run_for(3000)            -- a step granted just before the crash may still finish: that one is allowed
+          local inside0 = {}
+          for _, c in ipairs(workers(sim)) do if sec(c.pos) then inside0[#inside0 + 1] = c.name end end
+          faultInfo.in_base_at_atc_crash = #inside0
+          local last, entered, whoEntered = {}, 0, {}
+          for _, c in ipairs(workers(sim)) do last[c.name] = sec(c.pos) or "" end
+          for _ = 1, 143 do                                    -- 4 min 46 s of the 5 min down
+            sim:run_for(2000)
+            for _, c in ipairs(workers(sim)) do
+              local now = sec(c.pos) or ""
+              if now ~= "" and now ~= last[c.name] then entered = entered + 1; whoEntered[#whoEntered + 1] = c.name .. "->" .. now end
+              last[c.name] = now
             end
           end
           faultInfo.entered_while_down = entered
-          sim:expect(entered == 0, "with the ATC down, no turtle moved into the base (" .. entered .. ")")
-          minute = minute + 5
+          sim:expect(entered == 0, string.format("with the ATC down, no turtle stepped into a new section (%d; %d were in the base when it went down)",
+            entered, #inside0) .. (entered > 0 and (": " .. table.concat(whoEntered, " ")) or ""))
+          minute = minute + 35
         elseif FAULT == "server" then
           local d0 = #docked.lines
           sim:server_crash(sim.clock:now() - sim.t0, 20 * 60000)
@@ -245,5 +272,9 @@ return {
       sim:expect(#stuck.lines == 0, "nobody reported STUCK (" .. #stuck.lines .. ")")
     end
     sim.results.edge_wait_lines = #edgeWaits.lines
+    -- THE RUN MUST HAVE DONE WORK. 144 of 150 turtles once sat held by the server for the whole run, and every
+    -- check above passed because nothing moved (2026-11-03).
+    sim.results.deliveries_dispatched = #deliveries.lines
+    sim:expect(#deliveries.lines >= 10, "deliveries actually went out (" .. #deliveries.lines .. " dispatched)")
   end,
 }

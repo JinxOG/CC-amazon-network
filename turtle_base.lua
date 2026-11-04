@@ -1040,6 +1040,7 @@ end
 -- then re-detects facing -- a late fix without it still points every move
 -- the wrong way.
 function base.detectFacingForTest() return detectFacing() end
+function base.setFacingUnknownForTest() _self.facingKnown = false end   -- test seam
 function base.initPositionForTest() return initPosition() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
@@ -1071,6 +1072,7 @@ function base.waitForPositionFix(why, positionOnly)
                 or "no GPS fix, position unknown"
             pcall(base.sendProgress, string.format("stuck_no_fix: %s (%s)", where, tostring(why)))
             pcall(flushLogQueue)
+            _self.saidStuckNoFix = true    -- the server now holds it until it reports docked
         end
         sleep(10)
     end
@@ -3902,6 +3904,13 @@ function base.homeAfterBoot()
             logInfo(string.format("Not at dock (%d,%d) — homing from (%d,%d)...",
                 _self.dock.x, _self.dock.z, p.x, p.z))
             base.returnToDockInternal()
+        elseif atDock and _self.saidStuckNoFix then
+            -- IT SAID IT WAS STUCK, SO IT MUST SAY IT IS DOCKED. The server holds a
+            -- stuck_no_fix turtle until it reports docked, and a turtle already on
+            -- its own dock never went home, so it never said so: 144 of 150 sat
+            -- held for five hours after the boot rush for the aisle (sim, 2026-11-03).
+            _self.saidStuckNoFix = nil
+            pcall(base.sendProgress, "docked")
         elseif not insideBuilding then
             -- A FIELD REBOOT, ANY ROLE (recovery layer release 3). Say so -- the
             -- server requeues the job this turtle held and holds it until it

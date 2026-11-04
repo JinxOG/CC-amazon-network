@@ -668,6 +668,27 @@ return {
         assert_eq(r.said("recovering"), false, "a taxi home inside the building is not a recovery")
     end,
 
+    -- 144 of 150 turtles sat held for five hours (sim, 2026-11-03): each could not measure facing at once at boot
+    -- (the ATC let one per bay side step into the aisle at a time), so it told the server stuck_no_fix -- which
+    -- holds a turtle until it reports docked -- and, already on its own dock, it never went home to say so.
+    ["a turtle that said it was stuck at boot, on its own dock, says docked"] =
+    function(assert_eq)
+        local r = bootAt(nil, {}, { dx = 0, letMove = true })
+        r.base.setFacingUnknownForTest()
+        local refused = 0
+        for _, f in ipairs({ "forward", "back" }) do
+            local inner = turtle[f]
+            turtle[f] = function(...)
+                if refused < 6 then refused = refused + 1; return false, "Movement obstructed" end
+                return inner(...)
+            end
+        end
+        local ok, why = pcall(r.base.homeAfterBoot)
+        assert_eq(ok, true, tostring(why))
+        assert_eq(r.said("stuck_no_fix"), true, "it did report itself stuck first (the case under test)")
+        assert_eq(r.said("docked"), true, "and then that it is docked, which releases the server's hold")
+    end,
+
     ["a turtle that reaches its dock says docked"] =
     function(assert_eq)
         local r = bootAt(nil, {}, { dx = 2, letMove = true })
