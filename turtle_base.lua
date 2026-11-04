@@ -961,7 +961,9 @@ local function detectFacing()
     -- neighbouring section is asked for first, and given back afterwards.
     local claimed = base.atc.claimAround and base.atc.claimAround(x1, y1, z1)
     if claimed == false then
-        base.atc.stalled("cannot measure facing: the ATC has not let it step")
+        -- From a dock this is waiting in a safe place, as for a booking: not a
+        -- stall. Only a turtle refused while standing IN a section counts.
+        if base.atc.here() then base.atc.stalled("cannot measure facing: the ATC has not let it step") end
         logWarn("Cannot detect facing yet -- the ATC has not granted the sections around it. Facing UNKNOWN.")
         return false
     end
@@ -1578,6 +1580,7 @@ function atc.stalled(why)
     atc.stallAt = atc.stallAt or now
     if atc.stuckSent or now - atc.stallAt < atc.STUCK_S then return end
     atc.stuckSent = true
+    atc.statusBefore = _self.status
     logWarn(string.format("STUCK %ds at %d,%d,%d (%s) -- handing job %s back, status ERROR",
         math.floor(now - atc.stallAt), _self.pos.x, _self.pos.y, _self.pos.z, why, tostring(_self.jobId)))
     if _self.jobId then
@@ -1588,7 +1591,19 @@ function atc.stalled(why)
     comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(nil, proto.STATUS.ERROR,
         "stuck: " .. why, base.getPos()))
 end
-function atc.progressed() atc.stallAt = nil end
+-- Moving again ends a stall. A turtle that had reported STUCK goes back to the
+-- status it had: left at ERROR it would never be given work again (15 docked
+-- turtles in the boot rush, 2026-11-03). Its job, if it had one, is already back
+-- in the queue and stays there.
+function atc.progressed()
+    atc.stallAt = nil
+    if not atc.stuckSent then return end
+    atc.stuckSent = false
+    _self.status = (atc.statusBefore and atc.statusBefore ~= proto.STATUS.ERROR) and atc.statusBefore or proto.STATUS.IDLE
+    atc.statusBefore = nil
+    logInfo("Moving again after STUCK -- status " .. tostring(_self.status))
+    comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(nil, _self.status, "moving again", base.getPos()))
+end
 
 -- Before a step from section `cur` into section `sec`: wait for the grant.
 function atc.waitEnter(sec, cur)
@@ -3774,6 +3789,7 @@ function base.setStatus(status, jobId)
     _self.status = status
     if jobId ~= nil then _self.jobId = jobId end
 end
+function base.statusForTest() return _self.status end   -- test seam
 
 function base.sendProgress(detail)
     comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(
