@@ -173,16 +173,40 @@ return {
             entered, #inside0) .. (entered > 0 and (": " .. table.concat(whoEntered, " ")) or ""))
           minute = minute + 35
         elseif FAULT == "server" then
-          local d0 = #docked.lines
+          -- MEASURED FROM WHERE THE TURTLES ARE, not from their 'Docked' lines: those travel through the server, so
+          -- while it is down they wait in the turtles' outboxes (the first version counted 0 for that reason).
+          -- Crash it while turtles are coming home -- in the arrivals section or the holding line -- and require it.
+          local Wp = assert(loadfile(sim.sched.code_dir .. "/waypoints.lua", "t",
+            setmetatable({ fs = { exists = function() return false end } }, { __index = _G })))()
+          local function homeward(p)
+            if not p then return false end
+            local sec = Wp.atcSection(p.x, p.y, p.z)
+            if sec == "ARR" or (sec and sec:match("^R%d")) then return true end
+            return p.y == 60 and p.x > 228 and p.x <= 228 + 2 * Wp.ATC.HOLD_SLOTS and p.z >= -2783 and p.z <= -2778
+          end
+          local coming = {}
+          for _ = 1, 900 do                                    -- up to 30 min, every 2 s
+            for _, c in ipairs(workers(sim)) do if homeward(c.pos) then coming[#coming + 1] = c end end
+            if #coming > 0 then break end
+            sim:run_for(2000)
+          end
+          local names = {}
+          for _, c in ipairs(coming) do names[#names + 1] = c.name end
+          sim:expect(#coming > 0, "turtles were coming home when the server went down (evidence: " .. table.concat(names, " ") .. ")")
           sim:server_crash(sim.clock:now() - sim.t0, 20 * 60000)
           sim:run_for(20 * 60000 - 30000)
-          faultInfo.docked_while_server_down = #docked.lines - d0
+          local parked, left = 0, {}
+          for _, c in ipairs(coming) do if atDock(c.pos) then parked = parked + 1 else left[#left + 1] = c.name end end
+          faultInfo.coming_home_at_server_crash = #coming
+          faultInfo.parked_while_server_down = parked
+          sim:expect(#coming > 0 and parked == #coming, string.format(
+            "with the server down, every one of them parked (%d of %d)%s", parked, #coming,
+            #left > 0 and (": not " .. table.concat(left, " ")) or ""))
           local inside = 0
           for _, c in ipairs(workers(sim)) do if inBase(c.pos) then inside = inside + 1 end end
           faultInfo.in_base_at_end_of_outage = inside
-          sim:expect(#docked.lines - d0 > 0, "with the server down, turtles still docked (" .. (#docked.lines - d0) .. ")")
           sim:expect(inside == 0, "and none was left on the base floor off a dock when it came back (" .. inside .. ")")
-          minute = minute + 20
+          minute = minute + 50
         elseif FAULT == "world" then
           local s0 = #settled.lines
           sim:world_restart(sim.clock:now() - sim.t0, { gps_delay = 30000 })
