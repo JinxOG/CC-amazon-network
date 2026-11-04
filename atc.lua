@@ -199,9 +199,18 @@ function core.handle(st, id, p, now)
             slots[want] = { id = id, at = now }
             return { ok = true, slot = want }
         end
-        for k = 1, CFG.HOLD_SLOTS do
+        -- IN TURN AROUND THE LINE, not the first free one: handing out slot 1 again
+        -- and again sent every arrival up the same column, into the support of the
+        -- pair before, still waiting there -- 8 turtles piled up under slot 1 (sim,
+        -- 2026-11-03). In turn, a column comes round again only every HOLD_SLOTS
+        -- arrivals.
+        st.nextSlot = st.nextSlot or {}
+        local start = st.nextSlot[line] or 1
+        for i = 0, CFG.HOLD_SLOTS - 1 do
+            local k = (start - 1 + i) % CFG.HOLD_SLOTS + 1
             if free(slots[k], false) then
                 slots[k] = { id = id, at = now }
+                st.nextSlot[line] = k % CFG.HOLD_SLOTS + 1
                 return { ok = true, slot = k }
             end
         end

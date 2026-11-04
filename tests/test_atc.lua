@@ -188,8 +188,21 @@ return {
         assert_eq(core.handle(st, "late", { op = "hold", line = "tunnel", prefer = 2 }, t + 9000).slot ~= 2, true,
             "a slot somebody holds is not given away, asked for or not")
         core.handle(st, "sup", { op = "enter", sec = "ARR" }, t + 20000)
-        assert_eq(core.handle(st, "next", { op = "hold", line = "tunnel" }, t + 20000 + core.CFG.SLOT_KEEP_MS + 1).slot, 1,
+        assert_eq(core.handle(st, "next", { op = "hold", line = "tunnel", prefer = 1 }, t + 20000 + core.CFG.SLOT_KEEP_MS + 1).slot, 1,
             "after the minute it is anybody's")
+    end,
+
+    -- Slot 1 again and again sent every arrival up the same column, into the support of the pair before, still
+    -- waiting there: 8 turtles piled up under slot 1 (sim, 2026-11-03).
+    ["holding slots are handed out in turn around the line, not the first free one"] = function(assert_eq)
+        local core, st, t = live()
+        local got = {}
+        for i = 1, 3 do got[i] = core.handle(st, "r" .. i, { op = "hold", line = "tunnel" }, t).slot end
+        assert_eq(table.concat(got, ","), "1,2,3")
+        core.handle(st, "r1", { op = "enter", sec = "ARR" }, t)
+        local later = t + core.CFG.SLOT_KEEP_MS + 1
+        assert_eq(core.handle(st, "r4", { op = "hold", line = "tunnel" }, later).slot, 4,
+            "slot 1 is free again, but the next arrival gets the next column")
     end,
 
     ["a step outside any booking only goes into a free section"] = function(assert_eq)
