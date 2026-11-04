@@ -244,7 +244,12 @@ return {
     sim.results.off_dock_where = table.concat(where, " ")
     for k, v in pairs(faultInfo) do if type(v) ~= "table" then sim.results[k] = v end end
     sim:expect(#off == 0, "every turtle ended on a dock cell (" .. #off .. " not: " .. table.concat(where, " ") .. ")")
-    local edge = maxSeconds(edgeWaits.lines, "waiting to enter")
+    -- A wait the ATC did not answer is the base pausing while it is down -- the point of "safe when down" -- not a
+    -- wait at an edge it refused; the 30 s bound is for the second kind.
+    local answered = {}
+    for _, l in ipairs(edgeWaits.lines) do if not l:find("no answer from the ATC", 1, true) then answered[#answered + 1] = l end end
+    local edge = maxSeconds(answered, "waiting to enter")
+    sim.results.max_wait_unanswered_s = maxSeconds(edgeWaits.lines, "no answer from the ATC")
     sim.results.max_edge_wait_s = edge
     sim:expect(edge <= 30, "no turtle waited more than 30 s at a section edge (worst " .. edge .. " s)")
     local dh = 0

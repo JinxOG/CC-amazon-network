@@ -174,6 +174,24 @@ return {
             "and the rest of east's route (J2, R2) was not booked for it: a third turtle may use R2")
     end,
 
+    -- node_81 (a support: it cannot dig) was given the first free slot instead of its partner's, the only one
+    -- dug all the way, and stayed in the tunnel (sim, 2026-11-03).
+    ["a support gets its partner's holding slot, kept back from strangers for a minute"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "del", { op = "hold", line = "tunnel" }, t).slot, 1)
+        assert_eq(core.handle(st, "other", { op = "hold", line = "tunnel" }, t).slot, 2)
+        core.handle(st, "del", { op = "enter", sec = "ARR" }, t)                   -- del leaves slot 1 for the shaft
+        assert_eq(core.handle(st, "stranger", { op = "hold", line = "tunnel" }, t + 1000).slot, 3,
+            "slot 1 is kept back: a stranger gets the next one")
+        assert_eq(core.handle(st, "sup", { op = "hold", line = "tunnel", prefer = 1 }, t + 9000).slot, 1,
+            "the support asking for the slot it stands in gets it")
+        assert_eq(core.handle(st, "late", { op = "hold", line = "tunnel", prefer = 2 }, t + 9000).slot ~= 2, true,
+            "a slot somebody holds is not given away, asked for or not")
+        core.handle(st, "sup", { op = "enter", sec = "ARR" }, t + 20000)
+        assert_eq(core.handle(st, "next", { op = "hold", line = "tunnel" }, t + 20000 + core.CFG.SLOT_KEEP_MS + 1).slot, 1,
+            "after the minute it is anybody's")
+    end,
+
     ["a step outside any booking only goes into a free section"] = function(assert_eq)
         local core, st, t = live()
         assert_eq(core.handle(st, "a", { op = "enter", sec = "N2" }, t).ok, true, "one-section step into a free section")

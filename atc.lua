@@ -25,6 +25,7 @@ local CFG = {
     HELLO_EVERY = 60000,     -- re-announce, for a turtle that missed the boot hello
     FAIR_MS     = 60000,     -- a request waiting this long keeps later overlapping ones out
     HOLD_SLOTS  = 40,        -- per holding line (waypoints.lua W.ATC.HOLD_SLOTS)
+    SLOT_KEEP_MS = 60000,    -- a slot just left is not handed to a stranger for this long
 }
 
 -- ─── The rules, with no radio (tests drive these) ───────────────────────────
@@ -139,7 +140,9 @@ function core.handle(st, id, p, now)
         for k, sl in pairs(line) do
             if sl.id == id then
                 -- a turtle stepping into the arrivals section has left its slot
-                if p.op == "enter" and p.sec == "ARR" then line[k] = nil else sl.at = now end
+                -- a turtle stepping into the arrivals section has left its slot; the slot
+                -- is kept back a minute for the support that followed it in (below)
+                if p.op == "enter" and p.sec == "ARR" then line[k] = { freedAt = now, at = 0 } elseif sl.id then sl.at = now end
             end
         end
     end
@@ -181,9 +184,23 @@ function core.handle(st, id, p, now)
         for k = 1, CFG.HOLD_SLOTS do
             if slots[k] and slots[k].id == id then slots[k].at = now; return { ok = true, slot = k } end
         end
+        local function free(sl, mine)
+            if not sl then return true end
+            if sl.id then return now - sl.at > CFG.STALE_MS end
+            return mine or now - (sl.freedAt or 0) > CFG.SLOT_KEEP_MS
+        end
+        -- THE SLOT IT STANDS IN FIRST (p.prefer). A support cannot dig: it can
+        -- only use the tunnel its delivery dug, and the one dug all the way to the
+        -- arrivals column is its partner's slot, which it is standing in. Given
+        -- the first free slot instead, node_81 met solid rock one block on and
+        -- stayed in the tunnel (sim, 2026-11-03).
+        local want = tonumber(p.prefer)
+        if want and want >= 1 and want <= CFG.HOLD_SLOTS and free(slots[want], true) then
+            slots[want] = { id = id, at = now }
+            return { ok = true, slot = want }
+        end
         for k = 1, CFG.HOLD_SLOTS do
-            local s = slots[k]
-            if not s or now - s.at > CFG.STALE_MS then
+            if free(slots[k], false) then
                 slots[k] = { id = id, at = now }
                 return { ok = true, slot = k }
             end

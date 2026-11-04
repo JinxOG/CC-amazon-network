@@ -1978,10 +1978,10 @@ function move.followRoute(waypoints)
 end
 
 -- A holding slot from the ATC; waits (outside the base) until it gives one.
-function atc.holdSlot(line)
+function atc.holdSlot(line, prefer)
     local report
     while true do
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer })
         if r and r.ok and r.slot then return r.slot end
         local now = os.clock()
         report = report or waitReporter(function()
@@ -2216,7 +2216,12 @@ function home.dock()
         -- never crosses the taxi row; the support stops one block behind, in the
         -- slot's own column; then up the shaft only once the whole way home is
         -- free.
-        local k = base.atc.holdSlot("tunnel")
+        -- The slot whose column it stands in, when it stands in one: a support
+        -- (which cannot dig) is in its delivery's, the one tunnel dug all the way.
+        local dx = _self.pos.x - W.ARRIVALS_HOLE.x
+        local here = (dx > 0 and dx % W.ATC.HOLD_STEP == 0 and math.abs(_self.pos.z - W.ATC.HOLD_Z) <= 1)
+            and (dx / W.ATC.HOLD_STEP) or nil
+        local k = base.atc.holdSlot("tunnel", here)
         logInfo("Navigating underground to holding slot " .. k .. "...")
         ok, err = move.followRoute(W.holdingApproach(_self.pos, k, UNDERGROUND_Y))
         if not ok then return false, "could not reach holding slot " .. k .. ": " .. (err or "?") end
@@ -2405,6 +2410,12 @@ local function homing(fn)
         _self.homing = false
         atc.finish()
         if not ok then error(a, 0) end
+        -- Said here, for every role: support_turtle ignores what returnToDock
+        -- returns, and node_81 was left in the tunnel with no word of why (sim,
+        -- 2026-11-03).
+        if a == false then
+            logWarn(string.format("Return home failed at %d,%d,%d: %s", _self.pos.x, _self.pos.y, _self.pos.z, tostring(b)))
+        end
         return a, b
     end
 end
