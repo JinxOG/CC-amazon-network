@@ -3373,13 +3373,43 @@ function dispatcher.evaluateGps()
         and string.format("no_fix: %d of %d GPS hosts answered", n, dispatcher.GPS_MIN_HOSTS)) or nil
     local was = state.gpsHealth
     local now = os.epoch("utc")
+    -- The first judgement after a restart: memory is empty, the disk says
+    -- whether an outage was on when the server went down.
+    local carried = not was and dispatcher.gpsOutageStart()
+    if carried then was = { ok = false, since = carried } end
     state.gpsHealth = { ok = reason == nil, reason = reason, hosts = n, checkedAt = now,
         since = reason and ((was and was.ok == false and was.since) or now) or nil }
     if reason and not (was and was.ok == false) then
         logWarn("GPS CHECK FAILED: " .. reason .. " -- no job is sent out until GPS is back")
+        dispatcher.gpsOutageStart(now)
+    elseif reason and carried then
+        logWarn(string.format("GPS check: still down after a server restart, %ds since it failed (%s) "
+            .. "-- no job is sent out until GPS is back", math.floor((now - carried) / 1000), reason))
     elseif not reason and was and was.ok == false then
         logInfo(string.format("GPS check: back after %ds (%d hosts) -- dispatch resumes",
             math.floor((now - (was.since or now)) / 1000), n))
+        dispatcher.gpsOutageStart(false)
+    end
+end
+
+-- When the outage in progress began (os.epoch ms), kept on disk so a restart
+-- does not forget it. Live 10-29..11-02: one ~91 h outage logged as seven
+-- 'GPS CHECK FAILED' (six were restarts), and its one 'back after' counted
+-- from the last restart. A number saves it, false clears it, nothing reads it.
+-- Written only when an outage starts or ends: a few bytes, twice per outage.
+dispatcher.GPS_OUTAGE_FILE = "gps_outage.dat"
+function dispatcher.gpsOutageStart(set)
+    local p = dispatcher.GPS_OUTAGE_FILE
+    if set == false then
+        if fs.exists(p) then fs.delete(p) end
+    elseif set then
+        local f = fs.open(p, "w")
+        if f then f.write(tostring(set)); f.close() end
+    elseif fs.exists(p) then
+        local f = fs.open(p, "r")
+        local v = f and tonumber(f.readAll() or "")
+        if f then f.close() end
+        return v
     end
 end
 

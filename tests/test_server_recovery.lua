@@ -1168,6 +1168,73 @@ return {
         assert_eq(afterNext, 2, "the next ping at 15 s")
     end,
 
+    -- Live 10-29..11-02 (the watcher's GPS 2 FAILED, SPEC-OWNER's reading): one
+    -- ~91 h outage read as seven, because every server restart forgot it was
+    -- down -- 'GPS CHECK FAILED' again about 10 s after each boot, and the one
+    -- 'back after 15515s' counted from the last restart, not from the start.
+    ["a restart in the middle of an outage carries it on, and back counts from its true start"] =
+    function(assert_eq)
+        local _, T, advance, restore = serverWithMinerOnJob()
+        T.dispatcher.setGpsHome(150, 70, -2800)
+        T.dispatcher.checkGps(); T.dispatcher.checkGps()        -- the outage starts
+        local startedAt = T.state.gpsHealth and T.state.gpsHealth.since
+        advance(3600)
+        T.state.gpsHealth = nil; T.state.gpsWindow = nil        -- the restart: memory gone, the disk kept
+        local before = #T.state.log
+        T.dispatcher.checkGps(); T.dispatcher.checkGps()        -- still nobody answers
+        local h = T.state.gpsHealth
+        local failedAgain, carried
+        for i = before + 1, #T.state.log do
+            local m = T.state.log[i].msg
+            if m:find("GPS CHECK FAILED", 1, true) then failedAgain = m end
+            if m:find("still down", 1, true) then carried = m end
+        end
+        advance(600)
+        answer(T, 4)
+        T.dispatcher.checkGps()
+        local back
+        for i = before + 1, #T.state.log do
+            local m = T.state.log[i].msg
+            if m:find("GPS check: back after", 1, true) then back = m end
+        end
+        restore()
+        assert_eq(h and h.ok, false, "after the restart the alert is still up and dispatch still held")
+        assert_eq(h and h.since, startedAt, "the outage keeps its start across the restart")
+        assert_eq(failedAgain, nil, "a restart is not a new outage: no second 'GPS CHECK FAILED'")
+        assert_eq(carried ~= nil and carried:find("3600s", 1, true) ~= nil, true,
+            "the boot says the outage is still on, and for how long (" .. tostring(carried) .. ")")
+        assert_eq(back ~= nil and back:find("back after 4200s", 1, true) ~= nil, true,
+            "back counts from the true start, across the restart (" .. tostring(back) .. ")")
+    end,
+
+    ["GPS back by the time the server restarts closes the outage it was in"] =
+    function(assert_eq)
+        local _, T, advance, restore = serverWithMinerOnJob()
+        T.dispatcher.setGpsHome(150, 70, -2800)
+        T.dispatcher.checkGps(); T.dispatcher.checkGps()        -- the outage starts
+        advance(120)
+        T.state.gpsHealth = nil; T.state.gpsWindow = nil        -- the restart
+        T.dispatcher.checkGps()
+        answer(T, 4)
+        T.dispatcher.checkGps()                                 -- GPS answers at boot
+        local back, n = nil, 0
+        for _, l in ipairs(T.state.log) do
+            if l.msg:find("GPS check: back after", 1, true) then back = l.msg; n = n + 1 end
+        end
+        advance(60)
+        T.state.gpsHealth = nil; T.state.gpsWindow = nil        -- and a later restart
+        T.dispatcher.checkGps(); answer(T, 4); T.dispatcher.checkGps()
+        local n2 = 0
+        for _, l in ipairs(T.state.log) do
+            if l.msg:find("GPS check: back after", 1, true) then n2 = n2 + 1 end
+        end
+        restore()
+        assert_eq(back ~= nil and back:find("back after 120s", 1, true) ~= nil, true,
+            "every 'GPS CHECK FAILED' gets its 'back' line, even across a restart (" .. tostring(back) .. ")")
+        assert_eq(n, 1)
+        assert_eq(n2, 1, "and once closed, a later restart does not close it again")
+    end,
+
     ["three hosts are not enough for a fix"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()

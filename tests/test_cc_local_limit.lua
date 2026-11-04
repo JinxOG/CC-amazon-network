@@ -23,7 +23,7 @@ local LIMIT = 200
 
 local function listing(path)
     local p = assert(io.popen('luac -l -l -p "' .. path .. '" 2>&1', "r"))
-    local out = p:read("a")
+    local out = p:read("*a")
     p:close()
     return out
 end
@@ -98,7 +98,7 @@ end
 
 local function luacWorks()
     local p = io.popen("luac -v 2>&1", "r")
-    local v = p and p:read("a") or ""
+    local v = p and p:read("*a") or ""
     if p then p:close() end
     return v:find("Lua") ~= nil
 end
@@ -122,7 +122,7 @@ end
 local function fleetFiles()
     local p = io.popen(package.config:sub(1, 1) == "\\" and 'dir /b *.lua 2>nul' or 'ls *.lua 2>/dev/null', "r")
     local files = {}
-    for name in p:read("a"):gmatch("[^\r\n]+") do files[#files + 1] = name end
+    for name in p:read("*a"):gmatch("[^\r\n]+") do files[#files + 1] = name end
     p:close()
     table.sort(files)
     return files
