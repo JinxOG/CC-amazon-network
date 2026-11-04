@@ -74,6 +74,17 @@ return {
     local done = sim:capture_log("Job complete: job_")
     local deliveries = sim:capture_log("[DELIVER] -> node_")
     local settled = sim:capture_log("settled: rebuilt")
+    -- The holding line must lie in the loaded base, or turtles sent to its far slots freeze there (23 did, at a
+    -- 40-slot line reaching x 308 past the loaded edge at 260, 2026-11-03).
+    if not NO_ATC then
+      local Wl = assert(loadfile(sim.sched.code_dir .. "/waypoints.lua", "t",
+        setmetatable({ fs = { exists = function() return false end } }, { __index = _G })))()
+      local far = Wl.holdingSlot(Wl.ATC.HOLD_SLOTS)
+      local box = (sim.world:meta().base_loaded or {})[1]
+      sim:expect(box and far.x >= box[1] and far.x <= box[3] and far.z >= box[2] and far.z <= box[4],
+        string.format("the holding line lies in the loaded base (last slot x %d; loaded x %s..%s)", far.x,
+          tostring(box and box[1]), tostring(box and box[3])))
+    end
     sim:storage_set("minecraft:cobblestone", 10000000)
     sim:storage_set("minecraft:chest", 100000)
     sim:run_for(5 * 60000)

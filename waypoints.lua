@@ -320,7 +320,11 @@ local BAY_X = {}
 for b = 1, CFG.NUM_WORKER_BAYS do BAY_X[b] = CFG.BAY_CENTER_X + (b - 1) * CFG.BAY_SPACING end
 
 W.ATC = {
-    HOLD_SLOTS  = 40,      -- holding-line slots in the tunnel east of the arrivals hole
+    -- Holding-line slots east of the arrivals hole, at x 230, 232, ... THE LINE MUST
+    -- LIE IN THE LOADED BASE: a turtle sent to a slot in an unloaded chunk freezes
+    -- there. 40 reached x 308, and with slots handed out in turn 23 turtles froze past
+    -- the sim's loaded edge at x 260 (2026-11-03). 14 ends at x 256.
+    HOLD_SLOTS  = 14,
     HOLD_STEP   = 2,       -- x between slots, so a turtle called up passes nobody
     HOLD_Z      = W.ARRIVALS_HOLE.z + 2,   -- the slots (z -2780)
     TAXI_Z      = W.ARRIVALS_HOLE.z + 4,   -- the taxi row, NORTH of the slots (z -2778): a turtle reaches its

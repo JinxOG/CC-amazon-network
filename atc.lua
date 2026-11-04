@@ -17,6 +17,7 @@
 -- docs/superpowers/specs/2026-11-03-base-atc-design.md
 
 local proto = require("protocol")
+local okW, W = pcall(require, "waypoints")   -- the holding line's length is the layout's
 
 local CFG = {
     SETTLE_MS   = 15000,     -- after boot: collect reports, admit nothing
@@ -24,7 +25,7 @@ local CFG = {
     SWEEP_MS    = 5000,
     HELLO_EVERY = 60000,     -- re-announce, for a turtle that missed the boot hello
     FAIR_MS     = 60000,     -- a request waiting this long keeps later overlapping ones out
-    HOLD_SLOTS  = 40,        -- per holding line (waypoints.lua W.ATC.HOLD_SLOTS)
+    HOLD_SLOTS  = (okW and type(W) == "table" and W.ATC and W.ATC.HOLD_SLOTS) or 14,   -- per holding line, from waypoints.lua
     SLOT_KEEP_MS = 60000,    -- a slot just left is not handed to a stranger for this long
 }
 
