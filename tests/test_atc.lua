@@ -192,6 +192,20 @@ return {
             "after the minute it is anybody's")
     end,
 
+    -- node_81 (cannot dig) asked for slot 3, the one it stood under, was given slot 1 while 3 was still held, and
+    -- stayed in the tunnel (sim, 2026-11-03).
+    ["a turtle that cannot dig gets the slot it stands under or none, never another"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "a", { op = "hold", line = "tunnel" }, t).slot, 1)
+        assert_eq(core.handle(st, "b", { op = "hold", line = "tunnel" }, t).slot, 2)
+        local r = core.handle(st, "sup", { op = "hold", line = "tunnel", prefer = 2, strict = true }, t)
+        assert_eq(r.ok, false, "slot 2 is b's: refused")
+        assert_eq(r.slot, nil, "and no other slot is handed out instead")
+        core.handle(st, "b", { op = "enter", sec = "ARR" }, t + 1000)
+        assert_eq(core.handle(st, "sup", { op = "hold", line = "tunnel", prefer = 2, strict = true }, t + 2000).slot, 2,
+            "once b leaves it, slot 2 is the support's")
+    end,
+
     -- Slot 1 again and again sent every arrival up the same column, into the support of the pair before, still
     -- waiting there: 8 turtles piled up under slot 1 (sim, 2026-11-03).
     ["holding slots are handed out in turn around the line, not the first free one"] = function(assert_eq)

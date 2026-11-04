@@ -1980,8 +1980,10 @@ end
 -- A holding slot from the ATC; waits (outside the base) until it gives one.
 function atc.holdSlot(line, prefer)
     local report
+    -- A turtle that cannot dig (support) takes the slot it stands under or none.
+    local strict = prefer ~= nil and not _self.canDig
     while true do
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer, strict = strict })
         if r and r.ok and r.slot then return r.slot end
         local now = os.clock()
         report = report or waitReporter(function()

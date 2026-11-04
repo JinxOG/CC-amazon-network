@@ -197,7 +197,15 @@ function core.handle(st, id, p, now)
         local want = tonumber(p.prefer)
         if want and want >= 1 and want <= CFG.HOLD_SLOTS and free(slots[want], true) then
             slots[want] = { id = id, at = now }
+            note(st, string.format("%s slot %d (%s, the one it stands under)", id, want, line))
             return { ok = true, slot = want }
+        end
+        -- STRICT: a turtle that cannot dig takes the slot it stands under or none --
+        -- any other is through rock. node_81 was given slot 1 while 3 was still held
+        -- (the ATC had restarted) and stayed in the tunnel (sim, 2026-11-03).
+        if p.strict and want then
+            local sl = slots[want]
+            return { ok = false, why = string.format("slot %d is %s's", want, tostring(sl and sl.id or "kept back")) }
         end
         -- IN TURN AROUND THE LINE, not the first free one: handing out slot 1 again
         -- and again sent every arrival up the same column, into the support of the
@@ -211,6 +219,7 @@ function core.handle(st, id, p, now)
             if free(slots[k], false) then
                 slots[k] = { id = id, at = now }
                 st.nextSlot[line] = k % CFG.HOLD_SLOTS + 1
+                note(st, string.format("%s slot %d (%s)", id, k, line))
                 return { ok = true, slot = k }
             end
         end
