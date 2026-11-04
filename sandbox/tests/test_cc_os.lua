@@ -19,6 +19,17 @@ end
 local function lines(comp) local o = {} for i, l in ipairs(comp.output) do o[i] = l.text end return o end
 
 return {
+  -- A 150-turtle week (W3 capacity study, 2026-11-04): every print on every computer was kept for the whole run,
+  -- ~70 MB a simulated hour, and a week would need ~14 GB. Only the newest lines are ever read (the viewer, the
+  -- fleet status); a computer keeps its newest OUTPUT_KEEP of them.
+  ["a computer keeps only its newest printed lines"] = function(t)
+    local comp = rig([[ for i = 1, 12000 do print("line " .. i) end ]])
+    local o = lines(comp)
+    t.ok(#o <= 2 * Computer.OUTPUT_KEEP, "at most twice the keep (" .. #o .. ")")
+    t.ok(#o >= Computer.OUTPUT_KEEP, "and at least the keep (" .. #o .. ")")
+    t.eq(o[#o], "line 12000", "the newest line is the last")
+  end,
+
   ["epoch reads the virtual clock"] = function(t)
     local comp = rig([[ print(os.epoch("utc")) ]], 123456)
     t.eq(comp.output[1].text, "123456")

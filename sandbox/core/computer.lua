@@ -44,8 +44,18 @@ function Computer:new_co(fn)
   return co
 end
 
+-- Only the newest printed lines are kept: a 150-turtle week kept every print of every computer (~70 MB a
+-- simulated hour, W3 2026-11-04). Readers want the newest (the viewer, fleet status). Trimmed in one go when the
+-- list reaches twice the keep, so a print stays O(1) on average.
+Computer.OUTPUT_KEEP = 2000
 function Computer:print(text)
-  self.output[#self.output + 1] = { t = self:clock(), text = text }
+  local out = self.output
+  out[#out + 1] = { t = self:clock(), text = text }
+  if #out >= 2 * Computer.OUTPUT_KEEP then
+    local keep = {}
+    for i = #out - Computer.OUTPUT_KEEP + 1, #out do keep[#keep + 1] = out[i] end
+    self.output = keep
+  end
 end
 
 -- Attach hardware by side or network name. `methods` is a table of functions.
