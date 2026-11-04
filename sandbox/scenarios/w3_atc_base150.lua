@@ -208,14 +208,32 @@ return {
           sim:expect(inside == 0, "and none was left on the base floor off a dock when it came back (" .. inside .. ")")
           minute = minute + 50
         elseif FAULT == "world" then
+          -- Restart the world while turtles stand in the base, so the rebuild has something to rebuild (the first
+          -- version restarted it at a quiet moment: "rebuilt 0 turtle(s)", and passed proving nothing).
+          local Wp = assert(loadfile(sim.sched.code_dir .. "/waypoints.lua", "t",
+            setmetatable({ fs = { exists = function() return false end } }, { __index = _G })))()
+          local inside, insideC = {}, {}
+          for _ = 1, 900 do                                    -- up to 30 min, every 2 s
+            for _, c in ipairs(workers(sim)) do
+              if c.pos and Wp.atcSection(c.pos.x, c.pos.y, c.pos.z) then inside[#inside + 1] = c.name; insideC[#insideC + 1] = c end
+            end
+            if #inside > 0 then break end
+            sim:run_for(2000)
+          end
+          faultInfo.in_base_at_world_restart = #inside
+          sim:expect(#inside > 0, "turtles stood in the base when the world restarted (evidence: " .. table.concat(inside, " ") .. ")")
           local s0 = #settled.lines
           sim:world_restart(sim.clock:now() - sim.t0, { gps_delay = 30000 })
           sim:run_for(10 * 60000)
           if not NO_ATC then
-            sim:expect(#settled.lines > s0, "the ATC rebuilt from reports after the restart ("
-              .. (settled.lines[#settled.lines] or "no line") .. ")")
+            -- Turtles that come up after the 15 s settle (GPS back 30 s late) are taken in on first contact, where
+            -- they stand: the settle count is information, the base clearing is the check.
+            local line = settled.lines[#settled.lines] or ""
+            faultInfo.rebuilt_at_settle = tonumber(line:match("rebuilt (%d+) turtle")) or -1
+            sim:expect(#settled.lines > s0, "the ATC came back and rebuilt (" .. (line ~= "" and line or "no line") .. ")")
           end
-          minute = minute + 10
+          faultInfo.world_restart_inside = insideC
+          minute = minute + 40
         elseif FAULT == "stuck" then
           -- the first turtle with a job seen in a taxiway lane: its moves now find a turtle in the way, for ever
           local victim, jobId
@@ -279,6 +297,12 @@ return {
     sim.results.off_dock_where = table.concat(where, " ")
     for k, v in pairs(faultInfo) do if type(v) ~= "table" then sim.results[k] = v end end
     sim:expect(#off == 0, "every turtle ended on a dock cell (" .. #off .. " not: " .. table.concat(where, " ") .. ")")
+    if faultInfo.world_restart_inside then
+      local home = 0
+      for _, c in ipairs(faultInfo.world_restart_inside) do if atDock(c.pos) then home = home + 1 end end
+      sim:expect(home == #faultInfo.world_restart_inside, string.format(
+        "every turtle standing in the base at the world restart got home (%d of %d)", home, #faultInfo.world_restart_inside))
+    end
     -- A wait the ATC did not answer is the base pausing while it is down -- the point of "safe when down" -- not a
     -- wait at an edge it refused; the 30 s bound is for the second kind.
     local answered = {}
