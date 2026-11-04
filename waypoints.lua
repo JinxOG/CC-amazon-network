@@ -255,6 +255,21 @@ end
 -- Never call from underground.
 function W.internalReturnRouteFrom(dock, fromX, fromZ)
     local az = returnAisleZ(dock)
+    -- FROM A DOCK, LEAVE IT THE WAY A DEPARTURE DOES (2026-11-03). Z first from a
+    -- back-row dock drove straight into the parked turtle in the front row and
+    -- stayed there: node_4070, homing from support dock 211,-2793, blocked at
+    -- 211,-2796 for good when ~147 turtles changed docks at boot (w3_atc_base150).
+    -- So: back into that dock's own departure aisle, along it to the bay's centre
+    -- column -- which no dock occupies -- and on from there.
+    for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+        for _, d in ipairs(W.docks[role]) do
+            if d.x == fromX and d.z == fromZ and not (d.x == dock.x and d.z == dock.z) then
+                local out = { { x = fromX, y = CFG.FLOOR_Y, z = aisleZ(d) }, { x = d.junction.x, y = CFG.FLOOR_Y, z = aisleZ(d) } }
+                for _, wp in ipairs(W.internalReturnRouteFrom(dock, d.junction.x, aisleZ(d))) do out[#out + 1] = wp end
+                return out
+            end
+        end
+    end
     return {
         -- 1. Move to red taxiway at CURRENT column (Z-only — never crosses rows)
         { x = fromX,           y = CFG.FLOOR_Y, z = W.RED_Z  },

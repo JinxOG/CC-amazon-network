@@ -21,6 +21,38 @@ local DEPART3 = { "S3", "J3", "W3", "J2", "W2", "J1", "W1", "DH" }
 local RETURN3 = { "ARR", "R5", "J5", "R4", "J4", "R3", "J3", "S3" }
 
 return {
+    -- node_4070 homed from support dock 211,-2793 straight into the parked turtle at 211,-2797 and stayed there
+    -- (w3_atc_base150, 2026-11-03). A homing route from one dock to another must cross no third dock.
+    ["no homing route from one dock to another drives through a third dock"] = function(assert_eq)
+        package.loaded["waypoints"] = nil
+        local W = require("waypoints")
+        local isDock = {}
+        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+            for _, d in ipairs(W.docks[role]) do isDock[d.x .. "," .. d.z] = true end
+        end
+        local routes, worst, where = 0, 0, ""
+        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+            for _, from in ipairs(W.docks[role]) do
+                for _, to in ipairs(W.docks[role]) do
+                    if from ~= to then
+                        routes = routes + 1
+                        local x, z, crossed = from.x, from.z, 0
+                        local function step()
+                            if isDock[x .. "," .. z] and not (x == to.x and z == to.z) then crossed = crossed + 1 end
+                        end
+                        for _, wp in ipairs(W.internalReturnRouteFrom(to, from.x, from.z)) do
+                            while x ~= wp.x do x = x + (wp.x > x and 1 or -1); step() end
+                            while z ~= wp.z do z = z + (wp.z > z and 1 or -1); step() end
+                        end
+                        if crossed > worst then worst, where = crossed, from.x .. "," .. from.z .. " -> " .. to.x .. "," .. to.z end
+                    end
+                end
+            end
+        end
+        assert_eq(routes > 10000, true, "every pair of docks was tried (" .. routes .. ")")
+        assert_eq(worst, 0, "a homing route crossed another dock: " .. where)
+    end,
+
     ["one turtle per section: a second departure waits in its dock until the way is clear"] = function(assert_eq)
         local core, st, t = live()
         assert_eq(core.handle(st, "a", { op = "request", route = DEPART3 }, t).ok, true, "a is admitted")
