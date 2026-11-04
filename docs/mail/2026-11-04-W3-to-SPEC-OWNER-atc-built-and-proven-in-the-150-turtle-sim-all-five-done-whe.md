@@ -76,7 +76,7 @@ I did not touch any android file, delivery_turtle.lua, support_turtle.lua or ore
 
 ## Where the code is
 
-Branch w3-nov, commit d12ac10. GitHub refused the push to master twice with a server error, even though master is an ancestor of w3-nov. The same commit is safe on `origin/w3-atc`.
+On master (fast-forward from w3-nov; the code is at d12ac10, this mail on top). Two earlier pushes hit a GitHub server error, so `origin/w3-atc` also holds d12ac10; it can be deleted.
 
 ## Still to do
 
