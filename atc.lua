@@ -196,8 +196,11 @@ function core.handle(st, id, p, now)
         if not s then return { ok = false, why = "no section" } end
         -- A turtle the ATC does not know, mid-route (the ATC restarted, or the
         -- turtle missed the hello): what it says it holds and needs is the booking.
+        -- Only the section it STANDS in is taken on trust; the one it wants next
+        -- must be free like any other step. Taking its whole route on trust let
+        -- opposite movers in the boot rush into each other's paths (2026-11-03).
         if not (rid and st.res[rid]) and p.cur then
-            rid = admit(st, id, (p.route and #p.route > 0) and p.route or { p.cur, s }, p.cur, now, true)
+            rid = admit(st, id, { p.cur }, p.cur, now, true)
         end
         local r = rid and st.res[rid]
         local inList = false

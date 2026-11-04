@@ -161,6 +161,19 @@ return {
         assert_eq(core.handle(st, "y", { op = "enter", sec = "W3" }, t).ok, false, "and W3 is held: it is in there")
     end,
 
+    -- The boot rush (2026-11-03): turtles the ATC did not know were each given their whole route on trust, and
+    -- a miner going east on the red lane met a support going west. Only where it stands is taken on trust.
+    ["a turtle the ATC does not know is trusted with where it stands, not with where it wants to go"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "west", { op = "request", route = { "R1", "J1", "S1" } }, t).ok, true)
+        assert_eq(core.handle(st, "west", { op = "enter", sec = "R1" }, t).ok, true)
+        local r = core.handle(st, "east", { op = "enter", sec = "R1", cur = "J1", route = { "J1", "R1", "J2", "R2" } }, t)
+        assert_eq(r.ok, false, "R1 is west's: east is refused, not booked through it")
+        assert_eq(core.handle(st, "west", { op = "enter", sec = "J1" }, t).ok, false, "J1 is east's: it stands there")
+        assert_eq(core.handle(st, "third", { op = "request", route = { "R2", "J3", "S3" } }, t).ok, true,
+            "and the rest of east's route (J2, R2) was not booked for it: a third turtle may use R2")
+    end,
+
     ["a step outside any booking only goes into a free section"] = function(assert_eq)
         local core, st, t = live()
         assert_eq(core.handle(st, "a", { op = "enter", sec = "N2" }, t).ok, true, "one-section step into a free section")

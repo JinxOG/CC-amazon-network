@@ -1516,6 +1516,22 @@ function atc.heard()
 end
 
 function atc.section(x, y, z) return W.atcSection and W.atcSection(x, y, z) or nil end
+
+-- Is there an ATC? Asks it (at most once a minute) when this turtle has never
+-- heard one. EVERY use of the base asks first -- the step gate, a booking, facing
+-- detection. A booking used to be skipped before the first gated step had
+-- switched the gate on, so the boot rush homed with no bookings, the ATC took
+-- each turtle in as "standing where it is", and opposite movers met head-on on
+-- the red lane in every bay (w3_atc_base150, boot rush, 2026-11-03).
+function atc.ensure()
+    if atc.ENABLED then return true end
+    if not W.atcSection then return false end
+    if atc.probedAt and os.clock() - atc.probedAt < 60 then return false end
+    atc.probedAt = os.clock()
+    local okAsk, answer = pcall(atc.ask, proto.MSG.ATC_REQUEST, { route = {} })
+    if okAsk and answer then atc.heard() end   -- an error is no answer: never cost the move
+    return atc.ENABLED
+end
 function atc.here() return atc.section(_self.pos.x, _self.pos.y, _self.pos.z) end
 
 -- The booked sections from `from` on (from included), or {from, nextSec}.
@@ -1595,7 +1611,7 @@ end
 -- Returns once admitted: the turtle waits HERE -- its dock, the holding line, the
 -- sky -- until the route's first section is free.
 function atc.book(waypoints, label)
-    if not atc.ENABLED then return true end
+    if not atc.ensure() then return true end
     local list = W.routeSections(base.getPos(), waypoints)
     atc.route = list
     if #list == 0 then return true end
@@ -1628,13 +1644,13 @@ end
 -- back), else the list granted. For facing detection, which cannot know which
 -- of the four it is about to step into.
 function atc.claimAround(x, y, z)
-    if not atc.ENABLED then return nil end
+    if not W.atcSection then return nil end
     local cur, want, seen = atc.section(x, y, z), {}, {}
     for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
         local s = atc.section(x + d[1], y, z + d[2])
         if s and s ~= cur and not seen[s] then seen[s] = true; want[#want + 1] = s end
     end
-    if #want == 0 then return nil end
+    if #want == 0 or not atc.ensure() then return nil end
     local got = {}
     for _, s in ipairs(want) do
         local r = atc.ask(proto.MSG.ATC_ENTER, { sec = s, cur = cur, route = { cur, s } })
@@ -1759,15 +1775,10 @@ local function tryMove(digFn, dir)
         -- BEFORE THE FIRST STEP INTO THE BASE, LOOK FOR AN ATC. Waiting to hear its
         -- hello is not enough: at boot 147 turtles started homing within 2 s and
         -- heard it only at its 60 s repeat, so the boot rush ran ungated and jammed
-        -- (w3_atc_base150, 2026-11-03). Asked at most once a minute; a base with
-        -- no ATC loses 2 s a minute.
+        -- (w3_atc_base150, 2026-11-03). A base with no ATC loses 2 s a minute.
         local nx, ny, nz = _self.pos.x, _self.pos.y, _self.pos.z
         if dir == "up" then ny = ny + 1 elseif dir == "down" then ny = ny - 1 else nx, nz = projectStep(dir) end
-        if (atc.section(nx, ny, nz) or atc.here()) and (not atc.probedAt or os.clock() - atc.probedAt >= 60) then
-            atc.probedAt = os.clock()
-            local okAsk, answer = pcall(atc.ask, proto.MSG.ATC_REQUEST, { route = {} })
-            if okAsk and answer then atc.heard() end   -- an error is no answer: never cost the move
-        end
+        if atc.section(nx, ny, nz) or atc.here() then atc.ensure() end
     end
     if atc.ENABLED then
         local nx, ny, nz = _self.pos.x, _self.pos.y, _self.pos.z
