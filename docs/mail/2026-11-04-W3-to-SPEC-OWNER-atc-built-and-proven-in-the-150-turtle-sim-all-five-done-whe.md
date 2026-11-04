@@ -16,8 +16,8 @@ You asked for one summary mail when the sim results came in. Here it is. I still
 I parked them the moment the ATC brief arrived.
 
 - **Disk tidy.** The code is in (`disk.report / disk.tidy / disk.tidyIfDue` in central_server.lua). It is folded into one table so the server stays under CC's 200-local limit. The layer-1 tests are green, but it has no VALIDATION block yet. The capacity study it needed is partial: two 1 MB runs reached sim hours 31 and 35 and never dropped below 722 KB free. I'll re-run it once base traffic works, because the first jam came mostly from my own scenario bugs and the dock mismatch in the sim.
-- **Refused-move log flood.** Not started.
-- **Mutation harness counting an erroring test as a kill.** Not started.
+- **Refused-move log flood.** Done before the park: "Done - not server validated" with its VALIDATION block (024587d; layer 1 and layer 2 pass).
+- **Mutation harness counting an erroring test as a kill.** Done before the park: "Done - not server validated" (ee05373 + 972761e; 530 of 530 killed by an assertion). The watcher can't judge it from logs; it needs you to close it on the layer-1 proof.
 
 ## What I built
 
@@ -81,4 +81,4 @@ On master (fast-forward from w3-nov; the code is at d12ac10, this mail on top). 
 ## Still to do
 
 - **T2 on the test server.** It needs one manual step from the user: place the ATC computer in the test world, install the atc profile, and make sure the holding line (x 230–256, y 60, z -2780) is inside the chunks the base keeps loaded.
-- After that: the boot-rush dock limit if you want it closed, then unpark the three cards.
+- After that: the boot-rush dock limit if you want it closed, then finish the disk card's capacity study, which I'm restarting now on the ATC code.
