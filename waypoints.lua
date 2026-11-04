@@ -284,6 +284,138 @@ function W.dockFacing(dock)
     return W.WHITE_Z > dock.z and 2 or 0   -- south if taxiway is in +Z, north otherwise
 end
 
+-- ─── Air-traffic control sections (2026-11-03, atc.lua) ─────────────────────
+-- The base is cut into short sections; the ATC computer lets one turtle into a
+-- section at a time (docs/superpowers/specs/2026-11-03-base-atc-design.md).
+-- Docks and the holding line are in NO section: they are where a turtle waits.
+--
+--   S<b> / N<b>  worker (south) / support (north) side of bay b: its centre
+--                column, its aisles, everything between the taxiway and the
+--                back aisle -- dock cells excluded
+--   J<b>         the crossing at bay b's centre column (red, middle, white)
+--   W<b>         the white lane between crossing b-1 and crossing b (W1 starts
+--                at the dispatch corner; W6 east of bay 5, which nothing uses)
+--   R<b>         the red lane between crossing b and b+1 (R5 runs to the
+--                arrivals run; R0 west of bay 1, which nothing uses)
+--   DH           the dispatch corner and its shaft down to the tunnel
+--   ARR          the arrivals shaft, the floor run from it to the red lane, the
+--                column above it, and the taxi row in the tunnel under it
+
+local BAY_X = {}
+for b = 1, CFG.NUM_WORKER_BAYS do BAY_X[b] = CFG.BAY_CENTER_X + (b - 1) * CFG.BAY_SPACING end
+
+W.ATC = {
+    HOLD_SLOTS  = 40,      -- holding-line slots in the tunnel east of the arrivals hole
+    HOLD_STEP   = 2,       -- x between slots, so a turtle called up passes nobody
+    HOLD_Z      = W.ARRIVALS_HOLE.z + 2,   -- the slots (z -2780)
+    TAXI_Z      = W.ARRIVALS_HOLE.z + 4,   -- the taxi row, NORTH of the slots (z -2778): a turtle reaches its
+                                           -- slot from the south and leaves it northwards, so the support that
+                                           -- followed it in, one block behind, is never in its way out
+    SKY_MIN_Y   = 100,                     -- the sky line and its taxi row are above this
+    BAY_X       = BAY_X,
+}
+
+local function isDockCell(x, z)
+    for _, row in ipairs({ WORKER_ROW_A_Z, WORKER_ROW_B_Z, SUPPORT_ROW_A_Z, SUPPORT_ROW_B_Z }) do
+        if z == row then
+            for b = 1, #BAY_X do
+                local dx = x - BAY_X[b]
+                if dx ~= 0 and dx >= -4 and dx <= 4 then return true end
+            end
+        end
+    end
+    return false
+end
+
+-- The section a cell belongs to, or nil (a dock, the holding line, the world).
+function W.atcSection(x, y, z)
+    local A, ax, az = W.ATC, W.ARRIVALS_HOLE.x, W.ARRIVALS_HOLE.z
+    -- the arrivals side: shaft, sky column, floor run, tunnel taxi row
+    if x == ax and z == az and y >= CFG.BELOW_HOLE_Y then return "ARR" end
+    if y == CFG.FLOOR_Y and x == ax and z <= az and z >= W.RED_Z then return "ARR" end
+    if (y == CFG.BELOW_HOLE_Y or y >= A.SKY_MIN_Y) then
+        if z == A.TAXI_Z and x >= ax and x <= ax + A.HOLD_STEP * A.HOLD_SLOTS then return "ARR" end
+        if x == ax and z > az and z < A.TAXI_Z then return "ARR" end   -- from the taxi row to the column
+    end
+    -- the dispatch corner and its shaft
+    local dx, dz = W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z
+    if x == dx and z == dz and y >= CFG.BELOW_HOLE_Y and y <= CFG.FLOOR_Y then return "DH" end
+    if y ~= CFG.FLOOR_Y then return nil end
+    if x == dx and z <= W.WHITE_Z and z >= dz then return "DH" end
+    -- the taxiway strip: crossings and lanes
+    if z >= W.WHITE_Z and z <= W.RED_Z then
+        for b = 1, #BAY_X do if x == BAY_X[b] then return "J" .. b end end
+        if x < dx or x > ax then return nil end
+        local b = 0
+        while b < #BAY_X and x > BAY_X[b + 1] do b = b + 1 end   -- x lies between BAY_X[b] and BAY_X[b+1]
+        if z == W.RED_Z then return "R" .. b end
+        return "W" .. (b + 1)
+    end
+    -- the bay sides
+    if isDockCell(x, z) then return nil end
+    for b = 1, #BAY_X do
+        if x >= BAY_X[b] - 4 and x <= BAY_X[b] + 4 then
+            if z < W.WHITE_Z and z >= WORKER_ROW_B_Z - 3 then return "S" .. b end
+            if z > W.RED_Z and z <= SUPPORT_ROW_B_Z + 3 then return "N" .. b end
+        end
+    end
+    return nil
+end
+
+-- Holding-line slot k (1-based) east of the arrivals hole: in the tunnel, or at
+-- height y for the sky line (miners come home from the sky; ATC card, addition A).
+function W.holdingSlot(k, y)
+    return { x = W.ARRIVALS_HOLE.x + W.ATC.HOLD_STEP * k, y = y or CFG.BELOW_HOLE_Y, z = W.ATC.HOLD_Z }
+end
+
+-- From anywhere at the line's height to slot k: along the row it is on to the
+-- slot's column, then up the column into the slot. Not along the column it came
+-- down (the destination's own, which outbound turtles use), and from the south no
+-- crossing at all: the taxi row is beyond the slots.
+function W.holdingApproach(from, k, y)
+    local s = W.holdingSlot(k, y)
+    return {
+        { x = s.x, y = s.y, z = from.z },
+        { x = s.x, y = s.y, z = s.z },
+    }
+end
+
+-- Out of slot k to the arrivals column: onto the taxi row, along it to the
+-- column -- then up the shaft to the floor (tunnel), or nothing more (the sky:
+-- the descent is the caller's).
+function W.holdingExitRoute(k, y)
+    local s = W.holdingSlot(k, y)
+    local route = {
+        { x = s.x,               y = s.y, z = W.ATC.TAXI_Z },
+        { x = W.ARRIVALS_HOLE.x, y = s.y, z = W.ATC.TAXI_Z },
+        { x = W.ARRIVALS_HOLE.x, y = s.y, z = W.ARRIVALS_HOLE.z },
+    }
+    if s.y < CFG.FLOOR_Y then
+        route[#route + 1] = { x = W.ARRIVALS_HOLE.x, y = CFG.FLOOR_Y, z = W.ARRIVALS_HOLE.z }
+    end
+    return route
+end
+
+-- The sections a route passes through, in order, walking its cells the way
+-- move.to does (vertical, then x, then z) from `from`. Each section once, at its
+-- first visit. `from`'s own section comes first when it has one: a turtle that
+-- is standing in a section holds it.
+function W.routeSections(from, waypoints)
+    local out, seen = {}, {}
+    local function add(x, y, z)
+        local s = W.atcSection(x, y, z)
+        if s and not seen[s] then seen[s] = true; out[#out + 1] = s end
+    end
+    local x, y, z = from.x, from.y, from.z
+    add(x, y, z)
+    for _, wp in ipairs(waypoints) do
+        while y ~= wp.y do y = y + (wp.y > y and 1 or -1); add(x, y, z) end
+        while x ~= wp.x do x = x + (wp.x > x and 1 or -1); add(x, y, z) end
+        while z ~= wp.z do z = z + (wp.z > z and 1 or -1); add(x, y, z) end
+    end
+    return out
+end
+
 -- ─── Utility ─────────────────────────────────────────────────────────────────
 
 function W.totalDocks(role)

@@ -26,6 +26,7 @@ return function(quota, days)
       d.quota = quota
       server.quota = quota
       sim:storage_set("minecraft:cobblestone", 10000000)
+      sim:storage_set("minecraft:chest", 100000)   -- the warehouse ships every order in a chest
       sim:run_for(5 * 60000)
 
       local area = sim.world:meta().areas[1]
@@ -81,7 +82,7 @@ return function(quota, days)
             nextDest = nextDest % 4 + 1
             sim:dispatch{ type = "ORDER_DELIVERY", params = {
               items = { { name = "minecraft:cobblestone", count = 64 } },
-              destination = { x = 304 + 16 * nextDest, y = 67, z = -2800 } } }
+              destination = { x = 112 + 6 * nextDest, y = 67, z = -2830 } } }
           end
         end
         if hour % 24 == 12 then sim:reboot(server.name) end      -- the daily restart

@@ -90,6 +90,13 @@ function Synth.layout(waypoints, opts)
     blocks = { { side = "right", block = "advancedperipherals:rs_bridge" },
                { side = "top", block = "enderstorage:ender_chest", freq = "delivery" } } }
 
+  -- the base air-traffic control computer (atc.lua, 2026-11-03), when the scenario asks for one: a modem and
+  -- nothing else. Off by default, so every existing run and every run of older code is unchanged.
+  if opts.atc then
+    add{ id = 3, kind = "computer", role = "atc", label = "atc", pos = { x = 182, y = 67, z = -2820, facing = 0 },
+      modems = { "left" } }
+  end
+
   local MODEM, PICK = "computercraft:wireless_modem_advanced", "minecraft:diamond_pickaxe"
   local worker_docks, support_docks = waypoints.docks.DELIVERY, waypoints.docks.SUPPORT
   local next_worker, next_support = 1, 1

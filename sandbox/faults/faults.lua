@@ -49,6 +49,20 @@ function Sim:server_crash(t, down_for)
   end)
 end
 
+-- The base air-traffic control computer stops, then reboots (W3, the ATC card, 2026-11-03). It keeps nothing
+-- on disk, so it comes back empty and rebuilds from the turtles.
+function Sim:atc_crash(t, down_for)
+  record(self, t, "atc_crash", "down_for=" .. down_for)
+  at(self, t, function()
+    local a
+    for _, c in ipairs(self.sched.computers) do if c.role == "atc" then a = c end end
+    if not a then error("fault: this run has no ATC computer", 0) end
+    a:shutdown()
+    local gen = a.gen
+    self.sched:after(down_for, function() if a.gen == gen then a:boot() end end)
+  end)
+end
+
 -- Every computer reboots; GPS hosts may come back late.
 function Sim:world_restart(t, opts)
   opts = opts or {}

@@ -146,6 +146,10 @@ local ROLE_FILES = {
     WAREHOUSE = {
         { src = "warehouse.lua", dst = "startup.lua" },
     },
+    -- The base air-traffic control computer (2026-11-03): its own machine.
+    ATC       = {
+        { src = "atc.lua", dst = "startup.lua" },
+    },
     SERVER    = {
         -- Must precede central_server: it requires cloudstore at load, and an
         -- OTA that ships the server without it bricks the boot.

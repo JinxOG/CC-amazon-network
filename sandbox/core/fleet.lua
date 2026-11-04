@@ -4,7 +4,8 @@ local Fleet = {}
 
 local REPO = "https://raw.githubusercontent.com/JinxOG/CC-amazon-network/master/"
 
-local INSTALL_ROLES = { server = true, warehouse = true, admin = true, miner = true, loader = true, delivery = true, support = true }
+local INSTALL_ROLES = { server = true, warehouse = true, admin = true, miner = true, loader = true, delivery = true, support = true,
+  atc = true }
 
 local function bootstrap(role)
   return string.format([[

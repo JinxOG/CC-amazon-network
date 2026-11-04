@@ -14,6 +14,7 @@ proto.CH_BROADCAST = 2    -- server → all turtles
 proto.CH_PRIVATE   = 3    -- server → specific turtle (turtle filters by its own ID)
 proto.CH_WAREHOUSE = 4    -- server ↔ warehouse computer
 proto.CH_LOCAL     = 5    -- turtle ↔ turtle direct (short range coordination)
+proto.CH_ATC       = 7    -- turtles → the base air-traffic control computer (atc.lua); it answers on each turtle's private channel
 
 -- ─── Message Types ───────────────────────────────────────────────────────────
 
@@ -129,6 +130,21 @@ proto.MSG = {
     -- Proves the chunk is actually held, and makes an abandoned loader
     -- self-reporting rather than something the server has to infer.
     LOADER_BEACON = "LOADER_BEACON",
+
+    -- Base air-traffic control (atc.lua, 2026-11-03). A turtle books its route
+    -- through the base as an ordered list of sections (ATC_REQUEST), asks before
+    -- each step into a new section (ATC_ENTER), gives each back as it leaves
+    -- (ATC_LEAVE) and drops what it no longer needs (ATC_CANCEL). Every answer is
+    -- one ATC_REPLY. ATC_HELLO (broadcast, a new epoch) asks every turtle in the
+    -- base where it is; ATC_REPORT is the answer.
+    -- docs/superpowers/specs/2026-11-03-base-atc-design.md
+    ATC_REQUEST = "ATC_REQUEST",
+    ATC_ENTER   = "ATC_ENTER",
+    ATC_LEAVE   = "ATC_LEAVE",
+    ATC_CANCEL  = "ATC_CANCEL",
+    ATC_REPLY   = "ATC_REPLY",
+    ATC_HELLO   = "ATC_HELLO",
+    ATC_REPORT  = "ATC_REPORT",
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────

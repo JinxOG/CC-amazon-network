@@ -257,7 +257,9 @@ return {
         local f = io.open("turtle_base.lua", "r")
         local src = f:read("*a"); f:close()
 
-        for _, fn in ipairs({ "base%.returnToDock%(%)", "base%.returnToDockFromSky%(%)" }) do
+        -- home.dock and home.fromSky since the ATC card (2026-11-03): base.returnToDock*
+        -- wrap them (homing) so a trip home moves with the server down.
+        for _, fn in ipairs({ "home%.dock%(%)", "home%.fromSky%(%)" }) do
             local at = src:find("function " .. fn)
             assert_eq(at ~= nil, true, fn .. " moved or vanished")
             local endAt = src:find("\nend\n", at) or #src

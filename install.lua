@@ -5,6 +5,7 @@
 --   pastebin run <install_id> support
 --   pastebin run <install_id> miner
 --   pastebin run <install_id> loader
+--   pastebin run <install_id> atc
 --
 -- Or copy install.lua to the computer and run:
 --   install server | install delivery | install support | install miner | install loader
@@ -31,6 +32,7 @@ local FILES = {
     mine_flow       = "mine_flow.lua",
     loader_turtle   = "loader_turtle.lua",
     cloudstore      = "cloudstore.lua",
+    atc             = "atc.lua",
 }
 
 local PROFILES = {
@@ -50,6 +52,15 @@ local PROFILES = {
         -- it as central_server.lua beside a startup_server.lua launcher left, after
         -- the first update, a 346 KB copy nothing ran (2026-11-02, W3's disk card).
         { src = FILES.central_server, name = "startup.lua"        },
+    },
+    -- The base air-traffic control computer (2026-11-03). Its own computer and
+    -- channel; it keeps nothing on disk.
+    atc = {
+        { src = FILES.protocol,  name = "protocol.lua"  },
+        { src = FILES.updater,   name = "updater.lua"   },
+        { src = FILES.logship,   name = "logship.lua"   },
+        { src = FILES.waypoints, name = "waypoints.lua" },
+        { src = FILES.atc,       name = "startup.lua"   },
     },
     admin = {
         { src = FILES.protocol, name = "protocol.lua" },
@@ -119,7 +130,7 @@ role = role:lower():gsub("%s+", "")
 
 local files = PROFILES[role]
 if not files then
-    print("Unknown role '" .. role .. "'. Use: server, delivery, support, miner, or loader")
+    print("Unknown role '" .. role .. "'. Use: server, delivery, support, miner, loader, or atc")
     return
 end
 

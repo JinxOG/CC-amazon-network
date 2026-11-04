@@ -335,6 +335,7 @@ local CTRL_TYPES = {
     -- it, and the reboot would silently never happen.
     [proto.MSG.REBOOT]        = true,
     [proto.MSG.RE_REGISTER]   = true,
+    [proto.MSG.ATC_HELLO]     = true,   -- the control loop answers it (atc.report)
 }
 
 -- Types that are only meaningful LIVE and must never be queued.
@@ -351,6 +352,8 @@ local CTRL_TYPES = {
 local TRANSIENT_TYPES = {
     [proto.MSG.LOADER_BEACON]   = true,
     [proto.MSG.POSITION_UPDATE] = true,
+    -- An ATC answer is for the step waiting on it right now; a late one is noise.
+    [proto.MSG.ATC_REPLY]       = true,
 }
 
 local _ctrlInbox, _jobInbox = {}, {}
@@ -953,6 +956,16 @@ local function detectFacing()
     -- must say so if the power goes mid-way (GPS 3).
     _self.facingKnown = false
 
+    -- In the base the measuring step is a step into a section like any other,
+    -- and which one is not known (that is what is being measured): every
+    -- neighbouring section is asked for first, and given back afterwards.
+    local claimed = base.atc.claimAround and base.atc.claimAround(x1, y1, z1)
+    if claimed == false then
+        base.atc.stalled("cannot measure facing: the ATC has not let it step")
+        logWarn("Cannot detect facing yet -- the ATC has not granted the sections around it. Facing UNKNOWN.")
+        return false
+    end
+
     -- Try to move forward one step to detect direction
     local moved = jMove("forward")
     if not moved then
@@ -962,11 +975,14 @@ local function detectFacing()
             if jMove("forward") then moved = true; break end
         end
     end
-    if not moved then
+    if not moved and not claimed then
         -- Defined after digGuarded, so reached through base at call time.
+        -- Never in the base: what boxes a turtle in there is other turtles.
         moved = base.digOutForFacing(x1, y1, z1)
     end
     if not moved then
+        if claimed then base.atc.releaseAround(claimed) end
+        base.atc.stalled("boxed in on all four sides")
         logWarn("Cannot detect facing — boxed in on all four sides. Facing UNKNOWN.")
         _self.facingKnown = false
         return false
@@ -974,6 +990,7 @@ local function detectFacing()
 
     local x2, y2, z2 = gps.locate(CFG.GPS_TIMEOUT)
     jMove("back")  -- return to original position
+    if claimed then base.atc.releaseAround(claimed) end
 
     if not x2 then
         logWarn("GPS lost during facing detection. Facing UNKNOWN; not moving on a guess.")
@@ -1463,6 +1480,184 @@ local function fenceRefusalSlot(key)
     end
 end
 
+-- ─── Base air-traffic control: the turtle's half (2026-11-03, atc.lua) ──────
+-- One turtle per section of the base (waypoints.lua, W.atcSection). A step into
+-- a new section waits here until the ATC computer says it may enter; leaving a
+-- section gives it back. A whole route is booked first (atc.book), so a turtle
+-- waits in its dock or the holding line, not in the corridor. NO ANSWER MEANS NO
+-- ENTRY: with the ATC down a turtle stops at the edge of the section it holds,
+-- and the base pauses instead of jamming.
+-- docs/superpowers/specs/2026-11-03-base-atc-design.md
+--
+-- One table, not a dozen locals: CC refuses this file past 200 locals alive at
+-- once counted with the functions around them (tests/test_cc_local_limit.lua).
+-- ON ONCE THIS TURTLE HAS HEARD AN ATC, AND FROM THEN ON FOR GOOD. A base with no
+-- ATC computer moves exactly as before; a base that has one keeps gating while it
+-- is down, after a reboot, after a world restart -- the file says it exists.
+local atc = {
+    SEEN_FILE = "atc.seen",
+    ENABLED  = W.atcSection ~= nil and fs.exists("atc.seen"),
+    REPLY_S  = 2,          -- one round trip
+    STUCK_S  = 180,        -- no progress this long: the job goes back to the queue
+    route    = nil,        -- the booked sections, in order
+    nonce    = 0,
+    stallAt  = nil,        -- os.clock() when progress stopped
+    stuckSent = false,
+}
+
+function atc.heard()
+    if atc.ENABLED or not W.atcSection then return end
+    atc.ENABLED = true
+    pcall(function()
+        local f = fs.open(atc.SEEN_FILE, "w")
+        if f then f.write(tostring(os.epoch("utc"))); f.close() end
+    end)
+    logInfo("ATC heard: this turtle now asks it before every step into the base")
+end
+
+function atc.section(x, y, z) return W.atcSection and W.atcSection(x, y, z) or nil end
+function atc.here() return atc.section(_self.pos.x, _self.pos.y, _self.pos.z) end
+
+-- The booked sections from `from` on (from included), or {from, nextSec}.
+function atc.remaining(from, nextSec)
+    local r, out, on = atc.route, {}, false
+    if r then
+        for _, s in ipairs(r) do
+            if s == from or s == nextSec then on = true end
+            if on then out[#out + 1] = s end
+        end
+    end
+    if #out == 0 then
+        if from then out[#out + 1] = from end
+        if nextSec and nextSec ~= from then out[#out + 1] = nextSec end
+    end
+    return out
+end
+
+function atc.send(msgType, payload)
+    payload.ch = OWN_CHANNEL or proto.CH_PRIVATE
+    if not _self.modem then return false end
+    return pcall(proto.send, _self.modem, proto.CH_ATC, proto.encode(msgType, _self.id, "atc", payload))
+end
+
+-- One round trip: the reply payload, or nil when the ATC did not answer.
+function atc.ask(msgType, payload)
+    atc.nonce = atc.nonce + 1
+    payload.nonce = atc.nonce
+    if not atc.send(msgType, payload) then return nil end
+    local deadline = os.clock() + atc.REPLY_S
+    while true do
+        local left = deadline - os.clock()
+        if left <= 0 then return nil end
+        local msg = pumpFor(_jobInbox, proto.MSG.ATC_REPLY, left)
+        if not msg then return nil end
+        if type(msg.payload) == "table" and msg.payload.nonce == payload.nonce then return msg.payload end
+    end
+end
+
+-- No progress for STUCK_S: hand the job back once and stop counting as idle.
+-- Called from every wait that is a refusal; a silent ATC is a pause, not a stall.
+function atc.stalled(why)
+    local now = os.clock()
+    atc.stallAt = atc.stallAt or now
+    if atc.stuckSent or now - atc.stallAt < atc.STUCK_S then return end
+    atc.stuckSent = true
+    logWarn(string.format("STUCK %ds at %d,%d,%d (%s) -- handing job %s back, status ERROR",
+        math.floor(now - atc.stallAt), _self.pos.x, _self.pos.y, _self.pos.z, why, tostring(_self.jobId)))
+    if _self.jobId then
+        comms.toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(_self.jobId, "stuck: " .. why, true))
+        _self.jobId = nil
+    end
+    _self.status = proto.STATUS.ERROR
+    comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(nil, proto.STATUS.ERROR,
+        "stuck: " .. why, base.getPos()))
+end
+function atc.progressed() atc.stallAt = nil end
+
+-- Before a step from section `cur` into section `sec`: wait for the grant.
+function atc.waitEnter(sec, cur)
+    local report
+    while true do
+        local r = atc.ask(proto.MSG.ATC_ENTER, { sec = sec, cur = cur, route = atc.remaining(cur, sec) })
+        if r and r.ok then return true end
+        local now = os.clock()
+        if r and r.why ~= "settling" then atc.stalled("ATC: " .. tostring(r.why) .. " for " .. sec) end
+        report = report or waitReporter(function()
+            return string.format("ATC: waiting to enter %s at %d,%d,%d (%s)", sec,
+                _self.pos.x, _self.pos.y, _self.pos.z, r and tostring(r.why) or "no answer from the ATC")
+        end, now)
+        report(now)
+        sleep(r and 1 or 2)
+    end
+end
+
+-- Book a route (waypoints, in move.to's order) from where the turtle stands.
+-- Returns once admitted: the turtle waits HERE -- its dock, the holding line, the
+-- sky -- until the route's first section is free.
+function atc.book(waypoints, label)
+    if not atc.ENABLED then return true end
+    local list = W.routeSections(base.getPos(), waypoints)
+    atc.route = list
+    if #list == 0 then return true end
+    local report
+    while true do
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group })
+        if r and r.ok then
+            atc.progressed()
+            return true
+        end
+        local now = os.clock()
+        report = report or waitReporter(function()
+            return string.format("ATC: %s waiting to be let in (%s) at %d,%d,%d", label or "route",
+                r and tostring(r.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
+        end, now)
+        report(now)
+        sleep(r and 2 or 3)
+    end
+end
+
+-- Done with the base: give back everything but the section it stands in.
+function atc.finish()
+    if not atc.ENABLED then return end
+    atc.send(proto.MSG.ATC_CANCEL, { cur = atc.here() })
+    atc.route = nil
+end
+
+-- The sections of the four blocks beside (x, y, z), asked for one at a time;
+-- nil when none is in the base, false when one was refused (the rest given
+-- back), else the list granted. For facing detection, which cannot know which
+-- of the four it is about to step into.
+function atc.claimAround(x, y, z)
+    if not atc.ENABLED then return nil end
+    local cur, want, seen = atc.section(x, y, z), {}, {}
+    for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+        local s = atc.section(x + d[1], y, z + d[2])
+        if s and s ~= cur and not seen[s] then seen[s] = true; want[#want + 1] = s end
+    end
+    if #want == 0 then return nil end
+    local got = {}
+    for _, s in ipairs(want) do
+        local r = atc.ask(proto.MSG.ATC_ENTER, { sec = s, cur = cur, route = { cur, s } })
+        if not (r and r.ok) then
+            atc.releaseAround(got)
+            return false
+        end
+        got[#got + 1] = s
+    end
+    return got
+end
+
+function atc.releaseAround(list)
+    for _, s in ipairs(list or {}) do atc.send(proto.MSG.ATC_LEAVE, { sec = s }) end
+end
+
+-- Where it is and what it still needs, for an ATC that just booted.
+function atc.report()
+    local cur = atc.here()
+    atc.send(proto.MSG.ATC_REPORT, { cur = cur, route = atc.remaining(cur) })
+end
+base.atc = atc
+
 local function tryMove(digFn, dir)
     -- NO TURTLE MOVES AFTER BOOT ON A GUESS (recovery layer release 2). Only
     -- miners ever called waitForPositionFix; delivery and support moved on
@@ -1478,9 +1673,14 @@ local function tryMove(digFn, dir)
     -- strand the miner in the field for as long as the server stays down, and
     -- leave its placed loader force-loading a chunk indefinitely.
     local downReport = nil
+    -- Not while homing, and never inside the base: there the ATC is the
+    -- authority, and a turtle must be able to park with the server down (ATC
+    -- card, requirement 7).
     while _self.serverDown
           and not _self.inSkyReturn
-          and not _self.autonomousReturn do
+          and not _self.autonomousReturn
+          and not _self.homing
+          and not (atc.ENABLED and atc.here()) do
         -- Escape hatch for a solo miner holding a placed loader (see
         -- base.setServerDownEscape). nil for every other role, so their loop
         -- body stays exactly `sleep(2)`. pcall'd so a faulty predicate can
@@ -1550,6 +1750,19 @@ local function tryMove(digFn, dir)
         return false, "geofence_breach"
     end
 
+    -- THE ATC GATE. A step into a section this turtle is not in waits for the
+    -- grant; nothing else in this function changes for a step that stays in the
+    -- world. inBase also turns off the sidesteps below: in a one-block lane a
+    -- step sideways is a step into somebody else's section.
+    local atcFrom, atcInto = nil, nil
+    if atc.ENABLED then
+        local nx, ny, nz = _self.pos.x, _self.pos.y, _self.pos.z
+        if dir == "up" then ny = ny + 1 elseif dir == "down" then ny = ny - 1 else nx, nz = projectStep(dir) end
+        atcFrom, atcInto = atc.here(), atc.section(nx, ny, nz)
+        if atcInto and atcInto ~= atcFrom then atc.waitEnter(atcInto, atcFrom) end
+    end
+    local inBase = atcFrom ~= nil or atcInto ~= nil
+
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
     local digAttempts = 0
 
@@ -1560,7 +1773,12 @@ local function tryMove(digFn, dir)
     local blockReport     = nil
 
     while true do
-        if jMove(dir) then applyMove(dir); return true end
+        if jMove(dir) then
+            applyMove(dir)
+            atc.progressed()
+            if atcFrom and atcFrom ~= atcInto then atc.send(proto.MSG.ATC_LEAVE, { sec = atcFrom }) end
+            return true
+        end
 
         if isTurtleBlock(dir) then
             -- Another turtle is in the way — wait, then try to route around it.
@@ -1577,13 +1795,14 @@ local function tryMove(digFn, dir)
                 return false, "blocked by turtle (" .. dir .. ")"
             end
             turtleWaits = turtleWaits + 1
+            if inBase then atc.stalled("blocked by a turtle moving " .. dir) end
             blockReport = blockReport or waitReporter(function()
                 return string.format("a turtle is blocking %s at %d,%d,%d (%d attempts)",
                     dir, _self.pos.x, _self.pos.y, _self.pos.z, turtleWaits)
             end, now)
             blockReport(now)
             -- After ~3 s of waiting, attempt a one-block lateral bypass (forward only)
-            if dir == "forward" and turtleWaits >= 6 and not bypassAttempted then
+            if dir == "forward" and turtleWaits >= 6 and not bypassAttempted and not inBase then
                 bypassAttempted = true
                 if bypassForward() then
                     return true   -- position already updated inside bypassForward
@@ -1606,7 +1825,7 @@ local function tryMove(digFn, dir)
             -- holes are one-block shafts turtles queue in on purpose.
             if (dir == "down" or dir == "up") and not bypassAttempted
                     and turtleWaits >= (dir == "down" and 6 or 20)
-                    and not base.nearDepot(_self.pos) then
+                    and not base.nearDepot(_self.pos) and not inBase then
                 bypassAttempted = true
                 if base.sidestepOutOfColumn() then
                     logInfo(string.format(
@@ -1670,6 +1889,13 @@ end
 function base.setMoveAbort(fn) _self.moveAbort = fn end
 
 function move.to(tx, ty, tz)
+    -- A flight to the point above the arrivals hole goes by the sky holding line
+    -- when there is an ATC (ATC card, addition A): the miner's own program flies
+    -- straight there, and the ATC decides who comes down the column next.
+    if atc.ENABLED and not atc.skyBound and tx == W.ARRIVALS_HOLE.x and tz == W.ARRIVALS_HOLE.z
+            and ty >= W.ATC.SKY_MIN_Y and atc.here() ~= "ARR" and _self.dock then
+        return atc.skyArrive(ty)
+    end
     -- Vertical first
     while _self.pos.y < ty do
         if _self.moveAbort and _self.moveAbort() then return false, "aborted" end
@@ -1707,6 +1933,47 @@ function move.followRoute(waypoints)
         if not ok then return false, err end
     end
     return true
+end
+
+-- A holding slot from the ATC; waits (outside the base) until it gives one.
+function atc.holdSlot(line)
+    local report
+    while true do
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line })
+        if r and r.ok and r.slot then return r.slot end
+        local now = os.clock()
+        report = report or waitReporter(function()
+            return string.format("ATC: no %s holding slot yet (%s) at %d,%d,%d", line,
+                r and tostring(r.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
+        end, now)
+        report(now)
+        sleep(r and 2 or 3)
+    end
+end
+
+-- Concatenate waypoint lists.
+function atc.join(...)
+    local out = {}
+    for _, list in ipairs({ ... }) do for _, wp in ipairs(list) do out[#out + 1] = wp end end
+    return out
+end
+
+-- Sky slot, wait there for the whole way home, then fly to the column: ends
+-- standing at the top of the arrivals column, holding ARR, the route booked.
+function atc.skyArrive(ty)
+    atc.skyBound = true
+    local k = atc.holdSlot("sky")
+    logInfo(string.format("Sky arrival: to holding slot %d at y=%d", k, ty))
+    local ok, err = move.followRoute(W.holdingApproach(_self.pos, k, ty))
+    if ok then
+        local exit = W.holdingExitRoute(k, ty)
+        atc.book(atc.join(exit, { { x = W.ARRIVALS_HOLE.x, y = CFG.FLOOR_Y, z = W.ARRIVALS_HOLE.z } },
+            W.returnRoute(_self.dock)), "sky arrival from slot " .. k)
+        logInfo("Called down from sky slot " .. k)
+        ok, err = move.followRoute(exit)
+    end
+    atc.skyBound = false
+    return ok, err
 end
 
 base.move = move
@@ -1748,6 +2015,8 @@ function base.depart(noDescend)
         -- behind us, THEN descend so they go down together.
 
         local route = W.departureRoute(_self.dock)
+        atc.group = _self.id
+        atc.book(route, "departure")
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end
 
@@ -1790,6 +2059,10 @@ function base.depart(noDescend)
         -- then move to hole and descend.
 
         local route = W.supportDepartureRoute(_self.dock)
+        -- One party with the delivery it follows: it may share the dispatch
+        -- corner its partner is holding for it.
+        atc.group = _self.partnerId
+        atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }), "departure")
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end
 
@@ -1815,6 +2088,8 @@ function base.depart(noDescend)
     end
 
     logInfo(string.format("Exited depot at %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
+    atc.finish()
+    atc.group = nil
     return true
 end
 
@@ -1856,7 +2131,8 @@ local function verifyAtDock()
         _self.dock.x, _self.dock.z, tostring(err2))
 end
 
-function base.returnToDock()
+local home = {}
+function home.dock()
     if not _self.dock then logWarn("No dock assigned, staying put.") return true end
 
     base.setStatus(proto.STATUS.RETURNING)
@@ -1873,32 +2149,58 @@ function base.returnToDock()
         end
     end
 
-    -- Navigate underground to arrivals hole X,Z
-    -- Support is following via position broadcasts so it arrives right behind us
-    logInfo("Navigating underground to arrivals hole...")
-    local ok, err = move.to(W.ARRIVALS_HOLE.x, UNDERGROUND_Y, W.ARRIVALS_HOLE.z)
-    if not ok then return false, "could not reach arrivals hole: " .. (err or "?") end
-
     -- Stop position broadcasts and tell support to hold BEFORE ascending.
     -- Clearing partnerId immediately is critical: if support misses the ASCENDING
     -- signal (it can happen if support is mid-move.to()), it would otherwise keep
     -- following POSITION_UPDATEs all the way to the surface and block delivery.
     local savedPartnerId = nil
-    if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
-        savedPartnerId  = _self.partnerId
-        _self.partnerId = nil   -- kills all further POSITION_UPDATE broadcasts NOW
-        -- Send ASCENDING so support knows to hold (best-effort; if missed it's OK
-        -- because broadcasts have already stopped so support gets no more updates)
-        local sig = proto.encode(proto.MSG.ASCENDING, _self.id, savedPartnerId, {})
-        proto.send(_self.modem, proto.CH_LOCAL, sig)
-        sleep(0.5)
+    local function holdSupport()
+        if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
+            savedPartnerId  = _self.partnerId
+            _self.partnerId = nil   -- kills all further POSITION_UPDATE broadcasts NOW
+            -- Send ASCENDING so support knows to hold (best-effort; if missed it's OK
+            -- because broadcasts have already stopped so support gets no more updates)
+            local sig = proto.encode(proto.MSG.ASCENDING, _self.id, savedPartnerId, {})
+            proto.send(_self.modem, proto.CH_LOCAL, sig)
+            sleep(0.5)
+        end
     end
 
-    -- Ascend through arrivals hole into building (no POSITION_UPDATEs, partnerId is nil)
-    logInfo("Ascending arrivals hole...")
-    for _ = 1, 10 do
-        move.up()
-        if _self.pos.y >= FLOOR_Y then break end
+    local ok, err
+    if base.atc.ENABLED then
+        -- THE HOLDING LINE (ATC card, 2026-11-03). Not straight for the hole --
+        -- every returning turtle aiming at one cell is what piled twenty of them
+        -- into the tunnel. A slot from the ATC, reached from the far side so it
+        -- never crosses the taxi row; the support stops one block behind, in the
+        -- slot's own column; then up the shaft only once the whole way home is
+        -- free.
+        local k = base.atc.holdSlot("tunnel")
+        logInfo("Navigating underground to holding slot " .. k .. "...")
+        ok, err = move.followRoute(W.holdingApproach(_self.pos, k, UNDERGROUND_Y))
+        if not ok then return false, "could not reach holding slot " .. k .. ": " .. (err or "?") end
+        holdSupport()
+        local exit, home = W.holdingExitRoute(k), W.returnRoute(_self.dock)
+        local whole = {}
+        for _, wp in ipairs(exit) do whole[#whole + 1] = wp end
+        for _, wp in ipairs(home) do whole[#whole + 1] = wp end
+        base.atc.book(whole, "return from holding slot " .. k)
+        logInfo("Called up from holding slot " .. k .. " -- ascending arrivals hole...")
+        ok, err = move.followRoute(exit)
+        if not ok then return false, "could not leave holding slot " .. k .. ": " .. (err or "?") end
+    else
+        -- Navigate underground to arrivals hole X,Z
+        -- Support is following via position broadcasts so it arrives right behind us
+        logInfo("Navigating underground to arrivals hole...")
+        ok, err = move.to(W.ARRIVALS_HOLE.x, UNDERGROUND_Y, W.ARRIVALS_HOLE.z)
+        if not ok then return false, "could not reach arrivals hole: " .. (err or "?") end
+        holdSupport()
+
+        -- Ascend through arrivals hole into building (no POSITION_UPDATEs, partnerId is nil)
+        logInfo("Ascending arrivals hole...")
+        for _ = 1, 10 do
+            move.up()
+            if _self.pos.y >= FLOOR_Y then break end
+        end
     end
 
     -- GPS resync now that we're on the surface — corrects any drift from underground
@@ -1952,7 +2254,7 @@ end
 -- altitude, then descend through the hole and follow the normal return route.
 -- Use for mining recall where both turtles come back via the sky rather than
 -- navigating underground (which risks terrain collisions from deep scan depths).
-function base.returnToDockFromSky()
+function home.fromSky()
     if not _self.dock then logWarn("No dock assigned, staying put.") return true end
 
     base.setStatus(proto.STATUS.RETURNING)
@@ -1969,7 +2271,11 @@ function base.returnToDockFromSky()
     logInfo("Flying to arrivals hole at Y=" .. SKY_RETURN_Y .. "...")
     move.to(W.ARRIVALS_HOLE.x, SKY_RETURN_Y, W.ARRIVALS_HOLE.z)
 
-    -- 3. Descend straight down through the arrivals hole to floor level
+    -- 3. Descend straight down through the arrivals hole to floor level -- once
+    --    the whole way home is free (a no-op without an ATC, and when the sky
+    --    holding line already booked it).
+    atc.book(atc.join({ { x = W.ARRIVALS_HOLE.x, y = FLOOR_Y, z = W.ARRIVALS_HOLE.z } }, W.returnRoute(_self.dock)),
+        "sky return")
     logInfo("Descending through arrivals hole...")
     local ok, err = move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.ARRIVALS_HOLE.z)
     if not ok then
@@ -2006,7 +2312,7 @@ end
 -- Navigate from anywhere inside the building back to dock.
 -- Uses an aisle route that moves Z first so the turtle never cuts
 -- through occupied dock rows.  Safe to call from any floor position.
-function base.returnToDockInternal()
+function home.internal()
     if not _self.dock then return true end
     -- GPS sync first so current position is accurate
     gpsSync()
@@ -2026,6 +2332,7 @@ function base.returnToDockInternal()
     -- Position-aware route: moves Z to the red taxiway FIRST at the current X
     -- column so the turtle never traverses another dock row sideways.
     local route = W.internalReturnRouteFrom(_self.dock, _self.pos.x, _self.pos.z)
+    atc.book(route, "homing inside the base")
     local ok, err = move.followRoute(route)
     if not ok then
         base.setStatus(proto.STATUS.ERROR)
@@ -2046,6 +2353,22 @@ function base.returnToDockInternal()
     if not _self.canDig then base.fuel.dockRefuel() end
     return true
 end
+
+-- A trip home moves with the server down (ATC card, requirement 7) and gives
+-- back whatever it booked when it ends, docked or not.
+local function homing(fn)
+    return function()
+        _self.homing = true
+        local ok, a, b = pcall(fn)
+        _self.homing = false
+        atc.finish()
+        if not ok then error(a, 0) end
+        return a, b
+    end
+end
+base.returnToDock         = homing(home.dock)
+base.returnToDockFromSky  = homing(home.fromSky)
+base.returnToDockInternal = homing(home.internal)
 
 -- ─── Fuel ────────────────────────────────────────────────────────────────────
 -- Turtles carry an entangled chest in a reserved slot.
@@ -3764,6 +4087,12 @@ function base.run(jobHandler)
             if not ok then
                 logWarn("RE_REGISTER failed: " .. tostring(err))
             end
+
+        elseif msg.type == proto.MSG.ATC_HELLO then
+            -- The ATC booted with nothing: tell it where we are and what we
+            -- still need. Only a turtle standing in a section has anything to say.
+            base.atc.heard()
+            if base.atc.here() then pcall(base.atc.report) end
 
         elseif msg.type == proto.MSG.REBOOT then
             -- Deliberately does NOT call sendFailed. The job is meant to
