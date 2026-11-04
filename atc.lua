@@ -181,8 +181,15 @@ function core.handle(st, id, p, now)
         local line = (p.line == "sky") and "sky" or "tunnel"
         st.slots[line] = st.slots[line] or {}
         local slots = st.slots[line]
+        local want = tonumber(p.prefer)
         for k = 1, CFG.HOLD_SLOTS do
-            if slots[k] and slots[k].id == id then slots[k].at = now; return { ok = true, slot = k } end
+            if slots[k] and slots[k].id == id then
+                -- Its slot from before -- unless it asks for the one it now stands
+                -- under: then the old one goes. node_81 kept slot 1 from a trip seven
+                -- minutes earlier and was sent back to it, through rock (2026-11-03).
+                if not want or want == k then slots[k].at = now; return { ok = true, slot = k } end
+                slots[k] = { freedAt = now, at = 0 }
+            end
         end
         local function free(sl, mine)
             if not sl then return true end
@@ -194,7 +201,6 @@ function core.handle(st, id, p, now)
         -- arrivals column is its partner's slot, which it is standing in. Given
         -- the first free slot instead, node_81 met solid rock one block on and
         -- stayed in the tunnel (sim, 2026-11-03).
-        local want = tonumber(p.prefer)
         if want and want >= 1 and want <= CFG.HOLD_SLOTS and free(slots[want], true) then
             slots[want] = { id = id, at = now }
             note(st, string.format("%s slot %d (%s, the one it stands under)", id, want, line))
@@ -288,6 +294,10 @@ function core.handle(st, id, p, now)
 
     if p.op == "cancel" then
         for k, x in pairs(st.res) do if x.id == id then drop(st, k, p.cur) end end
+        -- done with the base (home, or out of the hole): no slot of its own any more
+        for _, line in pairs(st.slots) do
+            for k, sl in pairs(line) do if sl.id == id then line[k] = { freedAt = now, at = 0 } end end
+        end
         return { ok = true }
     end
 

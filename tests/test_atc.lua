@@ -206,6 +206,20 @@ return {
             "once b leaves it, slot 2 is the support's")
     end,
 
+    -- node_81 held slot 1 from a trip seven minutes before; asking for slot 3, the one it stood under, it was told
+    -- "slot 1, yours already" and sent through rock (sim, 2026-11-03).
+    ["an old slot gives way to the one a turtle stands under, and finishing gives any slot back"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "sup", { op = "hold", line = "tunnel" }, t).slot, 1, "an earlier trip's slot")
+        assert_eq(core.handle(st, "sup", { op = "hold", line = "tunnel", prefer = 3, strict = true }, t + 1000).slot, 3,
+            "asking for the slot it stands under, it gets that one")
+        assert_eq(core.handle(st, "x", { op = "hold", line = "tunnel", prefer = 1 }, t + 2000).slot, 1,
+            "and slot 1 went back")
+        core.handle(st, "sup", { op = "cancel" }, t + 3000)
+        assert_eq(core.handle(st, "y", { op = "hold", line = "tunnel", prefer = 3 }, t + 4000).slot, 3,
+            "finished (home), it holds no slot any more")
+    end,
+
     -- Slot 1 again and again sent every arrival up the same column, into the support of the pair before, still
     -- waiting there: 8 turtles piled up under slot 1 (sim, 2026-11-03).
     ["holding slots are handed out in turn around the line, not the first free one"] = function(assert_eq)
