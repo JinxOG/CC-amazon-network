@@ -183,9 +183,26 @@ end
 
 local inbox = {}
 
+-- Only what tick() takes out is kept, and at most INBOX_MAX of each type (the
+-- oldest goes first). This computer opens the turtles' server channel, and
+-- until 2026-11-04 every message it did not handle was kept here for good --
+-- every heartbeat of every turtle. W3 measured it in a 150-turtle simulator
+-- run: 2.4 million table entries in two simulated hours, the run's whole
+-- memory growth. A type added to tick() must be added here too.
+local INBOX_KEEP = {
+    [proto.MSG.DELIVERY_ARRIVED] = true,
+    [proto.MSG.CHESTS_PLACED]    = true,
+    [proto.MSG.BATCH_DONE]       = true,
+    [proto.MSG.ITEM_COLLECTED]   = true,
+}
+local INBOX_MAX = 64
+
 local function inboxPut(msg)
+    if not INBOX_KEEP[msg.type] then return end
     if not inbox[msg.type] then inbox[msg.type] = {} end
-    table.insert(inbox[msg.type], msg)
+    local bucket = inbox[msg.type]
+    table.insert(bucket, msg)
+    if #bucket > INBOX_MAX then table.remove(bucket, 1) end
 end
 
 local function inboxGet(wantType, fromId)
@@ -984,6 +1001,9 @@ end
 -- run loop below is entered exactly as before.
 if _G.__CC_WAREHOUSE_TEST then
     return {
+        routeMsg        = routeMsg,
+        inbox           = inbox,
+        inboxGet        = inboxGet,
         rsCall          = rsCall,
         clearEnderChest = clearEnderChest,
         loadChests      = loadChests,

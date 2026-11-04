@@ -577,4 +577,37 @@ return {
             .. "; without the guard each cycle rebuilds 45 KB and retries")
     end,
 
+    -- W3, 2026-11-04 (user's go to edit this file): the warehouse opens the
+    -- turtles' server channel, and routeMsg put every message it did not handle
+    -- into the inbox -- every heartbeat of every turtle -- while tick() only ever
+    -- takes four types out. A 150-turtle simulator run grew the inbox by 2.4
+    -- million table entries in two simulated hours (~68 MB an hour of the Lua
+    -- heap); on the live game the same pile grows until the daily restart.
+    ["the fleet's chatter on the server channel is not kept in the inbox"] = function(assert_eq)
+        local W = fresh(fakeRS(), fakeChest({}))
+        local proto = require("protocol")
+        for i = 1, 500 do
+            W.routeMsg(proto.encode(proto.MSG.HEARTBEAT, "node_" .. (i % 150), "server", { fuel = i }))
+            W.routeMsg(proto.encode(proto.MSG.STATUS_UPDATE, "node_" .. (i % 150), "server", {}))
+        end
+        local kept = 0
+        for _, bucket in pairs(W.inbox) do kept = kept + #bucket end
+        assert_eq(kept, 0, "1000 messages the warehouse never reads leave nothing behind")
+    end,
+
+    ["a message the state machine reads is still kept, and its pile is bounded"] = function(assert_eq)
+        local W = fresh(fakeRS(), fakeChest({}))
+        local proto = require("protocol")
+        W.routeMsg(proto.encode(proto.MSG.DELIVERY_ARRIVED, "node_7", "warehouse", { jobId = "job_1" }))
+        local got = W.inboxGet(proto.MSG.DELIVERY_ARRIVED, "node_7")
+        for i = 1, 200 do
+            W.routeMsg(proto.encode(proto.MSG.DELIVERY_ARRIVED, "node_" .. i, "warehouse", { jobId = "job_" .. i }))
+        end
+        local pile = #(W.inbox[proto.MSG.DELIVERY_ARRIVED] or {})
+        local newest = W.inboxGet(proto.MSG.DELIVERY_ARRIVED, "node_200")
+        assert_eq(got ~= nil and got.from, "node_7", "DELIVERY_ARRIVED still reaches WAIT_ARRIVE")
+        assert_eq(pile <= 64, true, "200 unanswered arrivals keep at most 64 (" .. pile .. ")")
+        assert_eq(newest ~= nil, true, "and the newest is the one kept")
+    end,
+
 }
