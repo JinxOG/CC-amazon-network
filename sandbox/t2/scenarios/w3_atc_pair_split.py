@@ -44,6 +44,13 @@ def steps(ctx):
     pin = getattr(ctx, "pin", None) or "HEAD"
     tmp = tempfile.mkdtemp(prefix="w3split")
 
+    # THE ARRIVALS SIDE OF THE BASE DOES NOT RUN IN THIS WORLD COPY (w3-chunk-tick-probe-b, 2026-11-05): computers placed
+    # at x 160, 200, 220 ran; at x 226 (chunk column 14, beside the arrivals hole) none started, at z -2786, -2795, -2801.
+    # In runs -a and -b the delivery froze on stepping to 228,67,-2801 (no events at all for 180 s, then a fresh boot).
+    # The simulator models the base as loaded to x 260; the holding line reaches x 256. Load chunks 14-16, z -176..-174.
+    out = c.command("forceload add 224 -2816 271 -2769")
+    ctx.note("forceload the arrivals side (chunks 14..16, -176..-174): %s" % out.strip()[:120])
+
     # 1. The ATC computer.
     start = os.path.join(tmp, "atc_startup.lua")
     with open(start, "w", encoding="utf8", newline="\n") as f:
