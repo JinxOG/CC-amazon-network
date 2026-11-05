@@ -36,6 +36,7 @@ local _self = {
     role       = nil,
     dock       = nil,    -- assigned dock from waypoints
     partnerId  = nil,
+    partnerSlot = nil,   -- the holding slot its delivery named (base.atc.preferSlot)
     status     = proto.STATUS.IDLE,
     jobId      = nil,
     modem      = nil,
@@ -101,7 +102,7 @@ function base.getPos()           return { x=_self.pos.x, y=_self.pos.y, z=_self.
 function base.getFacing()        return _self.facing     end
 function base.getDock()          return _self.dock       end
 function base.getPartnerId()     return _self.partnerId  end
-function base.setPartnerId(id)   _self.partnerId = id    end
+function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil end
 function base.setCanDig(val)     _self.canDig = val      end
 function base.isServerDown()     return _self.serverDown  end
 function base.isRecalled()       return _self.recalled    end
@@ -519,6 +520,13 @@ local function pumpFor(q, wantType, timeout)
             if parsed then
                 local valid, msg = proto.decode(parsed)
                 if valid and (msg.to == _self.id or msg.to == "broadcast") then
+                    -- A support's delivery names its holding slot when it says hold or
+                    -- come home; noted here, whichever loop reads the message.
+                    if msg.from ~= nil and msg.from == _self.partnerId
+                       and (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
+                       and type(msg.payload) == "table" and tonumber(msg.payload.slot) then
+                        _self.partnerSlot = tonumber(msg.payload.slot)
+                    end
                     if firstSight(msg) then
                         if wantMatches(msg, wantType)
                            and ((CTRL_TYPES[msg.type] and q == _ctrlInbox)
@@ -2000,6 +2008,40 @@ function atc.holdSlot(line, prefer)
     end
 end
 
+-- The tunnel slot to ask for, from `pos`, or nil for the next one in turn.
+--   * the slot whose column it stands in, anywhere SOUTH of the slot: a support
+--     (which cannot dig) is in its delivery's, dug all the way up -- however far
+--     it had fallen behind when the delivery stopped (five came home six blocks
+--     short and met rock one column over, sim 2026-11-03);
+--   * otherwise the slot its delivery named in ASCENDING / RETURN_TO_DOCK
+--     (_self.partnerSlot): a support that lagged further back is somewhere on the
+--     delivery's own path, and holdingApproach from there walks that path. Given
+--     the next slot in turn instead, one was sent through rock and stranded in
+--     the departure tunnel, and every later departure piled up behind it (sim
+--     20261104-183352: 105 deliveries waiting by hour 105).
+function atc.preferSlot(pos)
+    local dx = pos.x - W.ARRIVALS_HOLE.x
+    if dx > 0 and dx % W.ATC.HOLD_STEP == 0 and dx / W.ATC.HOLD_STEP <= W.ATC.HOLD_SLOTS
+            and pos.z <= W.ATC.HOLD_Z then
+        return dx / W.ATC.HOLD_STEP
+    end
+    return _self.partnerSlot
+end
+
+-- How long a delivery or miner at the hole waits for its support to stage: 60 s
+-- without an ATC (as before), STAGE_WAIT_S under one (see base.depart).
+atc.STAGE_WAIT_S = 600
+function atc.stageWaitS()
+    return atc.ENABLED and atc.STAGE_WAIT_S or 60
+end
+
+-- The delivery's word to its support (ASCENDING: hold; RETURN_TO_DOCK: come
+-- home), naming its holding slot when it has one.
+function atc.signalSupport(msgType, partnerId, slot)
+    local sig = proto.encode(msgType, _self.id, partnerId, { slot = slot })
+    proto.send(_self.modem, proto.CH_LOCAL, sig)
+end
+
 -- Concatenate waypoint lists.
 function atc.join(...)
     local out = {}
@@ -2089,8 +2131,15 @@ function departImpl(noDescend)
 
             -- Wait for support to reach staging position (1 block behind us)
             -- Loop so we don't consume unrelated messages (heartbeat ACKs etc.)
+            -- Under the ATC the support's way to the hole is granted like any other,
+            -- and other traffic can hold it back minutes (a silent turtle keeps its
+            -- sections STALE_MS, 3 min). A delivery that went down alone after 60 s
+            -- left its support to come out late and chase it in a straight line --
+            -- through rock it cannot dig -- stranded in the departure tunnel, and
+            -- every later departure piled up behind it (sim, 105 deliveries waiting;
+            -- sandbox/scenarios/w3_atc_pair_split.lua). So it waits STAGE_WAIT_S.
             logInfo("Waiting for SUPPORT_STAGED...")
-            local deadline = os.epoch("utc") / 1000 + 60
+            local deadline = os.epoch("utc") / 1000 + atc.stageWaitS()
             while os.epoch("utc") / 1000 < deadline do
                 if base.isRecalled() then break end
                 local msg = base.receive(5)
@@ -2219,15 +2268,17 @@ function home.dock()
     -- Clearing partnerId immediately is critical: if support misses the ASCENDING
     -- signal (it can happen if support is mid-move.to()), it would otherwise keep
     -- following POSITION_UPDATEs all the way to the surface and block delivery.
-    local savedPartnerId = nil
-    local function holdSupport()
+    local savedPartnerId, savedSlot = nil, nil
+    local function holdSupport(slot)
         if _self.partnerId and _self.role == proto.ROLE.DELIVERY then
             savedPartnerId  = _self.partnerId
+            savedSlot       = slot
             _self.partnerId = nil   -- kills all further POSITION_UPDATE broadcasts NOW
             -- Send ASCENDING so support knows to hold (best-effort; if missed it's OK
-            -- because broadcasts have already stopped so support gets no more updates)
-            local sig = proto.encode(proto.MSG.ASCENDING, _self.id, savedPartnerId, {})
-            proto.send(_self.modem, proto.CH_LOCAL, sig)
+            -- because broadcasts have already stopped so support gets no more updates).
+            -- It names the holding slot: a support that lagged comes to the same one,
+            -- along the path this turtle just dug (base.atc.preferSlot).
+            base.atc.signalSupport(proto.MSG.ASCENDING, savedPartnerId, slot)
             sleep(0.5)
         end
     end
@@ -2240,19 +2291,14 @@ function home.dock()
         -- never crosses the taxi row; the support stops one block behind, in the
         -- slot's own column; then up the shaft only once the whole way home is
         -- free.
-        -- The slot whose column it stands in, anywhere SOUTH of the slot: a support
-        -- (which cannot dig) is in its delivery's, dug all the way up -- however far
-        -- it had fallen behind when the delivery stopped (five came home six blocks
-        -- short and met rock one column over, sim 2026-11-03).
-        local dx = _self.pos.x - W.ARRIVALS_HOLE.x
-        local here = (dx > 0 and dx % W.ATC.HOLD_STEP == 0 and dx / W.ATC.HOLD_STEP <= W.ATC.HOLD_SLOTS
-                and _self.pos.z <= W.ATC.HOLD_Z)
-            and (dx / W.ATC.HOLD_STEP) or nil
-        local k = base.atc.holdSlot("tunnel", here)
+        -- Which slot to ask for: base.atc.preferSlot (the column it stands in, or
+        -- its delivery's slot for a support that lagged behind on the way).
+        local k = base.atc.holdSlot("tunnel", base.atc.preferSlot(_self.pos))
+        _self.partnerSlot = nil
         logInfo("Navigating underground to holding slot " .. k .. "...")
         ok, err = move.followRoute(W.holdingApproach(_self.pos, k, UNDERGROUND_Y))
         if not ok then return false, "could not reach holding slot " .. k .. ": " .. (err or "?") end
-        holdSupport()
+        holdSupport(k)
         local exit, home = W.holdingExitRoute(k), W.returnRoute(_self.dock)
         local whole = {}
         for _, wp in ipairs(exit) do whole[#whole + 1] = wp end
@@ -2286,8 +2332,7 @@ function home.dock()
     if savedPartnerId then
         move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.RED_Z)
         logInfo("Clear of arrivals hole — signalling support to return.")
-        local sig = proto.encode(proto.MSG.RETURN_TO_DOCK, _self.id, savedPartnerId, {})
-        proto.send(_self.modem, proto.CH_LOCAL, sig)
+        base.atc.signalSupport(proto.MSG.RETURN_TO_DOCK, savedPartnerId, savedSlot)
         -- partnerId already nil, nothing more to clear
     end
 
