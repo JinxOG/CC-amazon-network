@@ -146,6 +146,37 @@ return {
         assert_eq(said("Journal: agrees"), false)
     end,
 
+    -- Live, 2026-11-03 13:02 restart (the card "Miners rebooted during DUMPING journal the wrong facing"): three of
+    -- five miners logged JOURNAL FACING DIFFERS by 90 or 180 degrees, all underground in DUMPING. Nobody had touched
+    -- them. Underground the block ahead is rock: detectFacing turns right until a step is free, and the check
+    -- compared the journal's facing from BEFORE those turns with the one measured AFTER them.
+    ["rock ahead at boot: the measuring turns are counted, and the journal agrees"] =
+    function(assert_eq)
+        local base, c = working({ 2132, 6, -3034 }, 2)             -- facing south, as node_179's journal said
+        local b2, said, restore = (function()
+            c.world["2132,6,-3033"] = "minecraft:stone"             -- ahead (south): rock
+            c.world["2131,6,-3034"] = "minecraft:stone"             -- after one right turn (west): rock
+            return reboot()                                         -- after two (north): free
+        end)()
+        restore()
+        assert_eq(b2.getFacing(), 0, "it ends facing north after two measuring turns")
+        assert_eq(said("JOURNAL FACING DIFFERS"), false, "the journal was right: south, before the turns")
+        assert_eq(said("Journal: agrees with GPS at 2132,6,-3034"), true)
+    end,
+
+    ["rock ahead and a real hand-turn: still caught"] =
+    function(assert_eq)
+        local base, c = working({ 10, 70, 10 }, 1)
+        base.move.forward()                                         -- journal: east at 11,70,10
+        c.pos.facing = 3                                            -- put back facing west
+        c.world["10,70,10"] = "minecraft:stone"                     -- ahead (west): rock; one turn on, north is free
+        local b2, said, restore = reboot()
+        restore()
+        assert_eq(b2.getFacing(), 0, "west, one turn: north")
+        assert_eq(said("JOURNAL FACING DIFFERS: journal east, measured west"), true,
+            "compared before the turns: the hand-turn still shows")
+    end,
+
     ["put back in the same block, turned: the measured facing is used and the difference is logged"] =
     function(assert_eq)
         local base, c = working({ 10, 70, 10 }, 1)

@@ -849,8 +849,15 @@ end
 
 -- The only raw turn. Settled by move.turnLeft/turnRight; the turns made while
 -- measuring facing are never settled, which is right -- the facing is unknown.
+-- The turns detectFacing makes while it looks for a free side (detectFacing
+-- and digOutForFacing turn right only): counted so the boot check compares the
+-- journal with the facing the turtle had BEFORE them. Not counted, rock ahead
+-- underground read as a journal fault -- 3 of 5 dumping miners at the 11-03
+-- restart, 90 and 180 degrees, nobody had touched them.
+local _measureTurns = nil
 local function jTurn(dir)
     writeJournal(dir)
+    if _measureTurns and dir == "turnRight" then _measureTurns = _measureTurns + 1 end
     return turtle[dir]()
 end
 
@@ -902,7 +909,9 @@ local function checkJournal(claim, why)
     local p = _self.pos
     local off = math.abs(claim.x - p.x) + math.abs(claim.y - p.y) + math.abs(claim.z - p.z)
     local where = string.format("journal %d,%d,%d, GPS %d,%d,%d", claim.x, claim.y, claim.z, p.x, p.y, p.z)
-    local facingOk = claim.facing == nil or not _self.facingKnown or claim.facing == _self.facing
+    -- Against the facing it booted with, not the one after detectFacing's turns.
+    local booted = _self.bootFacing or _self.facing
+    local facingOk = claim.facing == nil or not _self.facingKnown or claim.facing == booted
     if off == 1 then
         logWarn("Journal: 1 block from GPS (" .. where .. ")")
     elseif off > 1 then
@@ -910,7 +919,7 @@ local function checkJournal(claim, why)
     end
     if not facingOk then
         logWarn(string.format("JOURNAL FACING DIFFERS: journal %s, measured %s at %d,%d,%d (put back turned by hand, or a journal fault)",
-            FACING_NAMES[claim.facing] or tostring(claim.facing), FACING_NAMES[_self.facing] or tostring(_self.facing),
+            FACING_NAMES[claim.facing] or tostring(claim.facing), FACING_NAMES[booted] or tostring(booted),
             p.x, p.y, p.z))
     end
     if off == 0 and facingOk then
@@ -977,6 +986,7 @@ local function detectFacing()
     end
 
     -- Try to move forward one step to detect direction
+    _measureTurns = 0
     local moved = jMove("forward")
     if not moved then
         -- Blocked — try turning until we find a free direction
@@ -991,6 +1001,7 @@ local function detectFacing()
         moved = base.digOutForFacing(x1, y1, z1)
     end
     if not moved then
+        _measureTurns = nil
         if claimed then base.atc.releaseAround(claimed) end
         base.atc.stalled("boxed in on all four sides")
         logWarn("Cannot detect facing — boxed in on all four sides. Facing UNKNOWN.")
@@ -999,6 +1010,8 @@ local function detectFacing()
     end
 
     local x2, y2, z2 = gps.locate(CFG.GPS_TIMEOUT)
+    local turnsMade = _measureTurns or 0
+    _measureTurns = nil
     jMove("back")  -- return to original position
     if claimed then base.atc.releaseAround(claimed) end
 
@@ -1022,6 +1035,8 @@ local function detectFacing()
 
     local names = { [0]="north", [1]="east", [2]="south", [3]="west" }
     logInfo("Facing: " .. names[_self.facing])
+    -- The facing it booted with: before the measuring turns (checkJournal).
+    _self.bootFacing = (_self.facing - turnsMade) % 4
     _self.facingKnown = true
     writeJournal(nil)
     return true
