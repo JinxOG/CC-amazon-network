@@ -80,7 +80,10 @@ def steps(ctx):
 
     def since(needle):
         return [l for l in ctx.log_lines(needle) if miner in l and l[:19] >= t_on]
-    ctx.wait_until(lambda: since("Journal: agrees") or since("JOURNAL FACING DIFFERS") or since("Journal: nothing"), 300)
+    # Its boot lines carry their own time but can reach the bridge much later: after the boot the miner goes to fetch
+    # its loader and is out of radio contact (comms gap), and logship sends them when it is back (run -b: stamped
+    # 18:54:37, arrived after a 300 s wait gave up). So wait up to 40 minutes for them.
+    ctx.wait_until(lambda: since("Journal: agrees") or since("JOURNAL FACING DIFFERS") or since("Journal: nothing"), 2400)
     ctx.wait_game(10)
     facing_line = since("] Facing: ")
     measured = None
