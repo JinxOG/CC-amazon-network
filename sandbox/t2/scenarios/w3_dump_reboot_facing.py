@@ -72,19 +72,23 @@ def steps(ctx):
             c.command("setblock %d %d %d minecraft:stone" % (bx, y, bz))
             placed.append((bx, y, bz))
     ctx.note("stone set at %s (only where there was air)" % placed)
-    a0 = len(ctx.log_lines("Journal: agrees"))
-    f0 = len(ctx.log_lines("] Facing: "))
-    x0 = len(ctx.log_lines("JOURNAL FACING DIFFERS"))
+    # Lines after the switch-on, by their own timestamp: the log files are not in arrival order, so counting lines
+    # missed the miner's boot lines in run -a (they were there: "Facing: north", "Journal: agrees ... facing south").
+    import datetime
+    t_on = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     c.turn_on([cid])
-    checked = ctx.wait_until(lambda: [l for l in ctx.log_lines("Journal: agrees")[a0:] if miner in l]
-                             or [l for l in ctx.log_lines("JOURNAL FACING DIFFERS")[x0:] if miner in l], 300)
-    facing_line = [l for l in ctx.log_lines("] Facing: ")[f0:] if miner in l]
+
+    def since(needle):
+        return [l for l in ctx.log_lines(needle) if miner in l and l[:19] >= t_on]
+    ctx.wait_until(lambda: since("Journal: agrees") or since("JOURNAL FACING DIFFERS") or since("Journal: nothing"), 300)
+    ctx.wait_game(10)
+    facing_line = since("] Facing: ")
     measured = None
     if facing_line:
         m = re.search(r"Facing: (\w+)", facing_line[0])
         measured = m.group(1) if m else None
-    differs = [l for l in ctx.log_lines("JOURNAL FACING DIFFERS")[x0:] if miner in l]
-    agrees = [l for l in ctx.log_lines("Journal: agrees")[a0:] if miner in l]
+    differs = since("JOURNAL FACING DIFFERS")
+    agrees = since("Journal: agrees")
     ctx.expect(measured is not None and measured != before, "%s had to turn to measure: facing %s before, 'Facing: %s' at "
                "boot (the check below has something to judge)" % (miner, before, measured))
     ctx.expect(not differs, "no JOURNAL FACING DIFFERS (%s)" % (differs[:1] or "none"))
