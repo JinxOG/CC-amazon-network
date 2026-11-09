@@ -1,7 +1,7 @@
 # Shakeout stress test — design
 
-Status: DRAFT for the user's approval (2026-11-09). Written by the spec owner from the user's brainstorm of
-2026-11-02 to 11-09. Nothing here is built until the user approves it.
+Status: **APPROVED by the user, 2026-11-09.** Written by the spec owner from the user's brainstorm of
+2026-11-02 to 11-09. Plan: `docs/superpowers/plans/2026-11-09-shakeout-stress-test.md`.
 
 ## 1. Why
 
