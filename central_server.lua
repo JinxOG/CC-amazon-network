@@ -275,20 +275,33 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
         end
     end
 
-    -- Assign or recover a dock
-    local dockRole = (role == proto.ROLE.SUPPORT) and "SUPPORT" or "DELIVERY"
-    local dock = nil
+    -- Assign or recover a dock OF THIS TURTLE'S TYPE (per-bay types, shakeout
+    -- Task 2, 2026-11-10). This used to send every non-SUPPORT role to DELIVERY;
+    -- DELIVERY is now worker bay 1 only, 16 docks, so the 17th miner had none.
+    -- A LOADER has no dock type and gets no dock.
+    local dockType = W.dockTypeFor(role)
+    local dock = dockType and W.getDockFor(dockType, id)
 
-    -- Always try to recover existing dock first
-    dock = W.getDockFor(dockRole, id)
-
-    -- If no existing dock (new turtle or dock was released), assign a fresh one
-    if not dock then
-        dock = W.assignDock(dockRole, id)
-        if dock then
+    if dockType and not dock then
+        -- Holding a dock of ANOTHER type -- a live miner on what is now a
+        -- DELIVERY dock -- is a move, made once: after it, the lookup above finds
+        -- the new dock and nothing here runs again. The new dock is taken BEFORE
+        -- the old one is let go, so a turtle is never left dockless; with no free
+        -- dock of its type it stays where it is, and the next register retries.
+        local heldType, held = W.dockOf(id)
+        dock = W.assignDock(dockType, id)
+        if dock and held then
+            W.releaseDock(heldType, id)
+            logInfo(string.format("Dock moved: %s from bay %d row %s (%s) to bay %d row %s (%s) -- per-bay types",
+                id, held.bay, held.row, heldType, dock.bay, dock.row, dockType))
+        elseif held then
+            dock = held
+            logWarn(string.format("%s [%s] is on a %s dock (bay %d row %s) and no %s dock is free -- it keeps that one",
+                id, tostring(role), heldType, held.bay, held.row, dockType))
+        elseif dock then
             logInfo(string.format("Assigned dock: bay %d row %s to %s", dock.bay, dock.row, id))
         else
-            logWarn("No free docks for " .. id .. " [" .. role .. "] — depot full!")
+            logWarn("No free docks for " .. id .. " [" .. tostring(role) .. "] — depot full!")
         end
     end
 
@@ -5002,11 +5015,13 @@ end
 -- restart of 2026-10-05) is absent from the registry and REMOVE_TURTLE refused
 -- it, while its bay stayed reserved for a name that will never return. Miners
 -- share the DELIVERY bays, so four lost miners left too few for replacements.
--- Releases whatever dock the name holds in either pool. Returns true if it held one.
+-- Releases whatever dock the name holds in any pool. Returns true if it held one.
+-- MINER is a pool of its own since per-bay types (2026-11-10); leaving it out
+-- here meant a lost miner's dock was never released.
 function server.releaseLostTurtle(tid)
     if type(tid) ~= "string" or tid == "" then return false end
     local released = false
-    for _, pool in ipairs({ "DELIVERY", "SUPPORT" }) do
+    for _, pool in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
         if W.getDockFor(pool, tid) then
             W.releaseDock(pool, tid)
             released = true
@@ -5716,7 +5731,9 @@ function server.run()
                     end
                 end
             end
-            W.releaseDock(tr.role, tid)
+            -- Every pool, not tr.role's: a role is not a dock type (a LOADER has
+            -- none) and a misplaced turtle holds a dock of another type.
+            W.releaseAllDocks(tid)
             state.registry[tid] = nil
             logInfo("Dashboard removed turtle from fleet: " .. tid)
 
@@ -5754,7 +5771,8 @@ function server.run()
             sendTo(tid, proto.MSG.RECALL, proto.payloadRecall("bay_reassigned"))
             tr.jobId = nil
             -- Reassign the dock slot.
-            local newDock = W.assignDockAt(tr.role, tid, bay)
+            -- By dock type, not role: nil for a LOADER, which has no dock.
+            local newDock = W.assignDockAt(W.dockTypeFor(tr.role), tid, bay)
             if newDock then
                 tr.dock = newDock
                 logInfo(string.format("Dashboard reassigned %s → bay %d%s (recalled)",
@@ -6271,7 +6289,7 @@ function server.run()
     pcall(server.bootReport)
     -- A deploy's fleet update, staged before the restart. See server.stageFanOut.
     pcall(server.armFanOut)
-    W.loadDockAssignments()
+    W.loadDockAssignments(logInfo, logWarn)
     loadJobs()
     loadPersistentZones()
     -- Idempotent, and must follow the load: it seeds KV from whatever the load
@@ -7053,6 +7071,8 @@ if _G.__CC_SERVER_TEST then
         loadMiningZones  = loadMiningZones,
         saveSectorProgress = saveSectorProgress,
         recomputeZoneOre = recomputeZoneOre,
+        -- The dock load exactly as server.run does it, loggers included.
+        loadDocks = function() W.loadDockAssignments(logInfo, logWarn) end,
     }
     return server
 end

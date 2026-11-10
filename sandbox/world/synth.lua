@@ -69,6 +69,15 @@ end
 -- delivery and support turtles, which sit idle at their docks unless the scenario gives them work. Docks come
 -- from waypoints.lua, in the order the server hands them out (registration order), so the fleet starts
 -- where the depot expects it.
+-- PER-BAY DOCK TYPES (shakeout Task 2, 2026-11-10). Code with a waypoints.docks.MINER list puts each kind on its
+-- own type's docks: delivery in DELIVERY (worker bay 1), support in SUPPORT (support bay 1), miners in MINER (the
+-- other eight bays, worker side first). Code from before that has no MINER list and keeps the old placement --
+-- miners first on the worker docks, then delivery -- so every existing run of older code is unchanged, unless
+-- opts.per_bay asks for the per-bay layout there too: then the turtles stand where they would on new code (bay 1
+-- delivery / support, miners in bays 2-5 of both sides), so a check on per-bay docks can fail on old code.
+-- A kind with more turtles than its docks is an error here, not a turtle placed on nothing.
+-- opts.miners_on_delivery = n: the first n miners stand on DELIVERY docks (worker bay 1), as the live base's miners
+-- did before per-bay types; the server should move each to a MINER dock once.
 function Synth.layout(waypoints, opts)
   opts = opts or {}
   local n_miners = opts.miners or 2
@@ -98,12 +107,37 @@ function Synth.layout(waypoints, opts)
   end
 
   local MODEM, PICK = "computercraft:wireless_modem_advanced", "minecraft:diamond_pickaxe"
-  local worker_docks, support_docks = waypoints.docks.DELIVERY, waypoints.docks.SUPPORT
-  local next_worker, next_support = 1, 1
+  local docks = waypoints.docks
+  local lists, next_of = {}, {}
+  if docks.MINER then
+    lists = { delivery = docks.DELIVERY, support = docks.SUPPORT, miner = docks.MINER }
+  elseif opts.per_bay then
+    local function pick(list, want)
+      local out = {}
+      for _, d in ipairs(list) do if want(d.bay) then out[#out + 1] = d end end
+      return out
+    end
+    local bay1 = function(b) return b == 1 end
+    local other = function(b) return b ~= 1 end
+    lists = { delivery = pick(docks.DELIVERY, bay1), support = pick(docks.SUPPORT, bay1),
+              miner = pick(docks.DELIVERY, other) }
+    for _, d in ipairs(pick(docks.SUPPORT, other)) do lists.miner[#lists.miner + 1] = d end
+  else
+    -- as always: miners and delivery share the worker docks, in that order
+    lists = { delivery = docks.DELIVERY, support = docks.SUPPORT, miner = docks.DELIVERY }
+    next_of[docks.DELIVERY] = 1
+  end
+  local function take(kind)
+    local list = lists[kind]
+    local n = next_of[list] or 1
+    next_of[list] = n + 1
+    return assert(list[n], string.format("synth: no %s dock left for %s turtle %d (%d docks of that type)",
+      kind, kind, n, #list))
+  end
 
   -- miners and the loaders they carry
   for i = 1, n_miners do
-    local d = worker_docks[next_worker]; next_worker = next_worker + 1
+    local d = take((i <= (opts.miners_on_delivery or 0)) and "delivery" or "miner")
     -- IDs as they always were for a small fleet (so every existing run is unchanged); a big fleet (the capacity
     -- study's 150) gets its own ranges, or miner, loader, delivery and support IDs collide with each other and the GPS hosts.
     local loader_id, loader_label = (i <= 9) and (20 + i) or (2000 + i), "loader_" .. i
@@ -126,14 +160,14 @@ function Synth.layout(waypoints, opts)
   local n_delivery = opts.delivery or math.ceil(remaining / 2)
   local n_support = opts.support or (remaining - n_delivery)
   for i = 1, n_delivery do
-    local d = worker_docks[next_worker]; next_worker = next_worker + 1
+    local d = take("delivery")
     add{ id = (i <= 19) and (30 + i) or (3000 + i), kind = "turtle", role = "delivery", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
       turtle = { equipped = { left = MODEM, right = PICK }, inv = {
         [15] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" },
         [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "delivery" } } } }
   end
   for i = 1, n_support do
-    local d = support_docks[next_support]; next_support = next_support + 1
+    local d = take("support")
     add{ id = (i <= 49) and (50 + i) or (4000 + i), kind = "turtle", role = "support", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
       turtle = { equipped = { left = MODEM, right = PICK }, inv = {
         [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" } } } }
@@ -142,14 +176,22 @@ function Synth.layout(waypoints, opts)
   -- dock_assignments.dat survives restarts). Without it the server hands docks out in registration order, which is
   -- not the layout's order, and at boot nearly every turtle drives to a new dock at once -- a rush the live fleet
   -- never sees (W3, the ATC card, 2026-11-03).
+  -- The file names each dock twice: by its place in the code's own typed lists ([type][index], all that code
+  -- from before per-bay types reads) and by position (byPos "x,z", what code since reads). Each turtle is written
+  -- under the list that holds the cell it stands on, whatever its kind: on old code a miner standing in a support
+  -- bay is in its SUPPORT list, exactly as a live file would say.
   if opts.preset_docks then
-    local byRole = { DELIVERY = {}, SUPPORT = {} }
+    local byRole, byPos = { DELIVERY = {}, SUPPORT = {}, MINER = docks.MINER and {} or nil }, {}
     for _, spec in ipairs(L) do
       if spec.kind == "turtle" and spec.pos and not spec.carried then
-        local list = (spec.role == "support") and support_docks or worker_docks
-        local key = (spec.role == "support") and "SUPPORT" or "DELIVERY"
-        for i, d in ipairs(list) do
-          if d.x == spec.pos.x and d.z == spec.pos.z then byRole[key][i] = "node_" .. spec.id end
+        for key, list in pairs(docks) do
+          for i, d in ipairs(list) do
+            if d.x == spec.pos.x and d.z == spec.pos.z then
+              byRole[key] = byRole[key] or {}
+              byRole[key][i] = "node_" .. spec.id
+              byPos[#byPos + 1] = string.format("[%q] = %q", d.x .. "," .. d.z, "node_" .. spec.id)
+            end
+          end
         end
       end
     end
@@ -159,6 +201,9 @@ function Synth.layout(waypoints, opts)
       for i, name in pairs(slots) do s[#s + 1] = string.format("[%d] = %q", i, name) end
       parts[#parts + 1] = role .. " = { " .. table.concat(s, ", ") .. " }"
     end
+    -- only code with per-bay types gets byPos: older code would read it as a dock type named "byPos" (harmless,
+    -- but its runs are then not byte-identical to before)
+    if docks.MINER then parts[#parts + 1] = "byPos = { " .. table.concat(byPos, ", ") .. " }" end
     for _, spec in ipairs(L) do
       if spec.role == "server" then spec.files = { ["dock_assignments.dat"] = "{ " .. table.concat(parts, ", ") .. " }" } end
     end

@@ -79,9 +79,9 @@ local function shell()
             local t        = state.registry[targetId]
             if t then
                 local W        = require("waypoints")
-                local dockRole = (t.role == "SUPPORT") and "SUPPORT" or "DELIVERY"
-                -- Release dock slot
-                W.releaseDock(dockRole, targetId)
+                -- Release its dock, whatever type it is (per-bay types: a miner
+                -- holds a MINER dock, and a misplaced turtle one of another type)
+                W.releaseAllDocks(targetId)
                 -- Cancel any active job
                 if t.jobId then
                     server.cancelJob(t.jobId)

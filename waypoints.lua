@@ -59,6 +59,14 @@ W.docks = {
     MINER    = {},
 }
 
+-- Where each physical dock sits in the typed lists, by "x,z" (y is the floor for
+-- every dock): _where["157,-2806"] = { type = "DELIVERY", index = 1 }. And each
+-- side's docks by "x,z" in generation order, which is what a dock index meant in
+-- dock_assignments.dat before per-bay types (see W.loadDockAssignments).
+local _where = {}
+local _sideOrder = { WORKER = {}, SUPPORT = {} }
+local function posKey(d) return d.x .. "," .. d.z end
+
 -- side: "WORKER" or "SUPPORT" -- which list of CFG.BAY_TYPES gives each bay's type.
 local function generateBays(side, numBays, rowAZ, rowBZ)
     for bay = 1, numBays do
@@ -69,26 +77,21 @@ local function generateBays(side, numBays, rowAZ, rowBZ)
         local junction = { x = centerX, y = CFG.FLOOR_Y, z = W.WHITE_Z }
 
         for _, dx in ipairs(SLOT_OFFSETS) do
-            -- Row A
-            table.insert(docks, {
-                role     = role,
-                bay      = bay,
-                x        = centerX + dx,
-                y        = CFG.FLOOR_Y,
-                z        = rowAZ,
-                row      = "A",
-                junction = junction,
-            })
-            -- Row B
-            table.insert(docks, {
-                role     = role,
-                bay      = bay,
-                x        = centerX + dx,
-                y        = CFG.FLOOR_Y,
-                z        = rowBZ,
-                row      = "B",
-                junction = junction,
-            })
+            for _, rz in ipairs({ { "A", rowAZ }, { "B", rowBZ } }) do
+                local d = {
+                    role     = role,
+                    bay      = bay,
+                    x        = centerX + dx,
+                    y        = CFG.FLOOR_Y,
+                    z        = rz[2],
+                    row      = rz[1],
+                    junction = junction,
+                }
+                table.insert(docks, d)
+                assert(not _where[posKey(d)], "two docks at " .. posKey(d))
+                _where[posKey(d)] = { type = role, index = #docks }
+                table.insert(_sideOrder[side], posKey(d))
+            end
         end
     end
 end
@@ -110,28 +113,100 @@ end
 local _assigned = {}  -- [role][dockIndex] = turtleId
 local DOCK_SAVE_FILE = "dock_assignments.dat"
 
+-- THE FILE NAMES DOCKS BY POSITION (shakeout Task 2, 2026-11-10). It used to be
+-- only [type][index], and an index is a place in a typed list -- so the day bay
+-- types became a setting, every index past 16 named a different dock or none.
+-- byPos ("x,z" -> id) is what is read back; it survives any change to
+-- CFG.BAY_TYPES, because a dock's position does not move when its type does.
+-- The typed lists are still written beside it so an older server reading this
+-- file degrades (worker/support bay 1 keep their meaning) instead of erroring.
 local function saveDockAssignments()
+    local out = { byPos = {} }
+    for t, slots in pairs(_assigned) do
+        out[t] = slots
+        for i, id in pairs(slots) do
+            local d = W.docks[t] and W.docks[t][i]
+            if d then out.byPos[posKey(d)] = id end
+        end
+    end
     local f = fs.open(DOCK_SAVE_FILE, "w")
-    if f then f.write(textutils.serialise(_assigned)); f.close() end
+    if f then f.write(textutils.serialise(out)); f.close() end
 end
 
-function W.loadDockAssignments()
+-- info / warn: optional loggers (the server passes its own). Every entry ends on
+-- the physical dock it named when written, or -- if that dock is gone or already
+-- taken by an earlier entry -- is dropped with a warning; that turtle is given a
+-- fresh dock when it registers. Nothing is ever double-booked.
+function W.loadDockAssignments(info, warn)
     if not fs.exists(DOCK_SAVE_FILE) then return end
     local f = fs.open(DOCK_SAVE_FILE, "r")
     if not f then return end
     local data = textutils.unserialise(f.readAll())
     f.close()
     if type(data) ~= "table" then return end
-    -- textutils.serialise converts number table keys to strings.
-    -- Convert them back so dock index lookups (which use ipairs numbers) work.
+    -- entries: { key = "x,z", id = turtleId, from = what the file said }
+    local entries = {}
+    if type(data.byPos) == "table" then
+        for key, id in pairs(data.byPos) do
+            entries[#entries + 1] = { key = key, id = id, from = key }
+        end
+    else
+        -- Written before per-bay types. DELIVERY[i] was then the i-th dock of the
+        -- worker side and SUPPORT[i] the i-th of the support side, so that is what
+        -- they still mean; any other type's index is its own list's.
+        -- textutils.serialise turns number keys into strings, hence tonumber.
+        for t, slots in pairs(data) do
+            if type(slots) == "table" then
+                for k, id in pairs(slots) do
+                    local i = tonumber(k)
+                    local key
+                    if t == "DELIVERY" then key = _sideOrder.WORKER[i]
+                    elseif t == "SUPPORT" then key = _sideOrder.SUPPORT[i]
+                    elseif W.docks[t] and i and W.docks[t][i] then key = posKey(W.docks[t][i]) end
+                    entries[#entries + 1] = { key = key, id = id, from = t .. "[" .. tostring(k) .. "]" }
+                end
+            end
+        end
+        if info and #entries > 0 then
+            info(string.format("dock_assignments.dat predates per-bay types: %d docks read by side and index", #entries))
+        end
+    end
     local fixed = {}
-    for role, slots in pairs(data) do
-        fixed[role] = {}
-        for k, v in pairs(slots) do
-            fixed[role][tonumber(k) or k] = v
+    for _, e in ipairs(entries) do
+        local w = e.key and _where[e.key]
+        if not w then
+            if warn then warn(string.format("dock_assignments.dat: %s names no dock (%s) -- %s gets a fresh dock when it registers",
+                tostring(e.from), tostring(e.key), tostring(e.id))) end
+        elseif fixed[w.type] and fixed[w.type][w.index] then
+            if warn then warn(string.format("dock_assignments.dat: %s and %s both name the dock at %s -- %s keeps it, %s gets a fresh dock when it registers",
+                tostring(fixed[w.type][w.index]), tostring(e.id), e.key, tostring(fixed[w.type][w.index]), tostring(e.id))) end
+        else
+            fixed[w.type] = fixed[w.type] or {}
+            fixed[w.type][w.index] = e.id
         end
     end
     _assigned = fixed
+end
+
+-- The dock a turtle holds in ANY type's list: (type, dock), or nil.
+function W.dockOf(turtleId)
+    for _, t in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
+        local d = W.getDockFor(t, turtleId)
+        if d then return t, d end
+    end
+    return nil
+end
+
+-- Releases every dock the turtle holds, whatever its type. Returns how many.
+function W.releaseAllDocks(turtleId)
+    local n = 0
+    for _, t in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
+        while W.getDockFor(t, turtleId) do
+            W.releaseDock(t, turtleId)
+            n = n + 1
+        end
+    end
+    return n
 end
 
 function W.assignDock(role, turtleId)
@@ -167,14 +242,19 @@ function W.getDockFor(role, turtleId)
     return nil
 end
 
--- Release current dock and assign the turtle to the first free slot at targetBay.
--- Returns the new dock, or nil if that bay has no free slots.
+-- Move the turtle to the first free slot of this type at targetBay, releasing
+-- whatever dock it held (of any type). Returns the new dock, or nil if that bay
+-- has no free slot of this type -- and then the turtle KEEPS its old dock: this
+-- used to release first and search second, so a full bay left it with none.
+-- role nil (a LOADER has no dock type) returns nil.
 function W.assignDockAt(role, turtleId, targetBay)
-    W.releaseDock(role, turtleId)
+    local docks = role and W.docks[role]
+    if not docks then return nil end
     if not _assigned[role] then _assigned[role] = {} end
-    local docks = W.docks[role]
     for i, dock in ipairs(docks) do
-        if dock.bay == targetBay and not _assigned[role][i] then
+        local holder = _assigned[role][i]
+        if dock.bay == targetBay and (not holder or holder == turtleId) then
+            W.releaseAllDocks(turtleId)
             _assigned[role][i] = turtleId
             saveDockAssignments()
             return dock
