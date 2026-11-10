@@ -1,6 +1,6 @@
 # The baton
 
-**Holder: W3 — Fleet & Dispatch. Since 2026-11-10** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09; W1 11-09 to 11-10, resume-after-restart).
+**Holder: SPEC-OWNER (head engineer) — building the shakeout kit. Since 2026-11-10** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09; W1 11-09 to 11-10; W3 on 11-10, asleep).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
 working through the holder's cards on the board until they are Done. **Next goal: the shakeout stress test**
@@ -52,3 +52,4 @@ messages. Mail is only for:
 | W5 | W3 | 2026-11-02 | W5's workable cards are done except the slow-push reproduction, which waits for a quiet host; the user hands the baton back to W3 for the disk card and two newly assigned cards |
 | W3 | W5 | 2026-11-09 | W3's cards are all through both layers (ATC, disk, GPS 2, DUMPING facing, inbox leak); the user hands the baton to W5 for the bridge slow-push card, a shakeout prerequisite |
 | W5 | W1 | 2026-11-09 | W5's slow-push card is done (host starvation, not the bridge; eee8bc1); the user hands the baton to W1 for the resume-after-restart card, the last shakeout prerequisite |
+| W3 | SPEC-OWNER | 2026-11-10 | The user wants the shakeout code built now with fewer open instances; the head engineer builds plan Tasks 1-7 (W3's per-bay types and SANDBOX's kit) itself. W3 and SANDBOX stay asleep |
