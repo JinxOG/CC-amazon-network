@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.161"
+proto.VERSION = "1.9.162"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -434,7 +434,26 @@ function proto.payloadSectorScan(jobId, sectorX, sectorZ, scanY, foundOres, mine
     }
 end
 
-function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, minedOres)
+-- unreachable and band are ADDITIVE (P6): a server that predates them ignores
+-- them, and a miner too old to send them leaves them nil, which every reader
+-- must treat as "this survey did not say" rather than as zero.
+--
+-- WHY THEY ARE HERE. The coordinate ore-index card sets six conditions a count
+-- must meet before a build planner may source from it. Two of them are about
+-- what the number does NOT include:
+--   condition 2, STATE THE VERTICAL BAND -- the four scan levels at radius 16
+--     cover one continuous band and nothing outside it, so "how much iron is in
+--     this zone" is really "in a 100-block band". A planner must be given the
+--     band, not a bare number.
+--   condition 6, PUBLISH WHAT IT COULD NOT SEE -- the ore dropped for being
+--     below the dig floor or outside the lease, alongside the usable count.
+--     Both numbers already existed per level, were printed, and were thrown
+--     away; a log line is not something a consumer can read.
+-- The card itself says a survey that cannot report its own blind spots is "the
+-- failure mode this project keeps hitting: a number whose pass state and
+-- no-data state look identical".
+function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, minedOres,
+                                 unreachable, band)
     return {
         jobId      = jobId,
         sectorX    = sectorX,
@@ -442,6 +461,8 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         oreCount   = oreCount  or 0,
         foundOres  = foundOres or {},
         minedOres  = minedOres or {},
+        unreachable = unreachable,   -- { belowFloor, outsideLease, floorY } or nil
+        band        = band,          -- { minY, maxY } or nil
     }
 end
 

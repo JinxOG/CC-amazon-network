@@ -1383,7 +1383,10 @@ local function scanSector()
     else
         print("[SCAN] Found " .. #reachable .. " ore blocks")
     end
-    return reachable
+    -- The dropped count comes back as well as being printed. A survey that
+    -- cannot report its own blind spots is the ore-index card's condition 6,
+    -- and a log line is not something a planner can read.
+    return reachable, dropped
 end
 
 -- ── Mining ───────────────────────────────────────────────────────────────────
@@ -2595,6 +2598,15 @@ local function mineJob(job)
         local count       = 0
         local sectorFound = {}   -- {[name]=count} from geo scan (deduplicated)
         local sectorMined = {}   -- {[name]=count} actually mined (0 during survey)
+        -- WHAT THIS SURVEY COULD NOT SEE, totalled across the sector's levels.
+        -- The ore-index card's condition 6: "Each sector should carry the count
+        -- dropped as unreachable (below floor, outside lease) alongside the
+        -- usable count. A survey that cannot report its own blind spots is the
+        -- failure mode this project keeps hitting -- a number whose pass state
+        -- and no-data state look identical." Both numbers already exist per
+        -- level and were printed and thrown away.
+        local sectorBelowFloor  = 0
+        local sectorOutsideLease = 0
         local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
         local abort       = nil  -- non-nil once the sector must be abandoned
         -- RESUME AT THE LEVEL WE REACHED, not at the first one. Redoing the
@@ -2672,7 +2684,8 @@ local function mineJob(job)
             -- about. Best-effort -- a failed write only costs a re-scan.
             pcall(loader_state.setOrder, { jobId = jobId, sx = sx, sz = sz,
                                            surveyMode = surveyMode, level = i })
-            local rawOres, scanFail = scanSector()
+            local rawOres, scanFail, outsideLease = scanSector()
+            sectorOutsideLease = sectorOutsideLease + (outsideLease or 0)
             -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE. scanSector
             -- used to hand back a bare empty list from seven different refusals,
             -- so the loop counted the level as scanned, the sector was reported
@@ -2737,6 +2750,7 @@ local function mineJob(job)
             -- The split lives in mine_flow so it can be tested; ore_turtle
             -- cannot be loaded headlessly.
             local ores, belowFloor = mine_flow.dropBelowFloor(fresh, MIN_ORE_Y)
+            sectorBelowFloor = sectorBelowFloor + belowFloor
             local scanFound = {}
             for _, o in ipairs(ores) do
                 scanFound[o.name]   = (scanFound[o.name]   or 0) + 1
@@ -2813,7 +2827,11 @@ local function mineJob(job)
 
         -- Report done; server immediately replies with next SECTOR_ASSIGN or MINE_COMPLETE
         base.sendToServer(proto.MSG.SECTOR_DONE,
-            proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined))
+            proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined,
+                { belowFloor = sectorBelowFloor, outsideLease = sectorOutsideLease,
+                  floorY = MIN_ORE_Y },
+                { minY = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS,
+                  maxY = SCAN_LEVELS[1] + SCAN_RADIUS }))
 
         msg = waitSectorResponse(jobId)
         if not msg then

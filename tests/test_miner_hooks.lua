@@ -768,7 +768,11 @@ function(assert_eq)
     -- cannot clear must abandon the sector through `abort` -- the path
     -- loader_beacon_lost already takes, which goes home and reports the job
     -- failed BUT RECOVERABLE, so the server re-dispatches the sector.
-    local callAt = src:find("local rawOres, scanFail = scanSector()", 1, true)
+    -- The anchor gained a third return value when the survey started reporting
+    -- how much it dropped outside the lease (the ore-index card's condition 6),
+    -- so it is matched up to scanFail rather than to the end of the line. The
+    -- invariant is unchanged: the caller must take the REASON, not just the list.
+    local callAt = src:find("local rawOres, scanFail", 1, true)
     assert_eq(callAt ~= nil, true,
         "the caller must take scanSector's reason, not just its list")
     local tail = src:sub(callAt, callAt + 2000)
@@ -784,6 +788,54 @@ function(assert_eq)
         "the level must be retried before the sector is abandoned")
     assert_eq(src:find("local SCAN_RETRIES", 1, true) ~= nil, true,
         "SCAN_RETRIES must be a named constant, not a literal in the loop")
+end
+
+-- A SURVEY MUST REPORT ITS OWN BLIND SPOTS (coordinate ore-index card,
+-- conditions 2 and 6).
+--
+-- The card sets six conditions a count has to meet before a build planner may
+-- source materials from it. Two are about what the number does NOT include:
+-- state the vertical band (the four scan levels at radius 16 cover one
+-- continuous band and nothing outside it, so "how much iron is in this zone" is
+-- really "in a 100-block band"), and publish the ore dropped as unreachable --
+-- below the dig floor or outside the lease -- alongside the usable count. Both
+-- numbers already existed per level, were printed, and were thrown away.
+--
+-- The card's own words for why: a survey that cannot report its own blind spots
+-- is "a number whose pass state and no-data state look identical".
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["a finished sector reports what it could not see, and its band (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+
+    -- Totalled across the sector, not per level: the server is told once, when
+    -- the sector finishes, so a per-level number would be the last level's.
+    assert_eq(src:find("sectorBelowFloor = sectorBelowFloor + belowFloor", 1, true) ~= nil, true,
+        "the below-floor count must accumulate across the sector's scan levels")
+    assert_eq(src:find("sectorOutsideLease = sectorOutsideLease + (outsideLease or 0)", 1, true) ~= nil, true,
+        "and so must the count dropped outside the lease")
+
+    -- And both must actually leave the turtle. Accumulating them and not
+    -- sending them is the same as printing them: nothing a consumer can read.
+    local sendAt = src:find("proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined,", 1, true)
+    assert_eq(sendAt ~= nil, true, "SECTOR_DONE must carry the extra arguments")
+    local tail = src:sub(sendAt, sendAt + 400)
+    assert_eq(tail:find("belowFloor = sectorBelowFloor", 1, true) ~= nil, true,
+        "the below-floor total must be sent")
+    assert_eq(tail:find("outsideLease = sectorOutsideLease", 1, true) ~= nil, true,
+        "the outside-lease total must be sent")
+    assert_eq(tail:find("floorY = MIN_ORE_Y", 1, true) ~= nil, true,
+        "and the floor it was measured against, or the number cannot be read")
+
+    -- The band is DERIVED from the scan levels and the radius, never written
+    -- out by hand: a literal would silently stop matching the day either
+    -- changes, which is exactly how a survey starts lying about its own extent.
+    assert_eq(tail:find("SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS", 1, true) ~= nil, true,
+        "the band's floor must be derived from the deepest level and the radius")
+    assert_eq(tail:find("SCAN_LEVELS[1] + SCAN_RADIUS", 1, true) ~= nil, true,
+        "and its ceiling from the shallowest")
 end
 
 return suite
