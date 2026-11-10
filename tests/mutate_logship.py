@@ -371,6 +371,21 @@ C_KEEP    = "correcting the position keeps the label, sector and radius"
 C_CALL    = "retrieval retries and believes the loader's own position (SOURCE-ONLY, weaker)"
 B_ORDER   = "a recorded label is checked before the unlabelled refusal (SOURCE-ONLY, weaker)"
 L_ONE     = "retrieveLoader still proceeds with a single free slot"
+# The ore index's band arithmetic, and the resume intent that protects the frozen
+# roles. Both were proved by hand when they were written and never registered
+# here, which means they were not actually gated -- a one-off sed is not a gate.
+O_SUFFIX  = "coveredBand over a resumed suffix is narrower, and says how many"
+O_HOLE    = "coveredBand with a hole reports the union and the honest count"
+O_NONE    = "coveredBand refuses when no level ran, and on nonsense"
+O_TILE    = "censusBand tiles the real scan geometry with no gap and no overlap"
+O_GIVEN   = "censusBand follows the levels it is given, not the real ones"
+O_TILES_NOT = "censusBand refuses what it cannot tile"
+O_PACK    = "packCoords packs three bytes a block, relative to the sector"
+O_DROP    = "packCoords drops what it cannot represent rather than wrapping it"
+O_CAP     = "packCoords honours its cap and reports what it turned away"
+V_FROZEN  = "a role that never sets a resume intent may not resume (delivery and support)"
+V_TRUTHY  = "an intent returning something merely truthy may not resume"
+V_RAISE   = "an intent that raises may not resume, and does not propagate"
 Z_ORPHAN  = "a sector orphaned by a failed holder is reported and respawned when the last miner finishes"
 Z_LOGGED  = "every hand-out is logged, including the reply to a completion"
 RESPAWN   = "a failed mine job respawns a replacement for its unfinished zone"
@@ -2134,6 +2149,57 @@ MUTANTS = [
 
     ("the loader-dig room guard refuses one free slot too", "mine_flow.lua",
      [('    if freeSlots == 0 then', '    if freeSlots <= 1 then')], L_ONE),
+
+    # ---- the ore index's covered band (1.9.167) ----------------------------
+    # A resumed sector censuses only the levels it did NOT already finish, so the
+    # band it reports must be their union and not the nominal column. Reporting
+    # the column published a slice's counts against the whole of it: every count
+    # short, and nothing saying so.
+    ("the covered band counts levels that never ran", "mine_flow.lua",
+     [('        if ran[i] then', '        if true then')], O_SUFFIX),
+    ("the covered band's ceiling takes the last level instead of the highest", "mine_flow.lua",
+     [('            if not hi or top > hi then hi = top end', '            hi = top')], O_HOLE),
+    # NOTE: the matching `lo` guard is deliberately NOT mutated here. Over
+    # strictly descending levels the minimum is always the last to contribute, so
+    # a bare `lo = bottom` is an EQUIVALENT mutant that no test can kill;
+    # iterating the other way makes that guard load-bearing and this one
+    # unreachable instead. The proof is written at the function.
+    ("a sector that censused nothing reports a zero-width band instead of none", "mine_flow.lua",
+     [('    if n == 0 then return nil end\n    return lo, hi, n',
+       '    return lo, hi, n')], O_NONE),
+
+    # ---- the per-level band rule it is built on ----------------------------
+    ("a scan level keeps its whole reach, so the levels overlap", "mine_flow.lua",
+     [('        top = math.min(top, (levels[i - 1] - radius) - 1)',
+       '        top = math.min(top, levels[i - 1] - radius)')], O_TILE),
+    ("the band rule stops checking that the levels descend", "mine_flow.lua",
+     [('           or levels[k] >= levels[k - 1] then', '           or false then')], O_TILES_NOT),
+
+    # ---- the packed coordinates (Tier 2) -----------------------------------
+    ("packed coordinates lose their y", "mine_flow.lua",
+     [('string.char(dx, dz, dy)', 'string.char(dx, dz, 0)')], O_PACK),
+    # WIDENED, not removed. Deleting the guard makes string.char raise, and the
+    # harness rightly refuses to score an erroring test as a kill -- an error is
+    # red for any reason at all, which is how 24 broken tests once had their
+    # mutants counted as caught. Widening the bound instead lets a block outside
+    # the sector pack silently, which IS the fault (wrapping rather than
+    # dropping), and the drop test then fails on an assertion.
+    ("a block outside the sector's 32 blocks is packed anyway, not dropped", "mine_flow.lua",
+     [('            if dx >= 0 and dx <= 31 and dz >= 0 and dz <= 31',
+       '            if dx >= 0 and dx <= 255 and dz >= 0 and dz <= 255')], O_DROP),
+    ("the packer ignores its cap", "mine_flow.lua",
+     [('        if kept >= cap then', '        if false then')], O_CAP),
+
+    # ---- the resume intent, which is what keeps the FROZEN roles unchanged --
+    # delivery_turtle and support_turtle never call setResumeIntent and may not
+    # be edited, so this default is the only thing holding their old behaviour.
+    ("a role that never opted in may resume anyway", "turtle_base.lua",
+     [('if type(_mayResumeHere) ~= "function" then return false end',
+       'if type(_mayResumeHere) ~= "function" then return true end')], V_FROZEN),
+    ("anything truthy counts as consent to resume", "turtle_base.lua",
+     [('    return ok and v == true', '    return ok and v')], V_TRUTHY),
+    ("a resume predicate that raises is not contained", "turtle_base.lua",
+     [('    local ok, v = pcall(_mayResumeHere)', '    local ok, v = true, _mayResumeHere()')], V_RAISE),
 
     ("the pre-departure recall check is removed", "ore_turtle.lua",
      [("        if base.isRecalled() then\n            base.sendProgress(\"recalled before departing for the sector\")\n", "        if false then\n            base.sendProgress(\"recalled before departing for the sector\")\n")], R_FLIGHT),
