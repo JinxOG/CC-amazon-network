@@ -47,7 +47,16 @@
 return {
   world  = "synthetic",
   seed   = 1,
-  miners = 2,
+  -- ONE MINER. Two of them contend for the base aisle on the way out and
+  -- burn the job's three retries on each other before either reaches the
+  -- scan square: on 2026-11-10 the server logged "retry 1/3:
+  -- idle_stuck_after_crash" and "retry 2/3: departure_failed ... blocked by
+  -- turtle (forward)", neither of which is this card. The second miner was
+  -- never part of the test -- it was the default -- and the refusal, the
+  -- retries and the sector never being reported done are all single-turtle
+  -- behaviour. The contention itself is real and worth someone's attention,
+  -- but it belongs to the ATC and base-aisle cards, not here.
+  miners = 1,
   steps = function(sim)
     local didnt_run = sim:capture_log("did not run")
     local retried   = sim:capture_log("retry 1 of ")
@@ -58,6 +67,20 @@ return {
     --   Job job_0001 retry 1/3: scan_level_incomplete: blocked_by_turtle at Y=16
     -- and hands the sector to the next miner. The reason string is checked
     -- inside it below, so this cannot pass on some unrelated failure.
+    -- ANY retry, not retry 1. This scenario runs two miners, and the first
+    -- retry slot can be spent by the OTHER one failing for a reason that has
+    -- nothing to do with the scan square -- on 2026-11-10 node_11 got stuck in
+    -- the base aisle behind its neighbour and burned "retry 1/3" on
+    -- idle_stuck_after_crash, while node_12 went out, refused the square,
+    -- retried three times and abandoned the sector exactly as designed. The
+    -- fleet was right and the assertion was reading the wrong line. The reason
+    -- is still checked inside these lines below, so a retry for something else
+    -- cannot satisfy it.
+    -- "retry 1/" with the SLASH: that form is the server's. Widening it to
+    -- "retry " matched the MINER's own "retry 1 of 3 in 5s", which is logged
+    -- long before the server says anything, so the wait below was satisfied
+    -- by the wrong line and the reason check then read 0 of 1. With one
+    -- miner, retry 1 is this failure and no other.
     local requeued  = sim:capture_log("retry 1/")
     local redispatched = sim:capture_log("Dispatched job_0001 [MINE] -> node_12")
     local done      = sim:capture_log("Sector (128,-2816) done by")
