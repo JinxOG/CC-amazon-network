@@ -4,7 +4,7 @@ from: W1
 kind: request
 subject: Resume-after-restart: where does the shared decision live, given delivery and support are frozen
 date: 2026-11-09
-status: open
+status: answered
 ---
 
 # Resume-after-restart: where does the shared decision live, given delivery and support are frozen
