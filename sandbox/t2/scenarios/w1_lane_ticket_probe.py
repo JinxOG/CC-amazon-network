@@ -46,7 +46,15 @@ ZONE = {"x1": 1920, "z1": -2624, "x2": 1920, "z2": -2624, "minerCount": 1}
 FORCELOAD = [(224, -2816, 271, -2784)]
 
 TRAVEL_Y = 100          # above this a turtle is in flight, not working the ground
-WATCH_GAME_SECONDS = 2400
+WATCH_GAME_SECONDS = 5400
+
+# THE STRETCH THE CARD ACTUALLY NAMES: x ~1300-1550, y 200, z -2813.
+#
+# Runs a and c both stopped sampling at x 765, with the miner still climbing east. They measured the APPROACH to the lane and not the
+# lane, and I wrote them up as though the question were settled -- the card's own coordinates were never visited. So the watch now runs
+# until the miner is PAST the far edge, and one check is specifically about readings taken INSIDE the named band.
+LANE_X1, LANE_X2 = 1300, 1550
+LANE_PAST = 1600
 
 # RUN a (2026-11-10) AND WHY THIS READS THE GAME INSTEAD OF /state.
 #
@@ -105,9 +113,10 @@ def steps(ctx):
     seen_flying, frozen_hits, unloaded_hits, samples = {}, [], [], 0
     listed_while_flying, not_listed_while_flying = 0, 0
     last_pos = {}
+    in_lane, lane_bad, furthest_x = [], [], -10 ** 9
 
     def sample():
-        nonlocal samples, listed_while_flying, not_listed_while_flying
+        nonlocal samples, listed_while_flying, not_listed_while_flying, furthest_x
         samples += 1
         try:
             dump = c.computers()
@@ -140,12 +149,22 @@ def steps(ctx):
                 frozen_hits.append("node_%d at %d,%d,%d (chunk loaded=%s)" % (cid, x, y, z, loaded))
             if not loaded:
                 unloaded_hits.append("node_%d at %d,%d,%d (computer running=%s)" % (cid, x, y, z, running))
+            # INSIDE THE STRETCH THE CARD NAMES. Collected separately from the rest of the flight, because a clean crossing of
+            # x 143..765 says nothing about x 1300..1550 -- which is what runs a and c actually measured and I wrongly generalised.
+            if LANE_X1 <= x <= LANE_X2:
+                in_lane.append("node_%d at %d,%d,%d running=%s loaded=%s ticket=%s" % (cid, x, y, z, running, loaded, holds))
+                if (not running) or (not loaded) or (not holds):
+                    lane_bad.append("node_%d at %d,%d,%d running=%s loaded=%s ticket=%s"
+                                    % (cid, x, y, z, running, loaded, holds))
+            furthest_x = max(furthest_x, x)
             last_pos[cid] = (x, y, z)
         return bool(seen_flying)
 
     # Watch until a miner has been seen in flight, then keep sampling for a while so one reading cannot carry the verdict.
     ctx.wait_until(sample, 900, poll=20)
-    ctx.wait_until(lambda: (sample() and samples >= 14), WATCH_GAME_SECONDS, poll=30)
+    # KEEP SAMPLING UNTIL IT IS PAST THE FAR EDGE of the named stretch, not until some sample count. Runs a and c stopped at 14 samples
+    # with the miner still at x 765 and climbing, which is how they came to miss the only coordinates that matter.
+    ctx.wait_until(lambda: (sample() or True) and furthest_x >= LANE_PAST, WATCH_GAME_SECONDS, poll=25)
 
     ctx.note("miners seen in flight: %s" % (seen_flying or "none"))
     ctx.note("samples: %d; in-flight readings with a listed ticket: %d, without: %d; frozen readings: %d; unloaded readings: %d"
@@ -167,9 +186,27 @@ def steps(ctx):
     ctx.note("in-flight readings where the game said that block was not loaded: %d of %d (%s)"
              % (len(unloaded_hits), samples, "; ".join(unloaded_hits[:4]) or "none"))
 
+    # THE CARD'S OWN COORDINATES. Everything above is about the flight as a whole; this is the only part that speaks to x 1300-1550.
+    ctx.note("furthest x reached: %d (named stretch %d..%d, watched until past %d)" % (furthest_x, LANE_X1, LANE_X2, LANE_PAST))
+    for l in in_lane:
+        ctx.note("  IN THE NAMED STRETCH: %s" % l)
+    ctx.expect(bool(in_lane),
+               "the miner was observed INSIDE the stretch this card names, x %d-%d (%d readings there, furthest x reached %d) -- "
+               "runs a and c stopped at x 765 and never visited it, so a clean result from them proved nothing about this card"
+               % (LANE_X1, LANE_X2, len(in_lane), furthest_x))
+    ctx.expect(not lane_bad,
+               "and inside that stretch it was running, in a loaded chunk and holding its own ticket in every reading (%d bad of %d: "
+               "%s)" % (len(lane_bad), len(in_lane), "; ".join(lane_bad[:3]) or "none"))
+
     # THE VERDICT, recorded not asserted.
     if not seen_flying:
         verdict = "NO READING: no miner reached travel altitude, so this run says nothing about the lane"
+    elif not in_lane:
+        verdict = ("INCONCLUSIVE ABOUT THIS CARD: the miner never reached x %d-%d (furthest %d), which is the only stretch the card is "
+                   "about. Whatever the rest of the flight did, it does not answer the question." % (LANE_X1, LANE_X2, furthest_x))
+    elif lane_bad:
+        verdict = ("SOMETHING IS WRONG INSIDE THE NAMED STRETCH: %d of %d readings there had the computer off, the chunk unloaded or no "
+                   "ticket held. This is the card reproducing." % (len(lane_bad), len(in_lane)))
     elif frozen_hits:
         verdict = ("A MINER IN FLIGHT WAS FOUND WITH ITS COMPUTER OFF -- chunk loading freezes turtles on the lane for real, the card "
                    "should be re-aimed at keeping the lane loaded, and a GPS relay would not fix it")
@@ -177,9 +214,10 @@ def steps(ctx):
         verdict = ("A FLYING MINER HOLDS NO TICKET OF ITS OWN and never froze here -- so something else is keeping its chunks up, and "
                    "on the live lane, where nothing does, it is exposed")
     else:
-        verdict = ("A FLYING MINER CARRIES ITS OWN CHUNK LOADING and never froze across this flight (%d readings, all holding a "
-                   "ticket) -- so an EMPTY lane alone does not strand a healthy miner, and whatever happened live needs the ticket "
-                   "itself to have failed. Chunks going down BEHIND it is normal and not the fault." % listed_while_flying)
+        verdict = ("A FLYING MINER CARRIES ITS OWN CHUNK LOADING and never froze, INCLUDING ACROSS x %d-%d (%d readings inside the "
+                   "named stretch, %d in flight overall, all holding a ticket) -- so an empty lane alone does not strand a healthy "
+                   "miner, and whatever happened live needs the ticket itself to have failed. Chunks going down BEHIND it is normal "
+                   "and not the fault." % (LANE_X1, LANE_X2, len(in_lane), listed_while_flying))
     ctx.note("MECHANISM VERDICT: %s" % verdict)
     if shared:
         ctx.note("AND NOTE: shared tickets were found, which alone explains a turtle frozen mid-lane and woken by a passer, "
