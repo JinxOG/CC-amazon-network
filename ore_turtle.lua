@@ -208,6 +208,20 @@ if not _commsOk then
     print("[MINER] BOOT DEGRADED: " .. tostring(_commsErr))
     print("[MINER] Continuing without comms so the loader can still be recovered.")
     print("[MINER] Check slots: 1 scanner, 2 loader, 3 tool, 15 fuel EC, 16 ore EC.")
+    -- AND TRY TO SHIP THOSE LINES, the same reason the fatal-crash handler
+    -- does (1.9.159): print is logship's, so all three sit in the on-disk
+    -- queue, and the control loop that would normally send them has not
+    -- started -- base.init is where this failed. Found by the crash-message
+    -- scenario, which caught an injected fault landing HERE rather than in
+    -- base.run and saw nothing reach the server: the same fault that card
+    -- fixed, on the path it did not cover.
+    --
+    -- It will often fail, and that is fine: this branch exists precisely
+    -- because comms could not be brought up. A flush that cannot send
+    -- leaves the lines queued for the next boot, which is strictly better
+    -- than not trying. pcall'd so it cannot turn a degraded boot into no
+    -- boot at all.
+    pcall(base.flushLogs)
 end
 
 -- Forward declaration: checkFuel (defined below) calls rescueProtectedItems,

@@ -45,7 +45,14 @@ return {
   seed   = 1,
   miners = 2,
   steps = function(sim)
-    local fatal = sim:capture_log("[MINER] Fatal crash")
+    -- EITHER HANDLER, because which one catches the injected fault depends on
+    -- whether os.startTimer is next called from base.init or from the control
+    -- loop, and that moved when the resume work changed boot. What the card
+    -- is actually about is that the last lines REACH THE SERVER before the
+    -- reboot, and both handlers now flush -- the degraded-boot one only
+    -- because this scenario caught it printing without flushing, which was
+    -- the same fault on an uncovered path.
+    local fatal = sim:capture_log("w1 injected crash")
     local boots = sim:capture_log("[MINER] v")
 
     sim:run_for(120000)
