@@ -100,11 +100,13 @@ class Control:
         out = self.block_data(self._pos(computer_id), "Items[{Slot:%db}]" % slot)
         return out.split("data: ", 1)[-1] if "data:" in out else out
 
-    def set_slot(self, computer_id, slot, item, count=1):
-        """Puts a stack in a turtle's inventory slot (0-15) at the NBT level, replacing what was there."""
+    def set_slot(self, computer_id, slot, item, count=1, tag=None):
+        """Puts a stack in a turtle's inventory slot (0-15) at the NBT level, replacing what was there. `tag` is an SNBT
+        string appended to the stack as tag:<tag>, e.g. '{Frequency:{left:0,middle:0,right:14}}' for an ender chest."""
         x, y, z = self._pos(computer_id)
         self.clear_slot(computer_id, slot)
-        out = self.command("data modify block %d %d %d Items append value {Slot:%db,id:\"%s\",Count:%db}" % (x, y, z, slot, item, count))
+        tag_nbt = ",tag:%s" % tag if tag else ""
+        out = self.command("data modify block %d %d %d Items append value {Slot:%db,id:\"%s\",Count:%db%s}" % (x, y, z, slot, item, count, tag_nbt))
         if "Modified" not in out:
             raise RuntimeError(out)
         return self.get_slot(computer_id, slot)
