@@ -119,6 +119,19 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
     if with_bridge:
         port_free(3000)
         pids["bridge"] = start_bridge(run, port, pw)
+        # RECORD THE PID BEFORE WAITING ON IT, not with the rest at the end.
+        #
+        # This dump used to happen only after the Minecraft server had started,
+        # so the SystemExit below fired first and a run that died at the bridge
+        # step ALWAYS orphaned a bridge AND ALWAYS left no pids.json. Two costs,
+        # both paid on 2026-11-10 (run w1-ore-index-a):
+        #   - `run.py stop <run-id>` could not clear it, because stop() reads
+        #     pids.json, so the orphan held port 3000 and blocked every later run.
+        #   - A missing pids.json reads as "this bridge did not come from a t2
+        #     run", which is how I concluded the process belonged to another
+        #     engineer and left it alone for an hour. Absent and not-from-a-run
+        #     looked identical, and only one of them was true.
+        json.dump(pids, open(pids_path(run), "w"))
         for _ in range(60):
             try:
                 bridge_get("/ping", 2)
@@ -126,7 +139,18 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
             except Exception:
                 time.sleep(1)
         else:
-            raise SystemExit("the bridge did not come up; see " + os.path.join(run, "bridge", "bridge.out"))
+            # AND DO NOT LEAVE THE ONE WE GAVE UP ON. w1-ore-index-a's bridge
+            # took 216 s to start listening -- process created 11:33:53, first
+            # log line 11:37:29 -- so it came up two and a half minutes after
+            # this loop had timed out, seized 3000 unattended and looked for all
+            # the world like a busy port. A bridge we have stopped waiting for
+            # must not go on to take the port.
+            subprocess.run(["taskkill", "/F", "/PID", str(pids["bridge"])], capture_output=True)
+            raise SystemExit(
+                "the bridge did not come up within 60s and has been stopped; see "
+                + os.path.join(run, "bridge", "bridge.out")
+                + " -- if that file ENDS with the 'listening on' line it was merely slow, not broken "
+                  "(216s was observed on 2026-11-10), and the wait here is what needs raising")
     console = os.path.join(run, "console.log")
     since = os.path.getsize(console) if (append and os.path.exists(console)) else 0
     proc, log = phase0.start(run, append=append)
