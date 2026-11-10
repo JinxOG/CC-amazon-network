@@ -16,6 +16,9 @@ Slot numbering: NBT slot 0 = Lua slot 1 (set_slot/get_slot take NBT numbers, the
      from N to N+1: the only way that can happen is the placed chest being on bay 1's frequency. Both the placer's own
      results (placed, drop, failure reason) and the count change are asserted, so each step can fail.
 
+Side effects: the run leaves one diamond in bay 1's chest and the reader and placer turtles (and the placed chest) standing in the
+world, so use a throwaway world copy. Reader candidates that see no inventory are removed again.
+
 Run through sandbox/t2/scenario.py like the other scenarios, on a world copy with bay 1 built."""
 import json
 import os
@@ -93,14 +96,35 @@ def find_bay1_chest(c):
     return None, seen
 
 
-def air_neighbour(raw, pos):
-    """An air cell touching pos whose cell above is air too (spawn_turtle needs the spot free), or None."""
+FACING = {(1, 0): "east", (-1, 0): "west", (0, 1): "south", (0, -1): "north"}
+
+
+def in_dock_area(p):
+    """True for a cell of the bay 1 dock rows or the aisles and return lanes around them (y 67, bay 1's x range, z from the
+    outermost dock rows plus 4 cells each way for the aisles/return lanes): the reader must not park there."""
+    x, y, z = p
+    return y == 67 and BAY1_X - 5 <= x <= BAY1_X + 5 and min(DOCK_ZS) - 4 <= z <= max(DOCK_ZS) + 4
+
+
+def reader_candidates(raw, pos):
+    """[(cell, facing)] of air cells touching pos, never in the dock area. The facing points at the chest when it is to the side, so
+    the chest is in FRONT of the turtle (its modem is on the left, and a chest on the left is not wrapped as an inventory)."""
     x, y, z = pos
-    for dx, dy, dz in ((0, 1, 0), (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0)):
+    out = []
+    for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0), (0, 1, 0)):
         p = (x + dx, y + dy, z + dz)
-        if all("Test passed" in raw.command("execute if block %d %d %d air" % (p[0], p[1] + k, p[2])) for k in range(2)):
-            return p
-    return None
+        if in_dock_area(p) or "Test passed" not in raw.command("execute if block %d %d %d air" % p):
+            continue
+        out.append((p, FACING.get((-dx, -dz), "north")))   # the chest lies at (-dx, -dz) from the candidate
+    return out
+
+
+def write_probe(ctx, path, text):
+    """Writes a probe's Lua into the run folder and records it as an intervention (it becomes a turtle's startup)."""
+    with open(path, "w") as f:
+        f.write(text)
+    ctx.interventions.append({"verb": "write_file", "args": [repr(path)], "kwargs": {"text": repr(text[:300])},
+                              "game_seconds": ctx.game_seconds()})
 
 
 def disk_json(c, cid, name):
@@ -127,17 +151,21 @@ def steps(ctx):
     tag = "{%s}" % freq
 
     # ---- the reader, beside bay 1's chest ----
-    spot = air_neighbour(raw, pos)
-    ctx.expect(spot is not None, "an air cell (and the one above it) touches bay 1's chest at %s, for the reader turtle" % (pos,))
-    if spot is None:
-        return
+    cands = reader_candidates(raw, pos)
+    ctx.note("reader candidate cells (not in the dock area): %s" % (cands,))
+    ctx.expect(bool(cands), "an air cell outside the dock area touches bay 1's chest at %s, for the reader turtle" % (pos,))
     reader_lua = os.path.join(ctx.run, "ender_reader.lua")
-    with open(reader_lua, "w") as f:
-        f.write(READER_LUA)
-    reader = c.spawn_turtle(spot[0], spot[1], spot[2], "SUPPORT", startup=reader_lua, fuel=100)
-    ctx.wait_until(lambda: "diamonds" in disk_json(c, reader, "reader.json"), 120, poll=3)
-    r0 = disk_json(c, reader, "reader.json")
-    ctx.note("reader #%d at %s, first reading: %s" % (reader, spot, r0))
+    write_probe(ctx, reader_lua, READER_LUA)
+    reader, r0 = None, {}
+    for spot, facing in cands:
+        reader = c.spawn_turtle(spot[0], spot[1], spot[2], "SUPPORT", startup=reader_lua, fuel=100, facing=facing)
+        ctx.wait_until(lambda: "diamonds" in disk_json(c, reader, "reader.json"), 120, poll=3)
+        r0 = disk_json(c, reader, "reader.json")
+        ctx.note("reader #%d at %s facing %s, first reading: %s" % (reader, spot, facing, r0))
+        if r0.get("inventories", 0) >= 1:
+            break
+        c.shutdown([reader])
+        raw.command("setblock %d %d %d minecraft:air" % spot)      # not wrapping the chest: take it away, try the next cell
     ctx.expect(r0.get("inventories", 0) >= 1, "the reader sees an inventory peripheral (bay 1's chest) -- else the count proves nothing")
     if not r0.get("inventories"):
         return
@@ -145,14 +173,20 @@ def steps(ctx):
 
     # ---- the placer: start once with no chest, then clean up the stale result before the real run ----
     x, y, z = c.free_spot()
+    facing = next((f for (dx, dz), f in FACING.items()
+                   if "Test passed" in raw.command("execute if block %d %d %d air" % (x + dx, y, z + dz))), None)
+    ctx.expect(facing is not None, "the placer's spot %s has an air cell beside it to place the chest into" % ((x, y, z),))
+    if facing is None:
+        return
     placer_lua = os.path.join(ctx.run, "ender_placer.lua")
-    with open(placer_lua, "w") as f:
-        f.write(PLACER_LUA)
-    new = c.spawn_turtle(x, y, z, "SUPPORT", startup=placer_lua, fuel=1000)   # spawn turns it on: this first run has no chest
+    write_probe(ctx, placer_lua, PLACER_LUA)
+    new = c.spawn_turtle(x, y, z, "SUPPORT", startup=placer_lua, fuel=1000, facing=facing)   # spawn turns it on: first run has no chest
     c.shutdown([new])
     stale = os.path.join(c.disks, str(new), "ender_probe.json")
     if os.path.exists(stale):
         os.remove(stale)
+        ctx.interventions.append({"verb": "delete_disk_file", "args": [repr(new), repr("ender_probe.json")], "kwargs": {},
+                                  "game_seconds": ctx.game_seconds()})
     got = c.set_slot(new, 0, ENDER_ITEM, 1, tag=tag)          # NBT 0 = Lua 1
     c.set_slot(new, 1, "minecraft:diamond", 1)                # NBT 1 = Lua 2
     ctx.note("read back from get_slot: %s" % got)
