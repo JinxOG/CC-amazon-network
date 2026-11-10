@@ -155,9 +155,25 @@ function W.loadDockAssignments(info, warn)
         -- worker side and SUPPORT[i] the i-th of the support side, so that is what
         -- they still mean; any other type's index is its own list's.
         -- textutils.serialise turns number keys into strings, hence tonumber.
-        for t, slots in pairs(data) do
+        -- IN A FIXED ORDER, so a clash resolves the same way on every load: the
+        -- three types first, then any other key by name, each by index.
+        local order, seen = { "DELIVERY", "SUPPORT", "MINER" }, { DELIVERY = true, SUPPORT = true, MINER = true }
+        local rest = {}
+        for t in pairs(data) do if not seen[t] then rest[#rest + 1] = tostring(t) end end
+        table.sort(rest)
+        for _, t in ipairs(rest) do order[#order + 1] = t end
+        for _, t in ipairs(order) do
+            local slots = data[t]
             if type(slots) == "table" then
-                for k, id in pairs(slots) do
+                local keys = {}
+                for k in pairs(slots) do keys[#keys + 1] = k end
+                table.sort(keys, function(a, b)
+                    local na, nb = tonumber(a), tonumber(b)
+                    if na and nb then return na < nb end
+                    return tostring(a) < tostring(b)
+                end)
+                for _, k in ipairs(keys) do
+                    local id = slots[k]
                     local i = tonumber(k)
                     local key
                     if t == "DELIVERY" then key = _sideOrder.WORKER[i]
@@ -195,6 +211,23 @@ function W.dockOf(turtleId)
         if d then return t, d end
     end
     return nil
+end
+
+-- Releases every dock the turtle holds in a type OTHER than keepType. Returns
+-- the released ones as { { type = t, dock = d }, ... } (empty when none).
+function W.releaseOtherDocks(turtleId, keepType)
+    local out = {}
+    for _, t in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
+        if t ~= keepType then
+            local d = W.getDockFor(t, turtleId)
+            while d do
+                out[#out + 1] = { type = t, dock = d }
+                W.releaseDock(t, turtleId)
+                d = W.getDockFor(t, turtleId)
+            end
+        end
+    end
+    return out
 end
 
 -- Releases every dock the turtle holds, whatever its type. Returns how many.

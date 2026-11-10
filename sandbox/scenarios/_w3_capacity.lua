@@ -1,5 +1,5 @@
 -- W3 disk card, the capacity study (the user's request, 2026-11-02). Shared by w3_capacity_week_1mb.lua and
--- w3_capacity_week_10mb.lua: 150 turtles (8 miners with their loaders, 71 delivery, 71 support) for a simulated
+-- w3_capacity_week_10mb.lua: 150 turtles (118 miners with their loaders, 16 delivery, 16 support) for a simulated
 -- week, on a server disk of `quota` bytes, with the fleet's code as it ships (stripped by the installer) and the
 -- disk tidy running hourly.
 --   * mining: four zones at a time, two miners each, three sectors per zone, each on fresh ground; a finished zone
@@ -16,8 +16,12 @@ return function(quota, days)
   return {
     world = "synthetic",
     seed = 1,
-    miners = 8,
+    -- per-bay docks (shakeout, 2026-11-10): worker/support bay 1 hold 16 delivery / 16 support, the other eight
+    -- bays 128 miners, so the 150 are 118 miners (each with its loader), 16 delivery and 16 support. per_bay lays
+    -- the same out on code from before per-bay types.
+    miners = 118,
     workers = 150,
+    per_bay = true,
     -- The base under its air-traffic control computer, with the docks the server already knows, as a real base
     -- runs. The first two runs (2026-11-03) had neither: the base gridlocked and the delivery jobs piled up in
     -- jobs.dat for that reason, not for any disk reason (the ATC card).

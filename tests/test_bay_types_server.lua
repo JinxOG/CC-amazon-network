@@ -47,12 +47,29 @@ local function server(fileText)
     return srv, T, W, restore
 end
 
-local function register(T, id, role)
+-- pos / midJob: what the turtle reports (default: 158,67,-2806, which is no
+-- dock any of these tests uses, and not mid-job).
+local function register(T, id, role, pos, midJob)
     T.handlers[proto.MSG.REGISTER]({
         type = proto.MSG.REGISTER, from = id, to = "server",
         payload = { role = role, fuel = 100000, fuelMax = 100000,
-                    position = { x = 158, y = 67, z = -2806 }, midJob = false },
+                    position = pos or { x = 158, y = 67, z = -2806 }, midJob = midJob or false },
     })
+end
+
+-- The message types sent to id, in order.
+local function sentTypes(T, id)
+    local out = {}
+    for _, s in ipairs(T.sent) do
+        local ok, m = pcall(textutils.unserialise, s.body)
+        if ok and type(m) == "table" and m.to == id then out[#out + 1] = m.type end
+    end
+    return out
+end
+local function countOf(list, v)
+    local n = 0
+    for _, x in ipairs(list) do if x == v then n = n + 1 end end
+    return n
 end
 
 local function count(T, needle, level)
@@ -230,7 +247,10 @@ return {
         local after = #holdersAt(W, d.x, d.z, { "a", "b" })
         local da, db = T.state.registry["a"].dock, T.state.registry["b"].dock
         local warned = count(T, "dock_assignments.dat", "WARN")
+        local aKept = W.getDockFor("MINER", "a")
         restore()
+        -- a fixed order (DELIVERY before MINER), so the same entry wins on every load
+        assert_eq(aKept, d, "the DELIVERY entry, read first, keeps the dock")
         assert_eq(before, 1, "one holder on load")
         assert_eq(after, 1, "one holder after both register")
         assert_eq(da ~= nil and db ~= nil, true, "neither is dockless")
@@ -265,5 +285,63 @@ return {
         assert_eq(moved ~= nil and moved.bay, 3, "a bay with room moves it")
         assert_eq(now, moved, "and it holds the new one")
         assert_eq(free, W.totalDocks("MINER") - 1, "exactly one dock held")
+    end,
+
+    -- FIX ROUND 1 (review, 2026-11-10): a move changes the records, not the
+    -- turtle. One that re-registers without rebooting, standing on the dock it
+    -- just lost, must be rebooted so its boot homing drives it to the new one.
+    ["moved_idle_miner_is_rebooted_once"] = function(assert_eq)
+        local _, T, W, restore = server('{ DELIVERY = { [ 1 ] = "node_118" } }')
+        local old = W.docks.DELIVERY[1]
+        register(T, "node_118", proto.ROLE.MINER, { x = old.x, y = old.y, z = old.z }, false)
+        local first = sentTypes(T, "node_118")
+        local said = count(T, "Rebooting node_118 so it drives to its new dock")
+        T.sent = {}
+        register(T, "node_118", proto.ROLE.MINER, { x = old.x, y = old.y, z = old.z }, false)
+        local second = sentTypes(T, "node_118")
+        restore()
+        assert_eq(countOf(first, proto.MSG.REBOOT), 1, "one REBOOT to the moved miner (" .. table.concat(first, " ") .. ")")
+        assert_eq(first[1], proto.MSG.REGISTER_ACK, "the ACK goes first, so it reboots knowing its new dock")
+        assert_eq(said, 1, "and the log says why")
+        assert_eq(countOf(second, proto.MSG.REBOOT), 0, "a second register sends none (" .. table.concat(second, " ") .. ")")
+    end,
+
+    ["moved_midjob_miner_is_not_rebooted"] = function(assert_eq)
+        local _, T, W, restore = server('{ DELIVERY = { [ 1 ] = "node_118" } }')
+        local old = W.docks.DELIVERY[1]
+        register(T, "node_118", proto.ROLE.MINER, { x = old.x, y = old.y, z = old.z }, true)
+        local sent = sentTypes(T, "node_118")
+        local moved = count(T, "Dock moved: node_118 ")
+        restore()
+        assert_eq(moved, 1, "precondition: it was moved")
+        assert_eq(countOf(sent, proto.MSG.REBOOT), 0, "a mid-job turtle is not rebooted: it goes home to _self.dock, the new dock")
+    end,
+
+    ["moved_miner_away_from_its_old_dock_is_not_rebooted"] = function(assert_eq)
+        -- e.g. booted out in the field: homeAfterBoot / its job handler bring it to the new dock
+        local _, T, W, restore = server('{ DELIVERY = { [ 1 ] = "node_118" } }')
+        register(T, "node_118", proto.ROLE.MINER, { x = 1500, y = 40, z = -2700 }, false)
+        local sent = sentTypes(T, "node_118")
+        restore()
+        assert_eq(countOf(sent, proto.MSG.REBOOT), 0, "not standing on the old cell: no reboot")
+    end,
+
+    ["a_turtle_holding_two_docks_keeps_one"] = function(assert_eq)
+        -- Minor 2: a file saved between a move's assign and its release reloads with both.
+        local _, T, W, restore = server(nil)
+        local mine = W.assignDock("MINER", "node_118")
+        local del = W.assignDock("DELIVERY", "node_118")
+        register(T, "node_118", proto.ROLE.MINER)
+        local keeps = W.getDockFor("MINER", "node_118")
+        local stillDel = W.getDockFor("DELIVERY", "node_118")
+        local said = count(T, "Dock released: node_118 also held bay " .. del.bay .. " row " .. del.row .. " (DELIVERY)")
+        T.sent = {}
+        register(T, "node_118", proto.ROLE.MINER)
+        local again = count(T, "Dock released:")
+        restore()
+        assert_eq(keeps, mine, "it keeps the dock of its own type")
+        assert_eq(stillDel, nil, "the other is released")
+        assert_eq(said, 1, "and that is logged")
+        assert_eq(again, 1, "once")
     end,
 }

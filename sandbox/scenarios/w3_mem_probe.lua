@@ -66,8 +66,12 @@ end
 return {
   world = "synthetic",
   seed = 1,
-  miners = 8,
+  -- per-bay docks (shakeout, 2026-11-10): worker/support bay 1 hold 16 delivery / 16 support, the other eight
+  -- bays 128 miners, so the 150 are 118 miners (each with its loader), 16 delivery and 16 support. per_bay lays
+  -- the same out on code from before per-bay types.
+  miners = 118,
   workers = 150,
+  per_bay = true,
   atc = true,
   preset_docks = true,
   steps = function(sim)

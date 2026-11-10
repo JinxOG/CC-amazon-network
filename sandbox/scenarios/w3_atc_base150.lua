@@ -4,7 +4,7 @@
 --   W3_ATC_DRAIN_MIN = the most the drain may take (default 90)
 --   W3_NO_ATC=1  no ATC computer: the same traffic on code without one (today's master) -- every check must be
 --                able to fail, and this is where they do
--- The fleet: 8 miners (each with its loader), 71 delivery, 71 support. At the start a BURST of 20 deliveries at
+-- The fleet: 118 miners (each with its loader), 16 delivery, 16 support (per-bay docks; 8/71/71 before 2026-11-10). At the start a BURST of 20 deliveries at
 -- once (card addition C); then two zones mining at a time and a delivery every 10 minutes to four destinations
 -- inside the loaded area. After the traffic, no new orders and a drain of up to 90 minutes.
 -- CHECKS (bounds stated here, and in docs/superpowers/specs/2026-11-03-base-atc-design.md):
@@ -62,8 +62,12 @@ end
 return {
   world = "synthetic",
   seed = 1,
-  miners = 8,
+  -- per-bay docks (shakeout, 2026-11-10): worker/support bay 1 hold 16 delivery / 16 support, the other eight
+  -- bays 128 miners, so the 150 are 118 miners (each with its loader), 16 delivery and 16 support. per_bay lays
+  -- the same out on code from before per-bay types.
+  miners = 118,
   workers = 150,
+  per_bay = true,
   atc = not NO_ATC,
   preset_docks = os.getenv("W3_ATC_BOOT_RUSH") == nil,   -- the server knows the docks, as a real base does
   steps = function(sim)

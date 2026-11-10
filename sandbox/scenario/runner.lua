@@ -72,7 +72,7 @@ function Runner.run(scenario_path, opts)
   if type(layout) == "function" then layout = layout(load_waypoints(code_dir)) end
   if not layout and imported then layout, sim.skipped_computers = Import.layout(world_spec, world) end
   layout = layout or Synth.layout(load_waypoints(code_dir), { miners = scenario.miners, workers = scenario.workers, atc = scenario.atc,
-    preset_docks = scenario.preset_docks })
+    preset_docks = scenario.preset_docks, per_bay = scenario.per_bay })
   if opts.only then layout = apply_only(layout, opts.only); sim.only = opts.only end
   sim.layout = layout
 

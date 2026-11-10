@@ -281,6 +281,9 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
     -- A LOADER has no dock type and gets no dock.
     local dockType = W.dockTypeFor(role)
     local dock = dockType and W.getDockFor(dockType, id)
+    -- Set when a move leaves the turtle standing on the dock it just lost: see
+    -- the REGISTER handler, which reboots it after the REGISTER_ACK.
+    local rebootForDock = nil
 
     if dockType and not dock then
         -- Holding a dock of ANOTHER type -- a live miner on what is now a
@@ -294,6 +297,20 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
             W.releaseDock(heldType, id)
             logInfo(string.format("Dock moved: %s from bay %d row %s (%s) to bay %d row %s (%s) -- per-bay types",
                 id, held.bay, held.row, heldType, dock.bay, dock.row, dockType))
+            -- THE MOVE CHANGES THE RECORDS, NOT THE TURTLE (review, 2026-11-10).
+            -- REGISTER_ACK only sets the turtle's _self.dock; it drives there
+            -- only from homeAfterBoot, at boot. A turtle re-registering WITHOUT
+            -- rebooting (the server restarted alone) would sit on the cell just
+            -- freed -- free for the next turtle to be sent to -- and leave on its
+            -- next job by the new dock's route from the wrong cell. So one that
+            -- says it stands on the old cell and is not mid-job is rebooted.
+            -- A mid-job turtle needs nothing: it is not on the cell, and every
+            -- way home (home.dock / fromSky / internal) reads _self.dock when it
+            -- runs, which the ACK has already set to the new dock.
+            if not midJob and type(position) == "table"
+               and position.x == held.x and position.z == held.z then
+                rebootForDock = true
+            end
         elseif held then
             dock = held
             logWarn(string.format("%s [%s] is on a %s dock (bay %d row %s) and no %s dock is free -- it keeps that one",
@@ -302,6 +319,16 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
             logInfo(string.format("Assigned dock: bay %d row %s to %s", dock.bay, dock.row, id))
         else
             logWarn("No free docks for " .. id .. " [" .. tostring(role) .. "] — depot full!")
+        end
+    end
+    -- ONE TURTLE, ONE DOCK. A turtle on a dock of its own type that still holds
+    -- one of another type (the file was saved between a move's assign and its
+    -- release, or a role changed long ago) lets the other go, so it is not
+    -- reserved for good under a name that is not using it.
+    if dock and dock.role == dockType then
+        for _, other in ipairs(W.releaseOtherDocks(id, dockType)) do
+            logInfo(string.format("Dock released: %s also held bay %d row %s (%s) -- one dock per turtle",
+                id, other.dock.bay, other.dock.row, other.type))
         end
     end
 
@@ -325,6 +352,7 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
         -- rollback to a pre-1.9.108 turtle looks like, and that turtle no longer
         -- opens the channel: keeping the old number would send it into silence.
         privateChannel = reportedChannel,
+        rebootForDock  = rebootForDock,
     }
 
     -- Carry the dispatch hold across a re-registration, unless the server had
@@ -3662,6 +3690,16 @@ handlers[proto.MSG.REGISTER] = function(msg)
         serverTs = os.epoch("utc"),
         dock     = dock,
     })
+    -- A dock move left it on the cell it just lost (registry.register). Sent
+    -- after the ACK, so it reboots knowing its new dock and homeAfterBoot drives
+    -- it there now. REBOOT is a control message: a re-registering turtle routes
+    -- it to the control loop, which reboots at once (turtle_base.lua). Once:
+    -- the next REGISTER finds the new dock and moves nothing.
+    if state.registry[msg.from] and state.registry[msg.from].rebootForDock then
+        state.registry[msg.from].rebootForDock = nil
+        sendTo(msg.from, proto.MSG.REBOOT, {})
+        logInfo(string.format("Rebooting %s so it drives to its new dock now (it stands on the one it was moved from)", msg.from))
+    end
     -- A rebooted turtle's job is re-sent on its FIRST HEARTBEAT, not here.
     -- Sent straight after REGISTER_ACK, it reached a turtle still inside
     -- base.init -- homing, a GPS fix -- where every yield is filtered and an
