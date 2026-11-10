@@ -53,10 +53,32 @@ dump`, so the real block position and whether the computer is **running**.
   "copies made in creative share one ticket, and only the last placed holds it"
   hazard is not present on this world.
 
+## Run d: the stretch the card actually names
+
+Runs a and c both stopped sampling at 14 samples with the miner still at x 765
+and climbing east. **The card is about x ~1300-1550.** So both measured the
+*approach* to the lane and never the lane, and I wrote the conclusion up as
+though the question were settled. Run d watches until the miner is past x 1600
+instead of until a sample count.
+
+| x | y | z | computer running | chunk loaded | holds a ticket |
+|---|---|---|---|---|---|
+| 1314 | 200 | -2813 | yes | yes | yes |
+| 1377 | 200 | -2813 | yes | yes | yes |
+| 1439 | 200 | -2813 | yes | yes | yes |
+| 1502 | 200 | -2813 | yes | yes | yes |
+
+30 samples, 27 of them in flight, **0 with the computer off, 0 in an unloaded
+chunk, 27 of 27 holding a Forge ticket**, furthest x reached **1627**. Four
+readings fall inside x 1300-1550, and all four are clean.
+
+The probe now reports **INCONCLUSIVE ABOUT THIS CARD** if a run never reaches
+that stretch, so the gap that let runs a and c read as a pass cannot recur.
+
 ## Conclusion
 
 **A healthy miner carries its own chunk loading, and an empty lane alone does not
-strand it.** Both the card's GPS framing and the chunk-unloading theory fail to
+strand it — including across x 1300-1550, the stretch this card names.** Both the card's GPS framing and the chunk-unloading theory fail to
 reproduce on real Minecraft. **A GPS relay on the lane would fix nothing, and
 should not be built on the strength of this card.**
 
