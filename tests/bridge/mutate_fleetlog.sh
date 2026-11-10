@@ -40,6 +40,10 @@ run "slow-push line suppressed"     'if (totalMs >= BUSY_SLOW_PUSH_MS) {|||if (f
 run "zero-activity rollup dropped"  'if (b.pushes === 0 && b.writes === 0) {|||if (false) {'
 run "log share not computed"        'b.pushMsTotal > 0 ? (b.logMsTotal / b.pushMsTotal) * 100 : null|||null'
 run "bridge lines unsequenced"      'bridgeSeq++;|||;'
+run "since_tick dropped from the slow-push line"   'since_tick=${loopSinceTick()}ms|||'
+run "the ticker stops recording lateness"   'if (late > loopLagMax) loopLagMax = late;|||;'
+run "loop lag never resets between windows"   'loopLagMax = 0;|||;'
+run "idle rollup drops the loop lag"   '+ `loop_lag_max=${lagMax}ms`);||| );'
 run "prune deletes non-log files" 'if (!m) continue;|||if (!m) { fs.unlink(path.join(LOG_DIR, f), function(){}); continue; }'
 
 echo ""

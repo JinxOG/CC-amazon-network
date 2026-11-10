@@ -50,6 +50,9 @@ function loadLogModule(mutation) {
     const factory = new Function('fs', 'path', 'console', 'TEST_LOG_DIR', 'BRIDGE_BOOT_ID', block + `
         return { ingestLogs, logSeqHigh, pruneOldLogs, logLossSummary,
                  recordPush, emitBusyRollup, logLocal,
+                 loopTick, loopSinceTick,
+                 loopLagMax: () => loopLagMax,
+                 freeze: (ms) => { loopLastTick = Date.now() - ms; },
                  busy: () => busy, lastBusyRollup: () => lastBusyRollup,
                  queueLen: () => logQueue.length, LOG_DIR };
     `);
@@ -264,6 +267,73 @@ async function run(mutation) {
             /bridge#1\s/.test(readLog(m.LOG_DIR)) && /bridge#2\s/.test(readLog(m.LOG_DIR)));
     }
 
+    // ── 7b. event-loop liveness: was the bridge working, or not running? ────
+    //
+    // On 2026-10-27 a run logged 107 slow pushes, worst 143 s, with the log
+    // system accounting for ~0 ms. The bridge's own 60 s timer was late by up to
+    // 178 s in the same window and never once late in the 388 intervals outside
+    // it, while the game ticked normally. The handler is synchronous, so that
+    // elapsed time was the scheduler's, not the bridge's. These assertions are
+    // what make the next such window attributable without a log archaeology dig
+    // -- and the shakeout injects a bridge_slow fault, which without this is
+    // indistinguishable from host starvation.
+    {
+        const { mod: m } = loadLogModule(mutation);
+
+        m.loopTick();
+        check('a live loop reports almost no time since its last tick',
+            m.loopSinceTick() < 250, String(m.loopSinceTick()));
+
+        // A frozen process: the ticker should have run within the last 500 ms.
+        m.freeze(9000);
+        check('a frozen loop is visible as a large gap since the last tick',
+            m.loopSinceTick() >= 9000, String(m.loopSinceTick()));
+
+        // A slow push must carry the attribution on the line itself.
+        m.recordPush(143406, 0.2);
+        await settle(m);
+        const slowLine = readLog(m.LOG_DIR).trim().split('\n').pop();
+        check('a slow push line carries since_tick for attribution',
+            /slow push: 143406\.0ms total,.*since_tick=\d+ms/.test(slowLine), slowLine);
+        check('and that figure shows the loop was not running',
+            Number(/since_tick=(\d+)ms/.exec(slowLine)[1]) >= 9000, slowLine);
+
+        // loopTick turns lateness into the window's reported figure.
+        m.freeze(4000);
+        m.loopTick();
+        check('the ticker records how late it was', m.loopLagMax() >= 3000,
+            String(m.loopLagMax()));
+
+        m.emitBusyRollup();
+        await settle(m);
+        let rollLine = readLog(m.LOG_DIR).trim().split('\n').pop();
+        check('an active rollup reports loop_lag_max', /loop_lag_max=\d+ms/.test(rollLine), rollLine);
+        check('and reports the lateness it saw',
+            Number(/loop_lag_max=(\d+)ms/.exec(rollLine)[1]) >= 3000, rollLine);
+
+        // Reset per window, or a single bad minute would taint every later one.
+        m.emitBusyRollup();
+        await settle(m);
+        rollLine = readLog(m.LOG_DIR).trim().split('\n').pop();
+        check('the figure resets each window',
+            Number(/loop_lag_max=(\d+)ms/.exec(rollLine)[1]) < 1000, rollLine);
+
+        // The idle branch needs it most: frozen-while-idle produces no slow push
+        // to draw anyone to the window. It needs a module that has done nothing
+        // at all — once anything has been logged, the write counter puts the
+        // rollup on the active branch and the idle one goes untested.
+        const { mod: idle } = loadLogModule(mutation);
+        idle.freeze(7000);
+        idle.loopTick();
+        idle.emitBusyRollup();
+        await settle(idle);
+        const idleLine = readLog(idle.LOG_DIR).trim().split('\n').pop();
+        check('a zero-activity rollup still reports the loop lag',
+            /pushes=0 writes=0.*loop_lag_max=\d+ms/.test(idleLine), idleLine);
+        check('and a frozen-while-idle bridge is visible in it',
+            Number(/loop_lag_max=(\d+)ms/.exec(idleLine)[1]) >= 6000, idleLine);
+    }
+
     // ── 8. retention prunes only this module's own files ────────────────────
     const old = path.join(dir, '2020-01-01.txt');
     const keep = path.join(dir, 'operator-notes.txt');
@@ -281,7 +351,21 @@ async function run(mutation) {
 const mutArg = process.argv.indexOf('--mutate');
 const mutation = mutArg > -1 ? process.argv[mutArg + 1].split('|||') : null;
 
+// A throw during the RUN is a killed mutant, not a broken harness. Collapsing
+// the two reported real kills as "HARNESS ERROR", which the runner reads as a
+// malformed mutation — a result whose failure state is indistinguishable from
+// its cannot-tell state, which is the thing this suite exists to catch. The
+// other two bridge suites were fixed for this; this one was missed until four
+// mutants came back as errors on 2026-11-09.
 run(mutation).then((f) => {
     console.log(f === 0 ? '\nALL PASS' : `\n${f} FAILURE(S)`);
     process.exit(f === 0 ? 0 : 1);
-}).catch((e) => { console.error('HARNESS ERROR:', e.message); process.exit(2); });
+}).catch((e) => {
+    if (/could not locate|mutation target not found/.test(e.message || '')) {
+        console.error('HARNESS ERROR:', e.message);   // markers moved, or a bad mutation
+        process.exit(2);
+    }
+    console.log(`  FAIL  threw during the run — ${e.message}`);
+    console.log('\n1 FAILURE(S)');
+    process.exit(1);
+});

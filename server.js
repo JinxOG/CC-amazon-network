@@ -306,6 +306,43 @@ function freshBusy() {
 }
 let busy = freshBusy();
 
+// ─── Event-loop liveness ─────────────────────────────────────────────────────
+//
+// Answers one question about a slow push that nothing else can: was the bridge
+// WORKING, or was it NOT RUNNING?
+//
+// The /update handler is synchronous from entry to res.json — no awaits — so its
+// elapsed time cannot exceed the work it does unless the process is descheduled.
+// On 2026-10-27 a test run logged 107 slow pushes, worst 143 s, with the log
+// system accounting for ~0 ms of them. The bridge's own 60 s rollup timer, which
+// does nothing but format one line, was late by up to 178 s in the same window
+// and never once late in the 388 intervals outside it. The game kept ticking at
+// 10.75 ms mean throughout. So the host was fine and this process was not being
+// scheduled; no bridge code was slow.
+//
+// That diagnosis took a log file and an afternoon. This makes the next one
+// immediate, and the shakeout needs it: that run INJECTS a `bridge_slow` fault,
+// and without this a seeded bridge fault and host starvation produce identical
+// evidence.
+//
+// A timer that only takes a clock reading cannot itself be the slow thing, which
+// is what makes its lateness attributable to the scheduler rather than to us.
+const LOOP_TICK_MS = 500;
+let loopLastTick = Date.now();
+let loopLagMax   = 0;          // worst lateness seen this rollup window
+
+function loopTick() {
+    const now  = Date.now();
+    const late = now - loopLastTick - LOOP_TICK_MS;
+    loopLastTick = now;
+    if (late > loopLagMax) loopLagMax = late;
+}
+
+// How long since the loop last ran. Read at the END of a slow push: the ticker
+// should have fired within the last half second, so a large value means the
+// process was frozen through the push rather than busy during it.
+function loopSinceTick() { return Date.now() - loopLastTick; }
+
 // Bridge-authored lines carry their own source and sequence. A separate source
 // from `server` so they never mix into the CC server's continuity audit, and
 // sequenced so the instrumentation is itself auditable -- the one thing worse
@@ -330,8 +367,12 @@ function recordPush(totalMs, logMs) {
         busy.slowPushes++;
         // Timestamped by the log itself, so `?node=bridge&contains=slow push`
         // gives W1 the busy windows to correlate disconnect clusters against.
+        // since_tick is the attribution: under ~1000 ms the loop was alive and
+        // the bridge really did take this long; far above it the process was not
+        // running and the elapsed time is the scheduler's, not ours.
         logLocal('WARN', `slow push: ${totalMs.toFixed(1)}ms total, `
-            + `${logMs.toFixed(1)}ms of it in the log system, queue=${logQueue.length}`);
+            + `${logMs.toFixed(1)}ms of it in the log system, queue=${logQueue.length}, `
+            + `since_tick=${loopSinceTick()}ms`);
     }
 }
 
@@ -342,6 +383,10 @@ let lastBusyRollup = null;
 function emitBusyRollup() {
     const b = busy;
     busy = freshBusy();
+    // Taken and reset with the counters, so the figure belongs to the window it
+    // is reported beside.
+    const lagMax = loopLagMax;
+    loopLagMax = 0;
 
     const avg = (total, n) => (n > 0 ? total / n : 0);
     const pushAvg = avg(b.pushMsTotal, b.pushes);
@@ -361,12 +406,18 @@ function emitBusyRollup() {
         writeMsMax: +b.writeMsMax.toFixed(2),
         writeKb: +(b.writeBytes / 1024).toFixed(1),
         queueMax: b.queueMax,
+        loopLagMaxMs: lagMax,
     };
 
     if (b.pushes === 0 && b.writes === 0) {
         // Emitted anyway, and this is the whole point: it distinguishes "the
         // bridge was idle" from "the instrumentation stopped".
-        logLocal('INFO', 'busy rollup: pushes=0 writes=0 — bridge received nothing this interval');
+        //
+        // The lag belongs here too: a bridge can be frozen WHILE idle, and that
+        // is the case most likely to pass unnoticed, because no slow push exists
+        // to draw anyone's attention to the window.
+        logLocal('INFO', 'busy rollup: pushes=0 writes=0 — bridge received nothing this interval, '
+            + `loop_lag_max=${lagMax}ms`);
         return;
     }
 
@@ -376,7 +427,10 @@ function emitBusyRollup() {
         + `log_ms_avg=${logAvg.toFixed(1)} log_ms_max=${b.logMsMax.toFixed(1)} `
         + `log_share=${logShare === null ? 'n/a' : logShare.toFixed(1) + '%'} `
         + `writes=${b.writes} write_ms_max=${b.writeMsMax.toFixed(1)} `
-        + `write_kb=${(b.writeBytes / 1024).toFixed(1)} queue_max=${b.queueMax}`);
+        + `write_kb=${(b.writeBytes / 1024).toFixed(1)} queue_max=${b.queueMax} `
+        // Reported every window, not only when it is bad, so a clean number is
+        // evidence the process was running rather than an absence of evidence.
+        + `loop_lag_max=${lagMax}ms`);
 }
 
 // One append in flight at a time. fs.appendFile does not order concurrent
@@ -1496,4 +1550,8 @@ app.listen(CFG.port, () => {
     logLocal('INFO', `bridge up — busy rollups every ${BUSY_ROLLUP_MS / 1000}s, `
         + `slow-push threshold ${BUSY_SLOW_PUSH_MS}ms`);
     setInterval(emitBusyRollup, BUSY_ROLLUP_MS);
+    // Started here, not at module load, so the first interval is not counted as
+    // late by however long the boot took.
+    loopLastTick = Date.now();
+    setInterval(loopTick, LOOP_TICK_MS);
 });
