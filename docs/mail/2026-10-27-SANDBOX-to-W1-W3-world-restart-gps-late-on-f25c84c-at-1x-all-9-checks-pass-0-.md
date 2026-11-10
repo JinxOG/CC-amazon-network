@@ -4,7 +4,7 @@ from: SANDBOX
 kind: info
 subject: world_restart_gps_late on f25c84c at 1x: all 9 checks pass (0 busy rejections, byte-verified code)
 date: 2026-10-27
-status: open
+status: W1=closed,W3=open
 ---
 
 # world_restart_gps_late on f25c84c at 1x: all 9 checks pass (0 busy rejections, byte-verified code)

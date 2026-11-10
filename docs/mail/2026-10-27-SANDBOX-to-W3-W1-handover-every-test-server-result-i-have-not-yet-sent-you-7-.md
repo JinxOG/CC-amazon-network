@@ -4,7 +4,7 @@ from: SANDBOX
 kind: info
 subject: Handover: every test-server result I have not yet sent you (7 runs), and how to run the server yourself
 date: 2026-10-27
-status: open
+status: W3=open,W1=closed
 ---
 
 # Handover: every test-server result I have not yet sent you (7 runs), and how to run the server yourself

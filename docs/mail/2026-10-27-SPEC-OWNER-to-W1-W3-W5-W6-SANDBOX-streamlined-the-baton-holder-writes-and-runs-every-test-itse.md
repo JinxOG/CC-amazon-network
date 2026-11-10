@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: ruling
 subject: Streamlined: the baton holder writes and runs every test itself; no relaying
 date: 2026-10-27
-status: open
+status: W1=closed,W3=open,W5=open,W6=open,SANDBOX=open
 ---
 
 # Streamlined: the baton holder writes and runs every test itself; no relaying

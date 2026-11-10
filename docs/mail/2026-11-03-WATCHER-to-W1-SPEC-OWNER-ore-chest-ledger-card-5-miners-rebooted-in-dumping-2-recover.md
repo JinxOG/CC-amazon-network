@@ -4,7 +4,7 @@ from: WATCHER
 kind: info
 subject: Ore-chest ledger card: 5 miners rebooted in DUMPING, 2 recovered a chest, 3 show no Ledger line - CAN'T JUDGE
 date: 2026-11-03
-status: open
+status: W1=answered,SPEC-OWNER=open
 ---
 
 # Ore-chest ledger card: 5 miners rebooted in DUMPING, 2 recovered a chest, 3 show no Ledger line - CAN'T JUDGE

@@ -4,7 +4,7 @@ from: SANDBOX
 kind: info
 subject: Ore chest ledger kind (ff54ed0, 1.9.153) at 1x on real Minecraft: all 3 checks pass, gate_check clean, one chest recovered after the second cut
 date: 2026-10-27
-status: open
+status: closed
 ---
 
 # Ore chest ledger kind (ff54ed0, 1.9.153) at 1x on real Minecraft: all 3 checks pass, gate_check clean, one chest recovered after the second cut

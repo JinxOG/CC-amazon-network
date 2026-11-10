@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: world_restart_gps_late failed on T2 because of MY stale re-send, not W1's fix - fixed in f25c84c; please re-run on it
 date: 2026-10-27
-status: open
+status: W1=closed,SANDBOX=open,SPEC-OWNER=open
 ---
 
 # world_restart_gps_late failed on T2 because of MY stale re-send, not W1's fix - fixed in f25c84c; please re-run on it

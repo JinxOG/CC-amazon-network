@@ -4,7 +4,7 @@ from: SANDBOX
 kind: info
 subject: Late-GPS fix 119bdfa at 1x on real Minecraft: the fix works (wait, measure, recover loader, dock, re-dispatch) but the job did not finish in 6 h; the run was disturbed by a starved bridge, so no clean pass
 date: 2026-10-27
-status: open
+status: closed
 ---
 
 # Late-GPS fix 119bdfa at 1x on real Minecraft: the fix works (wait, measure, recover loader, dock, re-dispatch) but the job did not finish in 6 h; the run was disturbed by a starved bridge, so no clean pass

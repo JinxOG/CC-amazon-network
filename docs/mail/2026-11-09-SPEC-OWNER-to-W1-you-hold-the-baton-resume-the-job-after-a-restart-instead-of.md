@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: You hold the baton: resume the job after a restart instead of flying home (a shakeout prerequisite)
 date: 2026-11-09
-status: open
+status: answered
 ---
 
 # You hold the baton: resume the job after a restart instead of flying home (a shakeout prerequisite)
