@@ -2309,6 +2309,75 @@ return {
     -- nine ways home and lives in mine_flow so it can be checked without a
     -- world, and so it can be lifted into a shared home unchanged once the spec
     -- owner rules on where (delivery and support are frozen).
+    -- ─── The Tier 1 census tiles the column exactly once ───────────────
+    --
+    -- The census counts EVERY block, not just ore, so it cannot deduplicate by
+    -- position the way ore does -- that is tens of thousands of positions per
+    -- sector rather than tens. Instead each scan level owns a disjoint slice of
+    -- Y, which must tile the whole band with no gap and no overlap. A census
+    -- that double-counts or skips is worse than none, because it looks like
+    -- data.
+    --
+    -- My first version of this rule left 31 Y values owned by nobody. It capped
+    -- each level at the shallower level's REACH floor instead of the part that
+    -- level actually OWNS, and separately tried to raise the bottom to meet the
+    -- level below. The coverage assertion here is what caught it.
+    ["censusBand tiles the real scan geometry with no gap and no overlap"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local L, R = { 16, 0, -32, -52 }, 16
+        local owned = {}
+        for i = 1, #L do
+            local lo, hi = flow.censusBand(i, L, R)
+            assert_eq(type(lo) == "number" and type(hi) == "number", true,
+                "level " .. L[i] .. " must own a slice")
+            assert_eq(lo <= hi, true, "and it must be a real range")
+            for y = lo, hi do owned[y] = (owned[y] or 0) + 1 end
+        end
+        local gaps, dupes = 0, 0
+        for y = L[#L] - R, L[1] + R do
+            local n = owned[y] or 0
+            if n == 0 then gaps = gaps + 1 elseif n > 1 then dupes = dupes + 1 end
+        end
+        assert_eq(gaps, 0, "every Y in the band must be owned by exactly one level")
+        assert_eq(dupes, 0, "and by no more than one, or the census double-counts")
+    end,
+
+    -- The slices must come out of the list and the radius, so a literal table
+    -- cannot silently stop tiling the day either changes.
+    ["censusBand follows the levels it is given, not the real ones"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local L, R = { 10, -10 }, 5
+        local lo1, hi1 = flow.censusBand(1, L, R)
+        local lo2, hi2 = flow.censusBand(2, L, R)
+        assert_eq(lo1 .. ".." .. hi1, "5..15", "the shallowest keeps its whole reach")
+        -- -15..-5, not -15..4: the cap is "one below where the level above
+        -- started" OR this level's own reach, whichever is lower. A level
+        -- cannot own ground it never scanned, and my first expectation here
+        -- said it could.
+        assert_eq(lo2 .. ".." .. hi2, "-15..-5",
+            "and the next keeps its own reach, capped by where that one started")
+        -- These two levels do not overlap at all (5..15 and -15..-5), so -4..4
+        -- is owned by nobody -- correctly. Nobody can count what nobody
+        -- scanned, and the real geometry has no such gap: the tiling test
+        -- above proves that for SCAN_LEVELS as they actually are.
+        assert_eq(hi2 < lo1 - 1, true,
+            "non-overlapping levels leave a gap that no level claims")
+    end,
+
+    -- Nonsense in, nil out. An ascending list would make the slices overlap
+    -- wildly, and guessing would produce a census that looks plausible and
+    -- is wrong.
+    ["censusBand refuses what it cannot tile"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.censusBand(1, { 0, 16 }, 16), nil, "ascending levels")
+        assert_eq(flow.censusBand(1, { 0, 0 }, 16), nil, "equal levels")
+        assert_eq(flow.censusBand(9, { 16, 0 }, 16), nil, "no such level")
+        assert_eq(flow.censusBand(1, "nonsense", 16), nil)
+        assert_eq(flow.censusBand(1, { 16, 0 }, nil), nil, "no radius")
+    end,
+
     ["resumeDecision lets a healthy miner carry on where it stands"] =
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())

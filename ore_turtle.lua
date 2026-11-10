@@ -1283,7 +1283,7 @@ end
 -- re-queued it: job_0058, node_138 reported (1888,-2912) done with 0 ore while
 -- node_139 had found 81 there (W3, 2026-09-16). Refusing to dig a turtle is
 -- correct and stays; what was wrong was the accounting afterwards.
-local function scanSector()
+local function scanSector(levelIndex)
     local item = turtle.getItemDetail(S_SCANNER)
     if not item or item.name ~= SCANNER_NAME then
         print("[SCAN] ERROR: geo scanner not in slot 1 (found: " .. tostring(item and item.name) .. ")")
@@ -1376,6 +1376,61 @@ local function scanSector()
     -- that belongs to the neighbouring sector and is mined when that lease is
     -- issued. Counting it here credited it to the wrong sector and made every
     -- sector look like it left 6% behind.
+    -- TIER 1 CENSUS (coordinate ore-index card). Every block, not just ore,
+    -- counted by name -- "mostly removing the isOre filter", as the design put
+    -- it. Built here because this is the only place the raw scan exists.
+    --
+    -- DEDUPLICATED BY BAND, NOT BY POSITION. The scan levels overlap, and ore
+    -- gets away with a position set because there are tens of it; a census is
+    -- tens of THOUSANDS of positions per sector. mine_flow.censusBand gives
+    -- each level the slice of Y it owns, which tiles -68..32 exactly once -- so
+    -- a block is counted by whichever level owns its height and by no other.
+    --
+    -- Inside the lease, for the same reason the ore count is: the scanner reads
+    -- 33 blocks wide against a 32-wide lease, so about 6% of every scan belongs
+    -- to the neighbouring sector. geofence.contains is called per block, which
+    -- is the one loop here over the whole raw scan; everything else in this
+    -- function already walks it.
+    -- THE BOUNDS ARE HOISTED, NOT ASKED PER BLOCK. The first version called
+    -- geofence.contains for every block of a 30,000-block scan, four levels per
+    -- sector. It worked and it was far too slow: the below-floor scenario,
+    -- which had been passing, ran 12 simulated hours without the miner getting
+    -- past its first scan level. This project has been here before -- the
+    -- per-ore table.sort was the miners' single largest CPU cost -- and the
+    -- card's size estimate (114 entries, 3,924 bytes) said nothing about the
+    -- cost of PRODUCING it.
+    --
+    -- So the lease is read once and the test becomes four integer comparisons
+    -- inline. The Y band already excludes most of the column before any of
+    -- them run, which is the cheapest filter available and so goes first.
+    local census, censusTotal = {}, 0
+    local bandLo, bandHi = mine_flow.censusBand(levelIndex, SCAN_LEVELS, SCAN_RADIUS)
+    local lz = geofence.lease()
+    local lx1 = lz and lz.x1 or -math.huge
+    local lx2 = lz and lz.x2 or math.huge
+    local lz1 = lz and lz.z1 or -math.huge
+    local lz2 = lz and lz.z2 or math.huge
+    if bandLo then
+        local py, px, pz = p.y - 1, p.x, p.z
+        for _, b in ipairs(raw) do
+            local wy = py + b.y
+            if wy >= bandLo and wy <= bandHi then
+                local wx, wz = px + b.x, pz + b.z
+                if wx >= lx1 and wx <= lx2 and wz >= lz1 and wz <= lz2 then
+                    local n = b.name
+                    census[n] = (census[n] or 0) + 1
+                    censusTotal = censusTotal + 1
+                end
+            end
+        end
+        print(string.format("[SCAN] Census: %d blocks in Y %d..%d, %d distinct kinds",
+            censusTotal, bandLo, bandHi, (function()
+                local k = 0; for _ in pairs(census) do k = k + 1 end; return k
+            end)()))
+    else
+        print("[SCAN] Census skipped: no owned Y band for this level")
+    end
+
     local reachable, dropped = mine_flow.filterToLease(ores)
     if dropped > 0 then
         print(string.format("[SCAN] Found %d ore blocks at this level before "
@@ -1388,7 +1443,17 @@ local function scanSector()
     -- The dropped count comes back as well as being printed. A survey that
     -- cannot report its own blind spots is the ore-index card's condition 6,
     -- and a log line is not something a planner can read.
-    return reachable, dropped
+    -- SLOT 2 IS THE FAILURE REASON AND NOTHING ELSE. nil here means the scan
+    -- ran; the extra numbers go after it.
+    --
+    -- This cost a release. 1.9.162 returned `reachable, dropped` -- putting the
+    -- outside-lease COUNT where the caller reads `scanFail` -- so every
+    -- successful scan with any ore outside the lease (about 6% of scans always
+    -- have some) looked like a refusal: three retries, then
+    -- "scan_level_incomplete", then the sector abandoned. Every sector, every
+    -- job. The below-floor scenario caught it by running 12 simulated hours
+    -- without the miner finishing one sector, where it had taken 0.3.
+    return reachable, nil, dropped, census
 end
 
 -- ── Mining ───────────────────────────────────────────────────────────────────
@@ -2609,6 +2674,9 @@ local function mineJob(job)
         -- level and were printed and thrown away.
         local sectorBelowFloor  = 0
         local sectorOutsideLease = 0
+        -- TIER 1 CENSUS for the whole sector: name -> block count, each block
+        -- counted once because the levels own disjoint slices of Y.
+        local sectorCensus = {}
         local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
         local abort       = nil  -- non-nil once the sector must be abandoned
         -- RESUME AT THE LEVEL WE REACHED, not at the first one. Redoing the
@@ -2686,8 +2754,11 @@ local function mineJob(job)
             -- about. Best-effort -- a failed write only costs a re-scan.
             pcall(loader_state.setOrder, { jobId = jobId, sx = sx, sz = sz,
                                            surveyMode = surveyMode, level = i })
-            local rawOres, scanFail, outsideLease = scanSector()
+            local rawOres, scanFail, outsideLease, levelCensus = scanSector(i)
             sectorOutsideLease = sectorOutsideLease + (outsideLease or 0)
+            for name, n in pairs(levelCensus or {}) do
+                sectorCensus[name] = (sectorCensus[name] or 0) + n
+            end
             -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE. scanSector
             -- used to hand back a bare empty list from seven different refusals,
             -- so the loop counted the level as scanned, the sector was reported
@@ -2710,7 +2781,7 @@ local function mineJob(job)
                         "[SCAN] Level Y=%d did not run (%s) — retry %d of %d in %ds",
                         sy, scanFail, try, SCAN_RETRIES, SCAN_RETRY_WAIT))
                     sleep(SCAN_RETRY_WAIT)
-                    rawOres, scanFail = scanSector()
+                    rawOres, scanFail, outsideLease, levelCensus = scanSector(i)
                     if not scanFail then
                         print(string.format("[SCAN] Level Y=%d ran on retry %d", sy, try))
                         break
@@ -2849,7 +2920,8 @@ local function mineJob(job)
                 { minY = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS,
                   maxY = SCAN_LEVELS[1] + SCAN_RADIUS },
                 { at = os.epoch("utc"), surveyOnly = surveyMode == true,
-                  countsAre = "blocks" }))
+                  countsAre = "blocks" },
+                sectorCensus))
 
         msg = waitSectorResponse(jobId)
         if not msg then

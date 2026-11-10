@@ -1224,7 +1224,7 @@ function(assert_eq)
     local src = f:read("*a")
     f:close()
 
-    local scanAt = src:find("local function scanSector%(%)")
+    local scanAt = src:find("local function scanSector%([%w_]*%)")
     assert_eq(scanAt ~= nil, true, "scanSector moved or vanished")
 
     -- Record BEFORE place, the whole point of Invariant D's ordering: a crash
@@ -1313,7 +1313,7 @@ function(assert_eq)
     -- into scanSector, which also mentions SCANNER_NAME, so the identity
     -- assertion below passed even with the check deleted -- a green test
     -- proving nothing, caught only because the mutation run is mandatory.
-    local endAt = src:find("local function scanSector%(%)", defAt)
+    local endAt = src:find("local function scanSector%([%w_]*%)", defAt)
     assert_eq(endAt ~= nil and endAt > defAt, true,
         "could not bound recoverPlacedScanner's body")
     local body = src:sub(defAt, endAt - 1)
@@ -1923,7 +1923,7 @@ function(assert_eq)
     local src = f:read("*a")
     f:close()
 
-    local defAt = src:find("local function scanSector%(%)")
+    local defAt = src:find("local function scanSector%([%w_]*%)")
     assert_eq(defAt ~= nil, true, "scanSector moved or vanished")
     local endAt = src:find("\nend\n", defAt, true)
     assert_eq(endAt ~= nil, true, "could not bound scanSector")

@@ -1412,4 +1412,60 @@ function mine_flow.resumeDecision(facts)
     return "resume"
 end
 
+--- The slice of Y this scan level OWNS, so a census can count every block once.
+---
+--- Returns minY, maxY inclusive, or nil for a level that is not in the list.
+---
+--- WHY IT EXISTS. The Tier 1 census counts every block, not just ore, and the
+--- scan levels overlap: at radius 16 the levels 16, 0, -32 and -52 reach
+--- 0..32, -16..16, -48..-16 and -68..-36, so most of the column is seen two or
+--- three times. Ore gets away with deduplicating by exact position because
+--- there are tens of it; a census would be tens of THOUSANDS of positions per
+--- sector, which is neither cheap to carry nor cheap to compare.
+---
+--- So the levels are given non-overlapping slices instead. Each level keeps the
+--- part of its reach that no SHALLOWER level already covers, which tiles the
+--- whole band -68..32 exactly once with no position bookkeeping at all:
+---
+---     level  16  reach    0..32    owns    0..32
+---     level   0  reach  -16..16    owns  -16..-1
+---     level -32  reach  -48..-16   owns  -48..-17
+---     level -52  reach  -68..-36   owns  -68..-49
+---
+--- Derived from the list and the radius, never written out: a literal table
+--- would silently stop tiling the day either changes, and a census that
+--- double-counts is worse than no census, because it looks like data.
+---
+--- The list is assumed to be in descending order, which is how SCAN_LEVELS is
+--- written and the order the miner scans in (shallowest first). A level deeper
+--- than the one before it would make the slices nonsense, so that is refused
+--- rather than guessed at.
+function mine_flow.censusBand(i, levels, radius)
+    if type(levels) ~= "table" or type(radius) ~= "number" then return nil end
+    local sy = levels[i]
+    if type(sy) ~= "number" then return nil end
+    for k = 2, #levels do
+        if type(levels[k]) ~= "number" or type(levels[k - 1]) ~= "number"
+           or levels[k] >= levels[k - 1] then
+            return nil   -- not descending: the slices below would not tile
+        end
+    end
+    -- ONE RULE: keep your whole reach downwards, and stop where the level above
+    -- you started. That tiles the column exactly once, because each level
+    -- reaches deeper than the one above it.
+    --
+    -- My first attempt capped the top at the shallower level's REACH floor
+    -- rather than at the part it actually OWNS, and separately tried to raise
+    -- the bottom to meet the level below. The coverage check printed 31 Y
+    -- values owned by nobody -- which is why that check exists and why a census
+    -- that double-counts or skips is worse than none: it looks like data.
+    local bottom = sy - radius
+    local top = sy + radius
+    if i > 1 then
+        top = math.min(top, (levels[i - 1] - radius) - 1)
+    end
+    if top < bottom then return nil end
+    return bottom, top
+end
+
 return mine_flow

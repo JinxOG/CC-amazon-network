@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.163"
+proto.VERSION = "1.9.164"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -463,8 +463,15 @@ end
 --     needs item yields, which depend on the ore and on fortune. The card
 --     allows either publishing block counts and saying so plainly, or carrying
 --     the conversion. This publishes blocks and says so: `taken.countsAre`.
+--   TIER 1 CENSUS -- `census` is name -> block count for EVERY block in the
+--     sector's band, not just ore, which is what a build planner actually needs
+--     ("mostly removing the isOre filter", per the design). Each block is
+--     counted exactly once: the scan levels own disjoint slices of Y
+--     (mine_flow.censusBand), so nothing is deduplicated by position and
+--     nothing is double-counted. Measured size, 2026-09: 114 entries per
+--     sector, 3,924 bytes raw and 1,082 with names interned.
 function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, minedOres,
-                                 unreachable, band, taken)
+                                 unreachable, band, taken, census)
     return {
         jobId      = jobId,
         sectorX    = sectorX,
@@ -475,6 +482,7 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         unreachable = unreachable,   -- { belowFloor, outsideLease, floorY } or nil
         band        = band,          -- { minY, maxY } or nil
         taken       = taken,         -- { at, surveyOnly, countsAre } or nil
+        census      = census,        -- name -> block count for the band, or nil
     }
 end
 

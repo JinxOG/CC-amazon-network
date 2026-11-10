@@ -739,7 +739,7 @@ function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
     local src = f:read("*a"); f:close()
 
-    local from, to = src:find("local function scanSector%(%).-\nend\n")
+    local from, to = src:find("local function scanSector%([%w_]*%).-\nend\n")
     assert_eq(from ~= nil, true, "scanSector moved or was renamed")
     local body = src:sub(from, to)
 
@@ -775,7 +775,7 @@ function(assert_eq)
     local callAt = src:find("local rawOres, scanFail", 1, true)
     assert_eq(callAt ~= nil, true,
         "the caller must take scanSector's reason, not just its list")
-    local tail = src:sub(callAt, callAt + 2000)
+    local tail = src:sub(callAt, callAt + 3500)   -- the loop head grew: the census accumulates here too
     assert_eq(tail:find("abort = string.format(\"scan_level_incomplete", 1, true) ~= nil, true,
         "an unclearable refusal must set abort, so the sector is NOT reported "
         .. "done and the server re-queues it")
@@ -885,6 +885,48 @@ function(assert_eq)
     -- per-level list, or it would carry the same overlap it exists to correct.
     assert_eq(src:find("for _, n in pairs(sectorFound) do sectorNew = sectorNew + n end", 1, true) ~= nil, true,
         "the sector total must come from sectorFound, the tally that is sent")
+end
+
+-- SCANSECTOR'S SECOND RETURN IS THE FAILURE REASON, AND ONLY THAT.
+--
+-- 1.9.162 returned `reachable, dropped` from the success path, putting the
+-- outside-lease COUNT where the caller reads scanFail. About 6% of every scan
+-- sits outside the lease, so almost every successful scan then looked like a
+-- refusal: three retries, "scan_level_incomplete", sector abandoned -- every
+-- sector, every job. It shipped, and the below-floor scenario caught it by
+-- taking 12 simulated hours to not finish one sector where it had taken 0.3.
+--
+-- The guard is structural rather than a comment: on the success path slot 2
+-- must be the literal nil, and every refusal must put a STRING there.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["scanSector keeps its second return for the failure reason alone (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+    -- string.char(10) rather than an escape, which is this file's own
+    -- convention a few tests up: a literal newline inside the pattern ends
+    -- the Lua string instead of matching one, and that is exactly how this
+    -- test first failed to load.
+    local NL2 = string.char(10)
+    local body = src:match("local function scanSector%([%w_]*%).-" .. NL2 .. "end" .. NL2)
+    assert_eq(body ~= nil, true, "scanSector moved or was renamed")
+
+    -- The success path says nil in slot 2, explicitly.
+    assert_eq(body:find("return reachable, nil,", 1, true) ~= nil, true,
+        "the success path must put nil in the reason slot, not a count -- a "
+        .. "number there is truthy and every scan reads as a refusal")
+
+    -- And nothing returns a bare second value that is not a string reason.
+    for rest in body:gmatch("return {},%s*([^" .. NL2 .. "]*)") do
+        assert_eq(rest:find('^"[%w_]+"') ~= nil, true,
+            "every refusal must return a quoted reason string, got: " .. rest)
+    end
+
+    -- The caller reads the slots in that order, so a future reshuffle breaks
+    -- here rather than in a sector that silently abandons itself.
+    assert_eq(src:find("local rawOres, scanFail, outsideLease, levelCensus = scanSector(i)", 1, true) ~= nil, true,
+        "the caller must read ores, reason, outside-lease count, census in that order")
 end
 
 return suite
