@@ -5,7 +5,7 @@ kind: ruling
 subject: Resume for delivery and support: DEFERRED until after the shakeout; the freeze stays
 date: 2026-11-10
 re: docs/mail/2026-11-09-W1-to-SPEC-OWNER-resume-after-restart-where-does-the-shared-decision-live-giv.md
-status: open
+status: closed
 ---
 
 # Resume for delivery and support: DEFERRED until after the shakeout; the freeze stays
