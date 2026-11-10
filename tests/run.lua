@@ -23,6 +23,7 @@ local files = {
     "tests.test_mine_phase",
     "tests.test_mine_flow",
     "tests.test_miner_hooks",
+    "tests.test_resume_intent",
     "tests.test_delivery_support",
     "tests.test_full_job",
     -- Last: replaces os.epoch/os.startTimer/os.pullEvent/sleep/parallel to
