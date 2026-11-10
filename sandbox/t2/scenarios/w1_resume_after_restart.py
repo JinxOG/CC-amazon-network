@@ -31,7 +31,16 @@ the gap from boot to mining again is the round trip.
 """
 NAME = "w1_resume_after_restart"
 
-ZONE = {"x1": 1952, "z1": -2624, "x2": 1952, "z2": -2624, "minerCount": 1}
+# (1920,-2624), NOT (1952,-2624). The sector next door is the one my own
+# below-floor work proved holds nothing a miner may dig: 77 ores at the
+# Y=-52 level, every one of them beneath the -58 floor, so it surveys,
+# mines 0 and never enters the MINING phase at all. Run w1-resume-b sat for
+# two hours and failed on exactly that -- "reached the MINING phase before
+# the reboot (0 lines)" -- which was my mistake in picking the zone, not
+# anything about the fix. (1920,-2624) holds 2013 ores at Y=16, the FIRST
+# scan level, measured in run w1_skip_reason-1102-101833, so a miner is
+# mining within a minute or two of arriving.
+ZONE = {"x1": 1920, "z1": -2624, "x2": 1920, "z2": -2624, "minerCount": 1}
 MINING = "phase: MINING"
 RESUMED = "resuming sector ("          # the miner's own print; its radio copy can be eaten mid-recovery
 WENT_HOME = "going home: "
