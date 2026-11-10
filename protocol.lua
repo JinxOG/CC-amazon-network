@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.165"
+proto.VERSION = "1.9.166"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -470,8 +470,16 @@ end
 --     (mine_flow.censusBand), so nothing is deduplicated by position and
 --     nothing is double-counted. Measured size, 2026-09: 114 entries per
 --     sector, 3,924 bytes raw and 1,082 with names interned.
+--   TIER 2 COORDINATES -- `watch` carries the exact positions of WATCHLISTED
+--     materials only, packed at 3 bytes each relative to the sector corner and
+--     the band floor it names. The watchlist is load-bearing rather than a
+--     refinement: the design measured every ore type at ~19 KB a sector against
+--     ~2-4 KB for three or four materials, against a hard 128 KB store cap, and
+--     one mine order routinely covers 12 sectors. `refused` is how many the cap
+--     turned away, because a survey that drops coordinates silently is worse
+--     than one that says it dropped them.
 function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, minedOres,
-                                 unreachable, band, taken, census)
+                                 unreachable, band, taken, census, watch)
     return {
         jobId      = jobId,
         sectorX    = sectorX,
@@ -483,6 +491,7 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         band        = band,          -- { minY, maxY } or nil
         taken       = taken,         -- { at, surveyOnly, countsAre } or nil
         census      = census,        -- name -> block count for the band, or nil
+        watch       = watch,         -- { packed, kept, refused, bytesPerBlock, originX/Y/Z } or nil
     }
 end
 

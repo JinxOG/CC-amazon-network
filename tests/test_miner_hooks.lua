@@ -925,8 +925,12 @@ function(assert_eq)
 
     -- The caller reads the slots in that order, so a future reshuffle breaks
     -- here rather than in a sector that silently abandons itself.
-    assert_eq(src:find("local rawOres, scanFail, outsideLease, levelCensus = scanSector(i)", 1, true) ~= nil, true,
-        "the caller must read ores, reason, outside-lease count, census in that order")
+    -- Matched as a PREFIX: the list grew a fifth value when Tier 2 started
+    -- returning watchlisted positions. What must not change is that ores come
+    -- first and the REASON second -- everything after is extra data, and a
+    -- count landing in slot 2 is the bug this test exists for.
+    assert_eq(src:find("local rawOres, scanFail, outsideLease, levelCensus", 1, true) ~= nil, true,
+        "the caller must read ores, then the reason, then the extras in order")
 end
 
 return suite

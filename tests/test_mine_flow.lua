@@ -2322,6 +2322,72 @@ return {
     -- each level at the shallower level's REACH floor instead of the part that
     -- level actually OWNS, and separately tried to raise the bottom to meet the
     -- level below. The coverage assertion here is what caught it.
+    -- ─── Tier 2: watchlisted coordinates, packed ─────────────────────
+    --
+    -- The design measured why this is packed and capped: ~4,800 indexed blocks
+    -- per sector cost ~287 KB as naive tables and ~19 KB at 4 bytes each, and a
+    -- narrow watchlist brings it to ~2-4 KB against a hard 128 KB store cap
+    -- that is "refused rather than exceeded".
+    ["packCoords packs three bytes a block, relative to the sector"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local packed, kept, dropped = flow.packCoords({
+            { x = 1936, y = -68, z = -2640 },   -- the sector's low corner, band floor
+            { x = 1967, y = 32,  z = -2609 },   -- its high corner, band top
+        }, 1952, -2624, -68)
+        assert_eq(kept, 2)
+        assert_eq(dropped, 0)
+        assert_eq(#packed, 6, "three bytes per block and not a byte more")
+        -- The low corner must encode as all zeroes: that is what "relative"
+        -- means, and it is the one case that proves the origin is right.
+        assert_eq(packed:byte(1), 0, "dx of the low corner")
+        assert_eq(packed:byte(2), 0, "dz of the low corner")
+        assert_eq(packed:byte(3), 0, "dy at the band floor")
+        -- And the far corner at the top of its ranges.
+        assert_eq(packed:byte(4), 31, "dx of the high corner, 32 wide")
+        assert_eq(packed:byte(5), 31, "dz of the high corner")
+        assert_eq(packed:byte(6), 100, "dy at the band top, a 101-block band")
+    end,
+
+    -- Out of range is DROPPED, never wrapped. A wrapped coordinate is a block
+    -- confidently reported in the wrong place, which is worse than a missing
+    -- one -- and the ranges are exactly the sector and band the survey claims.
+    ["packCoords drops what it cannot represent rather than wrapping it"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local _, kept, dropped = flow.packCoords({
+            { x = 1952, y = 0, z = -2624 },     -- inside
+            { x = 1900, y = 0, z = -2624 },      -- west of the sector
+            { x = 2000, y = 0, z = -2624 },      -- east of it
+            { x = 1952, y = -200, z = -2624 },   -- below the band
+            { x = 1952, y = 999, z = -2624 },    -- above it
+        }, 1952, -2624, -68)
+        assert_eq(kept, 1, "only the one inside")
+        assert_eq(dropped, 4, "and every other is counted, not silently lost")
+    end,
+
+    -- The cap is refused rather than exceeded, and says how many it refused.
+    ["packCoords honours its cap and reports what it turned away"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local blocks = {}
+        for i = 0, 9 do blocks[#blocks + 1] = { x = 1936 + i, y = 0, z = -2640 } end
+        local packed, kept, dropped = flow.packCoords(blocks, 1952, -2624, -68, 4)
+        assert_eq(kept, 4)
+        assert_eq(dropped, 6, "the cap refuses the rest and counts them")
+        assert_eq(#packed, 12)
+    end,
+
+    ["packCoords survives nonsense without raising"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local p1, k1, d1 = flow.packCoords(nil, 0, 0, 0)
+        assert_eq(p1, ""); assert_eq(k1, 0); assert_eq(d1, 0)
+        local _, k2 = flow.packCoords({ { x = 1, y = 1, z = 1 } }, nil, 0, 0)
+        assert_eq(k2, 0, "no sector means nothing can be made relative to it")
+        local _, k3, d3 = flow.packCoords({ {} }, 1952, -2624, -68)
+        assert_eq(k3, 0); assert_eq(d3, 1, "a block with no coordinates is dropped")
+    end,
+
     ["censusBand tiles the real scan geometry with no gap and no overlap"] =
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())

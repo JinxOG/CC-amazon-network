@@ -1468,4 +1468,60 @@ function mine_flow.censusBand(i, levels, radius)
     return bottom, top
 end
 
+--- TIER 2 of the ore index: watchlisted block coordinates, packed.
+---
+--- Returns packed, kept, dropped. `packed` is a byte string of 3 bytes per
+--- block, `kept` how many went in, `dropped` how many the cap refused.
+---
+--- WHY PACKED AND WHY CAPPED. The design measured the alternatives at ~4,800
+--- indexed blocks per sector: naive {name=,x=,y=,z=} tables cost ~287 KB,
+--- while 4 bytes per block costs ~19 KB, and a narrow watchlist of 3-4
+--- materials brings that to ~2-4 KB. The watchlist is load-bearing rather than
+--- a refinement -- indexing every ore type costs 5-9x a narrow one -- and the
+--- store has a hard 128 KB cap that is "refused rather than exceeded". So this
+--- refuses too, and reports what it refused, which is condition 6's rule
+--- applied to itself: a survey that silently drops half its coordinates is
+--- worse than one that says it dropped them.
+---
+--- THE PACKING. Coordinates are stored RELATIVE to the sector, which is what
+--- makes 3 bytes enough: dx and dz are 0..31 inside a 32-wide sector, and dy is
+--- an offset from the band floor, 0..100 for the real geometry. Byte 1 is
+--- dx*8 + (dy >> 4) is NOT used -- the layout is deliberately the simple one,
+--- one byte each for dx, dz and dy, because a bit-packed layout saves one byte
+--- per block and costs a reader that has to agree with this exactly. At 3 bytes
+--- a narrow watchlist is already ~2-3 KB per sector.
+---
+--- Anything outside those ranges is DROPPED, not wrapped. A wrapped coordinate
+--- is a block confidently reported in the wrong place, which is worse than a
+--- missing one -- and the ranges are exactly the sector and the band the survey
+--- already says it covers.
+function mine_flow.packCoords(blocks, sx, sz, bandLo, cap)
+    if type(blocks) ~= "table" then return "", 0, 0 end
+    if type(sx) ~= "number" or type(sz) ~= "number" or type(bandLo) ~= "number" then
+        return "", 0, 0
+    end
+    cap = tonumber(cap) or 4096
+    -- The sector's own corner: sx,sz are its CENTRE and it is 32 wide, so the
+    -- low corner is 16 west and 16 north of it -- the same arithmetic
+    -- proto.leaseBounds uses, kept here rather than imported because mine_flow
+    -- must stay loadable without the protocol.
+    local x0, z0 = sx - 16, sz - 16
+    local out, kept, dropped = {}, 0, 0
+    for _, b in ipairs(blocks) do
+        if kept >= cap then
+            dropped = dropped + 1
+        else
+            local dx, dz, dy = (b.x or -1) - x0, (b.z or -1) - z0, (b.y or -1) - bandLo
+            if dx >= 0 and dx <= 31 and dz >= 0 and dz <= 31
+               and dy >= 0 and dy <= 255 then
+                out[#out + 1] = string.char(dx, dz, dy)
+                kept = kept + 1
+            else
+                dropped = dropped + 1
+            end
+        end
+    end
+    return table.concat(out), kept, dropped
+end
+
 return mine_flow

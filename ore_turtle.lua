@@ -64,6 +64,26 @@ local SCAN_RADIUS  = 16    -- geo scanner radius (blocks)
 -- shared shaft, so the level is retried before the sector is given up. Three
 -- tries five seconds apart: long enough for a transit, short enough that a
 -- parked turtle is not waited on for minutes.
+-- TIER 2 WATCHLIST: the materials whose exact coordinates are indexed.
+--
+-- A PLACEHOLDER FOR THE USER TO SET, and deliberately narrow. The design
+-- measured why: at ~4,800 indexed blocks per sector, every ore type costs
+-- ~19 KB against ~2-4 KB for three or four materials, so the watchlist "buys
+-- back most of an order of magnitude in sectors retained" against a hard
+-- 128 KB cap. Indexing everything would thrash eviction before one mine order
+-- finished, since a single order routinely covers 12 sectors.
+--
+-- These three are a reasonable default for build inputs, not a considered
+-- choice of the user's priorities -- that is theirs to make, and changing this
+-- list is the whole of it.
+local WATCHLIST = {
+    ["minecraft:iron_ore"]            = true,
+    ["minecraft:deepslate_iron_ore"]  = true,
+    ["minecraft:copper_ore"]          = true,
+    ["minecraft:deepslate_copper_ore"] = true,
+}
+local WATCH_CAP = 4096   -- blocks per sector; refused rather than exceeded
+
 local SCAN_RETRIES    = 3
 local SCAN_RETRY_WAIT = 5
 local SCANNER_NAME = equipment.ITEMS.SCANNER
@@ -1418,6 +1438,7 @@ local function scanSector(levelIndex)
     -- inline. The Y band already excludes most of the column before any of
     -- them run, which is the cheapest filter available and so goes first.
     local census, censusTotal = {}, 0
+    local watched = {}
     local bandLo, bandHi = mine_flow.censusBand(levelIndex, SCAN_LEVELS, SCAN_RADIUS)
     local lz = geofence.lease()
     local lx1 = lz and lz.x1 or -math.huge
@@ -1434,6 +1455,12 @@ local function scanSector(levelIndex)
                     local n = b.name
                     census[n] = (census[n] or 0) + 1
                     censusTotal = censusTotal + 1
+                    -- TIER 2, in the SAME pass. The census already walks every
+                    -- block inside the lease and band; a second loop for the
+                    -- watchlist would double the one expensive thing here.
+                    if WATCHLIST[n] then
+                        watched[#watched + 1] = { x = wx, y = wy, z = wz }
+                    end
                 end
             end
         end
@@ -1467,7 +1494,7 @@ local function scanSector(levelIndex)
     -- "scan_level_incomplete", then the sector abandoned. Every sector, every
     -- job. The below-floor scenario caught it by running 12 simulated hours
     -- without the miner finishing one sector, where it had taken 0.3.
-    return reachable, nil, dropped, census
+    return reachable, nil, dropped, census, watched
 end
 
 -- ── Mining ───────────────────────────────────────────────────────────────────
@@ -2691,6 +2718,9 @@ local function mineJob(job)
         -- TIER 1 CENSUS for the whole sector: name -> block count, each block
         -- counted once because the levels own disjoint slices of Y.
         local sectorCensus = {}
+        -- TIER 2: watchlisted block positions for the whole sector, packed and
+        -- sent once at the end rather than per level.
+        local sectorWatched = {}
         local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
         local abort       = nil  -- non-nil once the sector must be abandoned
         -- RESUME AT THE LEVEL WE REACHED, not at the first one. Redoing the
@@ -2768,10 +2798,13 @@ local function mineJob(job)
             -- about. Best-effort -- a failed write only costs a re-scan.
             pcall(loader_state.setOrder, { jobId = jobId, sx = sx, sz = sz,
                                            surveyMode = surveyMode, level = i })
-            local rawOres, scanFail, outsideLease, levelCensus = scanSector(i)
+            local rawOres, scanFail, outsideLease, levelCensus, levelWatched = scanSector(i)
             sectorOutsideLease = sectorOutsideLease + (outsideLease or 0)
             for name, n in pairs(levelCensus or {}) do
                 sectorCensus[name] = (sectorCensus[name] or 0) + n
+            end
+            for _, w in ipairs(levelWatched or {}) do
+                sectorWatched[#sectorWatched + 1] = w
             end
             -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE. scanSector
             -- used to hand back a bare empty list from seven different refusals,
@@ -2795,7 +2828,7 @@ local function mineJob(job)
                         "[SCAN] Level Y=%d did not run (%s) — retry %d of %d in %ds",
                         sy, scanFail, try, SCAN_RETRIES, SCAN_RETRY_WAIT))
                     sleep(SCAN_RETRY_WAIT)
-                    rawOres, scanFail, outsideLease, levelCensus = scanSector(i)
+                    rawOres, scanFail, outsideLease, levelCensus, levelWatched = scanSector(i)
                     if not scanFail then
                         print(string.format("[SCAN] Level Y=%d ran on retry %d", sy, try))
                         break
@@ -2935,7 +2968,25 @@ local function mineJob(job)
                   maxY = SCAN_LEVELS[1] + SCAN_RADIUS },
                 { at = os.epoch("utc"), surveyOnly = surveyMode == true,
                   countsAre = "blocks" },
-                sectorCensus))
+                sectorCensus,
+                (function()
+                    -- Packed against the band floor the survey already reports,
+                    -- so a reader needs nothing this payload does not carry.
+                    local lo = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS
+                    local packed, kept, over =
+                        mine_flow.packCoords(sectorWatched, sx, sz, lo, WATCH_CAP)
+                    if kept == 0 and over == 0 then return nil end
+                    if over > 0 then
+                        print(string.format(
+                            "[SCAN] Watchlist cap reached: %d coordinates kept, "
+                            .. "%d refused -- a survey that drops coordinates "
+                            .. "silently is worse than one that says so",
+                            kept, over))
+                    end
+                    return { packed = packed, kept = kept, refused = over,
+                             bytesPerBlock = 3, originX = sx - 16, originZ = sz - 16,
+                             originY = lo }
+                end)()))
 
         msg = waitSectorResponse(jobId)
         if not msg then
