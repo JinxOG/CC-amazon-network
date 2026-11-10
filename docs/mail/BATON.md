@@ -1,6 +1,6 @@
 # The baton
 
-**Holder: W1 — Resource Intelligence. Since 2026-11-09** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09).
+**Holder: W3 — Fleet & Dispatch. Since 2026-11-10** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09; W1 11-09 to 11-10, resume-after-restart).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
 working through the holder's cards on the board until they are Done. **Next goal: the shakeout stress test**
