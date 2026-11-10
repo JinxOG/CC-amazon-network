@@ -430,6 +430,10 @@ S_RETRY  = S_LEVEL
 C_SLOT   = "ore that lands in a reserved slot is still dumped (SOURCE-ONLY, weaker)"
 M_CRASH  = "a miner flushes its log before rebooting after a crash"
 A_DIR    = "adjacentDir refuses anything that is not exactly one cell on one axis"
+R_ONE    = "resumeDecision names exactly one reason for each way home"
+R_ORDER  = "resumeDecision reports the most fundamental reason when several apply"
+R_EMPTY  = "resumeDecision sends a turtle with no facts home, not onward"
+R_OK     = "resumeDecision lets a healthy miner carry on where it stands"
 A_FACE   = "adjacentDir names the face for each of the six neighbours"
 A_MALF   = "adjacentDir treats a malformed position or ore as not adjacent"
 A_SAFE   = ("the adjacent dig identifies the block, refuses a turtle, and otherwise "
@@ -515,6 +519,43 @@ MUTANTS = [
      [('                for try = 1, SCAN_RETRIES do', '                for try = 1, 0 do')], S_RETRY),
 
     # ── Digging an ore we already stand beside (adjacent-block dig card) ───
+    # ── Resume where it stands after a reboot (resume-after-restart card) ──
+    ("a recalled job is resumed", "mine_flow.lua",
+     [('    if f.recalled then return "home", "job_recalled" end',
+       '')], R_ONE),
+
+    ("a turtle with no position fix carries on anyway", "mine_flow.lua",
+     [('    if not f.hasFix then return "home", "no_position_fix" end',
+       '')], R_ONE),
+
+    ("an unmeasured facing is good enough to resume on", "mine_flow.lua",
+     [('    if not f.facingKnown then return "home", "facing_not_measured" end',
+       '')], R_ONE),
+
+    ("a miner that cannot afford the flight home stays out", "mine_flow.lua",
+     [('    if fuel < toReturn then return "home", "fuel_cannot_return" end',
+       '')], R_ONE),
+
+    ("a sector it cannot finish is started anyway", "mine_flow.lua",
+     [('    if fuel < toWork then return "home", "fuel_cannot_finish_sector" end',
+       '')], R_ONE),
+
+    ("a loader that is not where the record says is ignored", "mine_flow.lua",
+     [('    if f.loaderFound == false then return "home", "loader_not_found" end',
+       '')], R_ONE),
+
+    ("no loader placed is treated as a missing loader", "mine_flow.lua",
+     [('    if f.loaderFound == false then return "home", "loader_not_found" end',
+       '    if not f.loaderFound then return "home", "loader_not_found" end')], R_OK),
+
+    ("the recall only counts when a job came with it", "mine_flow.lua",
+     [('    if f.recalled then return "home", "job_recalled" end',
+       '    if f.recalled and f.jobId then return "home", "job_recalled" end')], R_ORDER),
+
+    ("a turtle with no facts at all resumes", "mine_flow.lua",
+     [('    local f = facts or {}',
+       '    local f = facts or { hasFix = true, facingKnown = true, jobId = "x", slotsOk = true }')], R_EMPTY),
+
     ("its own cell counts as adjacent", "mine_flow.lua",
      [('    if math.abs(dx) + math.abs(dy) + math.abs(dz) ~= 1 then return nil end',
        '    if math.abs(dx) + math.abs(dy) + math.abs(dz) > 1 then return nil end')], A_DIR),
