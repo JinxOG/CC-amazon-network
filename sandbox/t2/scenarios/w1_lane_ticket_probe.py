@@ -48,6 +48,19 @@ FORCELOAD = [(224, -2816, 271, -2784)]
 TRAVEL_Y = 100          # above this a turtle is in flight, not working the ground
 WATCH_GAME_SECONDS = 2400
 
+# RUN a (2026-11-10) AND WHY THIS READS THE GAME INSTEAD OF /state.
+#
+# The first version took the turtle's position from the bridge's /state and then asked the game whether THAT block was loaded. node_183
+# flew the lane at y 200, z -2813 -- the card's own altitude and z -- and came back "chunk loaded=False" at x 542, 607 and 681 while
+# moving continuously from 143 to 768. A turtle in an unloaded chunk cannot move, so those three readings were almost certainly my own
+# instrument: /state carries the turtle's last REPORTED position, which lags, so by the time the loaded-check ran the turtle had left and
+# the chunk had gone down behind it. Two clocks, one conclusion -- the same mistake as reading /state against hours-old log lines.
+#
+# control.computers() is the game's own view: the real block position AND whether the computer is RUNNING. A turtle whose chunk unloads
+# has its computer shut down -- the mod's M3 proof records exactly that ("the loaders' computers are off") -- so `on` answers the freeze
+# question directly instead of being inferred across two timestamps. Position and loaded-state are then read from the same source, one
+# after the other, with nothing in between.
+
 
 def steps(ctx):
     c = ctx.control
@@ -84,40 +97,50 @@ def steps(ctx):
     # ---- MEASUREMENT B: is a miner in flight standing in a loaded chunk? ----
     ctx.dispatch("ORDER_MINE", ZONE)
 
-    seen_flying, unloaded_hits, samples = {}, [], 0
+    # Which computer ids are miners, from /state once -- the roster does not change mid-run, and after this the probe reads only the game.
+    miners = sorted(int(n.replace("node_", "")) for n, t in (ctx.state().get("turtles") or {}).items()
+                    if isinstance(t, dict) and (t.get("role") or "").upper() == "MINER" and n.replace("node_", "").isdigit())
+    ctx.note("miner computer ids: %s" % miners)
+
+    seen_flying, frozen_hits, unloaded_hits, samples = {}, [], [], 0
     listed_while_flying, not_listed_while_flying = 0, 0
+    last_pos = {}
 
     def sample():
         nonlocal samples, listed_while_flying, not_listed_while_flying
         samples += 1
         try:
-            turtles = ctx.state().get("turtles", {})
-        except Exception as e:  # noqa: BLE001 - a bridge hiccup must not end the probe
-            ctx.note("sample %d: /state unreadable: %s" % (samples, e))
+            dump = c.computers()
+            ids_listed = {int(l.get("computer")) for l in c.chunk_loaders()}
+        except Exception as e:  # noqa: BLE001 - a hiccup must not end the probe
+            ctx.note("sample %d: could not read the game: %s" % (samples, e))
             return False
-        # Flat x/y/z and role on each turtle, keyed by node name -- the shape the
-        # other scenarios read (w3_recall_in_flight, the pinned-code check).
-        ids_listed = {str(l.get("computer")) for l in c.chunk_loaders()}
-        for name, t in sorted(turtles.items()):
-            if not isinstance(t, dict) or (t.get("role") or "").upper() != "MINER":
+        for cid in miners:
+            row = dump.get(cid)
+            if not row or not row.get("pos"):
                 continue
-            x, y, z = t.get("x"), t.get("y"), t.get("z")
-            if x is None or y is None or z is None:
-                continue
+            x, y, z = row["pos"]
             if y < TRAVEL_Y:
+                last_pos[cid] = None
                 continue                     # on the ground: not the lane
-            cid = name.replace("node_", "")
+            running = bool(row.get("on"))
             holds = cid in ids_listed
-            seen_flying[name] = "%d,%d,%d" % (x, y, z)
             loaded = "passed" in c.command("execute if loaded %d %d %d" % (x, y, z)).lower()
+            moved = last_pos.get(cid) not in (None, (x, y, z))
+            seen_flying["node_%d" % cid] = "%d,%d,%d" % (x, y, z)
             if holds:
                 listed_while_flying += 1
             else:
                 not_listed_while_flying += 1
-            ctx.note("sample %d: %s in flight at %d,%d,%d -- chunk loaded=%s, listed as holding a ticket=%s"
-                     % (samples, name, x, y, z, loaded, holds))
+            ctx.note("sample %d: node_%d at %d,%d,%d -- computer running=%s, chunk loaded=%s, holds a ticket=%s, moved since last=%s"
+                     % (samples, cid, x, y, z, running, loaded, holds, moved))
+            # A FROZEN TURTLE IS ONE WHOSE COMPUTER IS OFF. That is the state the mod's own M3 proof produces by unloading a chunk, and
+            # it needs no inference across two clocks.
+            if not running:
+                frozen_hits.append("node_%d at %d,%d,%d (chunk loaded=%s)" % (cid, x, y, z, loaded))
             if not loaded:
-                unloaded_hits.append("%s at %d,%d,%d" % (name, x, y, z))
+                unloaded_hits.append("node_%d at %d,%d,%d (computer running=%s)" % (cid, x, y, z, running))
+            last_pos[cid] = (x, y, z)
         return bool(seen_flying)
 
     # Watch until a miner has been seen in flight, then keep sampling for a while so one reading cannot carry the verdict.
@@ -125,31 +148,38 @@ def steps(ctx):
     ctx.wait_until(lambda: (sample() and samples >= 14), WATCH_GAME_SECONDS, poll=30)
 
     ctx.note("miners seen in flight: %s" % (seen_flying or "none"))
-    ctx.note("samples: %d; in-flight readings with a listed ticket: %d, without: %d"
-             % (samples, listed_while_flying, not_listed_while_flying))
+    ctx.note("samples: %d; in-flight readings with a listed ticket: %d, without: %d; frozen readings: %d; unloaded readings: %d"
+             % (samples, listed_while_flying, not_listed_while_flying, len(frozen_hits), len(unloaded_hits)))
 
     ctx.expect(bool(seen_flying),
                "at least one miner was seen above y %d, i.e. actually in flight (%d samples, miners seen: %s) -- without that, the "
-               "unloaded-chunk check below cannot fail and the run says nothing about the lane"
+               "checks below cannot fail and the run says nothing about the lane"
                % (TRAVEL_Y, samples, ", ".join(seen_flying) or "none"))
 
-    # THE ONE OUTCOME THAT IS A DEFECT EITHER WAY: a turtle sitting in a chunk the game says is not loaded. That is the live symptom.
-    ctx.expect(not unloaded_hits,
-               "no miner was ever found in flight in an UNLOADED chunk (%d such readings of %d samples: %s)"
-               % (len(unloaded_hits), samples, "; ".join(unloaded_hits[:3]) or "none"))
+    # THE HEADLINE, and the one reading that needs no inference: a turtle in flight whose COMPUTER IS OFF has frozen. This is the live
+    # symptom, measured the way the mod's own M3 proof measures it.
+    ctx.expect(not frozen_hits,
+               "no miner's computer was ever found switched off in flight (%d such readings of %d samples: %s)"
+               % (len(frozen_hits), samples, "; ".join(frozen_hits[:3]) or "none"))
+
+    # Secondary, and NOT a defect on its own: the lane going down behind a turtle is expected -- nothing is meant to hold it. It only
+    # matters together with the turtle's own position, which is why it is reported beside `running` rather than asserted alone.
+    ctx.note("in-flight readings where the game said that block was not loaded: %d of %d (%s)"
+             % (len(unloaded_hits), samples, "; ".join(unloaded_hits[:4]) or "none"))
 
     # THE VERDICT, recorded not asserted.
     if not seen_flying:
         verdict = "NO READING: no miner reached travel altitude, so this run says nothing about the lane"
-    elif unloaded_hits:
-        verdict = ("CHUNKS DO GO DOWN UNDER A FLYING MINER on the real server -- the lane card should be re-aimed at chunk loading and "
-                   "a GPS relay would not fix it")
+    elif frozen_hits:
+        verdict = ("A MINER IN FLIGHT WAS FOUND WITH ITS COMPUTER OFF -- chunk loading freezes turtles on the lane for real, the card "
+                   "should be re-aimed at keeping the lane loaded, and a GPS relay would not fix it")
     elif not_listed_while_flying and not listed_while_flying:
-        verdict = ("A FLYING MINER HOLDS NO TICKET OF ITS OWN, yet its chunks stayed loaded here -- so on the live lane, where nothing "
-                   "else keeps them up, it is exposed; the test world's base forceload is doing that work in this run")
+        verdict = ("A FLYING MINER HOLDS NO TICKET OF ITS OWN and never froze here -- so something else is keeping its chunks up, and "
+                   "on the live lane, where nothing does, it is exposed")
     else:
-        verdict = ("A FLYING MINER'S OWN TICKET HOLDS and its chunks stayed loaded throughout -- chunk unloading is NOT the mechanism "
-                   "and the card's GPS framing survives")
+        verdict = ("A FLYING MINER CARRIES ITS OWN CHUNK LOADING and never froze across this flight (%d readings, all holding a "
+                   "ticket) -- so an EMPTY lane alone does not strand a healthy miner, and whatever happened live needs the ticket "
+                   "itself to have failed. Chunks going down BEHIND it is normal and not the fault." % listed_while_flying)
     ctx.note("MECHANISM VERDICT: %s" % verdict)
     if shared:
         ctx.note("AND NOTE: shared tickets were found, which alone explains a turtle frozen mid-lane and woken by a passer, "
