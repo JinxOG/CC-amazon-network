@@ -1,11 +1,11 @@
 # The baton
 
-**Holder: W5 — Bridge & Dashboard. Since 2026-11-09** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09).
+**Holder: W1 — Resource Intelligence. Since 2026-11-09** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
 working through the holder's cards on the board until they are Done. **Next goal: the shakeout stress test**
-(design being written by the spec owner). W5's slow-push card is one of its prerequisites; W1's
-resume-after-restart card is next after it.
+(spec and plan approved 2026-11-09, `docs/superpowers/plans/2026-11-09-shakeout-stress-test.md`). W5's
+slow-push card is done; W1's resume-after-restart card is the last prerequisite. W3 (SHAKEOUT 1) is next.
 
 **Androids are on hold, not retired** (the user, 2026-11-02). The user is building a refresh of the CC Androids
 mod and androids are coming back. Nobody removes, trims or changes an android file or android dashboard entry
@@ -51,3 +51,4 @@ messages. Mail is only for:
 | W1 | W5 | 2026-11-02 | W1's queue is empty (six cards closed, three not startable); the user hands the baton to W5 for its dashboard cards |
 | W5 | W3 | 2026-11-02 | W5's workable cards are done except the slow-push reproduction, which waits for a quiet host; the user hands the baton back to W3 for the disk card and two newly assigned cards |
 | W3 | W5 | 2026-11-09 | W3's cards are all through both layers (ATC, disk, GPS 2, DUMPING facing, inbox leak); the user hands the baton to W5 for the bridge slow-push card, a shakeout prerequisite |
+| W5 | W1 | 2026-11-09 | W5's slow-push card is done (host starvation, not the bridge; eee8bc1); the user hands the baton to W1 for the resume-after-restart card, the last shakeout prerequisite |
