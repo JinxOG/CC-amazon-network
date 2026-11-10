@@ -113,7 +113,17 @@ return {
     local movedDuring, d1, d2 = movedOver(120000)
     sim.results.during_unload = d1 .. " -> " .. d2
     sim.results.phases_during_unload = #phases.lines - ph0
+    -- AND GIVE THE CHUNK BACK, which is the half that decides what the fix has
+    -- to be. If a frozen miner wakes up and carries on, keeping the lane loaded
+    -- is enough. If it does not, the lane needs loading AND something to
+    -- recover the turtles already stranded on it -- which the 24-hour shakeout
+    -- would otherwise discover the hard way, with 160 turtles.
+    --
+    -- clear_forced is the loading model's own undo. Called directly rather than
+    -- through a fault, because the fault list has no "load" verb: chunk_unload
+    -- takes no duration in the simulator (the test server's does).
     local ph1 = #phases.lines
+    sim.sched.loading:clear_forced()
     local movedAfter, a1, a2 = movedOver(300000)
     sim.results.after_unload = a1 .. " -> " .. a2
     sim.results.phases_after_unload = #phases.lines - ph1
