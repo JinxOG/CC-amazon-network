@@ -204,6 +204,26 @@ local function calls(assert_eq, f, ...)
 end
 
 
+-- A turtle that may carry on where it stands. Each resume test overrides the
+-- ONE fact it is about, so a pass cannot come from something else firing.
+--
+-- NONE is needed because `{ jobId = nil }` is not an override in Lua -- the key
+-- simply is not there, so the healthy default survives and the test silently
+-- checks nothing. It did exactly that until the no_job_to_resume case failed
+-- with "expected home, got resume", which is the fixture flaw announcing
+-- itself rather than a branch quietly going uncovered.
+local NONE = {}
+local function HEALTHY_RESUME(over)
+    local f = { hasFix = true, facingKnown = true, recalled = false,
+                jobId = "job_0206", slotsOk = true, fuel = 9000,
+                fuelToReturn = 2000, fuelToWork = 5000, invFull = false,
+                loaderFound = true }
+    for k, v in pairs(over or {}) do
+        if v == NONE then f[k] = nil else f[k] = v end
+    end
+    return f
+end
+
 return {
 
     -- ─── Picking the next ore (the per-ore table.sort, SPEC-OWNER 2026-10-20) ─
@@ -2280,6 +2300,84 @@ return {
     --
     -- The directions are move.face's own, as move.to uses them:
     -- 0 north (-z), 1 east (+x), 2 south (+z), 3 west (-x).
+    -- RESUME WHERE IT STANDS AFTER A REBOOT (resume-after-restart card).
+    --
+    -- A miner that reboots mid-job flies all the way home and back before it
+    -- digs again: measured live on the 2026-11-03 13:02 UTC restart, five
+    -- miners about 2,000 blocks out, ~36 minutes each and nearly all of it the
+    -- round trip. The rule deciding whether it may carry on where it stands has
+    -- nine ways home and lives in mine_flow so it can be checked without a
+    -- world, and so it can be lifted into a shared home unchanged once the spec
+    -- owner rules on where (delivery and support are frozen).
+    ["resumeDecision lets a healthy miner carry on where it stands"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local verdict, why = flow.resumeDecision(HEALTHY_RESUME())
+        assert_eq(verdict, "resume")
+        assert_eq(why, nil, "a resume carries no reason")
+        -- A loader between sectors is nil, not false, and must not send it home.
+        assert_eq(flow.resumeDecision(HEALTHY_RESUME{ loaderFound = NONE }), "resume",
+            "no loader placed is normal between sectors, not a fault")
+    end,
+
+    -- Every way home, each one alone on an otherwise healthy turtle, so a test
+    -- that passes cannot be passing because something else fired.
+    ["resumeDecision names exactly one reason for each way home"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local cases = {
+            { { hasFix = false },      "no_position_fix" },
+            { { facingKnown = false }, "facing_not_measured" },
+            { { recalled = true },     "job_recalled" },
+            { { jobId = NONE },        "no_job_to_resume" },
+            { { slotsOk = false, slotsWhy = "slot_1_must_hold_the_geo_scanner" },
+              "slots:slot_1_must_hold_the_geo_scanner" },
+            { { invFull = true },      "inventory_full" },
+            { { fuel = 1000 },         "fuel_cannot_return" },
+            { { fuel = 3000 },         "fuel_cannot_finish_sector" },
+            { { loaderFound = false }, "loader_not_found" },
+        }
+        for _, c in ipairs(cases) do
+            local verdict, why = flow.resumeDecision(HEALTHY_RESUME(c[1]))
+            assert_eq(verdict, "home", "expected home for " .. c[2])
+            assert_eq(why, c[2])
+        end
+        assert_eq(#cases, 9, "all nine ways home are covered")
+    end,
+
+    -- The ORDER is the design: each test makes the ones after it unanswerable,
+    -- so the first that fires is the honest reason. Without a fix, "can I afford
+    -- the flight" cannot be asked at all -- acting on 0,0,0 is how four miners
+    -- were lost on 2026-10-05.
+    ["resumeDecision reports the most fundamental reason when several apply"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local _, why = flow.resumeDecision(HEALTHY_RESUME{
+            hasFix = false, facingKnown = false, recalled = true, jobId = NONE,
+            slotsOk = false, invFull = true, fuel = 0, loaderFound = false })
+        assert_eq(why, "no_position_fix", "position outranks everything")
+
+        local _, why2 = flow.resumeDecision(HEALTHY_RESUME{
+            recalled = true, jobId = NONE, invFull = true, fuel = 0 })
+        assert_eq(why2, "job_recalled",
+            "a recall outranks a missing job: the recall is an instruction "
+            .. "about a job that may still be re-sent alongside it")
+
+        local _, why3 = flow.resumeDecision(HEALTHY_RESUME{ invFull = true, fuel = 0 })
+        assert_eq(why3, "inventory_full",
+            "a miner that cannot carry what it digs is stuck whatever its fuel")
+    end,
+
+    -- Nothing at all must read as "go home", never as "resume". A reboot that
+    -- lost its facts is exactly where carrying on is most dangerous.
+    ["resumeDecision sends a turtle with no facts home, not onward"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local v1, w1 = flow.resumeDecision(nil)
+        assert_eq(v1, "home"); assert_eq(w1, "no_position_fix")
+        assert_eq(flow.resumeDecision({}), "home")
+    end,
+
     ["adjacentDir names the face for each of the six neighbours"] =
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())

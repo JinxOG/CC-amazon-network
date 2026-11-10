@@ -3979,6 +3979,64 @@ end
 -- ─── Init ────────────────────────────────────────────────────────────────────
 
 -- Boot homing, out of base.init so it can be tested (review #1, release 2).
+-- MAY THIS TURTLE RESUME WHERE IT STANDS? (W1, resume-after-restart card.)
+--
+-- A role installs a predicate BEFORE base.init; nil means "no", which is every
+-- role's behaviour until it says otherwise. It exists because the decision has
+-- to be made in base.init and the facts live in the role: only ore_turtle knows
+-- whether it wrote down a sector order before its loader went into the ground.
+--
+-- WHY IT CANNOT WAIT FOR THE ROLE'S OWN RECOVERY. homeAfterBoot runs inside
+-- base.init, and for a field reboot it sends "recovering: at x,y,z". The server
+-- reads that one string as "this turtle is flying home", requeues the miner's
+-- job and drops the re-send it was holding for the first heartbeat -- measured
+-- in the simulator:
+--     Queuing re-send of job_0001 to rebooted turtle node_11
+--     Re-send of job_0001 to node_11 held for its first heartbeat
+--     node_11 is recovering from a reboot and flying home -- job_0001 requeued
+--     Held re-send of job_0001 to node_11 dropped: no longer its job
+-- All of that happens before ore_turtle's own recovery gets a say, so a miner
+-- that fully intended to resume found its job already given away and stood in
+-- the field with nothing to do. The announcement is the thing that has to be
+-- withheld, and this is the only place it is made.
+--
+-- W1 CHANGING A W3 FILE, said out loud: the card names turtle_base as where
+-- this belongs, the baton ruling of 2026-10-27 is that the holder writes and
+-- runs its own tests rather than relaying, and the alternative was to leave the
+-- last shakeout prerequisite blocked on a one-line hand-off. Mailed to
+-- SPEC-OWNER and W3 with this reasoning.
+local _mayResumeHere = nil
+function base.setResumeIntent(fn) _mayResumeHere = fn end
+
+-- WHAT TO DO IF NO JOB EVER COMES. A role installs fn and a wall-clock gap in
+-- seconds; the job runner calls it while it has nothing to run.
+--
+-- It exists because of a hole the resume-after-restart card opened and could
+-- not close from the role side. A miner that holds position instead of flying
+-- home is waiting for the job the server re-sends on its first heartbeat -- and
+-- if that job was cancelled meanwhile, nothing arrives and nothing ever will.
+-- Measured in the simulator: "Recall-all cancelled 1 unfinished job(s)" then
+-- "Held re-send of job_0001 to node_11 dropped: no longer its job", and the
+-- miner stood in the field indefinitely. It could not even hear the recall,
+-- because boot recovery has its modem swapped out for the chunk loader.
+--
+-- WALL CLOCK, NOT A TIMER, deliberately: parallel.waitForAny consumes os timer
+-- events, so a timer started here would fight the control loop for them and
+-- whole rounds would vanish. Every event the runner already wakes on moves this
+-- forward instead, and heartbeats alone guarantee it runs.
+local _idleFn, _idleMs = nil, 0
+function base.setIdleAction(fn, seconds)
+    _idleFn = fn
+    _idleMs = (tonumber(seconds) or 0) * 1000
+end
+function base.mayResumeHere()
+    if type(_mayResumeHere) ~= "function" then return false end
+    local ok, v = pcall(_mayResumeHere)
+    -- A predicate that raises means the role cannot answer, and "cannot answer"
+    -- must read as no: the old flight home is the safe direction.
+    return ok and v == true
+end
+
 function base.homeAfterBoot()
     -- If not physically at assigned dock, home there now before accepting any jobs.
     -- This corrects position mismatches caused by crashes, reassignments, or reboots.
@@ -4015,9 +4073,22 @@ function base.homeAfterBoot()
             -- docks -- and take back what the ledger says it left out, BEFORE
             -- the first step toward home: the item is beside it now, and every
             -- later step takes it further away.
-            pcall(base.sendProgress, string.format("recovering: at %d,%d,%d", p.x, p.y, p.z))
+            -- THE LEDGER FIRST EITHER WAY. Whatever happens next, anything this
+            -- turtle left on the ground is beside it NOW and every later step
+            -- takes it further away.
             local rok, rerr = pcall(base.recoverLedger)
             if not rok then logWarn("Ledger recovery before flying home failed: " .. tostring(rerr)) end
+            -- A ROLE THAT MAY RESUME SAYS NOTHING YET. "recovering:" is read by
+            -- the server as "flying home" and costs this turtle its job before
+            -- its own recovery has even run. The role decides and announces.
+            if base.mayResumeHere() then
+                logInfo(string.format(
+                    "Rebooted outside building at %d,%d,%d with an order to resume"
+                    .. " — deferring to the role, not announcing a recovery",
+                    p.x, p.y, p.z))
+                return
+            end
+            pcall(base.sendProgress, string.format("recovering: at %d,%d,%d", p.x, p.y, p.z))
             if _self.role == proto.ROLE.MINER then
                 logInfo(string.format(
                     "Miner rebooted outside building at %d,%d,%d — deferring return to job handler",
@@ -4389,9 +4460,19 @@ function base.run(jobHandler)
     -- Job runner: waits for a pending job then executes it
     local function jobRunner()
         while true do
-            -- Wait until a job is assigned
+            -- Wait until a job is assigned, and while waiting give the role a
+            -- chance to decide it has waited long enough (base.setIdleAction).
+            local idleSince = os.epoch("utc")
             while not pendingJob do
                 os.pullEvent()
+                if _idleFn and _idleMs > 0
+                   and (os.epoch("utc") - idleSince) >= _idleMs then
+                    idleSince = os.epoch("utc")
+                    -- pcall'd: an idle action that raises must not take the job
+                    -- runner down with it, or the turtle stops accepting work.
+                    local iok, ierr = pcall(_idleFn)
+                    if not iok then logWarn("Idle action failed: " .. tostring(ierr)) end
+                end
             end
 
             local job = pendingJob

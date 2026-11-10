@@ -1324,4 +1324,92 @@ function mine_flow.adjacentDir(p, ore)
     return "forward", 0
 end
 
+--- After a reboot mid-job: carry on from here, or fly home and say why.
+---
+--- Returns "resume", or "home", reason. The reason is always a single named
+--- string, never a list and never nil: the card asks for WHICH reason, every
+--- time, because the thing it replaces had exactly one behaviour -- go home --
+--- and so told us nothing about why.
+---
+--- WHY THIS EXISTS. A miner that reboots mid-job today recovers correctly and
+--- then flies all the way home and back out before it digs again. Measured
+--- live on the 2026-11-03 13:02 UTC restart, all five miners mid-job, about
+--- 2,000 blocks out: boot recovery at 13:02:56, docked 13:20:42-13:22:07,
+--- departing again 13:21:45-13:26:53, and node_178 did not mine until 13:39:36.
+--- About 36 minutes each, nearly all of it the round trip, every single day.
+---
+--- PURE, AND DELIBERATELY SO. It takes facts and returns a verdict; it reads no
+--- peripheral and moves nothing. ore_turtle cannot be loaded headlessly, so a
+--- rule with eight branches would otherwise only ever be exercised by a whole
+--- simulated world. It also has to be liftable: the user's standing rule is
+--- that restart safeguards are built once for every role, and delivery and
+--- support are frozen, so this will move to a shared home once the spec owner
+--- rules on where. Keeping it free of miner specifics is what makes that a move
+--- rather than a rewrite.
+---
+--- THE CALLER TRIES THE CHEAP REMEDIES FIRST, and this is a correction to the
+--- card's own list. It names "low fuel" and "inventory full" as reasons to go
+--- home; neither is, on a miner. It carries a fuel ender chest and refuels in
+--- the field (checkFuel/refuelFromEC), and it banks to the ore chest in the
+--- field (dumpOres). Flying 2,000 blocks home to do either would be the very
+--- waste this card exists to remove. So `fuel` and `invFull` below describe the
+--- state AFTER those attempts: they mean "it tried and it is still stuck", and
+--- only then is home the right answer.
+---
+--- facts:
+---   hasFix        a MEASURED position, not a journalled one
+---   facingKnown   a MEASURED facing. Never trust the journal: a hand put-back
+---                 looks identical to a crash (see the facing card)
+---   recalled      RECALL or a cancellation arrived, or landed while it was down
+---   jobId         what the server re-sent on re-registration; nil = nothing to
+---                 resume, which is not a fault, just no reason to stay out
+---   slotsOk       the pre-departure slot check, re-run where it stands
+---   slotsWhy      its reason, passed through rather than re-worded
+---   fuel          after any refuel attempt
+---   fuelToReturn  what it needs to reach the arrivals hole from here
+---   fuelToWork    what it needs to finish the sector AND still get home
+---   invFull       after any banking attempt
+---   loaderFound   true/false when a loader is recorded, nil when none is
+function mine_flow.resumeDecision(facts)
+    local f = facts or {}
+
+    -- ORDER IS THE DESIGN. Each test below is a thing that makes the tests
+    -- after it unanswerable, so the first one that fires is the honest reason.
+    -- Position before everything: without a fix, "am I near my sector" and "can
+    -- I afford the flight" are both unanswerable, and acting on 0,0,0 is how
+    -- four miners were lost on 2026-10-05.
+    if not f.hasFix then return "home", "no_position_fix" end
+    if not f.facingKnown then return "home", "facing_not_measured" end
+
+    -- A recalled job must never be resumed -- the card names it as a FAILED IF.
+    -- Checked before the job itself, because a recall is an instruction about a
+    -- job that may still be re-sent alongside it.
+    if f.recalled then return "home", "job_recalled" end
+    if not f.jobId then return "home", "no_job_to_resume" end
+
+    -- Tools and chests next: with these missing the turtle can reach its sector
+    -- and then be unable to scan, bank or refuel, which is worse than coming
+    -- home -- it would work through a zone reporting nothing found.
+    if not f.slotsOk then
+        return "home", "slots:" .. tostring(f.slotsWhy or "unknown")
+    end
+    if f.invFull then return "home", "inventory_full" end
+
+    -- Fuel in two steps, and they are different questions. Enough to get home
+    -- at all comes first: a turtle that cannot afford the flight has to start
+    -- it now, while it still can, not after another sector.
+    local fuel = tonumber(f.fuel) or 0
+    local toReturn = tonumber(f.fuelToReturn) or 0
+    local toWork = tonumber(f.fuelToWork) or 0
+    if fuel < toReturn then return "home", "fuel_cannot_return" end
+    if fuel < toWork then return "home", "fuel_cannot_finish_sector" end
+
+    -- The loader last, because it is the only one with a cheap repair: it is
+    -- standing where the record says, or it is not. nil means none was placed,
+    -- which is normal between sectors and not a fault.
+    if f.loaderFound == false then return "home", "loader_not_found" end
+
+    return "resume"
+end
+
 return mine_flow

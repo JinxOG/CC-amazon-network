@@ -113,6 +113,64 @@ end
 -- Call this only AFTER retrieval is confirmed (the loader is back in
 -- inventory). Clearing early would erase the only record of a loader that
 -- turned out still to be standing in the world.
+-- WHAT THE MINER WAS DOING WHEN IT PLACED THIS LOADER.
+--
+-- Written as a second step rather than as more arguments to record(), because
+-- mine_flow.placeLoader does not know the mining sector -- it knows the chunk
+-- to anchor the fence on, which is the `sector` field above and a different
+-- thing. ore_turtle knows the order, so ore_turtle records it, and
+-- placeLoader's signature stays as it is.
+--
+-- WHY IT IS PERSISTED AT ALL. A miner that reboots mid-job loses its order with
+-- the job coroutine, and the server will not re-send it: on re-registration it
+-- withholds the sector whenever the turtle is not awaiting one, logging
+-- "mid-sector, it already has its order". For a RE_REGISTER (coroutine intact)
+-- that is true. For a reboot it is not -- the order died with the coroutine --
+-- and SECTOR_REQUEST would not recover it either, because the held sector was
+-- removed from the zone's list when it was assigned and lives only in the
+-- server's lastAssignments. So the turtle writes its order down, which makes
+-- the server's assumption true instead of arguing with it.
+--
+-- The lifetime is exactly right without any extra bookkeeping: this record
+-- exists while a loader is placed, and a loader is placed exactly while the
+-- miner is working a sector. clear() takes the order with it on retrieval.
+function loader_state.setOrder(order)
+    local rec = load()
+    if not rec then return false, "no_loader_recorded" end
+    if type(order) ~= "table" or not order.jobId then return false, "no_order" end
+    local updated = {}
+    for k, v in pairs(rec) do updated[k] = v end
+    updated.order = { jobId = order.jobId, sx = order.sx, sz = order.sz,
+                      surveyMode = order.surveyMode == true,
+                      -- WHICH SCAN LEVEL, so a resume does not redo the ones
+                      -- already finished. Without it the sector restarts at
+                      -- level 1 and the re-scan is most of the time a resume
+                      -- still costs: measured 10 minutes from boot to mining
+                      -- again, against the card's bar of 5, with only 2 of
+                      -- those minutes being the loader.
+                      level = tonumber(order.level) or 1 }
+    local f = fs.open(PATH, "w")
+    if not f then return false, "loader_state_write_failed" end
+    f.write(textutils.serialise(updated))
+    f.close()
+    _cache  = updated
+    _loaded = true
+    return true
+end
+
+-- The recorded order, or nil. Records written before this existed have none,
+-- and a miner with no order simply has nothing to resume -- which is the same
+-- answer as "between sectors", and correct in both cases.
+function loader_state.order()
+    local rec = load()
+    local o = rec and rec.order
+    if type(o) == "table" and o.jobId and o.sx and o.sz then
+        o.level = tonumber(o.level) or 1   -- records written before levels existed
+        return o
+    end
+    return nil
+end
+
 function loader_state.clear()
     _cache = nil
     _loaded = true

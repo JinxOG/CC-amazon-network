@@ -1502,9 +1502,15 @@ function(assert_eq)
         "each leg of the flight home must report")
     assert_eq(ascAt < flyAt and flyAt < descAt, true,
         "leg reports must be in flight order")
-    local idleAt = body:find("base%.setStatus%(proto%.STATUS%.IDLE%)")
+    -- The IDLE THAT FOLLOWS THE FLIGHT, found from the return onwards. There is
+    -- now an earlier one: a miner with a recorded sector order holds position
+    -- instead of flying home (the resume-after-restart card) and hands itself
+    -- back as idle where it stands. Searching from the start would find that
+    -- one, and the ordering below would be testing the wrong statement.
+    local idleAt = body:find("base%.setStatus%(proto%.STATUS%.IDLE%)", returnAt)
     assert_eq(idleAt ~= nil, true,
-        "boot recovery must reset status to IDLE or the turtle is never dispatched again")
+        "boot recovery must reset status to IDLE after the flight home, or the "
+        .. "turtle is never dispatched again")
     assert_eq(returnAt < idleAt, true,
         "the IDLE reset must come after the return that set RETURNING")
 

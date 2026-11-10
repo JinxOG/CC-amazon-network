@@ -189,6 +189,20 @@ local oreChestLedger = {
 -- E -- a worker must reach its dock with no server contact at all), so a miner
 -- that cannot talk can still retrieve its loader and stop being a lost turtle
 -- plus a permanently force-loaded chunk.
+-- TELL BASE WE MIGHT NOT BE GOING HOME, before base.init decides for us.
+--
+-- homeAfterBoot runs inside base.init and, for a field reboot, announces
+-- "recovering:" -- which the server reads as "flying home", requeues this
+-- miner's job on, and drops the re-send it was holding. That all happens before
+-- recoverPlacedLoader gets a say, so without this a miner that fully intended
+-- to resume found its job already given away (measured in the simulator:
+-- "Held re-send of job_0001 to node_11 dropped: no longer its job").
+--
+-- The predicate is deliberately the narrowest fact that means "I have somewhere
+-- to go back to": an order written beside the loader record. No order, no
+-- resume, and the old flight home stands.
+base.setResumeIntent(function() return loader_state.order() ~= nil end)
+
 local _commsOk, _commsErr = pcall(base.init, proto.ROLE.MINER)
 if not _commsOk then
     print("[MINER] BOOT DEGRADED: " .. tostring(_commsErr))
@@ -1882,6 +1896,15 @@ local function clearStaleLoaderRecord()
     return false
 end
 
+-- What this miner was doing when it last placed its loader, read off disk by
+-- boot recovery before the retrieval clears it. nil means there is nothing to
+-- resume, which is also the answer between sectors.
+local _resumeOrder = nil
+-- The scan level to resume at, taken from the same record. Cleared as soon as
+-- the level list is built, so it can only ever affect the sector it was read
+-- for.
+local _resumeLevel = nil
+
 local function recoverPlacedLoader()
     if clearStaleLoaderRecord() then return end
     if not loader_state.hasPlaced() then return end
@@ -1934,6 +1957,13 @@ local function recoverPlacedLoader()
         return
     end
 
+    -- READ THE ORDER BEFORE THE RETRIEVAL CLEARS IT. loader_state.clear() takes
+    -- the recorded sector with it, and it is the only copy: the server withholds
+    -- the sector on re-registration whenever the turtle is not awaiting one, and
+    -- the held sector has already left the zone's list, so nothing else knows.
+    _resumeOrder = loader_state.order()
+    _resumeLevel = _resumeOrder and _resumeOrder.level or nil
+
     local ok, reason = retrievePlacedLoader(nil)
     if ok then
         print("[MINER] Loader recovered.")   -- mine_flow cleared the record
@@ -1948,6 +1978,43 @@ local function recoverPlacedLoader()
     -- Chunk loading first, comms later: a failed retrieval can leave us
     -- underground, where the pickaxe is what gets us out. On the success path
     -- retrieveLoader has already put the modem back, so this is a no-op there.
+    -- STAY WHERE WE ARE IF THERE IS A SECTOR TO COME BACK TO.
+    --
+    -- This is the card. Measured live on the 2026-11-03 13:02 UTC restart, all
+    -- five miners mid-job about 2,000 blocks out: recovery at 13:02:56, docked
+    -- 13:20-13:22, departing again 13:21-13:26, and node_178 did not mine again
+    -- until 13:39:36. About 36 minutes each, nearly all of it a round trip to
+    -- fetch a job the server re-sends anyway, every single day.
+    --
+    -- The loader is in the pack by now, not abandoned, which is what makes this
+    -- safe to do: the worst case if no job ever arrives is a turtle idling in
+    -- the field instead of at its dock -- recallable, visible, and carrying its
+    -- own loader -- rather than an orphaned loader force-loading a chunk with
+    -- nothing recording why. The job runner makes the real decision when the
+    -- re-sent job reaches it (mine_flow.resumeDecision), and point 3 of the
+    -- card explicitly allows re-placing the loader on the spot.
+    if ok and _resumeOrder then
+        print(string.format(
+            "[MINER] Boot: holding position for %s sector (%d,%d) instead of "
+            .. "flying home — the server re-sends the job on registration",
+            _resumeOrder.jobId, _resumeOrder.sx, _resumeOrder.sz))
+        base.sendProgress(string.format("holding position to resume %s (%d,%d)",
+            _resumeOrder.jobId, _resumeOrder.sx, _resumeOrder.sz))
+        base.setAutonomousReturn(false)
+        local restoredHere, whyHere = restoreTravelMode()
+        if not restoredHere then
+            -- Travel mode is what the job runner needs to fly to the sector. If
+            -- it cannot be reached, the resume is off and the old flight home is
+            -- the honest fallback.
+            print("[MINER] Cannot restore travel mode where we stand ("
+                .. tostring(whyHere) .. ") — flying home after all")
+            _resumeOrder = nil
+        else
+            base.setStatus(proto.STATUS.IDLE)
+            return
+        end
+    end
+
     local flyable, why2 = prepareToFly()
     if flyable then
         geofence.clear()
@@ -2162,10 +2229,57 @@ local function mineJob(job)
     base.waitForPositionFix("deciding whether this job rebooted mid-flight")
 
     local startPos = base.getPos()
+    local resuming = false
     if not base.isInsideBuilding(startPos) then
-        base.sendProgress("Rebooted mid-job — solo return")
-        recallReturn("reboot_recovery", true)
-        return
+        -- REBOOTED IN THE FIELD. Today this always flew home, and the server
+        -- then re-sent this very job -- 36 minutes per miner on the 2026-11-03
+        -- restart, nearly all of it the round trip. Decide instead, and say
+        -- which single reason sends it home when one does.
+        --
+        -- The facts are gathered here and judged in mine_flow.resumeDecision,
+        -- which is pure and tested without a world: this file cannot be loaded
+        -- headlessly, and a nine-branch rule that only a simulated restart ever
+        -- exercises is a rule nobody can check.
+        --
+        -- loaderFound is nil on purpose: boot recovery has already put the
+        -- loader back in the pack, so there is none standing to find. fuelToWork
+        -- uses the whole-zone estimate, which is more than this one sector
+        -- needs -- erring toward coming home while it still can.
+        local slotsOk, slotsWhy = preflightSlots()
+        local verdict, why = mine_flow.resumeDecision({
+            hasFix       = startPos ~= nil,
+            facingKnown  = base.getFacing() ~= nil,
+            recalled     = base.isRecalled(),
+            jobId        = _resumeOrder and _resumeOrder.jobId or nil,
+            slotsOk      = slotsOk,
+            slotsWhy     = slotsWhy,
+            fuel         = turtle.getFuelLevel(),
+            fuelToReturn = fuelToReturn(),
+            fuelToWork   = fuelForZone(job.params, SKY_Y),
+            invFull      = inventoryFull(),
+            loaderFound  = nil,
+        })
+
+        -- The job the server re-sent must be the job we wrote down. A different
+        -- one means the zone moved on while we were down, and resuming someone
+        -- else's sector is the "mined twice" the card lists as a FAILED IF.
+        if verdict == "resume" and _resumeOrder.jobId ~= jobId then
+            verdict, why = "home", "order_is_for_another_job"
+        end
+
+        if verdict ~= "resume" then
+            print("[MINER] Rebooted mid-job — going home: " .. tostring(why))
+            base.sendProgress("reboot_recovery_home: " .. tostring(why))
+            recallReturn("reboot_recovery: " .. tostring(why), true)
+            return
+        end
+
+        resuming = true
+        print(string.format(
+            "[MINER] Rebooted mid-job — resuming sector (%d,%d) where we stand, "
+            .. "not flying home", _resumeOrder.sx, _resumeOrder.sz))
+        base.sendProgress(string.format("reboot_resume: sector %d,%d",
+            _resumeOrder.sx, _resumeOrder.sz))
     end
     -- ── Pre-departure preflight ──────────────────────────────────────────────
     -- Both checks below MUST run before base.depart, not after it.
@@ -2259,23 +2373,55 @@ local function mineJob(job)
     base.sendProgress("Departing for mining zone")
     reportPhase(proto.PHASE.DEPARTING)
 
-    local ok, err = base.depart(true)  -- stay at floor level, ascend directly
-    if not ok then
-        base.sendFailed("departure_failed: " .. (err or "?"), true)
-        _jobId = nil
-        return
-    end
+    -- A RESUME IS ALREADY OUTSIDE. base.depart leaves the dock building and the
+    -- climb that follows it is the start of the outbound flight; a turtle
+    -- standing at its sector needs neither, and doing them is the round trip
+    -- this card exists to remove.
+    if not resuming then
+        local ok, err = base.depart(true)  -- stay at floor level, ascend directly
+        if not ok then
+            base.sendFailed("departure_failed: " .. (err or "?"), true)
+            _jobId = nil
+            return
+        end
 
-    checkFuel(jobId)
-    local p = base.getPos()
-    base.move.to(p.x, SKY_Y, p.z)
+        checkFuel(jobId)
+        local p = base.getPos()
+        base.move.to(p.x, SKY_Y, p.z)
+    else
+        checkFuel(jobId)
+    end
 
     -- ── Sector loop ──────────────────────────────────────────────────────────
     -- Request first sector. Thereafter: place loader → scan → mine → retrieve
     -- loader → SECTOR_DONE → request next.
 
-    base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
-    local msg = waitSectorResponse(jobId)
+    local msg
+    if resuming then
+        -- THE ORDER WE WROTE DOWN, not one asked for. SECTOR_REQUEST pops the
+        -- next UNHELD sector, and the one this turtle was working left the
+        -- zone's list when it was assigned -- asking would therefore start a
+        -- different sector and silently abandon this one, which is the "sector
+        -- skipped" the card lists as a FAILED IF.
+        --
+        -- Built with the server's own constructor so the payload is identical
+        -- to a real assignment, lease and ceiling included. Hand-rolling it
+        -- would be the one place the fence could quietly go unarmed.
+        --
+        -- SECTOR granularity, and that is worth being precise about: the sector
+        -- restarts at its first scan level, not at the exact ore. Nothing is
+        -- mined twice -- what was already taken is no longer there to find --
+        -- and nothing is skipped, but the scans before the reboot are redone.
+        -- Per-ore resume needs the server's per-sector progress and is a
+        -- separate card.
+        msg = { type = proto.MSG.SECTOR_ASSIGN,
+                payload = proto.payloadSectorAssign(jobId, _resumeOrder.sx,
+                    _resumeOrder.sz, nil, _resumeOrder.surveyMode) }
+        _resumeOrder = nil
+    else
+        base.sendToServer(proto.MSG.SECTOR_REQUEST, proto.payloadSectorRequest(jobId))
+        msg = waitSectorResponse(jobId)
+    end
 
     local useSkyTravel = false  -- true after first mine sector; switches to SKY_Y=200
 
@@ -2420,6 +2566,28 @@ local function mineJob(job)
             return
         end
 
+        -- WRITE DOWN WHAT WE ARE HERE TO DO, now the loader is standing.
+        --
+        -- A reboot mid-sector loses the order with the job coroutine, and the
+        -- server will not re-send it: on re-registration it withholds the
+        -- sector whenever the turtle is not awaiting one ("mid-sector, it
+        -- already has its order"), which is true after a RE_REGISTER and false
+        -- after a reboot. SECTOR_REQUEST cannot recover it either -- the held
+        -- sector left the zone's list when it was assigned. So the order goes
+        -- on disk beside the loader record, whose lifetime is exactly the same:
+        -- placed while this sector is being worked, cleared on retrieval.
+        --
+        -- Not fatal if it fails. A miner with a standing loader and no order
+        -- recorded is where every miner was before this, and boot recovery's
+        -- flight home still covers it; losing the sector is worth less than
+        -- losing the sector AND refusing to mine it.
+        local orderOk, orderWhy = loader_state.setOrder({
+            jobId = jobId, sx = sx, sz = sz, surveyMode = surveyMode })
+        if not orderOk then
+            print("[MINER] WARNING: could not record the sector order: "
+                .. tostring(orderWhy) .. " — a reboot here would fly home")
+        end
+
         -- Scan every depth level; only mine if not in survey mode.
         -- seenOres deduplicates across depth levels: scan spheres overlap
         -- (Y=16 covers Y 0-32, Y=8 covers Y -8 to 24 — 24-block overlap),
@@ -2429,7 +2597,24 @@ local function mineJob(job)
         local sectorMined = {}   -- {[name]=count} actually mined (0 during survey)
         local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
         local abort       = nil  -- non-nil once the sector must be abandoned
+        -- RESUME AT THE LEVEL WE REACHED, not at the first one. Redoing the
+        -- finished levels is most of what a resume still costs: measured 10
+        -- minutes from boot to mining again against the card's bar of 5, and
+        -- only 2 of those minutes were the loader. A level already finished
+        -- holds no ore for us -- it has been dug -- so redoing it is pure
+        -- travel and re-scanning.
+        --
+        -- Built as a LIST rather than a guard inside the loop: the body is
+        -- three hundred lines and wrapping it in an `if` would re-indent all of
+        -- it, which is the kind of diff that hides a real change inside a
+        -- whitespace storm.
+        local todo = {}
         for i, sy in ipairs(SCAN_LEVELS) do
+            if i >= (_resumeLevel or 1) then todo[#todo + 1] = { i = i, sy = sy } end
+        end
+        _resumeLevel = nil
+        for _, lv in ipairs(todo) do
+            local i, sy = lv.i, lv.sy
             if not loaderStillAlive() then
                 handleBeaconLoss()
                 abort = "loader_beacon_lost"
@@ -2480,6 +2665,13 @@ local function mineJob(job)
             base.sendProgress(string.format("%sScanning %d,%d depth %d/%d (Y=%d)",
                 modeTag, sx, sz, i, #SCAN_LEVELS, sy))
             reportPhase(proto.PHASE.SCANNING, string.format("%d,%d Y=%d", sx, sz, sy))
+            -- The level goes on disk as it STARTS, not as it finishes: a reboot
+            -- part-way through a level must redo that level, not skip it. An
+            -- already-dug level simply scans empty, which is cheap; a skipped
+            -- one leaves ore behind, which is the fault this whole card is
+            -- about. Best-effort -- a failed write only costs a re-scan.
+            pcall(loader_state.setOrder, { jobId = jobId, sx = sx, sz = sz,
+                                           surveyMode = surveyMode, level = i })
             local rawOres, scanFail = scanSector()
             -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE. scanSector
             -- used to hand back a bare empty list from seven different refusals,
@@ -2768,6 +2960,17 @@ end
 -- sets a flag for a job runner that is not running. Measured position and
 -- facing first, then the same sky route a recall would take.
 local hok, herr = pcall(function()
+    -- HOLDING POSITION TO RESUME IS NOT "NOTHING TO RECOVER". recoverPlacedLoader
+    -- has just put the loader back in the pack and chosen to stay out, so
+    -- hasPlaced() is false here and this block -- which exists for a miner
+    -- rebooted mid-FLIGHT with nothing to do -- would fly it home anyway and
+    -- undo the whole resume. Found by the simulator: the hold was logged, the
+    -- job runner's resume branch never ran, and a DOCKED line appeared.
+    if _resumeOrder then
+        print("[MINER] Not flying home: holding position to resume "
+            .. tostring(_resumeOrder.jobId))
+        return
+    end
     if loader_state.hasPlaced() then return end
     if base.isInsideBuilding(base.getPos()) then return end
     base.waitForPositionFix("rebooted outside the base with no loader to recover")
@@ -2798,6 +3001,39 @@ end)
 if not hok then
     print("[MINER] Going home after an out-of-base reboot crashed: " .. tostring(herr))
 end
+-- IF THE JOB NEVER COMES BACK, COME HOME. The counterpart to holding position:
+-- a miner that stayed out is waiting for the job the server re-sends on its
+-- first heartbeat, and if that job was cancelled while it was down, nothing
+-- arrives and nothing ever will. Measured in the simulator -- "Recall-all
+-- cancelled 1 unfinished job(s)", then "Held re-send of job_0001 to node_11
+-- dropped: no longer its job" -- and the miner stood in the field
+-- indefinitely. It could not even hear the recall: boot recovery has the modem
+-- swapped out for the chunk loader.
+--
+-- Three minutes, which is several heartbeats and well short of the 36-minute
+-- round trip this card removes. Only ever fires for a turtle that chose to hold
+-- position: _resumeOrder is nil for every other path, so no other behaviour
+-- changes.
+base.setIdleAction(function()
+    if not _resumeOrder then return end
+    if base.isInsideBuilding(base.getPos()) then _resumeOrder = nil; return end
+    local why = base.isRecalled() and "job_recalled" or "no_job_came_back"
+    print("[MINER] Held position for 3 min and no job arrived — going home: " .. why)
+    base.sendProgress("reboot_recovery_home: " .. why)
+    _resumeOrder = nil
+    base.setAutonomousReturn(true)
+    local docked, dockErr = base.returnToDockFromSky()
+    base.setAutonomousReturn(false)
+    if docked == false then
+        print("[MINER] Hold-expiry flight home did NOT reach the dock: " .. tostring(dockErr))
+        base.sendProgress("dock_not_reached: " .. tostring(dockErr))
+        return
+    end
+    tidyAtDock()
+    base.setStatus(proto.STATUS.IDLE)
+    reportPhase(proto.PHASE.DOCKED)
+end, 180)
+
 local ok, err = pcall(base.run, mineJob)
 if not ok then
     -- Unhandled crash. Print so it's visible on the terminal, then reboot

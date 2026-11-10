@@ -363,13 +363,23 @@ function(assert_eq)
 
     local waitAt   = body and body:find("base.waitForPositionFix(", 1, true)
     local readAt   = body and body:find("local startPos = base.getPos()", 1, true)
-    local flyAt    = body and body:find('recallReturn("reboot_recovery"', 1, true)
+    -- The anchor lost its closing quote when the reason became part of the
+    -- string: a reboot in the field now decides whether to resume where it
+    -- stands, and names which reason sent it home when it did not.
+    local flyAt    = body and body:find('recallReturn("reboot_recovery', 1, true)
+    local decideAt = body and body:find("mine_flow.resumeDecision(", 1, true)
     assert_eq(waitAt ~= nil, true,
         "mineJob must wait for a real fix before it reads its own position")
     assert_eq(readAt ~= nil and flyAt ~= nil, true, "the reboot-recovery branch moved")
     assert_eq(waitAt < readAt and waitAt < flyAt, true,
         "the fix must come BEFORE the position is read and before the flight home: "
         .. "an unfixed position makes 'I rebooted in the field' always true")
+    -- And before the DECISION, which is the same trap one step along: on an
+    -- unfixed position every fact the decision reads is a guess, and resuming
+    -- on a guess is how four miners were lost on 2026-10-05.
+    assert_eq(decideAt ~= nil, true,
+        "the reboot branch must ask mine_flow.resumeDecision, not always fly home")
+    assert_eq(waitAt < decideAt, true, "the fix must come BEFORE the resume decision")
 end
 
 -- The recorded label must be consulted BEFORE the unlabelled refusal, or the
