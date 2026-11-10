@@ -29,7 +29,7 @@ return {
         package.loaded["waypoints"] = nil
         local W = require("waypoints")
         local isDock = {}
-        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+        for _, role in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
             for _, d in ipairs(W.docks[role]) do isDock[d.x .. "," .. d.z] = true end
         end
         local routes, worst, where = 0, 0, ""
@@ -38,7 +38,7 @@ return {
                 for z = zr[1], zr[2] do
                     local sec = W.atcSection(x, 67, z)
                     if sec and not isDock[x .. "," .. z] then
-                        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+                        for _, role in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
                             for _, to in ipairs(W.docks[role]) do
                                 routes = routes + 1
                                 local cx, cz, crossed = x, z, 0
@@ -64,11 +64,11 @@ return {
         package.loaded["waypoints"] = nil
         local W = require("waypoints")
         local isDock = {}
-        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+        for _, role in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
             for _, d in ipairs(W.docks[role]) do isDock[d.x .. "," .. d.z] = true end
         end
         local routes, worst, where = 0, 0, ""
-        for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+        for _, role in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
             for _, from in ipairs(W.docks[role]) do
                 for _, to in ipairs(W.docks[role]) do
                     if from ~= to then

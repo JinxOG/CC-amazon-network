@@ -14,7 +14,15 @@ local CFG = {
     BAY_CENTER_X     = 157,     -- Bay 1 center X (pillar column)
     BAY_SPACING      = 14,      -- X blocks between bay centers (confirmed: 157→171)
     BELOW_HOLE_Y     = 60,      -- Y level for underground travel (above lava/caves)
+    -- The dock type of each bay, by bay number (shakeout stress test, 2026-11-09).
+    -- DELIVERY / SUPPORT bays hold only that role; MINER bays hold miners. The
+    -- worker side (south of the taxiway) and support side (north) are separate lists.
+    BAY_TYPES = {
+        WORKER  = { "DELIVERY", "MINER", "MINER", "MINER", "MINER" },
+        SUPPORT = { "SUPPORT",  "MINER", "MINER", "MINER", "MINER" },
+    },
 }
+W.BAY_TYPES = CFG.BAY_TYPES
 
 -- ─── Taxiways ────────────────────────────────────────────────────────────────
 
@@ -48,11 +56,15 @@ local SUPPORT_ROW_B_Z = -2793  -- further from taxiway (confirmed back corner)
 W.docks = {
     DELIVERY = {},
     SUPPORT  = {},
+    MINER    = {},
 }
 
-local function generateBays(role, numBays, rowAZ, rowBZ)
-    local docks = W.docks[role]
+-- side: "WORKER" or "SUPPORT" -- which list of CFG.BAY_TYPES gives each bay's type.
+local function generateBays(side, numBays, rowAZ, rowBZ)
     for bay = 1, numBays do
+        local role = CFG.BAY_TYPES[side][bay]
+        local docks = W.docks[role]
+        assert(docks, "unknown bay type " .. tostring(role) .. " for " .. side .. " bay " .. bay)
         local centerX  = CFG.BAY_CENTER_X + (bay - 1) * CFG.BAY_SPACING
         local junction = { x = centerX, y = CFG.FLOOR_Y, z = W.WHITE_Z }
 
@@ -81,8 +93,17 @@ local function generateBays(role, numBays, rowAZ, rowBZ)
     end
 end
 
-generateBays("DELIVERY", CFG.NUM_WORKER_BAYS,  WORKER_ROW_A_Z,  WORKER_ROW_B_Z)
-generateBays("SUPPORT",  CFG.NUM_SUPPORT_BAYS, SUPPORT_ROW_A_Z, SUPPORT_ROW_B_Z)
+generateBays("WORKER",  CFG.NUM_WORKER_BAYS,  WORKER_ROW_A_Z,  WORKER_ROW_B_Z)
+generateBays("SUPPORT", CFG.NUM_SUPPORT_BAYS, SUPPORT_ROW_A_Z, SUPPORT_ROW_B_Z)
+
+-- The dock type a turtle role uses, or nil for a role that has no dock (LOADER).
+-- Callers pass this to assignDock / getDockFor / freeDocks / totalDocks.
+function W.dockTypeFor(role)
+    if role == "SUPPORT" then return "SUPPORT" end
+    if role == "MINER" then return "MINER" end
+    if role == "LOADER" then return nil end
+    return "DELIVERY"
+end
 
 -- ─── Dock Assignment (server-side) ───────────────────────────────────────────
 
@@ -261,7 +282,7 @@ function W.internalReturnRouteFrom(dock, fromX, fromZ)
     -- 211,-2796 for good when ~147 turtles changed docks at boot (w3_atc_base150).
     -- So: back into that dock's own departure aisle, along it to the bay's centre
     -- column -- which no dock occupies -- and on from there.
-    for _, role in ipairs({ "DELIVERY", "SUPPORT" }) do
+    for _, role in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
         for _, d in ipairs(W.docks[role]) do
             if d.x == fromX and d.z == fromZ and not (d.x == dock.x and d.z == dock.z) then
                 local out = { { x = fromX, y = CFG.FLOOR_Y, z = aisleZ(d) }, { x = d.junction.x, y = CFG.FLOOR_Y, z = aisleZ(d) } }
