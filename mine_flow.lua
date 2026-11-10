@@ -1468,6 +1468,51 @@ function mine_flow.censusBand(i, levels, radius)
     return bottom, top
 end
 
+--- The Y band a sector's census ACTUALLY covers, over the levels that ran.
+--
+-- `ran` is a set of level indices: ran[i] is truthy when level i produced a
+-- census. Returns lo, hi, n -- the floor and ceiling of the union of those
+-- levels' owned bands, and how many there were. Nil when none ran, because a
+-- sector that censused nothing must report no band rather than an empty one.
+--
+-- WHY THIS IS NOT JUST censusBand(deepest) .. censusBand(shallowest). A sector
+-- that reboots mid-column resumes at the level it reached and never re-scans the
+-- ones above, so the levels that ran are a SUFFIX of the list, not all of it.
+-- Deriving the band from the full list -- which is what the miner did until
+-- 1.9.167 -- published a slice's counts against the whole column: every count
+-- short, and nothing saying so. A consumer cannot tell that from a sector that
+-- genuinely holds little, which makes it worse than a missing field.
+--
+-- It lives here, pure, because the inline version inside ore_turtle's mining
+-- loop could only ever be checked by reading the source back as text -- and a
+-- source-only test proves the expression is present, never that it is right.
+--
+-- ONE MUTANT SURVIVES HERE AND CANNOT BE KILLED: replacing the `lo` guard with
+-- a bare `lo = bottom`. censusBand only accepts strictly DESCENDING levels, so
+-- bottom falls monotonically as i rises, and the last level to contribute always
+-- holds the minimum -- the guard is unreachable by construction. Iterating the
+-- other way makes that guard load-bearing and makes the `hi` one unreachable
+-- instead, so one of the pair is always equivalent and no test can tell. Both
+-- are kept because min/max is the correct general statement of the intent and
+-- the alternative is code that silently depends on censusBand's ordering. The
+-- other six mutants of this function die, the `hi` guard's among them.
+function mine_flow.coveredBand(ran, levels, radius)
+    if type(ran) ~= "table" or type(levels) ~= "table" then return nil end
+    local lo, hi, n = nil, nil, 0
+    for i = 1, #levels do
+        if ran[i] then
+            local bottom, top = mine_flow.censusBand(i, levels, radius)
+            if bottom then
+                n = n + 1
+                if not lo or bottom < lo then lo = bottom end
+                if not hi or top > hi then hi = top end
+            end
+        end
+    end
+    if n == 0 then return nil end
+    return lo, hi, n
+end
+
 --- TIER 2 of the ore index: watchlisted block coordinates, packed.
 ---
 --- Returns packed, kept, dropped. `packed` is a byte string of 3 bytes per

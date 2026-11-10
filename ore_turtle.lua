@@ -2721,6 +2721,16 @@ local function mineJob(job)
         -- TIER 2: watchlisted block positions for the whole sector, packed and
         -- sent once at the end rather than per level.
         local sectorWatched = {}
+        -- WHICH Y THE CENSUS ACTUALLY COVERS, which is not always the whole
+        -- column. A resumed sector skips the levels it already finished, so its
+        -- census describes a SLICE while SCAN_LEVELS still describes the lot.
+        -- Reporting the nominal band there would under-report every count and
+        -- say nothing about it -- the exact failure the "absent, never zero"
+        -- rule exists to prevent, except worse, because a short count looks
+        -- like a fact rather than a gap.
+        -- Which LEVELS produced one; the band itself is derived from this by
+        -- mine_flow.coveredBand, where it can be unit-tested.
+        local censusRan   = {}
         local seenOres    = {}   -- "x,y,z" → true; prevents double-counting
         local abort       = nil  -- non-nil once the sector must be abandoned
         -- RESUME AT THE LEVEL WE REACHED, not at the first one. Redoing the
@@ -2806,6 +2816,10 @@ local function mineJob(job)
             for _, w in ipairs(levelWatched or {}) do
                 sectorWatched[#sectorWatched + 1] = w
             end
+            -- RECORD THAT THIS LEVEL RAN. levelCensus is nil on every scan
+            -- refusal, so a level that did not happen cannot enter the set --
+            -- which is what keeps the reported band honest after a resume.
+            if levelCensus then censusRan[i] = true end
             -- A LEVEL THAT DID NOT HAPPEN IS NOT A LEVEL WITH NO ORE. scanSector
             -- used to hand back a bare empty list from seven different refusals,
             -- so the loop counted the level as scanned, the sector was reported
@@ -2959,23 +2973,61 @@ local function mineJob(job)
         end
         stand = nil
 
+        -- SAY WHAT THE SURVEY COVERS, in the log, before sending it.
+        --
+        -- Every other field of this payload was unreadable by anyone until the
+        -- server stores it, which is a separate card on someone else's file. So
+        -- the one claim this turtle makes about its own survey -- the Y it
+        -- covered and how many of its levels it got through -- had no observer
+        -- at all: not the simulator, which only sees prints, and not the live
+        -- watcher, which only reads /logs. A field whose correctness nothing can
+        -- check is indistinguishable from a field that is wrong.
+        local censusLo, censusHi, censusLevels =
+            mine_flow.coveredBand(censusRan, SCAN_LEVELS, SCAN_RADIUS)
+        censusLevels = censusLevels or 0
+        if censusLevels > 0 then
+            print(string.format(
+                "[SCAN] Sector %d,%d survey: Y %d..%d from %d of %d levels, "
+                .. "%d distinct kinds%s", sx, sz, censusLo, censusHi,
+                censusLevels, #SCAN_LEVELS,
+                (function()
+                    local k = 0; for _ in pairs(sectorCensus) do k = k + 1 end
+                    return k
+                end)(),
+                censusLevels < #SCAN_LEVELS
+                    and " -- PARTIAL, this sector resumed part-way" or ""))
+        else
+            print(string.format("[SCAN] Sector %d,%d survey: none -- no level "
+                .. "was censused, so no census is sent", sx, sz))
+        end
+
         -- Report done; server immediately replies with next SECTOR_ASSIGN or MINE_COMPLETE
         base.sendToServer(proto.MSG.SECTOR_DONE,
             proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined,
                 { belowFloor = sectorBelowFloor, outsideLease = sectorOutsideLease,
                   floorY = MIN_ORE_Y },
-                { minY = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS,
-                  maxY = SCAN_LEVELS[1] + SCAN_RADIUS },
+                -- THE BAND THE CENSUS ACTUALLY COVERS, not the nominal column.
+                -- They are the same whenever the sector ran all its levels, and
+                -- they differ exactly when it resumed part-way -- which is the
+                -- case a consumer must not be lied to about. Nil when no level
+                -- was censused, because "absent" is the only honest answer there.
+                censusLevels > 0 and { minY = censusLo, maxY = censusHi,
+                                       levels = censusLevels,
+                                       ofLevels = #SCAN_LEVELS } or nil,
                 { at = os.epoch("utc"), surveyOnly = surveyMode == true,
                   countsAre = "blocks" },
-                sectorCensus,
+                censusLevels > 0 and sectorCensus or nil,
                 (function()
-                    -- Packed against the band floor the survey already reports,
+                    -- Packed against the floor of the band we actually covered,
                     -- so a reader needs nothing this payload does not carry.
-                    local lo = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS
+                    if censusLevels == 0 then return nil end
+                    local lo = censusLo
                     local packed, kept, over =
                         mine_flow.packCoords(sectorWatched, sx, sz, lo, WATCH_CAP)
-                    if kept == 0 and over == 0 then return nil end
+                    -- NOT nil on kept == 0. A sector with no iron in it has been
+                    -- indexed and found none, which is a fact worth having: the
+                    -- server can skip re-surveying it. Returning nil there said
+                    -- "I did not look", and the difference is a wasted flight.
                     if over > 0 then
                         print(string.format(
                             "[SCAN] Watchlist cap reached: %d coordinates kept, "

@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.166"
+proto.VERSION = "1.9.167"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -488,7 +488,11 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         foundOres  = foundOres or {},
         minedOres  = minedOres or {},
         unreachable = unreachable,   -- { belowFloor, outsideLease, floorY } or nil
-        band        = band,          -- { minY, maxY } or nil
+        -- { minY, maxY, levels, ofLevels } or nil. The Y the census ACTUALLY
+        -- covers, which is narrower than the nominal column when the sector
+        -- resumed part-way: levels < ofLevels says so outright. Nil means no
+        -- level was censused, never "the band was empty".
+        band        = band,
         taken       = taken,         -- { at, surveyOnly, countsAre } or nil
         census      = census,        -- name -> block count for the band, or nil
         watch       = watch,         -- { packed, kept, refused, bytesPerBlock, originX/Y/Z } or nil

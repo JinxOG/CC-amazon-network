@@ -71,6 +71,7 @@ return {
     local booted  = sim:capture_log("[MINER] v")
     local done    = sim:capture_log("done by")
     local complete = sim:capture_log("Job complete: ")
+    local survey  = sim:capture_log(" survey: Y ")
 
     sim:run_for(120000)
     local miner = node(sim, "miner")
@@ -165,5 +166,49 @@ return {
     sim:expect(dupes == 0,
       "no sector was reported done twice (" .. dupes .. " of " .. #done.lines
       .. " done lines) -- a resume onto the wrong sector would double one up")
+
+    -- AND THE SURVEY IT PUBLISHES DESCRIBES WHAT IT ACTUALLY SAW (1.9.167).
+    --
+    -- This is the one place in the fleet where a resume and an ore survey meet,
+    -- so it is the only place the fault could be caught. A resumed sector skips
+    -- the levels it already finished, so its census covers a SLICE of the
+    -- column; until 1.9.167 it was published against the full nominal band, and
+    -- every count was short with nothing saying so. The source tests prove the
+    -- band is derived from the censused levels; only a run proves a resumed
+    -- sector really does report fewer, because that depends on the resume
+    -- actually skipping levels -- which is a different part of this same card.
+    --
+    -- NOT ASSERTED AS "a partial one must appear". Whether the restart lands
+    -- mid-column or between levels is the simulator's business, not this card's,
+    -- and a sector resumed at level 1 legitimately covers all four. What IS
+    -- asserted holds either way: every survey line must be internally
+    -- consistent -- levels <= ofLevels, a band inside the scan geometry -- and
+    -- any line that says PARTIAL must really carry fewer levels than the total.
+    -- A wrong band fails this; a restart that happened to land between levels
+    -- does not.
+    local bad, partials = {}, 0
+    for _, l in ipairs(survey.lines) do
+      local lo, hi, n, of = l:match("Y (-?%d+)%.%.(-?%d+) from (%d+) of (%d+) levels")
+      if lo then
+        lo, hi, n, of = tonumber(lo), tonumber(hi), tonumber(n), tonumber(of)
+        local says = l:find("PARTIAL", 1, true) ~= nil
+        if says then partials = partials + 1 end
+        -- -68..32 is the whole column the four scan levels tile; a covered band
+        -- may be narrower but can never reach outside it.
+        if n > of or lo > hi or lo < -68 or hi > 32 or says ~= (n < of) then
+          bad[#bad + 1] = l
+        end
+      end
+    end
+    sim.results.survey_lines = #survey.lines
+    sim.results.survey_partial_lines = partials
+    sim.results.survey_inconsistent = table.concat(bad, " | ")
+    sim:expect(#survey.lines >= 1,
+      "the miner published at least one sector survey (" .. #survey.lines
+      .. ") -- with none, the consistency check below cannot fail")
+    sim:expect(#bad == 0,
+      "every sector survey describes a band it could actually have covered ("
+      .. #bad .. " inconsistent of " .. #survey.lines .. ", " .. partials
+      .. " partial): " .. (bad[1] or "none"))
   end,
 }

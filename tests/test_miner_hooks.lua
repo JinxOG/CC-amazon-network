@@ -831,13 +831,43 @@ function(assert_eq)
     assert_eq(tail:find("floorY = MIN_ORE_Y", 1, true) ~= nil, true,
         "and the floor it was measured against, or the number cannot be read")
 
-    -- The band is DERIVED from the scan levels and the radius, never written
-    -- out by hand: a literal would silently stop matching the day either
-    -- changes, which is exactly how a survey starts lying about its own extent.
-    assert_eq(tail:find("SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS", 1, true) ~= nil, true,
-        "the band's floor must be derived from the deepest level and the radius")
-    assert_eq(tail:find("SCAN_LEVELS[1] + SCAN_RADIUS", 1, true) ~= nil, true,
-        "and its ceiling from the shallowest")
+    -- The band is the one the census ACTUALLY COVERED, not the nominal column.
+    --
+    -- This assertion used to require the literal expressions
+    -- SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS and SCAN_LEVELS[1] + SCAN_RADIUS,
+    -- on the reasoning that deriving the band beats writing it out by hand. The
+    -- reasoning was right and the derivation was still wrong: it described the
+    -- whole column every time, including for a sector that RESUMED part-way and
+    -- had censused only its last level or two. Those counts cover a slice and
+    -- were published against the full band, so every number was short and
+    -- nothing said so -- a survey lying about its own extent, which is the very
+    -- thing the old comment here warned about, by the other route.
+    assert_eq(tail:find("minY = censusLo", 1, true) ~= nil, true,
+        "the band's floor must be the floor of the levels actually censused")
+    assert_eq(tail:find("maxY = censusHi", 1, true) ~= nil, true,
+        "and its ceiling theirs too")
+    -- AND IT MUST SAY HOW MANY. Without this a partial band is indistinguishable
+    -- from a narrow one, and a consumer cannot tell a resumed sector from a
+    -- shallow one.
+    assert_eq(tail:find("levels = censusLevels", 1, true) ~= nil, true,
+        "a partial survey must say how many levels it covered")
+    assert_eq(tail:find("ofLevels = #SCAN_LEVELS", 1, true) ~= nil, true,
+        "and out of how many, or the count means nothing")
+    -- Still derived, never a literal: the bounds come from mine_flow, fed the
+    -- real level list and radius, so they cannot drift from the scan geometry.
+    -- The arithmetic itself is tested for real in test_mine_flow's coveredBand
+    -- cases; this only pins down that the miner uses it rather than its own copy.
+    assert_eq(src:find("mine_flow.coveredBand(censusRan, SCAN_LEVELS, SCAN_RADIUS)", 1, true) ~= nil, true,
+        "the bounds must come from mine_flow.coveredBand over the real levels and radius")
+    -- A LEVEL THAT DID NOT RUN MUST NOT ENTER THE SET. levelCensus is nil on
+    -- every scan refusal, so gating on it is what keeps a refused level out.
+    assert_eq(src:find("if levelCensus then censusRan[i] = true end", 1, true) ~= nil, true,
+        "only a level that produced a census may widen the covered band")
+    -- And no level censused means NO BAND and NO CENSUS -- absent, never zero.
+    -- An empty census reads as "the band holds nothing", which is a fact, and a
+    -- false one.
+    assert_eq(tail:find("censusLevels > 0 and sectorCensus or nil", 1, true) ~= nil, true,
+        "a sector that censused nothing must send no census rather than an empty one")
 
     -- CONDITION 4: when it was taken, and whether the ground was untouched.
     -- A census is a point-in-time reading of UNMINED ground; after mining a

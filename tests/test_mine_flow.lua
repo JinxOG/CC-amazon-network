@@ -2444,6 +2444,76 @@ return {
         assert_eq(flow.censusBand(1, { 16, 0 }, nil), nil, "no radius")
     end,
 
+    -- coveredBand: the band a sector's census ACTUALLY covers. The fault it
+    -- exists for is a resumed sector -- one that skipped the levels it had
+    -- already finished -- publishing its slice's counts against the whole
+    -- column, so every count was short and nothing said so.
+    ["coveredBand over every level is the whole column"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local L, R = { 16, 0, -32, -52 }, 16
+        local lo, hi, n = flow.coveredBand({ true, true, true, true }, L, R)
+        assert_eq(lo, -68, "floor of the deepest level")
+        assert_eq(hi, 32, "ceiling of the shallowest")
+        assert_eq(n, 4, "all four counted")
+    end,
+
+    -- THE RESUME CASE, which is the whole point: levels 1 and 2 were finished
+    -- before the reboot and are never re-scanned, so the census describes
+    -- -68..-17 and must say so. Publishing -68..32 here is the bug.
+    ["coveredBand over a resumed suffix is narrower, and says how many"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local L, R = { 16, 0, -32, -52 }, 16
+        local lo, hi, n = flow.coveredBand({ [3] = true, [4] = true }, L, R)
+        assert_eq(lo, -68, "still the deepest level's floor")
+        assert_eq(hi, -17, "but only up to where level 2 began -- NOT 32")
+        assert_eq(n, 2, "two levels of four")
+
+        -- One level only, the narrowest real case: a reboot during the last.
+        local lo1, hi1, n1 = flow.coveredBand({ [4] = true }, L, R)
+        assert_eq(lo1, -68); assert_eq(hi1, -49); assert_eq(n1, 1)
+    end,
+
+    -- A GAP IN THE MIDDLE still reports the union's bounds, and the level count
+    -- is what reveals it is not solid. Not reachable by a resume, which always
+    -- skips a prefix, but reachable if a single level is ever refused mid-column
+    -- -- and a band that silently claimed to be solid would be the same lie.
+    ["coveredBand with a hole reports the union and the honest count"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local L, R = { 16, 0, -32, -52 }, 16
+        local lo, hi, n = flow.coveredBand({ [1] = true, [4] = true }, L, R)
+        assert_eq(lo, -68); assert_eq(hi, 32)
+        assert_eq(n, 2, "2 of 4 -- the count is the only thing that shows the hole")
+    end,
+
+    -- NOTHING CENSUSED IS NIL, NOT A ZERO-WIDTH BAND. An empty band reads as a
+    -- fact about the ground; nil reads as "this survey did not say", which is
+    -- the only true answer.
+    ["coveredBand refuses when no level ran, and on nonsense"] =
+    function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        local L, R = { 16, 0, -32, -52 }, 16
+        -- ALL THREE RETURNS, not just the first. Checking only the first let a
+        -- mutant that deleted the "nothing ran" guard live: it then returned
+        -- nil, nil, 0, whose first value is also nil, so the assertion could not
+        -- tell a refusal from a zero-width band. The count is the one that
+        -- differs, which makes it the one worth naming.
+        local lo0, hi0, n0 = flow.coveredBand({}, L, R)
+        assert_eq(lo0, nil, "no level ran: no floor")
+        assert_eq(hi0, nil, "no level ran: no ceiling")
+        assert_eq(n0, nil, "no level ran: NO COUNT -- 0 would read as a band of "
+            .. "nothing, which is a claim about the ground rather than an absence")
+        assert_eq(flow.coveredBand(nil, L, R), nil, "no set at all")
+        assert_eq(flow.coveredBand({ true }, "nonsense", R), nil, "no levels")
+        -- A level index outside the list cannot conjure a band.
+        assert_eq(flow.coveredBand({ [9] = true }, L, R), nil, "no such level")
+        -- Ascending levels do not tile, so censusBand refuses each one and the
+        -- union is empty rather than wrong.
+        assert_eq(flow.coveredBand({ true, true }, { 0, 16 }, R), nil,
+            "levels that do not tile")
+    end,
+
     ["resumeDecision lets a healthy miner carry on where it stands"] =
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())
