@@ -821,7 +821,9 @@ function(assert_eq)
     -- sending them is the same as printing them: nothing a consumer can read.
     local sendAt = src:find("proto.payloadSectorDone(jobId, sx, sz, count, sectorFound, sectorMined,", 1, true)
     assert_eq(sendAt ~= nil, true, "SECTOR_DONE must carry the extra arguments")
-    local tail = src:sub(sendAt, sendAt + 400)
+    -- Wide enough for the whole call: it now carries unreachable, band and
+    -- taken, and a 400-character window stopped before the last of them.
+    local tail = src:sub(sendAt, sendAt + 1200)
     assert_eq(tail:find("belowFloor = sectorBelowFloor", 1, true) ~= nil, true,
         "the below-floor total must be sent")
     assert_eq(tail:find("outsideLease = sectorOutsideLease", 1, true) ~= nil, true,
@@ -836,6 +838,53 @@ function(assert_eq)
         "the band's floor must be derived from the deepest level and the radius")
     assert_eq(tail:find("SCAN_LEVELS[1] + SCAN_RADIUS", 1, true) ~= nil, true,
         "and its ceiling from the shallowest")
+
+    -- CONDITION 4: when it was taken, and whether the ground was untouched.
+    -- A census is a point-in-time reading of UNMINED ground; after mining a
+    -- re-scan sees only residue, so without these a planner sources from ground
+    -- already emptied.
+    assert_eq(tail:find("at = os.epoch(\"utc\")", 1, true) ~= nil, true,
+        "the sector must say WHEN its counts were taken")
+    assert_eq(tail:find("surveyOnly = surveyMode == true", 1, true) ~= nil, true,
+        "and whether the pass only surveyed -- false means the counts were "
+        .. "taken while this miner was emptying the ground")
+
+    -- CONDITION 5: the card allows publishing block counts and saying so
+    -- plainly, OR carrying the conversion to items. This publishes blocks, so
+    -- it has to say so: the scanner counts blocks and a build needs yields,
+    -- which depend on the ore and on fortune.
+    assert_eq(tail:find("countsAre = \"blocks\"", 1, true) ~= nil, true,
+        "and that the numbers are BLOCKS, not item yields")
+end
+
+-- CONDITION 3: the per-level log lines overlap and the sector total does not.
+--
+-- Adjacent scan levels overlap by 24 blocks, so the same ore is seen two or
+-- three times and the per-level numbers overcount by roughly 3-4x. The
+-- TRANSMITTED count has always been right -- seenOres dedups by exact position
+-- -- but the card warns that anything built by reading the LOG would be wrong.
+-- So the log has to say which number is which.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["the scan log distinguishes the overlapping level count from the sector total (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+
+    assert_eq(src:find("at this level before cross-level dedup", 1, true) ~= nil, true,
+        "the per-level line must say it is before dedup, or it reads as a total")
+    -- Anchored on the COMPUTATION, not on the sentence. The message is built by
+    -- concatenation, so "for the sector so far" never appears contiguously in
+    -- the source -- which is the trap this project keeps relearning: assert on
+    -- what the code does, not on a string a line break can split.
+    assert_eq(src:find("sectorNew + #ores", 1, true) ~= nil, true,
+        "and a deduplicated sector running total must be printed beside it")
+    assert_eq(src:find("after dedup", 1, true) ~= nil, true,
+        "and the sector line must say it is the deduplicated one")
+    -- The total must be built from the TRANSMITTED tally, not recounted from a
+    -- per-level list, or it would carry the same overlap it exists to correct.
+    assert_eq(src:find("for _, n in pairs(sectorFound) do sectorNew = sectorNew + n end", 1, true) ~= nil, true,
+        "the sector total must come from sectorFound, the tally that is sent")
 end
 
 return suite

@@ -1378,10 +1378,12 @@ local function scanSector()
     -- sector look like it left 6% behind.
     local reachable, dropped = mine_flow.filterToLease(ores)
     if dropped > 0 then
-        print(string.format("[SCAN] Found %d ore blocks (%d outside the lease, "
-            .. "left for the neighbouring sector)", #reachable, dropped))
+        print(string.format("[SCAN] Found %d ore blocks at this level before "
+            .. "cross-level dedup (%d outside the lease, left for the "
+            .. "neighbouring sector)", #reachable, dropped))
     else
-        print("[SCAN] Found " .. #reachable .. " ore blocks")
+        print("[SCAN] Found " .. #reachable
+            .. " ore blocks at this level before cross-level dedup")
     end
     -- The dropped count comes back as well as being printed. A survey that
     -- cannot report its own blind spots is the ore-index card's condition 6,
@@ -2751,6 +2753,20 @@ local function mineJob(job)
             -- cannot be loaded headlessly.
             local ores, belowFloor = mine_flow.dropBelowFloor(fresh, MIN_ORE_Y)
             sectorBelowFloor = sectorBelowFloor + belowFloor
+            -- CONDITION 3 OF THE ORE-INDEX CARD, said in the log rather than
+            -- left to be inferred. Adjacent scan levels overlap by 24 blocks,
+            -- so the same ore is seen two or three times and the per-level
+            -- lines above overcount by roughly 3-4x. The TRANSMITTED count has
+            -- always been right -- seenOres dedups by exact position, which is
+            -- what `fresh` is -- but anything built by reading the log would be
+            -- wrong, and the card warns about exactly that. So the running
+            -- sector total is printed beside the level's own number.
+            local sectorNew = 0
+            for _, n in pairs(sectorFound) do sectorNew = sectorNew + n end
+            print(string.format(
+                "[SCAN] %d new ore at this level after dedup; %d for the sector "
+                .. "so far (the per-level numbers above overlap, this one does not)",
+                #ores, sectorNew + #ores))
             local scanFound = {}
             for _, o in ipairs(ores) do
                 scanFound[o.name]   = (scanFound[o.name]   or 0) + 1
@@ -2831,7 +2847,9 @@ local function mineJob(job)
                 { belowFloor = sectorBelowFloor, outsideLease = sectorOutsideLease,
                   floorY = MIN_ORE_Y },
                 { minY = SCAN_LEVELS[#SCAN_LEVELS] - SCAN_RADIUS,
-                  maxY = SCAN_LEVELS[1] + SCAN_RADIUS }))
+                  maxY = SCAN_LEVELS[1] + SCAN_RADIUS },
+                { at = os.epoch("utc"), surveyOnly = surveyMode == true,
+                  countsAre = "blocks" }))
 
         msg = waitSectorResponse(jobId)
         if not msg then

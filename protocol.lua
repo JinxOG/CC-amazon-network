@@ -5,7 +5,7 @@
 
 local proto = {}
 
-proto.VERSION = "1.9.162"
+proto.VERSION = "1.9.163"
 
 -- ─── Channels ────────────────────────────────────────────────────────────────
 
@@ -452,8 +452,19 @@ end
 -- The card itself says a survey that cannot report its own blind spots is "the
 -- failure mode this project keeps hitting: a number whose pass state and
 -- no-data state look identical".
+--   condition 4, SAY WHEN AND WHETHER IT HAS SINCE BEEN MINED -- a census is a
+--     point-in-time reading of UNMINED ground, and after mining a re-scan sees
+--     only residue. Without a timestamp and a survey/mined flag per sector, a
+--     planner sources from ground already emptied. `taken.at` is when, and
+--     `taken.surveyOnly` says whether this pass mined anything: true means the
+--     counts describe untouched ground, false means they were taken while this
+--     miner was emptying it.
+--   condition 5, BLOCKS ARE NOT ITEMS -- the scanner counts blocks and a build
+--     needs item yields, which depend on the ore and on fortune. The card
+--     allows either publishing block counts and saying so plainly, or carrying
+--     the conversion. This publishes blocks and says so: `taken.countsAre`.
 function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, minedOres,
-                                 unreachable, band)
+                                 unreachable, band, taken)
     return {
         jobId      = jobId,
         sectorX    = sectorX,
@@ -463,6 +474,7 @@ function proto.payloadSectorDone(jobId, sectorX, sectorZ, oreCount, foundOres, m
         minedOres  = minedOres or {},
         unreachable = unreachable,   -- { belowFloor, outsideLease, floorY } or nil
         band        = band,          -- { minY, maxY } or nil
+        taken       = taken,         -- { at, surveyOnly, countsAre } or nil
     }
 end
 
