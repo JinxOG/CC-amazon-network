@@ -35,6 +35,32 @@
 -- symptom nobody could explain, since a lane crosses chunks nobody else keeps
 -- loaded. If the miner keeps logging throughout, its own ticket holds and the
 -- card's GPS framing survives.
+--
+-- ===========================================================================
+-- SUPERSEDED, 2026-11-10: DO NOT READ THIS SCENARIO'S VERDICT AS EVIDENCE
+-- ABOUT THE WORLD. It returns "FROZEN BY THE UNLOAD AND RECOVERED". That is
+-- true of the simulator and false of real Minecraft.
+--
+-- The real mechanism was measured on the test server instead -- runs
+-- w1-lane-ticket-a and -c, docs/measurements/2026-11-10-the-flight-lane-a-
+-- healthy-miner-carries-its-own-chunk-loading.md. node_183 flew this card's
+-- own lane, y 200 and z -2813, from x 143 to x 765: 11 in-flight readings, ALL
+-- holding a Forge chunk ticket, NONE with its computer off, NONE in an
+-- unloaded chunk. A healthy miner carries its own chunk loading, so an empty
+-- lane does not strand one -- and a GPS relay would fix nothing either.
+--
+-- WHY THE TWO DISAGREE, which is the part worth keeping. sim:chunk_unload
+-- models the control mod's verb, and that verb works by a REFUSAL HOOK that
+-- forbids new tickets for its duration. The mod's own M3 proof carries the
+-- control arm: with no release in force, "the chunk stays loaded after the
+-- same forceload add and remove" -- the loader re-forced it. So this scenario
+-- asks "what if the turtle cannot get a ticket". That is a real question, and
+-- it is not the one the lane poses.
+--
+-- KEPT, not deleted: the question it does ask still matters for the shakeout,
+-- and the gap between the two is the lesson -- a simulator answers about its
+-- own model, and I treated its verdict as a finding about the world.
+-- ===========================================================================
 local function node(sim, role)
   for _, c in ipairs(sim.sched.computers) do if c.role == role then return c end end
 end
@@ -133,7 +159,7 @@ return {
 
     sim.results.verdict =
       (silentDuring and aliveAfter)
-        and "FROZEN BY THE UNLOAD AND RECOVERED -- chunk loading freezes a miner in flight, so it IS a live mechanism for the lane card and a GPS relay would not fix it"
+        and "FROZEN BY THE UNLOAD AND RECOVERED -- in the SIMULATOR. Measured false on real Minecraft 2026-11-10 (runs w1-lane-ticket-a/-c): a flying miner holds its own Forge ticket and never froze. See the SUPERSEDED note in this file's header before using this verdict for anything."
       or (silentDuring and "FROZEN AND STILL FROZEN at the end of the run -- the unload stopped it; whether it recovers needs a longer window")
       or ((not movedDuring) and "STOPPED BUT STILL REPORTING -- it arrived rather than froze; the unload did not catch it in flight")
       or "KEPT MOVING THROUGH THE UNLOAD -- its own chunk ticket held, so chunk unloading is NOT the mechanism and the card's GPS framing survives"
