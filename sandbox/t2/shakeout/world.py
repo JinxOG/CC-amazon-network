@@ -508,6 +508,37 @@ def set_block(c, pos, spec, nbt=None):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
+# Storage headroom (round 2 ruling): the RS network must not be able to fill by accident
+# ---------------------------------------------------------------------------------------------------------------------------
+
+RS_CONTROLLER = (173, 72, -2833)                        # the world copy's RS controller (inside BASE_AREAS, so forceloaded)
+RS_CREATIVE_BLOCK = "refinedstorage:creative_storage_block"     # Refined Storage 1.12.4 (mods/refinedstorage-1.12.4.jar): ItemStorageType
+                                                         # CREATIVE, capacity -1; creative_storage_disk is its disk twin, but a disk
+                                                         # cannot be put into a drive from a console command, a block can be set
+RS_NEIGHBOURS = [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0)]
+
+
+def add_rs_capacity(c, controller=RS_CONTROLLER):
+    """Sets a creative item storage block on the first free face of the RS controller (a node touching the controller joins the
+    network, no cable needed) so that storage cannot fill except as a scheduled fault. Idempotent: one already there is kept.
+    Returns {"pos", "placed", "block", "controller": whether a controller id was read there}. Raises when no face is free. VERIFY ON
+    T2: that the block joins the network is read back by the proof as capacity -1 in refinedstorage_disks.dat."""
+    ctrl = any(_passed(c, controller, spec) for spec in ("refinedstorage:controller", "refinedstorage:creative_controller"))
+    faces = [(controller[0] + dx, controller[1] + dy, controller[2] + dz) for dx, dy, dz in RS_NEIGHBOURS]
+    for pos in faces:
+        if _passed(c, pos, RS_CREATIVE_BLOCK):
+            return {"pos": pos, "placed": False, "block": RS_CREATIVE_BLOCK, "controller": ctrl}
+    for pos in faces:
+        if is_air(c, pos):
+            set_block(c, pos, RS_CREATIVE_BLOCK)
+            if not _passed(c, pos, RS_CREATIVE_BLOCK):
+                raise RuntimeError("the creative storage block at %s did not take" % (pos,))
+            return {"pos": pos, "placed": True, "block": RS_CREATIVE_BLOCK, "controller": ctrl}
+    raise RuntimeError("no free face next to the RS controller at %s for the creative storage block" % (controller,))
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
 # The build
 # ---------------------------------------------------------------------------------------------------------------------------
 
@@ -704,6 +735,9 @@ def build_world(ctx, cells=None):
             continue
         gid = c.spawn_computer(t[0], t[1], t[2], _write_startup(gps_host_program(t), "shakeout_gps_"))
         report["gps"].append({"pos": tuple(t), "id": gid, "announces": tuple(t)})
+    # 7. Storage can only fill as a scheduled fault: one creative item storage block (unlimited capacity) next to the RS controller.
+    report["rs_capacity"] = add_rs_capacity(c)
+    _note(ctx, "RS capacity: %s" % (report["rs_capacity"],))
     _note(ctx, "shakeout world: %d removed from bay cells, floor set %d / same %d, pillars set %d / same %d, under-dock copied %d / "
           "same %d, GPS towers placed %d, present %d, blocked %d" % (
               len(report["removed"]), report["floor"]["set"], report["floor"]["same"], report["pillars"]["set"],

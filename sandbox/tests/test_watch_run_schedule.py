@@ -171,6 +171,17 @@ class WatchTests(unittest.TestCase):
         code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "0.25")
         self.assertEqual(code, 3, out)
 
+    def test_failed_restart_keeps_its_window_so_the_relaunch_is_not_a_void(self):
+        # world_restart failed (no retry), the server is down until the driver relaunches it: start to fail line + the grace
+        self.h.write_schedule([{"id": "f001", "t_ms": 0, "fault": "world_restart", "args": {}, "quiet_ms": 10 * MIN}])
+        self.h.log_fault("f001", "world_restart", "start", 0)
+        self.h.log_fault("f001", "world_restart", "fail", 6 * MIN, error="x")
+        self.h.alive[111] = False
+        code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "0.2")     # 12 minutes: inside fail line + 5 min grace
+        self.assertEqual(code, 0, out)
+        code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "1")
+        self.assertEqual(code, 4, "...but a server still dead well past the grace is STOPPED: %s" % out)
+
     def test_max_hours_default_is_raised_only_with_a_schedule(self):
         self.assertEqual(watch_run.default_max_hours(None), 6.0)
         self.assertGreaterEqual(watch_run.default_max_hours("x.json"), 24.0)

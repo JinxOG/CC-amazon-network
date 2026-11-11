@@ -6,10 +6,13 @@
 
 THE LOAD TARGET (not a pass check): at least min_jobs MINE/DELIVER jobs active at all times, and no online, unheld turtle sitting
 IDLE for more than max_idle_s outside a fault. Turtles between jobs or recovering are fine; the feeder only counts what /state shows.
-IDLE WATCH: a turtle seen IDLE for IDLE_ACT_FRACTION of max_idle_s (half: the dispatch itself takes time) is given work, SIZED TO
-THE COUNT: one delivery per idle delivery turtle, and mining orders (zones of up to MINERS_PER_ZONE miners each) until every idle
-miner has capacity. Only turtles actually given work have their idle clock reset; when work cannot be placed (no stock, no fresh
-ground) the idleness stays on the clock, and is said, never hidden.
+IDLE WATCH: the idle clock is the evidence, so ordering resets NOTHING: a turtle's clock restarts only when it leaves IDLE (or is
+benched by blockedUntil, held, or offline: those are not being passed over). A turtle seen IDLE for IDLE_ACT_FRACTION of max_idle_s
+(a quarter: the dispatcher needs time to hand out a burst) is "waiting"; orders are placed against the waiting count LESS the jobs already PENDING for
+that kind (a pending job is about to take one of them). Deliveries are one order each; a mining order is ALWAYS a full zone
+(MINERS_PER_ZONE miners), whatever the idle count, so the spare jobs wait for the next idle miners instead of locking a 36-sector
+zone to one miner for a day. The min_jobs top-up also goes through deliveries (an idle delivery turtle with nothing pending), then
+zones. Work that cannot be placed (no fresh ground) leaves the clock running and is said, never hidden.
 
 HOW A MINING ORDER IS BUILT. ORDER_MINE takes sector CENTRES, not a footprint (memory "ORDER_MINE takes centres"): the server
 snaps the corners to its 32-block grid (floor/ceil) and pads the result by 16 (central_server.lua buildSectorGrid), so a zone is
@@ -25,25 +28,27 @@ the list runs out the feeder says so (once) and stops ordering mining rather tha
 SIZE: a 24-hour run needs  hours x miners / (sector_time / speed)  sectors (an ore sector is ~9,400 s per miner at 1x): at 4x and
 128 miners that is 4,706; ZONES holds 143 x 36 = 5,148 (the test works the sum out).
 
-DELIVERIES carry ordinary stock the warehouse holds (cobblestone first, else the biggest non-ore stack of at least 64 in /state
-storage), 16 at a time, rotating over DESTINATIONS (six spots south of the building, staggered in z: a row of destinations on one z
-is what piled 19 turtles up on 2026-11-03). Feeder() asks the game once whether each spot is still air (the free_spot probe) and
-drops one that is not.
+DELIVERIES carry ordinary stock (cobblestone first, else the biggest non-ore stack of at least 64 in /state storage, and cobblestone,
+2.55M in the RS, when storage is empty or older than two periods: /state storage goes empty after a restart), 16 at a time, rotating
+over DESTINATIONS (six spots south of the building, staggered in z: a row on one z is what piled 19 turtles up on 2026-11-03).
+Feeder() asks the game once whether each spot is still air (the free_spot probe) and drops one that is not.
 
-HOUSEKEEPING (spec 2: storage stays in its normal range, never full by accident). Delivery stock is Refined Storage (cobblestone
-2.55M): it needs no top-up, and ore and fuel chests already drain and stock themselves through RS importers and exporters, so there
-is nothing to refill. The real risk is RS HEADROOM: free space somewhere 7M-53M against 5-16M of ore inflow at full load. Each
-HOUSEKEEP_EVERY_S housekeep() reads used (the sum of /state "storage" amounts: rsBridge.listItems, verified in central_server.lua)
-against a capacity measured once from the world's RS disk data (rs_capacity_of_world; SHAKEOUT_RS_CAPACITY overrides) and logs
-`HOUSEKEEPING storage-headroom ok|low|unknown ...` to <run>/shakeout/housekeeping.log. `low` (free under LOW_FREE_FRACTION of
-capacity, or under one period of inflow) is the fixed tag the report reads as a named finding, and is followed by a drain: an
-ORDER_DELIVERY of the biggest ore stack out of RS to the base's trash can (DRAIN_DESTINATION). VERIFY THAT ON T2 FIRST: it uses
-only existing orders, but whether the hand-off lands in the can is unproven. It goes through ctx.dispatch and the raw control
-(ctx._raw), never ctx.control, so it is never an INTERVENTION. Storage filling up is otherwise only the scheduled rs_offline fault.
+HOUSEKEEPING (spec 2: storage stays in its normal range, never full by accident). Delivery stock is Refined Storage and ore and fuel
+chests drain and stock themselves, so nothing is refilled or drained by command. world.build_world adds a creative item storage
+block next to the RS controller, so the network cannot fill except as a scheduled fault. Each HOUSEKEEP_EVERY_S housekeep() reads
+BOTH used (sum of Quantity) and capacity from <world>/data/refinedstorage_disks.dat (not /state storage, which goes stale), logs the
+file's age, and writes `HOUSEKEEPING storage-headroom ok|low|unknown ...` to <run>/shakeout/housekeeping.log: unknown when the file
+is unreadable or older than two periods, or a disk has no numeric Capacity (only Capacity -1 is unlimited). `low` (free under
+LOW_FREE_FRACTION of capacity, or under two periods of inflow) is the fixed-tag named finding; inside a scheduled storage fault
+(rs_offline, rs_stall, disk_full) the line is `storage-headroom-expected state=...` instead. It also clears what deliveries leave at
+each destination: the plain chests placed at z+1..z+MAX_CHESTS (MAX_CHESTS read from delivery_turtle.lua) and dropped items, in a
+small box, only when no turtle is inside it and no delivery is heading there. All through the raw control (ctx._raw), never
+ctx.control, so none of it is an INTERVENTION.
 """
 import json
 import math
 import os
+import re
 import time
 
 
@@ -109,7 +114,7 @@ ZONES = _build_zones()
 DESTINATIONS = [(160, 67, -2752), (172, 67, -2755), (184, 67, -2758), (196, 67, -2761), (208, 67, -2764), (220, 67, -2767)]
 ITEM_COUNT = 16
 GRACE_S = 10 * MIN          # a freshly ordered site counts as open this long, while its jobs are still pending
-IDLE_ACT_FRACTION = 0.5     # a turtle is given work after this share of max_idle_s: the dispatch itself takes time
+IDLE_ACT_FRACTION = 0.25    # a turtle is given work after this share of max_idle_s: the dispatch itself takes time
 MAX_ORDERS_PER_TICK = 6     # the site / top-up orders; idle-watch orders have their own, larger, cap
 MAX_IDLE_ORDERS_PER_TICK = 30
 NOTE_EVERY_S = 30 * MIN     # how often one kind of complaint may be repeated
@@ -200,9 +205,17 @@ class Feeder:
         self.open_sites[z["id"]] = now
         return k
 
-    def _stock_item(self, st):
+    def _stock_item(self, st, now=None):
+        """Ordinary stock to deliver. /state storage goes empty or stale after a restart with mining live (central_server.lua
+        storageItems / storageTs), so when it is empty or older than two housekeeping periods the known stock, cobblestone
+        (2.55M in the world copy's RS), is used rather than skipping deliveries."""
+        ts = st.get("storageTs")
+        stale = False
+        if isinstance(ts, (int, float)) and ts > 0 and now is not None:
+            age = now - (ts / 1000.0 if ts > 1e11 else ts)
+            stale = age > 2 * HOUSEKEEP_EVERY_S
         best = None
-        for e in st.get("storage") or []:
+        for e in ([] if stale else st.get("storage") or []):
             if not isinstance(e, dict):
                 continue
             n, a = e.get("name"), e.get("amount") or e.get("count") or 0
@@ -212,13 +225,10 @@ class Feeder:
                 return n
             if best is None or a > best[1]:
                 best = (n, a)
-        return best[0] if best else None
+        return best[0] if best else "minecraft:cobblestone"
 
     def _order_delivery(self, st, now):
-        item = self._stock_item(st)
-        if item is None:
-            self._note_every(now, "nostock", "feeder: no ordinary stock of at least %d in storage to deliver" % (4 * ITEM_COUNT))
-            return False
+        item = self._stock_item(st, now)
         if not self.dests:
             self._note_every(now, "nodest", "feeder: no usable delivery destination")
             return False
@@ -228,11 +238,25 @@ class Feeder:
                                              "destination": {"x": x, "y": y, "z": z}})
         return True
 
+    @staticmethod
+    def _benched(t, now):
+        """True while the server holds a turtle back from dispatch (blockedUntil: epoch ms on the server, seconds in a fake)."""
+        bu = t.get("blockedUntil")
+        if not isinstance(bu, (int, float)) or bu <= 0:
+            return False
+        return (bu / 1000.0 if bu > 1e11 else bu) > now
+
     # -- the tick ---------------------------------------------------------------------------------------------------
     def tick(self, now):
+        """The idle clock is the evidence, so ORDERING RESETS NOTHING: a turtle's clock restarts only when it leaves IDLE (or is
+        benched, held or offline). Orders are placed against the idle turtles that have waited IDLE_ACT_FRACTION of the limit,
+        less the jobs already PENDING for their kind (a pending job is about to take one of them), and a mining order is always
+        a full zone: the spare jobs wait for the next idle miners instead of locking a zone to one miner for hours."""
         st, jobs, turtles = self._look()
         keys_open = {j.get("zoneKey") for j in jobs if j.get("type") == "MINE" and j.get("zoneKey")}
         self.seen_keys |= keys_open
+        pending = {"MINER": sum(1 for j in jobs if j.get("type") == "MINE" and j.get("status") == "PENDING"),
+                   "DELIVERY": sum(1 for j in jobs if j.get("type") == "DELIVER" and j.get("status") == "PENDING")}
         by_id = {z["id"]: z for z in self.zones}
         for zid in list(self.open_sites):
             key = zone_key(by_id[zid])
@@ -241,69 +265,83 @@ class Feeder:
                     self.ctx.note("feeder: the order for %s never showed up as a job (zoneKey %s)" % (zid, key))
                     self.seen_keys.add(key)
                 del self.open_sites[zid]
-        placed = 0
 
-        # 1. keep `sites` sites open
-        while len(self.open_sites) < self.sites and placed < MAX_ORDERS_PER_TICK:
-            if not self._order_mine(now, MINERS_PER_ZONE):
-                break
-            placed += 1
-            jobs.append({"type": "MINE"})
-
-        # 2. keep the job count up with mining (the open sites are shared, a new zone adds jobs)
-        shortfall = self.min_jobs - len(jobs)
-        while shortfall > 0 and placed < MAX_ORDERS_PER_TICK:
-            got = self._order_mine(now, shortfall)
-            if not got:
-                break
-            shortfall -= got
-            placed += 1
-
-        # 3. idle watch: size the work to the idle count; only the turtles actually given work restart their clock
+        # who is idle and waiting (benched, held, offline turtles are not: they are not being passed over)
         act_after = self.max_idle_s * IDLE_ACT_FRACTION
-        idle = {"MINER": [], "DELIVERY": []}
+        idle = {"MINER": 0, "DELIVERY": 0}      # idle at all
+        waiting = {"MINER": 0, "DELIVERY": 0}   # idle long enough to be acted on
         seen = set()
         for tid, t in turtles.items():
             if not isinstance(t, dict) or t.get("role") not in idle:
                 continue
             seen.add(tid)
-            if t.get("status") != "IDLE" or not t.get("online", True) or t.get("held") or t.get("needsHands"):
+            if (t.get("status") != "IDLE" or not t.get("online", True) or t.get("held") or t.get("needsHands")
+                    or self._benched(t, now)):
                 self.idle_since.pop(tid, None)
                 continue
-            since = self.idle_since.setdefault(tid, now)
-            if now - since > act_after:
-                idle[t["role"]].append((since, tid))
+            idle[t["role"]] += 1
+            if now - self.idle_since.setdefault(tid, now) > act_after:
+                waiting[t["role"]] += 1
         for tid in [k for k in self.idle_since if k not in seen]:
             del self.idle_since[tid]
+
+        placed = 0
+
+        def mine_order():
+            got = self._order_mine(now, MINERS_PER_ZONE)
+            if got:
+                pending["MINER"] += got
+                jobs.append({"type": "MINE", "status": "PENDING"})
+            return got
+
+        def delivery_order():
+            if self._order_delivery(st, now):
+                pending["DELIVERY"] += 1
+                jobs.append({"type": "DELIVER", "status": "PENDING"})
+                return True
+            return False
+
+        # 1. keep `sites` sites open
+        while len(self.open_sites) < self.sites and placed < MAX_ORDERS_PER_TICK:
+            if not mine_order():
+                break
+            placed += 1
+
+        # 2. keep the job count up: a delivery for an idle delivery turtle with nothing pending, else a mining zone
+        shortfall = self.min_jobs - len(jobs)
+        while shortfall > 0 and placed < MAX_ORDERS_PER_TICK:
+            if idle["DELIVERY"] > pending["DELIVERY"] and delivery_order():
+                shortfall -= 1
+            elif mine_order():
+                shortfall -= MINERS_PER_ZONE
+            else:
+                break
+            placed += 1
+
+        # 3. idle watch: against the waiting turtles less the jobs already pending for them
         orders = 0
-        for _, tid in sorted(idle["DELIVERY"]):
-            if orders >= MAX_IDLE_ORDERS_PER_TICK or not self._order_delivery(st, now):
+        while waiting["DELIVERY"] > pending["DELIVERY"] and orders < MAX_IDLE_ORDERS_PER_TICK:
+            if not delivery_order():
                 break
             orders += 1
-            self.idle_since[tid] = now
-        want = [tid for _, tid in sorted(idle["MINER"])]
-        while want and orders < MAX_IDLE_ORDERS_PER_TICK:
-            got = self._order_mine(now, len(want))
-            if not got:
+        while waiting["MINER"] > pending["MINER"] and orders < MAX_IDLE_ORDERS_PER_TICK:
+            if not mine_order():
                 break
             orders += 1
-            for tid in want[:got]:
-                self.idle_since[tid] = now
-            want = want[got:]
-        if want:
-            self._note_every(now, "unserved", "feeder: %d idle miners could not be given work (ground exhausted or order cap)" % len(want))
+        if waiting["MINER"] > pending["MINER"]:
+            self._note_every(now, "unserved", "feeder: %d idle miners are not covered by any job (ground exhausted or order cap)"
+                             % (waiting["MINER"] - pending["MINER"]))
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
-# Housekeeping: the RS headroom check
+# Housekeeping: the RS headroom check, and clearing what deliveries leave behind
 # ---------------------------------------------------------------------------------------------------------------------------
 
 HOUSEKEEP_EVERY_S = 30 * MIN
 LOW_FREE_FRACTION = 0.20            # free under this share of capacity is "low"
-INFLOW_PER_DAY = 16000000           # items a full-load day brings in (5-16M measured); low also when free < two periods of it
-DRAIN_COUNT = 2048                  # items of ore moved out per low reading
-DRAIN_DESTINATION = (174, 67, -2829)    # the item trash can by the RS controller (world copy)
+INFLOW_PER_DAY = 16000000           # items a full-load day brings in (5-16M measured); low also when free < TWO periods of it
 RS_DISKS_FILE = os.path.join("data", "refinedstorage_disks.dat")
+STORAGE_FAULTS = ("rs_offline", "rs_stall", "disk_full")     # scheduled faults that explain a bad storage reading
 
 
 def _env_int(name):
@@ -313,34 +351,59 @@ def _env_int(name):
         return None
 
 
-RS_CAPACITY = _env_int("SHAKEOUT_RS_CAPACITY")      # items the RS disks hold; measured from the world at the first check when unset
+RS_CAPACITY = _env_int("SHAKEOUT_RS_CAPACITY")      # a fixed capacity override; unset, capacity is read from the world data each period
 
 
 def capacity_of_disks(disks):
     """Total item capacity of a decoded refinedstorage disks list ([{Type, Data: {Capacity, Items}}]): the sum over item disks;
-    math.inf when any item disk is unlimited (Capacity <= 0); None when there is no item disk."""
+    math.inf only when an item disk's Capacity is the number -1 (creative); None (unknown) when there is no item disk, a disk has
+    no numeric Capacity, or a Capacity is negative but not -1."""
     total, n = 0, 0
     for d in disks or []:
         if not isinstance(d, dict) or d.get("Type") != "refinedstorage:item":
             continue
         n += 1
         cap = (d.get("Data") or {}).get("Capacity")
-        if not isinstance(cap, (int, float)) or cap <= 0:
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+            return None
+        if cap == -1:
             return math.inf
+        if cap < 0:
+            return None
         total += cap
     return total if n else None
 
 
+def used_of_disks(disks):
+    """Items held on all item disks (sum of Quantity); None when no item disk."""
+    total, n = 0, 0
+    for d in disks or []:
+        if not isinstance(d, dict) or d.get("Type") != "refinedstorage:item":
+            continue
+        n += 1
+        for i in (d.get("Data") or {}).get("Items") or []:
+            if isinstance(i, dict):
+                total += i.get("Quantity", i.get("Amount", i.get("Count", 0))) or 0
+    return total if n else None
+
+
+def read_rs_disks(world):
+    """The decoded Disks list of <world>/data/refinedstorage_disks.dat and the file's age in seconds (a host file read, the game
+    untouched). Raises when the file cannot be read."""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("sandbox_nbt", os.path.join(here, "..", "..", "tools", "nbt.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    path = os.path.join(world, RS_DISKS_FILE)
+    age = time.time() - os.path.getmtime(path)
+    return mod.read_nbt_file(path)["data"]["Disks"], age
+
+
 def rs_capacity_of_world(world):
-    """Reads <world>/data/refinedstorage_disks.dat (host file read, the game untouched); None when it cannot be read."""
+    """Capacity from the world's RS data (see capacity_of_disks); None when it cannot be read."""
     try:
-        import importlib.util
-        here = os.path.dirname(os.path.abspath(__file__))
-        spec = importlib.util.spec_from_file_location("sandbox_nbt", os.path.join(here, "..", "..", "tools", "nbt.py"))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        doc = mod.read_nbt_file(os.path.join(world, RS_DISKS_FILE))
-        return capacity_of_disks(doc["data"]["Disks"])
+        return capacity_of_disks(read_rs_disks(world)[0])
     except Exception:  # noqa: BLE001 - no capacity is reported as unknown, not guessed
         return None
 
@@ -352,24 +415,94 @@ def _hk_log(ctx, what):
         f.write("%s HOUSEKEEPING %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), what))
 
 
-def _drain_ore(ctx, storage):
-    """Moves ore out of RS with an ordinary delivery order to the trash can. VERIFY ON T2 FIRST: unproven end to end."""
-    best = None
-    for e in storage or []:
-        n, a = (e or {}).get("name"), (e or {}).get("amount") or 0
-        if isinstance(n, str) and ("ore" in n or n.startswith("minecraft:raw_")) and a > 0 and (best is None or a > best[1]):
-            best = (n, a)
-    if best is None:
-        return "drain_ore: no ore in storage to move"
-    x, y, z = DRAIN_DESTINATION
-    count = min(best[1], DRAIN_COUNT)
-    ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": best[0], "count": count}], "destination": {"x": x, "y": y, "z": z}})
-    return "drain_ore ordered %d x %s to %d,%d,%d (verify on T2 first)" % (count, best[0], x, y, z)
+def _active_storage_faults(ctx):
+    """Names of scheduled storage faults whose window is open now (the run driver sets ctx.shakeout_entries)."""
+    st = getattr(ctx, "shakeout_sched", None) or {}
+    entries = getattr(ctx, "shakeout_entries", None) or []
+    active = {i for i, s in (st.get("status") or {}).items() if isinstance(s, dict) and s.get("phase") == "active"}
+    return sorted({"%s %s" % (e["fault"], e["id"]) for e in entries if e.get("id") in active and e.get("fault") in STORAGE_FAULTS})
+
+
+def _headroom_line(ctx, now):
+    world_dir = getattr(getattr(ctx, "_raw", None), "world", None)
+    try:
+        disks, age = read_rs_disks(world_dir or "")
+    except Exception as ex:  # noqa: BLE001
+        return "unknown", "storage-headroom-unknown: RS data unreadable (%s: %s)" % (type(ex).__name__, str(ex)[:80])
+    used, cap = used_of_disks(disks), (RS_CAPACITY if RS_CAPACITY is not None else capacity_of_disks(disks))
+    if age > 2 * HOUSEKEEP_EVERY_S:
+        return "unknown", "storage-headroom-unknown: RS data is stale (file %.0f s old, limit %d s)" % (age, 2 * HOUSEKEEP_EVERY_S)
+    if used is None or cap is None:
+        return "unknown", "storage-headroom-unknown: no usable item-disk capacity or contents in the RS data (file %.0f s old)" % age
+    free = cap - used
+    low = cap != math.inf and (free < LOW_FREE_FRACTION * cap or free < 2 * INFLOW_PER_DAY * HOUSEKEEP_EVERY_S / 86400.0)
+    pct = "unlimited" if cap == math.inf else "%.1f%%" % (100.0 * free / cap)
+    return ("low" if low else "ok"), "used=%d capacity=%s free=%s file_age=%.0fs" % (
+        used, "unlimited" if cap == math.inf else int(cap), pct, age)
+
+
+# Where a delivery leaves things (delivery_turtle.lua: the entangled chest under the destination, regular chests placed down at
+# z+1 .. z+MAX_CHESTS): read from the turtle's own file so a change there changes the box here.
+def _delivery_chests():
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "..", "..", "..", "delivery_turtle.lua"), encoding="utf8") as f:
+            m = re.search(r"^local MAX_CHESTS\s*=\s*(\d+)", f.read(), re.M)
+        return int(m.group(1))
+    except (OSError, AttributeError, ValueError):
+        return 6
+
+
+MAX_CHESTS = _delivery_chests()
+CLEAR_MARGIN = 1                    # blocks around the chests, for items that bounced
+
+
+def clear_box(spot):
+    """(x1, y1, z1, x2, y2, z2): the destination x, the chest layer (y-1) and the turtle's layer, z .. z+MAX_CHESTS, plus a margin."""
+    x, y, z = spot
+    return (x - CLEAR_MARGIN, y - 1, z - CLEAR_MARGIN, x + CLEAR_MARGIN, y, z + MAX_CHESTS + CLEAR_MARGIN)
+
+
+def _turtle_in_box(turtles, box, pad=2):
+    x1, y1, z1, x2, y2, z2 = box
+    for t in turtles.values():
+        if not isinstance(t, dict) or not isinstance(t.get("x"), (int, float)):
+            continue
+        if x1 - pad <= t["x"] <= x2 + pad and y1 - pad <= t.get("y", 0) <= y2 + pad and z1 - pad <= t.get("z", 0) <= z2 + pad:
+            return True
+    return False
+
+
+def _clear_delivery_spots(ctx, st):
+    out = []
+    state = ctx.state() or {}
+    turtles = state.get("turtles") or {}
+    if isinstance(turtles, list):
+        turtles = {t.get("id"): t for t in turtles}
+    heading = []
+    for j in _as_list(state.get("jobs")):
+        d = j.get("destination") if isinstance(j, dict) else None
+        if isinstance(d, dict) and j.get("type") == "DELIVER" and j.get("status") in ACTIVE:
+            heading.append((d.get("x"), d.get("z")))
+    for spot in DESTINATIONS:
+        box = clear_box(spot)
+        if (spot[0], spot[2]) in heading:
+            out.append("clear-delivery-spot %d,%d,%d skipped: a delivery is on its way there" % spot)
+        elif _turtle_in_box(turtles, box):
+            out.append("clear-delivery-spot %d,%d,%d skipped: a turtle is inside the box" % spot)
+        else:
+            x1, y1, z1, x2, y2, z2 = box
+            r1 = ctx._raw.command("fill %d %d %d %d %d %d minecraft:air replace minecraft:chest" % box)
+            r2 = ctx._raw.command("kill @e[type=minecraft:item,x=%d,y=%d,z=%d,dx=%d,dy=%d,dz=%d]"
+                                  % (x1, y1, z1, x2 - x1, y2 - y1, z2 - z1))
+            out.append("clear-delivery-spot %d,%d,%d box %s: %s; items: %s" % (spot + (box, (r1 or "").strip()[:60], (r2 or "").strip()[:40])))
+    return out
 
 
 def housekeep(ctx, now):
-    """Every HOUSEKEEP_EVERY_S: logs the RS headroom; when it is low, logs `storage-headroom-low` and drains ore. Returns the lines."""
-    global RS_CAPACITY
+    """Every HOUSEKEEP_EVERY_S: logs the RS headroom (`storage-headroom-ok|low|unknown`; `low` is the named finding, and inside a
+    scheduled storage fault the line is `storage-headroom-expected state=...` instead) and clears what deliveries left at the
+    destinations. Returns the lines. Never an intervention: the raw control, no ctx.control."""
     st = getattr(ctx, "shakeout_housekeeping", None)
     if st is None:
         ctx.shakeout_housekeeping = {"last": now}
@@ -379,23 +512,20 @@ def housekeep(ctx, now):
     st["last"] = now
     out = []
     try:
-        storage = (ctx.state() or {}).get("storage") or []
-        used = sum((e.get("amount") or e.get("count") or 0) for e in storage if isinstance(e, dict))
-        if RS_CAPACITY is None:
-            RS_CAPACITY = rs_capacity_of_world(getattr(getattr(ctx, "_raw", None), "world", None) or "")
-        cap = RS_CAPACITY
-        if cap is None:
-            out.append("storage-headroom-unknown: used %d items, no capacity measured (set SHAKEOUT_RS_CAPACITY)" % used)
+        state, text = _headroom_line(ctx, now)
+        expected = _active_storage_faults(ctx)
+        if expected:
+            out.append("storage-headroom-expected state=%s (inside scheduled %s) %s" % (state, ", ".join(expected), text.split(": ", 1)[-1]))
+        elif text.startswith("storage-headroom-unknown"):
+            out.append(text)
         else:
-            free = cap - used
-            low = cap != math.inf and (free < LOW_FREE_FRACTION * cap or free < 2 * INFLOW_PER_DAY * HOUSEKEEP_EVERY_S / 86400.0)
-            pct = "unlimited" if cap == math.inf else "%.1f%%" % (100.0 * free / cap)
-            out.append("storage-headroom-%s used=%d capacity=%s free=%s" % ("low" if low else "ok", used,
-                                                                          "unlimited" if cap == math.inf else int(cap), pct))
-            if low:
-                out.append(_drain_ore(ctx, storage))
+            out.append("storage-headroom-%s %s" % (state, text))
     except Exception as ex:  # noqa: BLE001 - a failed check is logged, never the end of a 24-hour run
         out.append("storage-headroom-unknown: check failed: %s: %s" % (type(ex).__name__, ex))
+    try:
+        out += _clear_delivery_spots(ctx, st)
+    except Exception as ex:  # noqa: BLE001
+        out.append("clear-delivery-spot failed: %s: %s" % (type(ex).__name__, ex))
     for what in out:
         _hk_log(ctx, what)
     return out

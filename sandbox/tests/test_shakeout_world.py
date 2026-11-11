@@ -154,6 +154,7 @@ def seeded():
     everywhere, bay 1's under-dock blocks (worker bay 1: factory blocks left of the centre column, ender chests right of it; support bay 1:
     ender chests), bay 1's pillar east of it, bays 2-5 with the wrong or no under-blocks and no pillars, old turtles on docks."""
     s = FakeServer()
+    s.put(world.RS_CONTROLLER, "refinedstorage:controller")
     for x in range(140, 236):
         for z in range(-2816, -2786):
             s.put((x, 66, z), "xkdeco:factory_block")
@@ -398,6 +399,38 @@ class Verify(unittest.TestCase):
         self.assertEqual(v["under_ok"], 126, "a wrong frequency and a floor block instead of a chest both fail")
         self.assertEqual(v["dock_air"], 159)
         self.assertEqual(len(v["bad"]), 3)
+
+
+class RsCapacity(unittest.TestCase):
+    def faces(self):
+        x, y, z = world.RS_CONTROLLER
+        return [(x + dx, y + dy, z + dz) for dx, dy, dz in world.RS_NEIGHBOURS]
+
+    def test_build_adds_a_creative_storage_block_next_to_the_controller(self):
+        s, ctx, report = built()
+        rs = report["rs_capacity"]
+        self.assertTrue(rs["placed"] and rs["controller"], rs)
+        self.assertIn(rs["pos"], self.faces())
+        self.assertEqual(s.at(rs["pos"])[0], world.RS_CREATIVE_BLOCK)
+        self.assertEqual(sum(1 for p in self.faces() if s.at(p)[0] == world.RS_CREATIVE_BLOCK), 1)
+
+    def test_a_second_build_adds_no_second_block(self):
+        s, ctx, report = built()
+        report2 = world.build_world(ctx)
+        self.assertFalse(report2["rs_capacity"]["placed"])
+        self.assertEqual(report2["rs_capacity"]["pos"], report["rs_capacity"]["pos"])
+        self.assertEqual(sum(1 for p in self.faces() if s.at(p)[0] == world.RS_CREATIVE_BLOCK), 1)
+
+    def test_a_blocked_face_is_skipped_and_no_face_at_all_is_an_error(self):
+        s = seeded()
+        x, y, z = world.RS_CONTROLLER
+        s.put((x + 1, y, z), "minecraft:stone")
+        self.assertEqual(world.add_rs_capacity(FakeCtx(s).control)["pos"], (x - 1, y, z))
+        s2 = seeded()
+        for p in self.faces():
+            s2.put(p, "minecraft:stone")
+        with self.assertRaises(RuntimeError):
+            world.add_rs_capacity(FakeCtx(s2).control)
 
 
 class Gps(unittest.TestCase):

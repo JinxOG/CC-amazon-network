@@ -135,7 +135,7 @@ def quiet_windows(run, schedule_path, now=None):
     schedule.json just before it starts firing, so it is the schedule's start to within seconds. An entry with no line yet uses its
     planned t_ms. The length is the schedule's quiet_ms; a begin that took long (a restart) extends the window to when its line
     was logged. A fault whose `start` line is there but no begin or fail yet is still running its verb (a restart takes minutes):
-    its window stays open (end = now), capped at quiet_ms + 30 minutes. A fault that failed outright has no window. A restart
+    its window stays open (end = now), capped at quiet_ms + 30 minutes. A fault that failed outright has no window, unless it is a server restart (that one took the server down: start to the fail line). A restart
     fault's end also opens a restart-sized window (a disk fill is undone with another restart).
     """
     now = time.time() if now is None else now
@@ -164,10 +164,16 @@ def quiet_windows(run, schedule_path, now=None):
         mine = [l for l in lines if l.get("id") == e.get("id") and isinstance(l.get("wall_ms"), (int, float))]
         phases = {l.get("phase") for l in mine}
         anchors = [l for l in mine if l.get("phase") in ANCHOR_PHASES]
-        if "fail" in phases and "begin" not in phases:
-            continue
+        failed = "fail" in phases and "begin" not in phases
+        if failed and not restart:
+            continue            # a fault that never took effect leaves the fleet talking: nothing to excuse
         start = epoch0 + (min(l["wall_ms"] for l in anchors) if anchors else e.get("t_ms", 0)) / 1000.0
         end = start + (quiet_s if quiet_s > 0 else RESTART_QUIET_S)
+        if failed:
+            # A failed server restart still took the server down (the driver relaunches it on its next poll): the window runs from
+            # the start to the fail line (the relaunch grace is added by server_down_expected).
+            fl = max((l for l in mine if l.get("phase") == "fail"), key=lambda l: l["wall_ms"])
+            end = max(end, epoch0 + fl["wall_ms"] / 1000.0, _epoch(fl.get("time")) or 0)
         for l in mine:
             if l.get("phase") == "begin" and _epoch(l.get("time")) is not None:
                 end = max(end, _epoch(l["time"]))

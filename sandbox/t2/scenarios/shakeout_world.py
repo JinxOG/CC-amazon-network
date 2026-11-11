@@ -30,7 +30,7 @@ import os
 import re
 import tempfile
 
-from shakeout import world  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
+from shakeout import feeder, world  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
 
 NAME = "shakeout_world"
 PROBE_CORNERS = [(129, -2847), (271, -2770), (129, -2770)]     # NW, SE, SW corners of BASE_AREAS
@@ -87,10 +87,26 @@ def steps(ctx):
     c = ctx.control
     online0 = len(ctx.log_lines("ATC online"))
 
-    # 1. Build.
+    # 1. Build. (The RS capacity is read from the saved RS data before and after: housekeeping reads it the same way.)
+    rs_world = getattr(ctx._raw, "world", None)
+    cap_before = feeder.rs_capacity_of_world(rs_world) if rs_world else None
     report = world.build_world(ctx)
     ctx.note("build report: %s" % str({k: v for k, v in report.items() if k not in ("removed", "under")})[:3000])
     ctx.note("removed from bay cells (%d): %s" % (len(report["removed"]), report["removed"]))
+
+    # 1b. Storage can only fill as a scheduled fault: the creative storage block stands, and the saved RS data shows capacity rose.
+    rs = report.get("rs_capacity") or {}
+    ctx.expect(bool(rs.get("pos")) and world._passed(ctx._raw, rs["pos"], world.RS_CREATIVE_BLOCK),
+               "the creative item storage block stands next to the RS controller (%s)" % (rs,))
+    if rs_world:
+        ctx._raw.command("save-all flush")
+        ctx.wait_game(30)
+        cap_after = feeder.rs_capacity_of_world(rs_world)
+        ctx.expect(cap_after == float("inf") or (cap_before is not None and cap_after is not None and cap_after > cap_before),
+                   "RS item capacity rose after the build (before %s, after %s, from <world>/data/refinedstorage_disks.dat)"
+                   % (cap_before, cap_after))
+    else:
+        ctx.note("no world folder on the control: RS capacity read-back skipped")
 
     # 2a. No clone of turtles.
     cmds = world.commands_of(ctx.interventions)

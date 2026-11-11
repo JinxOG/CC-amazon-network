@@ -152,6 +152,7 @@ def run_loop(ctx, sched, seconds, poll=None):
     Always ends with schedule.teardown and the no-filler-left check, whatever stopped the loop."""
     poll = poll or env_int("SHAKEOUT_POLL_S", 15)
     feed, housekeep = _feeder(ctx)
+    ctx.shakeout_entries = sched          # housekeeping tags a storage reading taken inside a scheduled storage fault as expected
     t0 = time.time()
     errors = 0
     try:

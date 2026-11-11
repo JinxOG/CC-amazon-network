@@ -141,10 +141,10 @@ class FeederTests(unittest.TestCase):
         ctx = FakeCtx(miners=1, deliverers=0)
         f = feeder.Feeder(ctx, min_jobs=0, sites=0)
         f.tick(1000.0)
-        f.tick(1000.0 + 200)
+        f.tick(1000.0 + 100)
         self.assertEqual(ctx.orders, [], "no order for a turtle that has only just been seen idle")
-        f.tick(1000.0 + 301)
-        self.assertTrue(any(t == "ORDER_MINE" for t, _ in ctx.orders), "an order within the idle limit (half of it)")
+        f.tick(1000.0 + 200)
+        self.assertTrue(any(t == "ORDER_MINE" for t, _ in ctx.orders), "an order well within the idle limit (a quarter of it)")
 
     def test_feeder_never_reuses_ground(self):
         boxes = [server_bounds(z["x1"], z["z1"], z["x2"], z["z2"]) for z in feeder.ZONES]
@@ -235,82 +235,267 @@ class FeederTests(unittest.TestCase):
         working = len([1 for t in ctx.turtles.values() if t["role"] == "MINER" and t["status"] != "IDLE"])
         self.assertEqual(working, 128, "every miner is working at the end")
 
-    def test_idle_clock_resets_only_for_turtles_given_work(self):
-        # no stock to deliver: the delivery turtles' idleness must stay on the clock, not be wiped
-        ctx = FakeCtx(miners=0, deliverers=3)
-        ctx.storage = []
+    def test_ordering_resets_no_idle_clock(self):
+        # the clock is the evidence: it restarts only when a turtle leaves IDLE, never because an order was placed
+        ctx = FakeCtx(miners=2, deliverers=3)
         f = feeder.Feeder(ctx, min_jobs=0, sites=0)
         f.tick(0.0)
         f.tick(400.0)
-        self.assertEqual(ctx.orders, [])
+        self.assertTrue(any(t == "ORDER_DELIVERY" for t, _ in ctx.orders))
         self.assertTrue(all(f.idle_since[t] == 0.0 for t in ctx.turtles), f.idle_since)
-        ctx.storage = [{"name": "minecraft:cobblestone", "amount": 5000}]
-        f.tick(450.0)
-        self.assertEqual(len([o for o in ctx.orders if o[0] == "ORDER_DELIVERY"]), 3, "one delivery per idle delivery turtle")
 
-    def test_no_stock_note_is_rate_limited(self):
-        ctx = FakeCtx(deliverers=2, miners=0)
-        ctx.storage = []
+    def test_pending_jobs_are_subtracted_before_ordering_more(self):
+        ctx = FakeCtx(miners=5, deliverers=0)
         f = feeder.Feeder(ctx, min_jobs=0, sites=0)
         f.tick(0.0)
-        for i in range(1, 100):
-            f.tick(i * 15.0 + 300)
-        self.assertEqual(len([n for n in ctx.notes if "no ordinary stock" in n]), 1)
+        f.tick(400.0)
+        n = len([o for o in ctx.orders if o[0] == "ORDER_MINE"])
+        self.assertEqual(n, 1, "five waiting miners, one full zone of twelve jobs pending")
+        for j in ctx.jobs.values():
+            j["status"] = "PENDING"
+        for i in range(10):
+            f.tick(430.0 + 30 * i)
+        self.assertEqual(len([o for o in ctx.orders if o[0] == "ORDER_MINE"]), n, "pending jobs cover the waiting miners: no phantom orders")
+
+    def test_mining_orders_are_always_full_zones(self):
+        ctx = FakeCtx(miners=1, deliverers=0)
+        f = feeder.Feeder(ctx, min_jobs=0, sites=0)
+        f.tick(0.0)
+        f.tick(400.0)
+        self.assertEqual([p["minerCount"] for t, p in ctx.orders if t == "ORDER_MINE"], [feeder.MINERS_PER_ZONE])
+
+    def test_benched_turtles_are_not_waiting(self):
+        ctx = FakeCtx(miners=3, deliverers=0)
+        for t in ctx.turtles.values():
+            t["blockedUntil"] = (1e5 + 9999) * 1000        # server epoch ms, long after the ticks
+        f = feeder.Feeder(ctx, min_jobs=0, sites=0)
+        f.tick(1e5)
+        f.tick(1e5 + 900)
+        self.assertEqual(ctx.orders, [], "benched turtles are held back by the server: no phantom orders for them")
+        self.assertEqual(f.idle_since, {})
+
+    def test_empty_or_stale_storage_still_delivers_cobblestone(self):
+        for st in ({"storage": []}, {"storage": [{"name": "minecraft:iron_ingot", "amount": 9999}], "storageTs": 1}):
+            ctx = FakeCtx(deliverers=1, miners=0)
+            ctx.state = lambda ctx=ctx, st=st: {"turtles": ctx.turtles, "jobs": list(ctx.jobs.values()), "storage": st["storage"],
+                                                "storageTs": st.get("storageTs")}
+            f = feeder.Feeder(ctx, min_jobs=0, sites=0)
+            f.tick(1e6)
+            f.tick(1e6 + 400)
+            names = [p["items"][0]["name"] for t, p in ctx.orders if t == "ORDER_DELIVERY"]
+            self.assertEqual(names, ["minecraft:cobblestone"], st)
+
+
+class Sim:
+    """The reviewer's adversarial sim (scratchpad sim_feed2/3): a dispatcher handing PENDING jobs to idle, un-benched turtles at
+    `per_poll` jobs a poll (the oldest first, a DIFFERENT turtle from the one that was waiting), mining jobs that work a zone's 36
+    sectors (one per SECTOR_S per miner) and end when it is empty, deliveries that take 300 s, and `benches_per_hour` timed 600 s
+    benches (a working miner refuses its job: it goes IDLE, blocked, the job goes back to PENDING)."""
+    SECTOR_S = 9400 / 4.0
+
+    def __init__(self, benches_per_hour, per_poll, hours=24, miners=128, deliverers=16, warmup=0):
+        import random
+        self.rnd = random.Random(1)
+        self.ctx = ctx = FakeCtx(miners=miners, deliverers=deliverers)
+        self.zones = {}
+        orig = ctx.dispatch
+
+        def dispatch(t, p=None):
+            before = set(ctx.jobs)
+            r = orig(t, p)
+            for jid in set(ctx.jobs) - before:
+                j = ctx.jobs[jid]
+                j["status"] = "PENDING"
+                if j["type"] == "MINE":
+                    self.zones.setdefault(j["zoneKey"], 36)
+            return r
+        ctx.dispatch = dispatch
+        for t in ctx.turtles.values():
+            t["blockedUntil"] = 0
+        self.f = feeder.Feeder(ctx)
+        self.bph, self.per_poll, self.hours, self.warmup = benches_per_hour, per_poll, hours, warmup
+
+    def run(self):
+        ctx, f, now, idle_start, worst = self.ctx, self.f, 0.0, {}, 0
+        for step in range(int(self.hours * 3600 / 15)):
+            for j in ctx.jobs.values():
+                if j["status"] != "IN_PROGRESS":
+                    continue
+                w = ctx.turtles[j["who"]]
+                if j["type"] == "DELIVER" and now - j["t"] >= 300:
+                    j["status"] = "COMPLETE"
+                    w["status"] = "IDLE"
+                elif j["type"] == "MINE" and now - j["t"] >= self.SECTOR_S:
+                    if self.zones[j["zoneKey"]] > 0:
+                        self.zones[j["zoneKey"]] -= 1
+                        j["t"] = now
+                    else:
+                        j["status"] = "COMPLETE"
+                        w["status"] = "IDLE"
+            if self.rnd.random() < self.bph * 15 / 3600.0:
+                ws = [j for j in ctx.jobs.values() if j["type"] == "MINE" and j["status"] == "IN_PROGRESS"]
+                if ws:
+                    j = self.rnd.choice(ws)
+                    w = ctx.turtles[j["who"]]
+                    w["status"], w["blockedUntil"], j["status"] = "IDLE", now + 600, "PENDING"
+                    del j["who"]
+            n = 0
+            for jid, j in sorted(ctx.jobs.items(), key=lambda kv: int(kv[0][1:])):
+                if j["status"] != "PENDING" or n >= self.per_poll:
+                    continue
+                role = "MINER" if j["type"] == "MINE" else "DELIVERY"
+                for tid, t in ctx.turtles.items():
+                    if t["role"] == role and t["status"] == "IDLE" and t["blockedUntil"] <= now:
+                        t["status"], j["status"], j["who"], j["t"] = "WORKING", "IN_PROGRESS", tid, now
+                        if j["type"] == "MINE" and self.zones[j["zoneKey"]] > 0:
+                            self.zones[j["zoneKey"]] -= 1
+                        n += 1
+                        break
+            f.tick(now)
+            for tid, t in ctx.turtles.items():
+                if t["status"] == "IDLE" and t["blockedUntil"] <= now:
+                    idle_start.setdefault(tid, now)
+                    worst = max(worst, now - idle_start[tid]) if now >= self.warmup else worst
+                else:
+                    idle_start.pop(tid, None)
+            now += 15
+        return worst
+
+
+class AdversarialFleetTests(unittest.TestCase):
+    def check(self, bph, per_poll, warmup=0):
+        sim = Sim(bph, per_poll, warmup=warmup)
+        worst = sim.run()
+        ctx = sim.ctx
+        counts = {p["minerCount"] for t, p in ctx.orders if t == "ORDER_MINE"}
+        self.assertEqual(counts, {feeder.MINERS_PER_ZONE}, "every mining order is a full zone")
+        self.assertFalse(sim.f.exhausted, "ground lasted 24 h (zones used %d of %d)" % (sim.f.next_zone, len(feeder.ZONES)))
+        self.assertLessEqual(worst, 600, "worst un-benched idle time %.0f s" % worst)
+        working = len([1 for t in ctx.turtles.values() if t["role"] == "MINER" and t["status"] != "IDLE"])
+        self.assertGreater(working, 100, "the miners are working at the end (%d)" % working)
+
+    def test_no_faults_24_hours(self):
+        self.check(0, 8)
+
+    def test_six_benches_an_hour_24_hours(self):
+        self.check(6, 8)
+
+    def test_slow_dispatcher_with_benches(self):
+        self.check(6, 3, warmup=3600)       # 132 jobs at 3 a poll: the first hour is the dispatcher's start-up, not the feeder's
 
 
 class HousekeepingTests(unittest.TestCase):
     def setUp(self):
-        self.saved = feeder.RS_CAPACITY
+        self.saved = (feeder.RS_CAPACITY, feeder.read_rs_disks)
+        feeder.RS_CAPACITY = None
 
     def tearDown(self):
-        feeder.RS_CAPACITY = self.saved
+        feeder.RS_CAPACITY, feeder.read_rs_disks = self.saved
+
+    def disks(self, used, capacity, age=60.0):
+        item = {"Type": "refinedstorage:item", "Data": {"Items": [{"Quantity": used}]}}
+        if capacity is not None:
+            item["Data"]["Capacity"] = capacity
+        feeder.read_rs_disks = lambda world: ([item], age)
 
     def _lines(self, ctx):
         with open(os.path.join(ctx.run, "shakeout", "housekeeping.log"), encoding="utf8") as f:
             return [l for l in f.read().splitlines() if l]
 
-    def test_housekeeping_is_logged_not_intervention(self):
-        ctx = FakeCtx()
-        feeder.RS_CAPACITY = 20000000
-        ctx.storage = [{"name": "minecraft:cobblestone", "amount": 2000000}, {"name": "minecraft:iron_ore", "amount": 100000}]
+    def run_once(self, ctx):
         feeder.housekeep(ctx, 0.0)                         # the first call only sets the timetable
         self.assertEqual(feeder.housekeep(ctx, 10.0), [], "not due yet")
-        feeder.housekeep(ctx, feeder.HOUSEKEEP_EVERY_S + 1)
+        return feeder.housekeep(ctx, feeder.HOUSEKEEP_EVERY_S + 1)
+
+    def test_housekeeping_is_logged_not_intervention(self):
+        ctx = FakeCtx()
+        self.disks(2000000, 20000000)
+        self.run_once(ctx)
         self.assertEqual(ctx.interventions, [], "housekeeping is not an intervention")
-        self.assertEqual(ctx._raw.commands, [], "and runs no console command")
         lines = self._lines(ctx)
         self.assertTrue(lines and all("HOUSEKEEPING " in l for l in lines), lines)
-        self.assertTrue(any("HOUSEKEEPING storage-headroom-ok" in l for l in lines), lines)
-        self.assertEqual([o for o in ctx.orders if o[0] == "ORDER_DELIVERY"], [], "plenty of room: nothing drained")
+        self.assertTrue(any("HOUSEKEEPING storage-headroom-ok" in l and "file_age=60s" in l for l in lines), lines)
+        self.assertEqual([o for o in ctx.orders if o[0] == "ORDER_DELIVERY"], [], "nothing is drained or ordered")
 
-    def test_low_headroom_is_a_named_finding_and_drains_ore(self):
+    def test_low_headroom_is_a_named_finding(self):
         ctx = FakeCtx()
-        feeder.RS_CAPACITY = 10000000
-        ctx.storage = [{"name": "minecraft:cobblestone", "amount": 2000000}, {"name": "minecraft:iron_ore", "amount": 7500000},
-                       {"name": "minecraft:coal_ore", "amount": 10}]
-        feeder.housekeep(ctx, 0.0)
-        feeder.housekeep(ctx, feeder.HOUSEKEEP_EVERY_S + 1)
+        self.disks(9000000, 10000000)
+        self.run_once(ctx)
+        self.assertTrue(any("HOUSEKEEPING storage-headroom-low" in l for l in self._lines(ctx)), self._lines(ctx))
+        self.assertEqual(ctx.orders, [], "no drain order: the trash-can drain is gone")
+
+    def test_unlimited_creative_capacity_is_never_low(self):
+        ctx = FakeCtx()
+        self.disks(999999999, -1)
+        self.run_once(ctx)
+        self.assertTrue(any("storage-headroom-ok" in l and "unlimited" in l for l in self._lines(ctx)), self._lines(ctx))
+
+    def test_a_disk_without_capacity_is_unknown_not_unlimited(self):
+        ctx = FakeCtx()
+        self.disks(1, None)
+        self.run_once(ctx)
+        self.assertTrue(any("storage-headroom-unknown" in l for l in self._lines(ctx)), self._lines(ctx))
+        self.assertFalse(any("unlimited" in l for l in self._lines(ctx)))
+
+    def test_a_stale_file_is_unknown(self):
+        ctx = FakeCtx()
+        self.disks(1, 100, age=2 * feeder.HOUSEKEEP_EVERY_S + 5)
+        self.run_once(ctx)
+        self.assertTrue(any("storage-headroom-unknown: RS data is stale" in l for l in self._lines(ctx)), self._lines(ctx))
+
+    def test_an_unreadable_file_is_unknown(self):
+        ctx = FakeCtx()
+        self.run_once(ctx)                  # read_rs_disks is the real one and the fake world folder does not exist
+        self.assertTrue(any("storage-headroom-unknown: RS data unreadable" in l for l in self._lines(ctx)), self._lines(ctx))
+
+    def test_a_low_reading_inside_a_scheduled_storage_fault_is_expected(self):
+        ctx = FakeCtx()
+        self.disks(9900000, 10000000)
+        ctx.shakeout_entries = [{"id": "f007", "fault": "rs_offline"}, {"id": "f008", "fault": "radio_loss"}]
+        ctx.shakeout_sched = {"status": {"f007": {"phase": "active"}, "f008": {"phase": "active"}}}
+        self.run_once(ctx)
         lines = self._lines(ctx)
-        self.assertTrue(any("HOUSEKEEPING storage-headroom-low" in l for l in lines), lines)
-        self.assertTrue(any("HOUSEKEEPING drain_ore ordered" in l and "iron_ore" in l for l in lines), lines)
-        drains = [p for t, p in ctx.orders if t == "ORDER_DELIVERY"]
-        self.assertEqual(len(drains), 1)
-        self.assertEqual(drains[0]["items"][0]["name"], "minecraft:iron_ore")
-        self.assertEqual(drains[0]["destination"], {"x": 174, "y": 67, "z": -2829})
-        self.assertEqual(ctx.interventions, [])
+        self.assertTrue(any("storage-headroom-expected state=low (inside scheduled rs_offline f007)" in l for l in lines), lines)
+        self.assertFalse(any("storage-headroom-low" in l for l in lines), "an expected reading is not the finding")
 
-    def test_unknown_capacity_is_said(self):
+    def test_delivery_spots_are_cleared_in_a_box_read_from_delivery_turtle_lua(self):
+        import re
+        lua = os.path.join(HERE, "..", "..", "delivery_turtle.lua")
+        with open(lua, encoding="utf8") as f:
+            self.assertEqual(feeder.MAX_CHESTS, int(re.search(r"^local MAX_CHESTS\s*=\s*(\d+)", f.read(), re.M).group(1)))
+        x, y, z = feeder.DESTINATIONS[0]
+        self.assertEqual(feeder.clear_box((x, y, z)), (x - 1, y - 1, z - 1, x + 1, y, z + feeder.MAX_CHESTS + 1))
         ctx = FakeCtx()
-        feeder.RS_CAPACITY = None
-        feeder.housekeep(ctx, 0.0)
-        feeder.housekeep(ctx, feeder.HOUSEKEEP_EVERY_S + 1)
-        self.assertTrue(any("HOUSEKEEPING storage-headroom-unknown" in l for l in self._lines(ctx)))
+        self.disks(1, 100)
+        self.run_once(ctx)
+        fills = [c for c in ctx._raw.commands if c.startswith("fill ")]
+        self.assertEqual(len(fills), len(feeder.DESTINATIONS))
+        self.assertTrue(all(c.endswith("minecraft:air replace minecraft:chest") for c in fills), "only plain chests, never the entangled one")
+        self.assertEqual(len([c for c in ctx._raw.commands if c.startswith("kill @e[type=minecraft:item")]), len(feeder.DESTINATIONS))
+        self.assertEqual(ctx.interventions, [])
+        self.assertTrue(any("HOUSEKEEPING clear-delivery-spot" in l for l in self._lines(ctx)))
 
-    def test_capacity_of_disks(self):
-        def item(c):
-            return {"Type": "refinedstorage:item", "Data": {"Capacity": c, "Items": []}}
+    def test_a_spot_with_a_turtle_in_the_box_or_a_delivery_heading_there_is_left_alone(self):
+        ctx = FakeCtx()
+        self.disks(1, 100)
+        x, y, z = feeder.DESTINATIONS[0]
+        ctx.turtles["node_300"].update({"x": x, "y": y, "z": z + 3})
+        hx, hy, hz = feeder.DESTINATIONS[1]
+        ctx.jobs["j1"] = {"id": "j1", "type": "DELIVER", "status": "IN_PROGRESS", "destination": {"x": hx, "y": hy, "z": hz}}
+        self.run_once(ctx)
+        lines = self._lines(ctx)
+        self.assertTrue(any("%d,%d,%d skipped: a turtle is inside" % (x, y, z) in l for l in lines), lines)
+        self.assertTrue(any("%d,%d,%d skipped: a delivery is on its way" % (hx, hy, hz) in l for l in lines), lines)
+        self.assertEqual(len([c for c in ctx._raw.commands if c.startswith("fill ")]), len(feeder.DESTINATIONS) - 2)
+
+    def test_capacity_and_used_of_disks(self):
+        def item(c, q=0):
+            return {"Type": "refinedstorage:item", "Data": {"Capacity": c, "Items": [{"Quantity": q}]}}
         self.assertEqual(feeder.capacity_of_disks([item(1000), item(2000), {"Type": "refinedstorage:fluid", "Data": {"Capacity": 5}}]), 3000)
+        self.assertEqual(feeder.used_of_disks([item(1000, 7), item(2000, 5)]), 12)
         self.assertEqual(feeder.capacity_of_disks([item(1000), item(-1)]), float("inf"))
+        self.assertIsNone(feeder.capacity_of_disks([item(1000), item(-5)]), "only -1 is unlimited")
+        self.assertIsNone(feeder.capacity_of_disks([item(1000), {"Type": "refinedstorage:item", "Data": {"Items": []}}]), "no Capacity: unknown")
         self.assertIsNone(feeder.capacity_of_disks([]))
         self.assertIsNone(feeder.rs_capacity_of_world("no-such-world"))
 
