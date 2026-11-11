@@ -1205,6 +1205,7 @@ def _relaunch(ctx, st, wall_ms, acted):
     """Starts the game server again after a restart fault left it down -- only when pids.json says its process is NOT alive.
     Unknown (pids.json unreadable) is not a reason: a relaunch then could start a second server on the run folder, so it is
     logged once and the flag stays set."""
+    st["_wall"] = wall_ms             # what _after_restart times its forceloads from
     alive = _server_alive(ctx)
     if alive is True:
         st["need_relaunch"] = False

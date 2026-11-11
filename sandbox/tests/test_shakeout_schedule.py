@@ -1220,6 +1220,17 @@ class NoRestartInsideAChunkUnload(unittest.TestCase):
         self.assertIn(rm, [x[1][0] for x in calls_of(c, "command")])
         self.assertEqual(schedule.state_of(ctx)["forceloads"], [])
 
+    def test_a_relaunch_reissues_the_restore_timed_from_its_own_call(self):
+        real = schedule._server_alive
+        schedule._server_alive = lambda ctx: False
+        self.addCleanup(lambda: setattr(schedule, "_server_alive", real))
+        ctx = FakeCtx()
+        s = [entry(1, 0, "chunk_unload", {"dur_ms": 30000, "target": {"role": "MINER", "index": 0}, "radius_chunks": 1})]
+        schedule.run_due(ctx, s, 0)
+        schedule.state_of(ctx)["need_relaunch"] = True
+        schedule.run_due(ctx, s, 5 * HOUR)
+        self.assertEqual([f["until"] for f in schedule.state_of(ctx)["forceloads"]], [5 * HOUR + schedule.FORCELOAD_HOLD_MS])
+
     def test_teardown_takes_off_a_forceload_still_on(self):
         ctx = FakeCtx()
         s = [entry(1, 0, "chunk_unload", {"dur_ms": 30000, "target": {"role": "MINER", "index": 0}, "radius_chunks": 1}),
