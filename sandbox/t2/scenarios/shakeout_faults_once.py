@@ -8,8 +8,10 @@ faults and the chunk unload come (they prefer a turtle off its dock). Then sched
 schedule.FAULTS once, in that order, each window short, each starting only after the one before has closed and its quiet time
 has passed) is written to <run>/schedule.json and run by wall clock with shakeout.run_loop, which ends with teardown.
 
-CHECKS, one per fault (each can fail: a verb that raised, or never ran, leaves no 'begin' line): the fault's 'begin' is in
-<run>/shakeout/faults.jsonl, and its 'end' too when it has a window to close; and at least one INTERVENTION names its id.
+CHECKS, one per fault (check_each; each can fail): the fault's 'begin' is in <run>/shakeout/faults.jsonl WITH observed.ok --
+one cheap read made right after the verb showing it took effect, so a verb that silently did nothing fails here -- its 'end'
+too when it has a window to close (disk_full's end must also see diskFree back up), and at least one INTERVENTION names its
+id. Each begin and end line carries its actual wall time (wall_ms, and began_ms on the end line).
 Then: no filler file on any disk (run_loop's check), the server process alive and the bridge answering /ping at the end.
 """
 import importlib.util
@@ -37,14 +39,25 @@ def fault_log(ctx):
 
 
 def check_each(ctx, sched):
+    """One check per fault. A begin line and an intervention are not enough on their own (a verb whose reply nobody reads can
+    do nothing and still log both): the begin's detail must carry observed.ok, the cheap read schedule.py makes right after
+    the verb (the computer is off, the hosts are off, the tick rate reads back, the control mod said ok, diskFree fell to
+    leave_bytes, the slot is empty, the fuel reads back ...); a window's end must be logged too, and disk_full's end must see
+    diskFree back up (end_observed)."""
     log = fault_log(ctx)
     for e in sched:
-        phases = [l["phase"] for l in log if l.get("id") == e["id"]]
+        mine = [l for l in log if l.get("id") == e["id"]]
+        phases = [l["phase"] for l in mine]
         has_end = schedule.APPLY[e["fault"]].end is not None
         marks = [i for i in ctx.interventions if i.get("fault") == e["id"]]
-        ok = "begin" in phases and (not has_end or "end" in phases) and bool(marks)
-        ctx.expect(ok, "%s %s fired once: phases %s, %d intervention(s)%s" % (e["id"], e["fault"], phases, len(marks),
-                   "" if ok else " -- errors: %s" % [l.get("error") for l in log if l.get("id") == e["id"] and l.get("error")]))
+        begin = next((l for l in mine if l["phase"] == "begin"), {})
+        observed = (begin.get("detail") or {}).get("observed") or {}
+        end = next((l for l in mine if l["phase"] == "end"), {})
+        end_seen = ((end.get("detail") or {}).get("end_observed") or {"ok": True}) if end else {"ok": not has_end}
+        ok = bool(begin) and observed.get("ok") is True and (not has_end or bool(end)) and end_seen.get("ok") is True and bool(marks)
+        ctx.expect(ok, "%s %s fired once and was seen to take effect: phases %s, observed %s%s, %d intervention(s)%s" % (
+            e["id"], e["fault"], phases, observed, (", at the end %s" % end_seen) if end else "", len(marks),
+            "" if ok else " -- errors: %s" % [l.get("error") for l in mine if l.get("error")]))
 
 
 def steps(ctx):

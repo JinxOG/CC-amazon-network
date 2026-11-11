@@ -331,6 +331,61 @@ class PlacementRefuses(unittest.TestCase):
         self.assertFalse(any(t.startswith("setblock") for t in ctx.game.sent), "nothing is placed")
 
 
+class BootingGame(FakeGame):
+    """A turtle that, once on, writes its own boot log (as logship would): a fresh turtle doing that is not stale."""
+
+    def command(self, text):
+        out = super().command(text)
+        m = re.match(r"^computercraft turn-on #(\d+)$", text)
+        if m and int(m.group(1)) != 95:
+            d = os.path.join(self.disks, m.group(1))
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "boot.log"), "w") as f:
+                f.write("booted\n")
+        return out
+
+
+class BreakingGame(FakeGame):
+    """Refuses the setblock of the fifth fleet turtle: a placement that stops part-way."""
+
+    turtles = 0
+
+    def command(self, text):
+        if text.startswith("setblock") and "turtle_advanced" in text and "On:1b" not in text:
+            self.turtles += 1
+            if self.turtles == 5:
+                return "Could not set the block (fake)"
+        return super().command(text)
+
+
+class PlacementRobustness(unittest.TestCase):
+    def ctx_with(self, game_cls):
+        ctx = FakeCtx()
+        ctx.game = game_cls(ctx.control.disks)
+        ctx.control.game = ctx.control._rcon = ctx.game
+        return ctx
+
+    def test_a_turtles_own_boot_log_does_not_stop_the_placement(self):
+        ctx = self.ctx_with(BootingGame)
+        placed = place(ctx, CELLS[:20])
+        self.assertEqual(len(placed), 20)
+        some = next(iter(placed)).replace("node_", "")
+        self.assertIn("boot.log", os.listdir(os.path.join(ctx.control.disks, some)), "it did boot and write its log")
+
+    def test_a_placement_that_stops_part_way_turns_the_server_back_on_with_what_was_placed(self):
+        ctx = self.ctx_with(BreakingGame)
+        with self.assertRaises(RuntimeError):
+            place(ctx, CELLS[:20])
+        server = [e for e in ctx.game.events if e[1] == 95]
+        self.assertEqual(server[-1], ("turn-on", 95, True), "the dispatch computer is back on, with a seed written")
+        dat = os.path.join(ctx.control.disks, "95", "dock_assignments.dat")
+        placed = ctx.shakeout_fleet["placed"]
+        self.assertEqual(len(placed), 4)
+        self.assertFalse(ctx.shakeout_fleet["complete"])
+        docks, warns = dock_of_each(dat, sorted(placed))
+        self.assertEqual(mismatches(placed, docks), [], "the four placed turtles are seeded where they stand")
+
+
 class Strays(unittest.TestCase):
     def test_a_fleet_turtle_outside_the_docks_is_retired_and_a_roleless_body_is_not(self):
         ctx = FakeCtx()

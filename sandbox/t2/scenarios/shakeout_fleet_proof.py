@@ -7,9 +7,14 @@
    it reports standing there, and no 'Assigned dock' / 'Dock moved' / 'No free docks' line names a placed turtle.
 2. LOADER IDENTITY (spec 4.2.5; memory "copied turtles share a chunk ticket"): two miners are sent to one-sector mine jobs
    1,024 blocks apart (every other miner held); once both have placed their loaders, control.chunk_loaders() must list both
-   loaders' computers, at least 1,000 blocks apart, with different chunky uuids -- and still list both 15 game minutes later,
-   past the miners' own 600 s chunky lease, which is exactly when copied loaders let go (2026-10-06). One ticket shared
-   between them would show as one loader listed, or one gone by the second look.
+   loaders' computers at least 1,000 blocks apart.
+   THE EVIDENCE OF TWO IDENTITIES is that the two loaders carry DIFFERENT chunky uuids: AP keys its ticket by that uuid, and
+   copied loaders shared one (2026-10-06).
+   "BOTH STILL HOLD" is checked 15 game minutes later, past the miners' own 600 s chunky lease (exactly when copied loaders let
+   go) -- but a loader being listed only says its computer is loaded, and a miner standing within a chunk of its loader WITH
+   its own chunky upgrade equipped would keep that chunk loaded by itself. So the hold check counts only a look at which each
+   miner either has no chunky upgrade equipped (mine mode: modem + pickaxe; read from its block's Left/RightUpgrade) or is
+   more than one chunk from its loader; it waits up to HOLD_LOOK_S for such a look, and says so if none comes.
    The zones: (1920,-2624), the T2 scenarios' usual one, and (2944,-2624), 1,024 blocks east. An ORDER_MINE takes sector
    CENTRES (memory "ORDER_MINE takes centres"): x1 = x2, z1 = z2 is one sector.
 """
@@ -17,9 +22,13 @@ import importlib.util
 import math
 import os
 
+from shakeout import fleet  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
+
 NAME = "shakeout_fleet_proof"
 ZONES = [(1920, -2624), (2944, -2624)]
 HOLD_AFTER_S = 15 * 60          # game seconds past both placements: beyond the miners' 600 s chunky lease
+HOLD_LOOK_S = 30 * 60           # then up to this long for a look the miners' own chunky upgrades cannot explain
+CHUNKY = "advancedperipherals:chunky_turtle"
 
 _spec = importlib.util.spec_from_file_location("shakeout_driver", os.path.join(os.path.dirname(os.path.abspath(__file__)), "shakeout.py"))
 drv = importlib.util.module_from_spec(_spec)
@@ -36,6 +45,20 @@ def placed_loaders(ctx, wanted):
 
 def distance(a, b):
     return math.hypot((a["chunk_x"] - b["chunk_x"]) * 16, (a["chunk_z"] - b["chunk_z"]) * 16)
+
+
+def own_ticket_near(ctx, miner_cid, loader):
+    """True when the miner could be holding its loader's chunk by itself: its chunky upgrade equipped and it within one
+    chunk of the loader. (None when the miner cannot be read: counted as could.)"""
+    c = ctx.control
+    try:
+        pos = tuple(c.computers()[miner_cid]["pos"])
+        ups = [fleet._value(c.block_data(pos, side)) or "" for side in ("LeftUpgrade", "RightUpgrade")]
+    except Exception:  # noqa: BLE001
+        return None
+    chunky = any(CHUNKY in u for u in ups)
+    near = abs((pos[0] >> 4) - loader["chunk_x"]) <= 1 and abs((pos[2] >> 4) - loader["chunk_z"]) <= 1
+    return chunky and near
 
 
 def steps(ctx):
@@ -64,9 +87,20 @@ def steps(ctx):
     d = distance(first[0], first[1])
     ctx.expect(d >= 1000, "the two loaders stand at least 1,000 blocks apart (%.0f)" % d)
     ctx.expect(first[0].get("uuid") != first[1].get("uuid") and all(l.get("uuid") for l in first),
-               "the two loaders have different chunky uuids (%s, %s)" % (first[0].get("uuid"), first[1].get("uuid")))
+               "THE IDENTITY EVIDENCE: the two loaders have different chunky uuids, so two tickets (%s, %s)"
+               % (first[0].get("uuid"), first[1].get("uuid")))
     ctx.wait_game(HOLD_AFTER_S)
+    miner_of = {loaders[n]: int(n.replace("node_", "")) for n in two if n in loaders}
+
+    def clean_look():
+        ls = placed_loaders(ctx, wanted)
+        if len(ls) != 2:
+            return None
+        near = {l["computer"]: own_ticket_near(ctx, miner_of[l["computer"]], l) for l in ls}
+        return (ls, near) if all(v is False for v in near.values()) else None
+    look = ctx.wait_until(clean_look, HOLD_LOOK_S)
     later = placed_loaders(ctx, wanted)
-    ctx.note("chunk_loaders() %d game s later: %s" % (HOLD_AFTER_S, later))
-    ctx.expect(len(later) == 2 and {l["computer"] for l in later} == {l["computer"] for l in first},
-               "both loaders still hold their chunks %d game s later, past the 600 s lease (%d of 2)" % (HOLD_AFTER_S, len(later)))
+    ctx.note("chunk_loaders() from %d game s after the placements: %s; clean look %s" % (HOLD_AFTER_S, later, look))
+    ctx.expect(bool(look), "both loaders still hold their chunks past the 600 s lease, at a look where neither miner's own "
+               "chunky upgrade could be holding the chunk (%s; %d of 2 listed at the last look)"
+               % (look[1] if look else "no such look in %d game s" % HOLD_LOOK_S, len(later)))

@@ -262,6 +262,14 @@ def dock_seed_text(placed, layout):
 # Placement
 # ---------------------------------------------------------------------------------------------------------------------------
 
+def _write_seed(ctx, c, sid, placed, layout, partial=False):
+    with open(os.path.join(c.disks, str(sid), DOCK_FILE), "w", encoding="utf8", newline="\n") as f:
+        f.write(dock_seed_text(placed, layout))
+    record(ctx, "write_disk", sid, DOCK_FILE, entries=len(placed), partial=partial)
+    if partial and hasattr(ctx, "note"):
+        ctx.note("shakeout fleet: placement stopped part-way; %s seeded with the %d turtles placed so far" % (DOCK_FILE, len(placed)))
+
+
 def place_fleet(ctx, layout=None, kit=None, donors=None, server_id=None, loader_donor=None, staging=None):
     """Places the fleet (see the module doc). Returns {node_id: dock cell}; ctx.shakeout_fleet keeps the server id, the
     placement and each miner's loader id for the fault scheduler and the checks."""
@@ -288,31 +296,42 @@ def place_fleet(ctx, layout=None, kit=None, donors=None, server_id=None, loader_
 
     c.shutdown([sid])
     placed, loaders = {}, {}
-    for cell in layout:
-        role = cell["type"]
-        k = kit[role]
-        items = dict(k["items"])
-        lid = None
-        if "loader_slot" in k:
-            lid = make_loader(ctx, spot, loader_donor, pin)
-            item, count, tag = items[k["loader_slot"]]
-            items[k["loader_slot"]] = (item, count, loader_tag(tag, lid))
-        cid = c.spawn_turtle(cell["x"], cell["y"], cell["z"], role, fuel=k["fuel"], facing=cell["facing"], donor=donors[role],
-                             right=k["right"], items=items)
-        node = "node_%d" % cid
-        placed[node] = dict(cell)
-        if lid is not None:
-            loaders[node] = lid
-        stale = [f for f in c.list_disk(cid) if is_state_file(f)]
-        if stale:
-            raise RuntimeError("%s was given state files %s: it is not fresh" % (node, stale))
-
-    text = dock_seed_text(placed, layout)
-    with open(os.path.join(c.disks, str(sid), DOCK_FILE), "w", encoding="utf8", newline="\n") as f:
-        f.write(text)
-    record(ctx, "write_disk", sid, DOCK_FILE, entries=len(placed))
-    c.turn_on([sid])
-    ctx.shakeout_fleet = {"server": sid, "placed": placed, "loaders": loaders, "donors": dict(donors), "loader_donor": loader_donor}
+    seeded = False
+    try:
+        for cell in layout:
+            role = cell["type"]
+            k = kit[role]
+            items = dict(k["items"])
+            lid = None
+            if "loader_slot" in k:
+                lid = make_loader(ctx, spot, loader_donor, pin)
+                item, count, tag = items[k["loader_slot"]]
+                items[k["loader_slot"]] = (item, count, loader_tag(tag, lid))
+            cid = c.spawn_turtle(cell["x"], cell["y"], cell["z"], role, fuel=k["fuel"], facing=cell["facing"], donor=donors[role],
+                                 right=k["right"], items=items, start=False)
+            node = "node_%d" % cid
+            placed[node] = dict(cell)
+            if lid is not None:
+                loaders[node] = lid
+            # checked while it is still OFF: what is on its disk now came from the donor, not from its own first boot
+            stale = [f for f in c.list_disk(cid) if is_state_file(f)]
+            if stale:
+                raise RuntimeError("%s was given state files %s: it is not fresh" % (node, stale))
+            c.turn_on([cid])
+        _write_seed(ctx, c, sid, placed, layout)
+        seeded = True
+    finally:
+        # A placement that fails part-way must not leave the dispatch computer off, nor with the world copy's old file:
+        # the turtles placed so far are seeded where they stand, and the server comes back either way.
+        if not seeded and placed:
+            try:
+                _write_seed(ctx, c, sid, placed, layout, partial=True)
+            except Exception as ex:  # noqa: BLE001 - the original error is the one to raise
+                if hasattr(ctx, "note"):
+                    ctx.note("shakeout fleet: the partial dock seed could not be written: %s" % ex)
+        c.turn_on([sid])
+        ctx.shakeout_fleet = {"server": sid, "placed": placed, "loaders": loaders, "donors": dict(donors),
+                              "loader_donor": loader_donor, "complete": seeded}
     if hasattr(ctx, "note"):
         counts = {}
         for cell in placed.values():

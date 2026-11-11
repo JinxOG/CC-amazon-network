@@ -146,12 +146,13 @@ class Control:
         except OSError:
             return None
 
-    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None, right=None, startup=None, items=None):
+    def spawn_turtle(self, x, y, z, role, fuel=50000, facing="north", donor=None, right=None, startup=None, items=None, start=True):
         """Places a new advanced turtle with a wireless modem at x, y, z (the spot must be air in a loaded chunk), gives it the
         code of an existing computer of the same role (the files at the top of the donor's disk; no state files) and turns
         it on. The fleet sees it register as a new node. Returns its computer id. `right` is a tool or peripheral upgrade for the
         right side (for example "minecraft:diamond_pickaxe"); `items` maps slot (0-15) to (item, count) or (item, count, tag SNBT), set before the turtle starts; `startup` is a path of a Lua file to install as the new turtle's
-        startup.lua in place of the donor's (a probe program; the turtle is then not a fleet node)."""
+        startup.lua in place of the donor's (a probe program; the turtle is then not a fleet node). start=False leaves it off, so the
+        caller can check its disk before its own boot writes anything there (then turn_on it)."""
         before = set(self.computers())
         right_nbt = ',RightUpgrade:"%s"' % right if right else ""
         out = self.command('setblock %d %d %d computercraft:turtle_advanced[facing=%s]{LeftUpgrade:"computercraft:wireless_modem_advanced",'
@@ -183,7 +184,8 @@ class Control:
         for slot, stack in (items or {}).items():
             item, count, tag = (tuple(stack) + (None,))[:3]
             self.set_slot(new, slot, item, count, tag=tag)    # before it is turned on, so a program starts with them
-        self.turn_on([new])
+        if start:
+            self.turn_on([new])
         return new
 
     def spawn_computer(self, x, y, z, startup, files=None, modem=True):

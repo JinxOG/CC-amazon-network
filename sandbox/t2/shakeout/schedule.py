@@ -36,7 +36,8 @@ existing primitives, never a new mod feature:
   radio_latency     Control.radio_latency, the delay in game ms (real ms x speed) for the same reason
   gps_down          Control.gps_down on one, several or all hosts (Control.gps_hosts), then turn_on; overlapping windows
                     keep a host off until the last one ends
-  chunk_unload      Control.chunk_unload(area=...) round a working turtle (its chunk +- radius_chunks), game-ms dur
+  chunk_unload      Control.chunk_unload(area=...) round a working turtle (its chunk +- radius_chunks), game-ms dur; never
+                    a turtle whose area would touch a base chunk (world.BASE_AREAS): that would unload the base itself
   rs_stall          Control.rs_stall;  rs_offline  Control.rs_offline (storage gone: the spec's "storage full for a while")
   tps_drop          Control.tick_rate to speed x tps / 20 for dur_ms, then the run's own rate again
   bridge_down       the T2 bridge process stopped (taskkill on pids.json's bridge pid) for dur_ms, then started again
@@ -44,8 +45,10 @@ existing primitives, never a new mod feature:
                     HTTP rules allow), for dur_ms; then the proxy stopped and the bridge back on 3000
   disk_full         a filler file written into the dispatch computer's disk folder, leaving leave_bytes of /state diskFree,
                     then a world_restart, because CC measures a disk only when it creates the computer (w3_low_disk.py);
-                    at the window's end the filler is REMOVED FIRST (a host file delete, no game needed) and the disk
-                    measured again with another restart. teardown sweeps every disk for a filler (Review Focus 3)
+                    after the restart diskFree must READ at most leave_bytes + DISK_MARGIN, or the filler is removed and
+                    the begin fails (a fill can go unseen: w3_low_disk.py); no usable diskFree, no filler at all. At the
+                    window's end the filler is REMOVED FIRST (a host file delete, no game needed), the disk measured again
+                    with another restart and diskFree read back (end_observed). teardown sweeps every disk for a filler
   turtle_reboot     one turtle off and on (off_ms apart); the simulator can pick the action (at_action), T2 cannot
   remove_item       Control.clear_slot of one turtle's loader or ender chest (Lua slot in args; NBT slot = Lua slot - 1)
   put_back_turned   Control.turtle_move to where it stands with another facing
@@ -54,9 +57,20 @@ existing primitives, never a new mod feature:
 THE RUNNER (Review Focus 2). run_due keeps its place by wall clock: an entry fires once wall_ms reaches its t_ms; one due while
 the runner was blocked (a restart takes minutes) fires late and records late_ms. A begin that fails (rcon down, say) is retried
 for RETRY_MS, then recorded as failed; a fault that takes the server down and does not get it back sets need_relaunch, and
-every later call tries restart_after_crash until the server answers. Every call goes to the raw Control (the INTERVENTIONS
-wrapper asks the server for the game time first, which fails while it is down) and is recorded as an intervention here, with
-the game time estimated from the last sample. Begins, ends, retries and failures also go to <run>/shakeout/faults.jsonl.
+every later call (and teardown, first) tries restart_after_crash -- but only when pids.json says the server process is NOT
+alive: when that cannot be told, nothing is relaunched (a second server on one folder) and it is logged once.
+A BEGIN THAT FAILS PART-WAY LEAVES NOTHING BEHIND (review 1): a hold (a computer kept off) is taken only once the verb has
+worked, and per entry, so a failed try cannot leak one or release another window's; bridge_slow puts the real bridge back on
+3000 at once when any step fails; a disk fill that fails to write leaves no partial file; and when a begin is finally given
+up, the fault's end runs once on what the begin had done, as a compensating undo.
+EVERY BEGIN OBSERVES ITS EFFECT: detail["observed"] = {..., "ok"} is one cheap read made right after the verb (the computer
+reads off, the GPS hosts off, the tick rate reads back, the control mod replied ok, nothing answers on 3000, a ping through
+the proxy takes the delay, the slot is empty, the fuel reads back, the facing reads back, no slot is empty, the server answers
+after a restart). It is recorded, not acted on (except disk_full's): shakeout_faults_once.py's check requires it.
+Every call goes to the raw Control (the INTERVENTIONS wrapper asks the server for the game time first, which fails while it is
+down) and is recorded as an intervention here, with the game time estimated from the last sample. Begins (with their detail),
+ends, retries, failures and undos go to <run>/shakeout/faults.jsonl, each line with its actual wall time (wall_ms: ms since the
+schedule started; an end line also carries began_ms), which is what a watchdog should measure quiet windows from.
 """
 import http.client
 import http.server
@@ -232,12 +246,16 @@ def _fits(e, placed, lo, hi):
 
 def make_schedule(seed, hours, rates=None, minimums=None):
     """The seeded schedule: [{id, t_ms, fault, args, quiet_ms}] sorted by t_ms (see the module doc for the rules). The same
-    seed, hours and rates give the same list. A rate of 0 leaves that fault out; minimums apply to the rest."""
+    seed, hours and rates give the same list. `rates` must name EVERY fault of FAULTS (a forgotten name would silently drop a
+    fault from the run): a rate of 0 leaves that fault out on purpose; minimums apply to the rest."""
     rates = DEFAULT_RATES if rates is None else rates
     minimums = MIN_COUNTS if minimums is None else minimums
     unknown = sorted(set(rates) - set(FAULTS))
     if unknown:
         raise ValueError("unknown fault names in rates: %s" % unknown)
+    missing = [f for f in FAULTS if f not in rates]
+    if missing:
+        raise ValueError("rates name no rate for %s: give 0 to leave a fault out on purpose" % missing)
     lo, hi = START_MARGIN_MS, int(hours * HOUR) - END_MARGIN_MS
     if hi <= lo:
         raise ValueError("%s hours leave no room for faults" % hours)
@@ -297,6 +315,9 @@ def make_schedule(seed, hours, rates=None, minimums=None):
             else:
                 continue
             break
+        if not any(d["t_ms"] < c["t_ms"] < d["t_ms"] + window_ms(d) for d in fills for c in crashes):
+            raise RuntimeError("no server_crash could be put inside a disk_full window (Review Focus 3); %d crashes, %d fills"
+                               % (len(crashes), len(fills)))
     for e in placed:
         e.pop("_chained", None)
     placed.sort(key=lambda e: (e["t_ms"], FAULTS.index(e["fault"])))
@@ -387,7 +408,7 @@ def _intervention(ctx, fault_id, verb, *args, **kwargs):
 def state_of(ctx):
     st = getattr(ctx, "shakeout_sched", None)
     if st is None:
-        st = {"status": {}, "holds": {}, "need_relaunch": False, "proxy": None, "fillers": {}}
+        st = {"status": {}, "holds": {}, "partial": {}, "need_relaunch": False, "proxy": None, "fillers": {}}
         ctx.shakeout_sched = st
     return st
 
@@ -405,17 +426,21 @@ def _game_ms(ctx, real_ms):
     return int(round(real_ms * getattr(ctx, "rate", 20) / 20.0))
 
 
-def _hold(st, key):
-    st["holds"][key] = st["holds"].get(key, 0) + 1
+def _hold(st, key, eid):
+    """Entry `eid` keeps `key` (a computer id) off. Per entry, not a counter: an entry that never took a hold cannot release
+    another entry's (the leak of review 1: a failed shutdown took a hold, a retry a second, the end released one)."""
+    st["holds"].setdefault(key, set()).add(eid)
 
 
-def _release(st, key):
-    n = st["holds"].get(key, 0) - 1
-    if n <= 0:
+def _release(st, key, eid):
+    """Entry `eid` lets `key` go; True when no entry holds it any more (then it may come back on)."""
+    held = st["holds"].get(key)
+    if held is not None:
+        held.discard(eid)
+        if held:
+            return False
         st["holds"].pop(key, None)
-        return True
-    st["holds"][key] = n
-    return False
+    return True
 
 
 def _fleet(ctx):
@@ -438,20 +463,28 @@ def _role_computer(c, role):
     return (on or ids)[0]
 
 
-def _pick_turtle(c, ctx, sel):
-    """The computer id a selector names (see the module doc)."""
+def _cid(node):
+    return int(node.replace("node_", ""))
+
+
+def _pick_turtle(c, ctx, sel, accept=None):
+    """The computer id a selector names (see the module doc). `accept(cid, pos)` narrows the turtles that may be picked."""
     role = sel["role"].upper()
     placed = _fleet(ctx).get("placed") or {}
     nodes = sorted((n for n, cell in placed.items() if cell["type"] == role), key=lambda n: (placed[n]["x"], placed[n]["z"]))
     if not nodes:
         raise RuntimeError("no %s turtle in the placed fleet" % role)
+    comps = c.computers() if (accept or sel.get("prefer") == "working") else {}
+    if accept:
+        nodes = [n for n in nodes if _cid(n) in comps and accept(_cid(n), tuple(comps[_cid(n)]["pos"]))]
+        if not nodes:
+            raise RuntimeError("no %s turtle this fault may be aimed at right now" % role)
     pool = nodes
     if sel.get("prefer") == "working":
-        comps = c.computers()
-        working = [n for n in nodes if int(n.replace("node_", "")) in comps and
-                   tuple(comps[int(n.replace("node_", ""))]["pos"]) != (placed[n]["x"], placed[n]["y"], placed[n]["z"])]
+        working = [n for n in nodes if _cid(n) in comps and
+                   tuple(comps[_cid(n)]["pos"]) != (placed[n]["x"], placed[n]["y"], placed[n]["z"])]
         pool = working or nodes
-    return int(pool[int(sel.get("index", 0)) % len(pool)].replace("node_", ""))
+    return _cid(pool[int(sel.get("index", 0)) % len(pool)])
 
 
 def _pos(c, cid):
@@ -459,6 +492,32 @@ def _pos(c, cid):
     if cid not in comps:
         raise RuntimeError("computer #%d is not loaded" % cid)
     return tuple(comps[cid]["pos"])
+
+
+def _partial(st, e):
+    """The detail of this begin attempt, kept as it goes: what the compensating undo needs if the begin fails part-way."""
+    d = {}
+    st["partial"][e["id"]] = d
+    return d
+
+
+def _observe(d, fn):
+    """d["observed"] = fn(): one cheap read showing the fault took effect ({..., "ok": bool}); a read that fails is ok False."""
+    try:
+        d["observed"] = fn()
+    except Exception as ex:  # noqa: BLE001 - an observation is evidence, never a reason to stop
+        d["observed"] = {"ok": False, "error": "%s: %s" % (type(ex).__name__, ex)}
+    return d
+
+
+def _on(c, cid):
+    return (c.computers().get(cid) or {}).get("on")
+
+
+def _reply_ok(reply):
+    if isinstance(reply, list):
+        return bool(reply) and all(_reply_ok(r) for r in reply)
+    return isinstance(reply, dict) and not reply.get("error") and reply.get("ok", True) is not False
 
 
 # -- the verbs ---------------------------------------------------------------------------------------------------------------
@@ -469,171 +528,283 @@ def _after_restart(ctx, c):
         c.tick_rate(rate)
 
 
+def _server_answers(c):
+    reply = c.command("time query gametime")
+    return {"reply": reply.strip()[:80], "ok": any(ch.isdigit() for ch in reply)}
+
+
 def _crash_computer(find):
     def begin(ctx, c, st, e):
-        cid = find(ctx, c)
-        _hold(st, cid)
+        d = _partial(st, e)
+        cid = d["computer"] = find(ctx, c)
         c.shutdown([cid])
-        return {"computer": cid}
+        _hold(st, cid, e["id"])                        # only once it is off
+        return _observe(d, lambda: {"on": _on(c, cid), "ok": _on(c, cid) is False})
 
     def end(ctx, c, st, e, detail):
-        cid = detail["computer"]
-        if _release(st, cid):
+        cid = detail.get("computer")
+        if cid is not None and _release(st, cid, e["id"]):
             c.turn_on([cid])
     return begin, end
 
 
 def _world_restart(ctx, c, st, e):
+    d = _partial(st, e)
     if e["args"].get("kind") == "crash":
         c.server_crash()
         c.restart_after_crash()
     else:
         c.world_restart()
     _after_restart(ctx, c)
+    return _observe(d, lambda: _server_answers(c))
 
 
 def _burst(ctx, c, st, e):
-    for _ in range(int(e["args"].get("count", 5))):
+    d = _partial(st, e)
+    for i in range(int(e["args"].get("count", 5))):
         c.server_crash()
         c.restart_after_crash()            # returns once the server says Done: then it is killed again at once
+        d["restarts"] = i + 1
     _after_restart(ctx, c)
+    return _observe(d, lambda: dict(_server_answers(c), restarts=d["restarts"]))
 
 
 def _gps_begin(ctx, c, st, e):
+    d = _partial(st, e)
     hosts = sorted(c.gps_hosts())
     if not hosts:
         raise RuntimeError("no GPS hosts found")
     n = len(hosts) if e["args"].get("count") == "all" else min(len(hosts), int(e["args"].get("count", 1)))
     start = int(e["args"].get("pick", 0)) % len(hosts)
-    chosen = sorted(hosts[(start + j) % len(hosts)] for j in range(n))
-    for h in chosen:
-        _hold(st, h)
+    chosen = d["hosts"] = sorted(hosts[(start + j) % len(hosts)] for j in range(n))
     c.gps_down(hosts=chosen)
-    return {"hosts": chosen}
+    for h in chosen:
+        _hold(st, h, e["id"])                          # only once they are off
+
+    def seen():
+        comps = c.computers()
+        still = [h for h in chosen if (comps.get(h) or {}).get("on")]
+        return {"still_on": still, "ok": not still}
+    return _observe(d, seen)
 
 
 def _gps_end(ctx, c, st, e, detail):
-    back = [h for h in detail["hosts"] if _release(st, h)]
+    back = [h for h in detail.get("hosts", []) if _release(st, h, e["id"])]
     if back:
         c.turn_on(back)
 
 
+def _tick_seen(c, want):
+    reply = c.command("tickrate")
+    return {"want": want, "reply": reply.strip()[:80], "ok": str(want) in reply}
+
+
 def _tps_begin(ctx, c, st, e):
-    rate = getattr(ctx, "rate", 20)
-    c.tick_rate(max(1, int(round(rate * float(e["args"]["tps"]) / 20.0))))
+    d = _partial(st, e)
+    want = d["rate"] = max(1, int(round(getattr(ctx, "rate", 20) * float(e["args"]["tps"]) / 20.0)))
+    c.tick_rate(want)
+    return _observe(d, lambda: _tick_seen(c, want))
 
 
 def _tps_end(ctx, c, st, e, detail):
     c.tick_rate(getattr(ctx, "rate", 20))
 
 
+BASE_CHUNKS = world.area_chunks(world.BASE_AREAS)
+
+
+def unload_area(pos, r):
+    cx, cz = pos[0] >> 4, pos[2] >> 4
+    return ((cx - r) * 16, (cz - r) * 16, (cx + r + 1) * 16 - 1, (cz + r + 1) * 16 - 1)
+
+
 def _chunk_unload(ctx, c, st, e):
-    cid = _pick_turtle(c, ctx, e["args"]["target"])
-    x, _, z = _pos(c, cid)
+    """Under a working turtle -- never where the area would touch a base chunk (world.BASE_AREAS): a docked turtle's chunk +-1
+    covers the dispatch computer at x 136, and unloading the base is not this fault."""
+    d = _partial(st, e)
     r = int(e["args"].get("radius_chunks", 1))
-    cx, cz = x >> 4, z >> 4
-    area = ((cx - r) * 16, (cz - r) * 16, (cx + r + 1) * 16 - 1, (cz + r + 1) * 16 - 1)
-    c.chunk_unload(0, area=area, dur=_game_ms(ctx, e["args"]["dur_ms"]))
-    return {"computer": cid, "area": area}
+    clear = lambda cid, pos: not (world.area_chunks([unload_area(pos, r)]) & BASE_CHUNKS)   # noqa: E731
+    cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"], accept=clear)
+    area = d["area"] = unload_area(_pos(c, cid), r)
+    reply = c.chunk_unload(0, area=area, dur=_game_ms(ctx, e["args"]["dur_ms"]))
+    return _observe(d, lambda: {"reply": reply, "ok": _reply_ok(reply)})
 
 
 def _turtle_reboot(ctx, c, st, e):
-    cid = _pick_turtle(c, ctx, e["args"]["target"])
+    d = _partial(st, e)
+    cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"])
     c.shutdown([cid])
+    off = _on(c, cid)
     time.sleep(int(e["args"].get("off_ms", 0)) / 1000.0)
     c.turn_on([cid])
-    return {"computer": cid}
+    d["observed"] = {"on_while_off": off, "ok": off is False}
+    return d
 
 
 def _remove_item(ctx, c, st, e):
-    cid = _pick_turtle(c, ctx, e["args"]["target"])
-    c.clear_slot(cid, int(e["args"]["slot"]) - 1)
-    return {"computer": cid}
+    d = _partial(st, e)
+    cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"])
+    slot = int(e["args"]["slot"]) - 1
+    c.clear_slot(cid, slot)
+    return _observe(d, lambda: {"slot_empty": "Found no elements" in c.block_data(_pos(c, cid), "Items[{Slot:%db}]" % slot),
+                                "ok": "Found no elements" in c.block_data(_pos(c, cid), "Items[{Slot:%db}]" % slot)})
 
 
 FACINGS = ("north", "east", "south", "west")
 
 
+def _facing(c, cid, pos):
+    x, y, z = pos
+    return next((i for i, f in enumerate(FACINGS) for kind in world.TURTLE_KINDS
+                 if "Test passed" in c.command("execute if block %d %d %d %s[facing=%s]" % (x, y, z, kind, f))), None)
+
+
 def _put_back_turned(ctx, c, st, e):
-    cid = _pick_turtle(c, ctx, e["args"]["target"])
-    x, y, z = _pos(c, cid)
-    now = next((i for i, f in enumerate(FACINGS) for kind in world.TURTLE_KINDS
-                if "Test passed" in c.command("execute if block %d %d %d %s[facing=%s]" % (x, y, z, kind, f))), None)
+    d = _partial(st, e)
+    cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"])
+    pos = _pos(c, cid)
+    now = _facing(c, cid, pos)
     if now is None:
         raise RuntimeError("cannot read which way #%d faces" % cid)
-    new = FACINGS[(now + int(e["args"].get("turn", 1))) % 4]
-    c.turtle_move(cid, x, y, z, facing=new[0])
-    return {"computer": cid, "from": FACINGS[now], "to": new}
+    new = (now + int(e["args"].get("turn", 1))) % 4
+    c.turtle_move(cid, pos[0], pos[1], pos[2], facing=FACINGS[new][0])
+    d.update({"from": FACINGS[now], "to": FACINGS[new]})
+    return _observe(d, lambda: {"facing": FACINGS[_facing(c, cid, _pos(c, cid))], "ok": _facing(c, cid, _pos(c, cid)) == new})
 
 
 def _low_fuel(ctx, c, st, e):
-    cid = _pick_turtle(c, ctx, e["args"]["target"])
+    d = _partial(st, e)
+    cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"])
     c.set_fuel(cid, int(e["args"]["fuel"]))
-    return {"computer": cid}
+    return _observe(d, lambda: (lambda f: {"fuel": f, "ok": f == int(e["args"]["fuel"])})(c.get_fuel(cid)))
 
 
 def _full_inventory(ctx, c, st, e):
-    cid = _pick_turtle(c, ctx, e["args"]["target"])
+    d = _partial(st, e)
+    cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"])
     pos = _pos(c, cid)
-    filled = []
-    for slot in range(16):
-        if "Found no elements" in c.block_data(pos, "Items[{Slot:%db}]" % slot):
-            c.set_slot(cid, slot, e["args"].get("item", "minecraft:cobblestone"), 64)
-            filled.append(slot)
-    return {"computer": cid, "filled": filled}
+    empty = lambda: [s for s in range(16) if "Found no elements" in c.block_data(pos, "Items[{Slot:%db}]" % s)]   # noqa: E731
+    d["filled"] = empty()
+    for slot in d["filled"]:
+        c.set_slot(cid, slot, e["args"].get("item", "minecraft:cobblestone"), 64)
+    return _observe(d, lambda: (lambda left: {"empty_after": left, "ok": not left})(empty()))
 
 
-def _disk_free(ctx, c, sid):
+# -- disk_full ---------------------------------------------------------------------------------------------------------------
+
+DISK_MARGIN = 8000          # bytes: what w3_low_disk.py allows between the target and the diskFree it then reads
+DISK_WAIT_S = 600           # real seconds for the dispatch computer to come back after the remeasuring restart
+DISK_SETTLE_S = 30          # then this long, so the next bridge push carries the new figure (w3_low_disk waits 20 game s)
+DISK_POLL_S = 3
+
+
+def _disk_free(ctx):
+    """/state diskFree as a whole number of bytes, or None when the bridge has no usable figure."""
     try:
         v = (ctx.state() or {}).get("diskFree")
-        if isinstance(v, (int, float)):
-            return int(v)
-    except Exception:  # noqa: BLE001 - the bridge may be down: fall back to the default capacity
-        pass
-    folder = os.path.join(c.disks, str(sid))
-    used = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(folder) for f in fs)
-    return DISK_CAPACITY - used
+    except Exception:  # noqa: BLE001 - the bridge may be down
+        return None
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
 
 
-def _remeasure(ctx, c, st, e, wall):
-    """A world restart, so CC measures the dispatch computer's disk again. A failure is logged and handed to need_relaunch: it
-    must never stand between a filler and its removal."""
+def _online_count(ctx):
+    try:
+        return len(ctx.log_lines("Central server online"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fresh_disk_free(ctx, online_before):
+    """diskFree as the dispatch computer measures it after the restart: once it has logged 'Central server online' again
+    (when the log can be read), and DISK_SETTLE_S later."""
+    deadline = time.time() + DISK_WAIT_S
+    while online_before is not None and time.time() < deadline:
+        n = _online_count(ctx)
+        if n is not None and n > online_before:
+            break
+        time.sleep(DISK_POLL_S)
+    time.sleep(DISK_SETTLE_S)
+    return _disk_free(ctx)
+
+
+def _remeasure(ctx, c, st, e):
+    """A world restart, so CC measures the dispatch computer's disk again. Returns whether it worked; a failure is logged and
+    handed to need_relaunch, and never stands between a filler and its removal."""
     try:
         c.world_restart()
         _after_restart(ctx, c)
+        return True
     except (Exception, SystemExit) as ex:  # noqa: BLE001
         st["need_relaunch"] = True
-        _log(ctx, wall, e, "remeasure-failed", error="%s: %s" % (type(ex).__name__, ex))
+        _log(ctx, st.get("_wall", 0), e, "remeasure-failed", error="%s: %s" % (type(ex).__name__, ex))
+        return False
 
 
 def filler_path(c, sid, fault_id):
     return os.path.join(c.disks, str(sid), "%s%s.bin" % (FILLER_PREFIX, fault_id))
 
 
-def _disk_begin(ctx, c, st, e):
-    sid = _server_id(ctx)
-    free = _disk_free(ctx, c, sid)
-    size = max(0, free - int(e["args"].get("leave_bytes", 0)))
-    path = filler_path(c, sid, e["id"])
-    st["fillers"][path] = e["id"]
+def _write_filler(path, size):
     with open(path, "wb") as f:
         left = size
         while left > 0:
             n = min(left, 1 << 20)
             f.write(b"\0" * n)
             left -= n
+
+
+def _drop_filler(ctx, st, e, path):
+    if path and os.path.exists(path):
+        os.remove(path)
+        _intervention(ctx, e["id"], "delete_disk", os.path.basename(path))
+    st["fillers"].pop(path, None)
+
+
+def _disk_begin(ctx, c, st, e):
+    """Fill, restart, and SEE it: diskFree after the restart must be at most leave_bytes + DISK_MARGIN (w3_low_disk.py found a
+    fill can go unseen). If it is not -- or diskFree was not usable to size the fill -- the filler is removed again (and the
+    disk measured once more) and the begin fails: an unseen fill is not a fault that fired."""
+    d = _partial(st, e)
+    leave = int(e["args"].get("leave_bytes", 0))
+    sid = d["server"] = _server_id(ctx)
+    free = d["free_before"] = _disk_free(ctx)
+    if free is None or free <= leave + DISK_MARGIN:
+        d["clean"] = True
+        raise RuntimeError("diskFree %r cannot size a fill leaving %d bytes" % (free, leave))
+    path = d["path"] = filler_path(c, sid, e["id"])
+    size = d["bytes"] = free - leave
+    st["fillers"][path] = e["id"]
+    try:
+        _write_filler(path, size)
+    except BaseException:
+        if os.path.exists(path):
+            os.remove(path)                # never a half-written filler left behind
+        st["fillers"].pop(path, None)
+        d["clean"] = True
+        raise
     _intervention(ctx, e["id"], "write_disk", sid, os.path.basename(path), bytes=size, free_before=free)
-    _remeasure(ctx, c, st, e, st.get("_wall", 0))
-    return {"path": path, "bytes": size, "free_before": free}
+    n0 = _online_count(ctx)
+    restarted = _remeasure(ctx, c, st, e)
+    seen = _fresh_disk_free(ctx, n0) if restarted else None
+    d["observed"] = {"diskFree": seen, "want_at_most": leave + DISK_MARGIN, "restarted": restarted,
+                     "ok": seen is not None and seen <= leave + DISK_MARGIN}
+    if not d["observed"]["ok"]:
+        _drop_filler(ctx, st, e, path)
+        if restarted:
+            _remeasure(ctx, c, st, e)      # the filler may have been counted after all: measure the emptied disk
+        d["clean"] = True
+        raise RuntimeError("the fill was not seen: diskFree %r after the restart, want at most %d" % (seen, leave + DISK_MARGIN))
+    return d
 
 
 def _disk_end(ctx, c, st, e, detail):
-    path = detail["path"]
-    if os.path.exists(path):
-        os.remove(path)                    # first, and without the game: a failure here keeps the window open to retry
-        _intervention(ctx, e["id"], "delete_disk", os.path.basename(path))
-    st["fillers"].pop(path, None)
-    _remeasure(ctx, c, st, e, st.get("_wall", 0))
+    _drop_filler(ctx, st, e, detail.get("path"))    # first, and without the game: a failure here keeps the window open
+    if detail.get("clean"):
+        return                                     # a failed begin already put the disk back
+    n0 = _online_count(ctx)
+    back = _fresh_disk_free(ctx, n0) if _remeasure(ctx, c, st, e) else None
+    want = int(e["args"].get("leave_bytes", 0)) + DISK_MARGIN
+    detail["end_observed"] = {"diskFree": back, "want_more_than": want, "ok": back is not None and back > want}
 
 
 # -- the bridge --------------------------------------------------------------------------------------------------------------
@@ -643,12 +814,25 @@ def _read_pids(ctx):
         return json.load(f)
 
 
+def _bridge_ping(port, timeout=10):
+    """Milliseconds a GET /ping on 127.0.0.1:port took, or None when nothing answers."""
+    t0 = time.time()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        conn.request("GET", "/ping")
+        conn.getresponse().read()
+        conn.close()
+    except OSError:
+        return None
+    return (time.time() - t0) * 1000.0
+
+
 def _bridge_stop(ctx, e):
     pids = _read_pids(ctx)
     pid = pids.get("bridge")
     if pid:
         subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
-    _intervention(ctx, e["id"], "bridge_stop", pid)
+    _intervention(ctx, e["id"] if e else None, "bridge_stop", pid)
 
 
 def _bridge_start(ctx, e, port):
@@ -659,16 +843,12 @@ def _bridge_start(ctx, e, port):
     pids["bridge"] = pid
     with open(runmod.pids_path(ctx.run), "w") as f:
         json.dump(pids, f)
-    _intervention(ctx, e["id"], "bridge_start", port, pid)
+    _intervention(ctx, e["id"] if e else None, "bridge_start", port, pid)
     t0 = time.time()
     while time.time() - t0 < 300:
-        try:
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
-            conn.request("GET", "/ping")
-            conn.getresponse().read()
+        if _bridge_ping(port, 3) is not None:
             return pid
-        except OSError:
-            time.sleep(2)
+        time.sleep(2)
     raise RuntimeError("the bridge on port %d did not answer /ping in 300 s" % port)
 
 
@@ -693,25 +873,49 @@ def _proxy_stop(ctx, e, pid):
     _intervention(ctx, e["id"] if e else None, "proxy_stop", pid)
 
 
-def _bridge_down(ctx, c, st, e):
+def _bridge_restore(ctx, e, st):
+    """The real bridge on 3000, whatever state a bridge fault left: any proxy stopped; then, unless 3000 already answers (the
+    real bridge: no proxy is left), the recorded bridge stopped (the one on 3001, or a dead one) and a bridge started on 3000.
+    Idempotent: the end of bridge_down and bridge_slow, their compensating undo, and teardown all use it."""
+    if st.get("proxy"):
+        _proxy_stop(ctx, e, st["proxy"])
+        st["proxy"] = None
+    if _bridge_ping(BRIDGE_PORT) is not None:
+        return
     _bridge_stop(ctx, e)
+    _bridge_start(ctx, e, BRIDGE_PORT)
+
+
+def _bridge_down(ctx, c, st, e):
+    d = _partial(st, e)
+    _bridge_stop(ctx, e)
+    return _observe(d, lambda: (lambda ms: {"ping_ms": ms, "ok": ms is None})(_bridge_ping(BRIDGE_PORT, 3)))
 
 
 def _bridge_up(ctx, c, st, e, detail):
-    _bridge_start(ctx, e, BRIDGE_PORT)
+    _bridge_restore(ctx, e, st)
 
 
 def _slow_begin(ctx, c, st, e):
-    _bridge_stop(ctx, e)
-    _bridge_start(ctx, e, SLOW_BRIDGE_PORT)
-    st["proxy"] = _proxy_start(ctx, e, BRIDGE_PORT, SLOW_BRIDGE_PORT, int(e["args"]["ms"]))
+    d = _partial(st, e)
+    ms = int(e["args"]["ms"])
+    try:
+        _bridge_stop(ctx, e)
+        _bridge_start(ctx, e, SLOW_BRIDGE_PORT)
+        st["proxy"] = _proxy_start(ctx, e, BRIDGE_PORT, SLOW_BRIDGE_PORT, ms)
+        d["proxy"] = st["proxy"]
+    except (Exception, SystemExit):
+        try:
+            _bridge_restore(ctx, e, st)    # never leave the fleet without a bridge on 3000 because the slow one failed
+        finally:
+            d["clean"] = True
+        raise
+    return _observe(d, lambda: (lambda took: {"ping_ms": took, "want_at_least": 0.9 * ms,
+                                              "ok": took is not None and took >= 0.9 * ms})(_bridge_ping(BRIDGE_PORT, 3 + ms / 1000.0)))
 
 
 def _slow_end(ctx, c, st, e, detail):
-    _proxy_stop(ctx, e, st.get("proxy"))
-    st["proxy"] = None
-    _bridge_stop(ctx, e)
-    _bridge_start(ctx, e, BRIDGE_PORT)
+    _bridge_restore(ctx, e, st)
 
 
 class DelayProxy(http.server.ThreadingHTTPServer):
@@ -762,19 +966,24 @@ def start_proxy_thread(listen, target, delay_ms):
 # -- the table ---------------------------------------------------------------------------------------------------------------
 
 class Fault:
-    """begin(ctx, control, state, entry) -> detail dict or None; end(ctx, control, state, entry, detail) at t_ms + window, or
-    None for a one-shot (or a fault whose control-mod verb ends by itself). blocking: it takes the game server down, so a
-    failure sets need_relaunch and it is not retried."""
+    """begin(ctx, control, state, entry) -> detail dict (with "observed": {..., "ok"}, one cheap read showing it took effect);
+    end(ctx, control, state, entry, detail) at t_ms + window, or None for a one-shot (or a control-mod verb that ends by
+    itself). Every begin keeps its partial detail as it goes (_partial) and takes a hold only once its verb has worked.
+    blocking: it takes the game server down, so a failure sets need_relaunch. retry: a failed begin is tried again for
+    RETRY_MS (never for blocking faults, nor disk_full: each try costs restarts). When a begin finally fails, end runs once on
+    the partial detail as a compensating undo."""
 
-    def __init__(self, begin, end=None, blocking=False, sim=""):
-        self.begin, self.end, self.blocking, self.sim = begin, end, blocking, sim
+    def __init__(self, begin, end=None, blocking=False, retry=True, sim=""):
+        self.begin, self.end, self.blocking, self.retry, self.sim = begin, end, blocking, retry and not blocking, sim
 
 
 def _mod_verb(name, *keys):
     def begin(ctx, c, st, e):
+        d = _partial(st, e)
         a = e["args"]
         vals = [_game_ms(ctx, a["dur_ms"])] + [(_game_ms(ctx, a[k]) if k == "ms" else a[k]) for k in keys]
-        getattr(c, name)(0, *vals)
+        reply = getattr(c, name)(0, *vals)
+        return _observe(d, lambda: {"reply": reply, "ok": _reply_ok(reply)})
     return begin
 
 
@@ -794,7 +1003,7 @@ APPLY = {
     "tps_drop": Fault(_tps_begin, _tps_end, sim="sim:tps_drop(t, dur, tps)"),
     "bridge_down": Fault(_bridge_down, _bridge_up, sim="sim:bridge_down(t, dur)"),
     "bridge_slow": Fault(_slow_begin, _slow_end, sim="sim:bridge_slow(t, dur, ms)"),
-    "disk_full": Fault(_disk_begin, _disk_end, sim="sim:disk_full(t, server, leave_bytes), and back at the end"),
+    "disk_full": Fault(_disk_begin, _disk_end, retry=False, sim="sim:disk_full(t, server, leave_bytes), and back at the end"),
     "turtle_reboot": Fault(_turtle_reboot, sim="sim:turtle_reboot(t, node, {at_action})"),
     "remove_item": Fault(_remove_item, sim="sim:remove_item(t, node, slot)"),
     "atc_crash": Fault(*_atc_crash, sim="sim:atc_crash(t, down_ms)"),
@@ -807,17 +1016,28 @@ APPLY = {
 
 
 def _server_alive(ctx):
+    """True / False from pids.json and the process table; None when that cannot be told (pids.json unreadable)."""
     try:
         return runmod.alive(ctx._raw._pids()["server"])
-    except Exception:  # noqa: BLE001 - no pids (a fake): unknown
+    except Exception:  # noqa: BLE001
         return None
 
 
 def _relaunch(ctx, st, wall_ms, acted):
-    c = _Recorder(ctx, getattr(ctx, "_raw", ctx.control), "relaunch")
-    if _server_alive(ctx) is True:
+    """Starts the game server again after a restart fault left it down -- only when pids.json says its process is NOT alive.
+    Unknown (pids.json unreadable) is not a reason: a relaunch then could start a second server on the run folder, so it is
+    logged once and the flag stays set."""
+    alive = _server_alive(ctx)
+    if alive is True:
         st["need_relaunch"] = False
         return
+    if alive is None:
+        if not st.get("relaunch_unknown_logged"):
+            st["relaunch_unknown_logged"] = True
+            _log(ctx, wall_ms, None, "relaunch-unknown", error="pids.json unreadable: not relaunching a server that may be alive")
+            acted.append((None, "relaunch-unknown"))
+        return
+    c = _Recorder(ctx, getattr(ctx, "_raw", ctx.control), "relaunch")
     try:
         c.restart_after_crash()
         _after_restart(ctx, c)
@@ -826,6 +1046,19 @@ def _relaunch(ctx, st, wall_ms, acted):
         acted.append((None, "relaunched"))
     except (Exception, SystemExit) as ex:  # noqa: BLE001 - the next call tries again
         _log(ctx, wall_ms, None, "relaunch-failed", error="%s: %s" % (type(ex).__name__, ex))
+
+
+def _undo(ctx, st, e, f, c, wall_ms, acted):
+    """A begin that finally failed: its end, once, on what the begin had done (its partial detail)."""
+    if f.end is None:
+        return
+    try:
+        f.end(ctx, c, st, e, st["partial"].get(e["id"]) or {})
+        _log(ctx, wall_ms, e, "undo", detail=st["partial"].get(e["id"]))
+        acted.append((e["id"], "undo"))
+    except (Exception, SystemExit) as ex:  # noqa: BLE001
+        _log(ctx, wall_ms, e, "undo-failed", error="%s: %s" % (type(ex).__name__, ex))
+        acted.append((e["id"], "undo-failed"))
 
 
 def _begin(ctx, st, e, wall_ms, acted):
@@ -845,14 +1078,15 @@ def _begin(ctx, st, e, wall_ms, acted):
         err = "%s: %s" % (type(ex).__name__, ex)
         if f.blocking:
             st["need_relaunch"] = True
-        if not f.blocking and wall_ms - e["t_ms"] < RETRY_MS:
-            _log(ctx, wall_ms, e, "retry", error=err, attempt=s["attempts"])
+        if f.retry and wall_ms - e["t_ms"] < RETRY_MS:
+            _log(ctx, wall_ms, e, "retry", error=err, attempt=s["attempts"], detail=st["partial"].get(e["id"]))
             acted.append((e["id"], "retry"))
         else:
             s["phase"] = "failed"
             s["error"] = err
-            _log(ctx, wall_ms, e, "fail", error=err)
+            _log(ctx, wall_ms, e, "fail", error=err, detail=st["partial"].get(e["id"]))
             acted.append((e["id"], "fail"))
+            _undo(ctx, st, e, f, c, wall_ms, acted)
         return
     s.update(phase="active" if f.end else "done", began_ms=wall_ms, late_ms=wall_ms - e["t_ms"],
              ends_ms=max(wall_ms, e["t_ms"] + window_ms(e)), detail=detail)
@@ -872,7 +1106,7 @@ def _end(ctx, st, e, wall_ms, acted):
         return
     s["phase"] = "done"
     s["ended_ms"] = wall_ms
-    _log(ctx, wall_ms, e, "end")
+    _log(ctx, wall_ms, e, "end", began_ms=s.get("began_ms"), detail=s.get("detail"))
     acted.append((e["id"], "end"))
 
 
@@ -896,12 +1130,13 @@ def run_due(ctx, schedule, wall_ms):
 
 
 def teardown(ctx, schedule):
-    """The end of a run (also after an error): every filler on every disk removed FIRST, then every open window closed (the
-    computers it switched off back on, GPS up, the bridge back on 3000, the tick rate back). Returns {"fillers_removed",
-    "fillers_left" (a check must see this empty), "ended", "end_errors", "never_fired"}."""
+    """The end of a run (also after an error): every filler on every disk removed FIRST; then the game server relaunched if a
+    restart fault left it down (need_relaunch), so the ends below can reach it; then every open window closed (the computers
+    it switched off back on, GPS up, the bridge back on 3000, the tick rate back). Returns {"fillers_removed", "fillers_left"
+    (a check must see this empty), "ended", "end_errors", "never_fired", "relaunch"}."""
     st = state_of(ctx)
     raw = getattr(ctx, "_raw", ctx.control)
-    out = {"fillers_removed": [], "fillers_left": [], "ended": [], "end_errors": [], "never_fired": []}
+    out = {"fillers_removed": [], "fillers_left": [], "ended": [], "end_errors": [], "never_fired": [], "relaunch": None}
     paths = set(st["fillers"])
     try:
         for d in os.listdir(raw.disks):
@@ -921,6 +1156,10 @@ def teardown(ctx, schedule):
             out["fillers_left"].append(p)
             out["end_errors"].append("filler %s: %s" % (p, ex))
     wall = int(st.get("_wall", 0))
+    if st["need_relaunch"]:
+        acted = []
+        _relaunch(ctx, st, wall, acted)
+        out["relaunch"] = acted or "still needed"
     for e in schedule:
         s = st["status"].get(e["id"])
         if s is None or s["phase"] == "pending":

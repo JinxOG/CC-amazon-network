@@ -25,7 +25,19 @@ HOUR = 3600000
 # A fake Control: every verb the APPLY table may call, recorded; computers, GPS hosts and disks as a small world has them
 # ---------------------------------------------------------------------------------------------------------------------
 
+# The runner's waits are real-time sleeps on T2; here they are nothing. And no test may touch a real bridge on 3000.
+schedule.DISK_SETTLE_S = 0
+schedule.DISK_POLL_S = 0
+schedule.DISK_WAIT_S = 1
+schedule._bridge_ping = lambda port, timeout=10: None
+
+FACING_LETTER = {"n": "north", "e": "east", "s": "south", "w": "west"}
+
+
 class FakeControl:
+    """What the game would show after each verb: computers on or off, slots, fuel, facings, the tick rate, the control mod's
+    replies, and the dispatch computer's disk as CC measures it -- only when the world restarts (w3_low_disk.py)."""
+
     def __init__(self, disks):
         self.disks = disks
         self.calls = []
@@ -35,16 +47,34 @@ class FakeControl:
                       201: (153, 67, -2806), 202: (167, 67, -2806), 203: (300, 120, -2500)}
         self.roles = {95: "SERVER", 99: "WAREHOUSE", 300: "atc", 201: "DELIVERY", 202: "MINER", 203: "MINER"}
         self.slots = {}
+        self.fuel = {}
+        self.facing = {201: "south", 202: "south", 203: "south"}
+        self.rate = 20
         self.on = {i: True for i in self.comps}
         self.fail_next = []          # verbs that raise once (a dropped connection, say)
+        self.always_fail = []        # verbs that raise every time
+        self.noop = []               # verbs that "work" but change nothing (the no-op a proof must not pass)
+        self.capacity = 600000
+        self.restarts = 0
+        self.remeasures = True
+        self.measured = self.capacity
         for i in self.comps:
             os.makedirs(os.path.join(disks, str(i)), exist_ok=True)
 
     def _rec(self, name, *args, **kw):
+        if name in self.always_fail:
+            raise OSError("rcon: connection refused (fake)")
         if name in self.fail_next:
             self.fail_next.remove(name)
             raise OSError("rcon: connection reset (fake)")
         self.calls.append((name, args, kw))
+        return name not in self.noop
+
+    def _measure(self):
+        self.restarts += 1
+        if self.remeasures:
+            d = os.path.join(self.disks, "95")
+            self.measured = self.capacity - sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d))
 
     def computers(self):
         return {i: {"on": self.on[i], "pos": p} for i, p in self.comps.items()}
@@ -56,23 +86,24 @@ class FakeControl:
         return [48, 49, 50, 51]
 
     def shutdown(self, ids):
-        self._rec("shutdown", list(ids))
-        for i in ids:
-            self.on[i] = False
+        if self._rec("shutdown", list(ids)):
+            for i in ids:
+                self.on[i] = False
 
     def turn_on(self, ids):
-        self._rec("turn_on", list(ids))
-        for i in ids:
-            self.on[i] = True
+        if self._rec("turn_on", list(ids)):
+            for i in ids:
+                self.on[i] = True
 
     def gps_down(self, hosts=None):
-        self._rec("gps_down", list(hosts))
-        for i in hosts:
-            self.on[i] = False
+        if self._rec("gps_down", list(hosts)):
+            for i in hosts:
+                self.on[i] = False
         return hosts
 
     def world_restart(self):
         self._rec("world_restart")
+        self._measure()
 
     def server_crash(self):
         self._rec("server_crash")
@@ -81,12 +112,17 @@ class FakeControl:
     def restart_after_crash(self):
         self._rec("restart_after_crash")
         self.up = True
+        self._measure()
 
     def tick_rate(self, rate):
-        self._rec("tick_rate", rate)
+        if self._rec("tick_rate", rate):
+            self.rate = rate
+
+    def _cid_at(self, pos):
+        return next(i for i, p in self.comps.items() if p == tuple(pos))
 
     def block_data(self, pos, path=""):
-        cid = next(i for i, p in self.comps.items() if p == tuple(pos))
+        cid = self._cid_at(pos)
         slot = int(path.split("Slot:")[1].split("b")[0]) if "Slot:" in path else None
         if slot is not None and slot not in self.slots.get(cid, {}):
             return "Found no elements matching %s" % path
@@ -95,13 +131,37 @@ class FakeControl:
     def command(self, text):
         self._rec("command", text)
         if text.startswith("execute if block"):
-            return "Test passed" if "facing=south" in text else "Test failed"
+            x, y, z = (int(v) for v in text.split()[3:6])
+            return "Test passed" if "facing=%s]" % self.facing.get(self._cid_at((x, y, z))) in text else "Test failed"
+        if text == "tickrate":
+            return "The tick rate is %d per second" % self.rate
+        if text == "time query gametime":
+            return "The time is 123456" if self.up else ""
         return "ok"
 
+    def clear_slot(self, cid, slot):
+        if self._rec("clear_slot", cid, slot):
+            self.slots.get(cid, {}).pop(slot, None)
+
+    def set_slot(self, cid, slot, item, count=1, tag=None):
+        if self._rec("set_slot", cid, slot, item, count):
+            self.slots.setdefault(cid, {})[slot] = item
+
+    def set_fuel(self, cid, level):
+        if self._rec("set_fuel", cid, level):
+            self.fuel[cid] = level
+
+    def get_fuel(self, cid):
+        return self.fuel.get(cid, 50000)
+
+    def turtle_move(self, cid, x, y, z, facing=None):
+        if self._rec("turtle_move", cid, x, y, z, facing=facing):
+            self.facing[cid] = FACING_LETTER[facing]
+        return {"ok": True}
+
     def __getattr__(self, name):
-        if name in ("radio_loss", "radio_latency", "chunk_unload", "rs_stall", "rs_offline", "clear_slot", "set_fuel",
-                    "set_slot", "turtle_move"):
-            return lambda *a, **k: self._rec(name, *a, **k)
+        if name in ("radio_loss", "radio_latency", "chunk_unload", "rs_stall", "rs_offline"):
+            return lambda *a, **k: {"ok": True, "verb": name} if self._rec(name, *a, **k) else {"ok": False}
         raise AttributeError(name)
 
 
@@ -117,7 +177,6 @@ class FakeCtx:
         self.shakeout_fleet = {"server": 95, "placed": {"node_201": {"type": "DELIVERY", "x": 153, "y": 67, "z": -2806},
                                                        "node_202": {"type": "MINER", "x": 167, "y": 67, "z": -2806},
                                                        "node_203": {"type": "MINER", "x": 171, "y": 67, "z": -2806}}}
-
         self.checks = []
 
     def note(self, text):
@@ -130,7 +189,11 @@ class FakeCtx:
         raise OSError("no server in a unit test")
 
     def state(self):
-        return {"diskFree": 600000}
+        return {"diskFree": getattr(self.control, "measured", 600000)}
+
+    def log_lines(self, substr=""):
+        line = "INFO   Central server online (v1) ID: node_95"
+        return [line] * (1 + getattr(self.control, "restarts", 0)) if substr in line else []
 
 
 def entry(i, t_ms, fault, args, quiet_ms=0):
@@ -228,6 +291,14 @@ class TheSchedule(unittest.TestCase):
                 self.assertGreaterEqual(e["quiet_ms"], 5 * schedule.RESTART_QUIET_MS)
             elif e["fault"] in ("radio_latency", "low_fuel", "put_back_turned"):
                 self.assertEqual(e["quiet_ms"], 0, "the fleet keeps talking through %s" % e["fault"])
+
+    def test_rates_must_name_every_fault(self):
+        rates = dict(schedule.DEFAULT_RATES)
+        del rates["low_fuel"]
+        with self.assertRaises(ValueError) as cm:
+            schedule.make_schedule(1, 24, rates)
+        self.assertIn("low_fuel", str(cm.exception))
+        schedule.make_schedule(1, 24, dict(rates, low_fuel=0))       # 0 leaves it out on purpose
 
     def test_write_and_load_round_trip(self):
         s = schedule.make_schedule(2, 6, schedule.DEFAULT_RATES)
@@ -359,42 +430,94 @@ class TheVerbs(unittest.TestCase):
         self.assertEqual([(l["id"], l["phase"]) for l in log], [("f001", "begin")])
 
 
+class BridgeWorld:
+    """What listens where: the real bridge, the delaying proxy, or nothing. Stands in for the bridge process verbs."""
+
+    def __init__(self, test, fail_start=(), fail_proxy=False):
+        self.ports, self.bridge_port, self.calls = {3000: "bridge"}, 3000, []
+        self.fail_start, self.fail_proxy = set(fail_start), fail_proxy
+        self.saved = {n: getattr(schedule, n) for n in ("_bridge_stop", "_bridge_start", "_proxy_start", "_proxy_stop", "_bridge_ping")}
+        schedule._bridge_stop, schedule._bridge_start = self.stop, self.start
+        schedule._proxy_start, schedule._proxy_stop, schedule._bridge_ping = self.proxy, self.proxy_stop, self.ping
+        test.addCleanup(lambda: [setattr(schedule, n, f) for n, f in self.saved.items()])
+
+    def stop(self, ctx, e):
+        self.calls.append(("stop",))
+        if self.ports.get(self.bridge_port) == "bridge":
+            del self.ports[self.bridge_port]
+
+    def start(self, ctx, e, port):
+        self.calls.append(("start", port))
+        if port in self.fail_start:
+            raise SystemExit("something still listens on 127.0.0.1:%d (fake)" % port)
+        self.ports[port], self.bridge_port = "bridge", port
+
+    def proxy(self, ctx, e, listen, target, ms):
+        self.calls.append(("proxy", listen, target, ms))
+        if self.fail_proxy:
+            raise OSError("proxy would not start (fake)")
+        self.ports[listen], self.delay = "proxy", ms
+        return 4242
+
+    def proxy_stop(self, ctx, e, pid):
+        self.calls.append(("proxy_stop", pid))
+        self.ports = {p: v for p, v in self.ports.items() if v != "proxy"}
+
+    def ping(self, port, timeout=10):
+        v = self.ports.get(port)
+        if v == "proxy":
+            return float(self.delay) if self.ports.get(3001) == "bridge" else None
+        return 1.0 if v == "bridge" else None
+
+
 class TheBridgeFaults(unittest.TestCase):
-    def setUp(self):
-        self.calls = []
-        self.saved = {n: getattr(schedule, n) for n in ("_bridge_stop", "_bridge_start", "_proxy_start", "_proxy_stop")}
-        schedule._bridge_stop = lambda ctx, e: self.calls.append(("stop",))
-        schedule._bridge_start = lambda ctx, e, port: self.calls.append(("start", port))
-        schedule._proxy_start = lambda ctx, e, listen, target, ms: self.calls.append(("proxy", listen, target, ms)) or 4242
-        schedule._proxy_stop = lambda ctx, e, pid: self.calls.append(("proxy_stop", pid))
-
-    def tearDown(self):
-        for n, f in self.saved.items():
-            setattr(schedule, n, f)
-
     def test_bridge_down_stops_and_starts_the_bridge(self):
+        b = BridgeWorld(self)
         ctx = FakeCtx()
         s = [entry(1, 0, "bridge_down", {"dur_ms": 5000})]
         schedule.run_due(ctx, s, 0)
-        self.assertEqual(self.calls, [("stop",)])
+        self.assertEqual(b.ports, {}, "nothing answers on 3000 during the window")
+        self.assertTrue(schedule.state_of(ctx)["status"]["f001"]["detail"]["observed"]["ok"])
         schedule.run_due(ctx, s, 5000)
-        self.assertEqual(self.calls, [("stop",), ("start", 3000)])
+        self.assertEqual(b.ports, {3000: "bridge"})
 
     def test_bridge_slow_puts_a_delaying_proxy_in_front_and_takes_it_away(self):
+        b = BridgeWorld(self)
         ctx = FakeCtx()
         s = [entry(1, 0, "bridge_slow", {"dur_ms": 5000, "ms": 1500})]
         schedule.run_due(ctx, s, 0)
-        self.assertEqual(self.calls, [("stop",), ("start", 3001), ("proxy", 3000, 3001, 1500)])
+        self.assertEqual(b.calls, [("stop",), ("start", 3001), ("proxy", 3000, 3001, 1500)])
+        self.assertEqual(b.ports, {3000: "proxy", 3001: "bridge"})
+        obs = schedule.state_of(ctx)["status"]["f001"]["detail"]["observed"]
+        self.assertTrue(obs["ok"], obs)
         schedule.run_due(ctx, s, 5000)
-        self.assertEqual(self.calls[3:], [("proxy_stop", 4242), ("stop",), ("start", 3000)])
+        self.assertEqual(b.ports, {3000: "bridge"}, "the proxy gone and the real bridge back on 3000")
 
     def test_a_slow_bridge_open_at_teardown_is_put_back(self):
+        b = BridgeWorld(self)
         ctx = FakeCtx()
         s = [entry(1, 0, "bridge_slow", {"dur_ms": 50000, "ms": 1500})]
         schedule.run_due(ctx, s, 0)
         out = schedule.teardown(ctx, s)
         self.assertEqual(out["ended"], ["f001"])
-        self.assertEqual(self.calls[-1], ("start", 3000))
+        self.assertEqual(b.ports, {3000: "bridge"})
+
+    def test_a_slow_bridge_that_cannot_start_on_3001_leaves_the_bridge_on_3000(self):
+        b = BridgeWorld(self, fail_start={3001})
+        ctx = FakeCtx()
+        s = [entry(1, 0, "bridge_slow", {"dur_ms": 5000, "ms": 1500})]
+        self.assertIn(("f001", "retry"), schedule.run_due(ctx, s, 0))
+        self.assertEqual(b.ports, {3000: "bridge"}, "restored at once, not left dark until the window would have ended")
+        acted = schedule.run_due(ctx, s, schedule.RETRY_MS)                   # it keeps failing: given up, undone once
+        self.assertIn(("f001", "fail"), acted)
+        self.assertEqual(b.ports, {3000: "bridge"})
+        self.assertEqual(schedule.teardown(ctx, s)["end_errors"], [])
+
+    def test_a_slow_bridge_whose_proxy_will_not_start_is_put_back(self):
+        b = BridgeWorld(self, fail_proxy=True)
+        ctx = FakeCtx()
+        schedule.run_due(ctx, [entry(1, 0, "bridge_slow", {"dur_ms": 5000, "ms": 1500})], 0)
+        self.assertEqual(b.ports, {3000: "bridge"}, "the bridge on 3001 stopped, the real one back on 3000")
 
 
 class TheDelayProxy(unittest.TestCase):
@@ -429,6 +552,153 @@ class TheDelayProxy(unittest.TestCase):
             target.shutdown()
             proxy.server_close()
             target.server_close()
+
+
+class FailedBeginsAreUndone(unittest.TestCase):
+    """Review 1, Important 1 (the reviewer's leak_probe.py, as tests): a begin that fails part-way leaves nothing behind."""
+
+    def test_a_shutdown_that_failed_once_leaks_no_hold(self):
+        ctx = FakeCtx()
+        ctx.control.fail_next = ["shutdown"]
+        s = [entry(1, 1000, "server_crash", {"down_ms": 60000})]
+        self.assertEqual(schedule.run_due(ctx, s, 1000), [("f001", "retry")])
+        self.assertEqual(schedule.run_due(ctx, s, 2000), [("f001", "begin")])
+        schedule.run_due(ctx, s, 62000)
+        self.assertTrue(ctx.control.on[95], "the dispatch computer is back on after the window")
+        self.assertEqual(schedule.state_of(ctx)["holds"], {})
+        schedule.teardown(ctx, s)
+        self.assertTrue(ctx.control.on[95])
+
+    def test_a_shutdown_that_never_works_is_undone_once_it_is_given_up(self):
+        ctx = FakeCtx()
+        ctx.control.always_fail = ["shutdown"]
+        s = [entry(1, 1000, "server_crash", {"down_ms": 60000})]
+        schedule.run_due(ctx, s, 1000)
+        acted = schedule.run_due(ctx, s, 1000 + schedule.RETRY_MS)
+        self.assertEqual(acted, [("f001", "fail"), ("f001", "undo")])
+        self.assertEqual(calls_of(ctx.control, "turn_on"), [("turn_on", ([95],), {})], "the undo turns it on, in case it went off")
+        self.assertEqual(schedule.state_of(ctx)["holds"], {})
+
+    def test_an_undo_does_not_cut_another_window_short(self):
+        ctx = FakeCtx()
+        s = [entry(1, 0, "server_crash", {"down_ms": 60 * MIN}), entry(2, 1000, "server_crash", {"down_ms": 60000})]
+        schedule.run_due(ctx, s, 0)
+        ctx.control.always_fail = ["shutdown"]
+        schedule.run_due(ctx, s, 1000)
+        schedule.run_due(ctx, s, 1000 + schedule.RETRY_MS)          # f002 given up and undone
+        self.assertFalse(ctx.control.on[95], "f001 still holds it off")
+        self.assertEqual(calls_of(ctx.control, "turn_on"), [])
+
+    def test_a_gps_down_that_failed_once_leaks_no_hold(self):
+        ctx = FakeCtx()
+        ctx.control.fail_next = ["gps_down"]
+        s = [entry(1, 1000, "gps_down", {"dur_ms": 60000, "count": 1, "pick": 0})]
+        for t in (1000, 2000, 62000):
+            schedule.run_due(ctx, s, t)
+        self.assertTrue(ctx.control.on[48])
+        self.assertEqual(schedule.state_of(ctx)["holds"], {})
+
+    def test_a_gps_down_given_up_turns_its_hosts_back_on(self):
+        ctx = FakeCtx()
+        ctx.control.always_fail = ["gps_down"]
+        s = [entry(1, 1000, "gps_down", {"dur_ms": 60000, "count": "all", "pick": 0})]
+        schedule.run_due(ctx, s, 1000)
+        schedule.run_due(ctx, s, 1000 + schedule.RETRY_MS)
+        self.assertEqual(calls_of(ctx.control, "turn_on"), [("turn_on", ([48, 49, 50, 51],), {})])
+        self.assertEqual(schedule.state_of(ctx)["holds"], {})
+
+    def test_a_filler_write_that_fails_leaves_no_partial_file(self):
+        ctx = FakeCtx()
+        real = schedule._write_filler
+
+        def half(path, size):
+            with open(path, "wb") as f:
+                f.write(b"\0" * (size // 2))
+            raise OSError("disk full on the host (fake)")
+        schedule._write_filler = half
+        try:
+            acted = schedule.run_due(ctx, [entry(1, 0, "disk_full", {"dur_ms": 60000, "leave_bytes": 2048})], 0)
+        finally:
+            schedule._write_filler = real
+        self.assertIn(("f001", "fail"), acted, "a disk fill is not retried: each try costs restarts")
+        self.assertEqual(fillers(ctx), [])
+        self.assertEqual(calls_of(ctx.control, "world_restart"), [], "nothing was filled, so nothing is measured")
+
+
+class TheDiskFillIsSeen(unittest.TestCase):
+    """Review 1, Important 2: a fill counts only when diskFree shows it (w3_low_disk.py found one can go unseen)."""
+
+    def test_a_seen_fill_records_diskfree_before_and_after(self):
+        ctx = FakeCtx()
+        s = [entry(1, 0, "disk_full", {"dur_ms": 60000, "leave_bytes": 20000})]
+        schedule.run_due(ctx, s, 0)
+        d = schedule.state_of(ctx)["status"]["f001"]["detail"]
+        self.assertEqual((d["free_before"], d["observed"]["diskFree"], d["observed"]["ok"]), (600000, 20000, True))
+        schedule.run_due(ctx, s, 60000)
+        self.assertEqual(d["end_observed"], {"diskFree": 600000, "want_more_than": 28000, "ok": True})
+
+    def test_an_unseen_fill_fails_and_takes_its_filler_away(self):
+        ctx = FakeCtx()
+        ctx.control.remeasures = False                     # the restart does not make CC measure again
+        acted = schedule.run_due(ctx, [entry(1, 0, "disk_full", {"dur_ms": 60000, "leave_bytes": 20000})], 0)
+        self.assertIn(("f001", "fail"), acted)
+        self.assertEqual(fillers(ctx), [])
+        with open(os.path.join(ctx.run, "shakeout", "faults.jsonl")) as f:
+            log = [json.loads(l) for l in f]
+        self.assertIn("the fill was not seen", [l for l in log if l["phase"] == "fail"][0]["error"])
+
+    def test_no_usable_diskfree_means_no_filler_at_all(self):
+        for bad in (-1, None, "n/a", 5000):
+            ctx = FakeCtx()
+            ctx.control.measured = bad
+            acted = schedule.run_due(ctx, [entry(1, 0, "disk_full", {"dur_ms": 60000, "leave_bytes": 2048})], 0)
+            self.assertIn(("f001", "fail"), acted, bad)
+            self.assertEqual(fillers(ctx), [], bad)
+            self.assertEqual(calls_of(ctx.control, "world_restart"), [], bad)
+
+
+class EveryFaultIsSeenToTakeEffect(unittest.TestCase):
+    """Review 1, Important 2: each begin records one cheap read showing it worked; a verb that does nothing reads ok False."""
+
+    def run_all(self, ctl_setup=None):
+        b = BridgeWorld(self)
+        ctx = FakeCtx()
+        if ctl_setup:
+            ctl_setup(ctx.control)
+        sched = schedule.one_of_each(seed=2)
+        for e in sched:
+            if "target" in e["args"]:
+                e["args"]["target"]["role"] = "MINER"
+            if e["fault"] == "turtle_reboot":
+                e["args"]["off_ms"] = 0
+        t = 0
+        while t <= sched[-1]["t_ms"] + 3 * HOUR:
+            schedule.run_due(ctx, sched, t)
+            t += MIN
+        return ctx, sched, b
+
+    def test_every_fault_observes_its_own_effect(self):
+        ctx, sched, _ = self.run_all()
+        st = schedule.state_of(ctx)["status"]
+        bad = {e["fault"]: (st[e["id"]].get("detail") or {}).get("observed") for e in sched
+               if not ((st[e["id"]].get("detail") or {}).get("observed") or {}).get("ok")}
+        self.assertEqual(bad, {})
+
+    def test_a_verb_that_changes_nothing_is_seen(self):
+        ctx, sched, _ = self.run_all(lambda c: c.noop.extend(["shutdown", "set_fuel", "tick_rate"]))
+        st = schedule.state_of(ctx)["status"]
+        bad = sorted(e["fault"] for e in sched if not ((st[e["id"]].get("detail") or {}).get("observed") or {}).get("ok"))
+        self.assertEqual(bad, ["atc_crash", "low_fuel", "server_crash", "tps_drop", "turtle_reboot", "warehouse_crash"])
+
+
+class ChunkUnloadSparesTheBase(unittest.TestCase):
+    def test_a_docked_turtle_in_the_base_is_not_a_target(self):
+        ctx = FakeCtx()
+        ctx.control.comps[203] = (171, 67, -2806)          # every miner docked: their chunks +-1 touch the base
+        s = [entry(1, 0, "chunk_unload", {"dur_ms": 30000, "target": {"role": "MINER", "index": 0, "prefer": "working"},
+                                          "radius_chunks": 1})]
+        self.assertEqual(schedule.run_due(ctx, s, 0), [("f001", "retry")])
+        self.assertEqual(calls_of(ctx.control, "chunk_unload"), [], "the base is never unloaded")
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -590,7 +860,12 @@ class TheRunnerSurvivesItsServer(unittest.TestCase):
         acted = schedule.run_due(ctx, s, 2000)
         self.assertIn(("f001", "begin"), acted)
 
+    def setUp(self):
+        self.real_alive = schedule._server_alive
+        self.addCleanup(lambda: setattr(schedule, "_server_alive", self.real_alive))
+
     def test_a_restart_that_never_comes_back_is_retried_on_the_next_call(self):
+        schedule._server_alive = lambda ctx: False
         ctx = FakeCtx()
         c = ctx.control
         def dies():
@@ -604,6 +879,27 @@ class TheRunnerSurvivesItsServer(unittest.TestCase):
         schedule.run_due(ctx, s, 2000)
         self.assertFalse(schedule.state_of(ctx)["need_relaunch"])
         self.assertEqual(len(calls_of(c, "restart_after_crash")), 2)
+
+    def test_no_relaunch_when_it_cannot_be_told_whether_the_server_is_alive(self):
+        schedule._server_alive = lambda ctx: None          # pids.json unreadable: a relaunch might start a second server
+        ctx = FakeCtx()
+        st = schedule.state_of(ctx)
+        st["need_relaunch"] = True
+        self.assertEqual(schedule.run_due(ctx, [], 1000), [(None, "relaunch-unknown")])
+        self.assertEqual(schedule.run_due(ctx, [], 2000), [], "said once, not every call")
+        self.assertEqual(calls_of(ctx.control, "restart_after_crash"), [])
+        self.assertTrue(st["need_relaunch"])
+
+    def test_teardown_relaunches_first_so_the_ends_can_reach_the_server(self):
+        schedule._server_alive = lambda ctx: False
+        ctx = FakeCtx()
+        s = [entry(1, 0, "server_crash", {"down_ms": 60000})]
+        schedule.run_due(ctx, s, 0)
+        schedule.state_of(ctx)["need_relaunch"] = True
+        out = schedule.teardown(ctx, s)
+        seq = [x[0] for x in ctx.control.calls if x[0] in ("restart_after_crash", "turn_on")]
+        self.assertEqual(seq, ["restart_after_crash", "turn_on"])
+        self.assertEqual(out["relaunch"], [(None, "relaunched")])
 
 
 class TheDriverLoop(unittest.TestCase):
@@ -628,6 +924,15 @@ class TheDriverLoop(unittest.TestCase):
         once.check_each(ctx, s)
         self.assertTrue(all(c["ok"] for c in ctx.checks), [c["message"] for c in ctx.checks if not c["ok"]])
         self.assertTrue(any("no filler file left" in c["message"] for c in ctx.checks))
+
+    def test_the_per_fault_check_fails_a_fault_that_did_nothing(self):
+        drv, once = self.load("shakeout"), self.load("shakeout_faults_once")
+        ctx = FakeCtx()
+        ctx.control.noop = ["shutdown"]                          # begins, logs, records an intervention -- and nothing goes off
+        s = [entry(1, 0, "server_crash", {"down_ms": 20})]
+        drv.run_loop(ctx, s, 0.1, poll=0.01)
+        once.check_each(ctx, s)
+        self.assertEqual([c["ok"] for c in ctx.checks if "f001" in c["message"]], [False])
 
     def test_the_per_fault_check_can_fail(self):
         drv, once = self.load("shakeout"), self.load("shakeout_faults_once")
