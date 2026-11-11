@@ -120,7 +120,86 @@ local function movedOnOldCell()
     return srv, T, W, restore, old, oldPos
 end
 
+-- The waypoints module as it was before per-bay types (d4b2ae8), loaded from
+-- git, on the same (stub) disk. It is the real old reader, not a copy of it.
+local function oldWaypoints()
+    local null = package.config:sub(1, 1) == "\\" and "NUL" or "/dev/null"
+    local p = io.popen("git show d4b2ae8:waypoints.lua 2>" .. null, "r")
+    local text = p and p:read("*a") or ""
+    if p then p:close() end
+    assert(#text > 1000, "could not read d4b2ae8:waypoints.lua with git")
+    return assert(load(text, "=waypoints@d4b2ae8"))()
+end
+
+local function at(d) return d and (d.x .. "," .. d.z) or "none" end
+
 return {
+    -- FINAL REVIEW I2 (2026-11-11): a rollback past per-bay types must leave
+    -- every turtle on its physical dock. The file used to carry the typed lists,
+    -- so DELIVERY held bay 1 only and the old server called every miner dockless.
+    ["old_server_reads_the_new_file_with_every_turtle_on_its_dock"] = function(assert_eq)
+        local _, T, W, restore = server(nil)
+        local want = {}
+        for i = 1, 66 do   -- 64 fill the worker-side miner bays, 2 land on the support side
+            local d = W.assignDock("MINER", "m" .. i); want["m" .. i] = d
+        end
+        want.d1 = W.assignDock("DELIVERY", "d1")
+        want.s1 = W.assignDock("SUPPORT", "s1")
+        local old = oldWaypoints()
+        old.loadDockAssignments()
+        local wrong, worker, support = "", 0, 0
+        for id, d in pairs(want) do
+            -- the old server looks for every worker-side turtle in DELIVERY and
+            -- every support-side one in SUPPORT (the side lists of its day)
+            local southSide = d.z < W.WHITE_Z
+            local o = old.getDockFor(southSide and "DELIVERY" or "SUPPORT", id)
+            if at(o) ~= at(d) then wrong = wrong .. id .. " " .. at(d) .. " -> " .. at(o) .. "; " end
+            if southSide then worker = worker + 1 else support = support + 1 end
+        end
+        restore()
+        assert_eq(worker, 65, "turtles checked on the worker side")
+        assert_eq(support, 3, "turtles checked on the support side")
+        assert_eq(wrong, "", "turtles the old server puts on another dock")
+    end,
+
+    ["a_file_an_old_server_rewrote_is_read_from_its_legacy_lists"] = function(assert_eq)
+        local _, T, W, restore = server(nil)
+        local m1 = W.assignDock("MINER", "m1")       -- worker bay 2
+        local d1 = W.assignDock("DELIVERY", "d1")    -- worker bay 1
+        -- roll back: the old server loads the file, moves m1 to bay 3, saves
+        local old = oldWaypoints()
+        old.loadDockAssignments()
+        local moved = old.assignDockAt("DELIVERY", "m1", 3)
+        -- roll forward: a fresh new server reads the same disk
+        package.loaded["waypoints"] = nil
+        local W2 = require("waypoints")
+        local said = {}
+        W2.loadDockAssignments(function(m) said[#said + 1] = m end, function(m) said[#said + 1] = m end)
+        local m1b, d1b = W2.getDockFor("MINER", "m1"), W2.getDockFor("DELIVERY", "d1")
+        local f = fs.open("dock_assignments.dat", "r"); local text = f.readAll(); f.close()
+        restore()
+        assert_eq(moved ~= nil and moved.bay, 3, "precondition: the old server moved m1 to bay 3")
+        assert_eq(textutils.unserialise(text).byPos ~= nil, true, "precondition: the old server kept the stale byPos")
+        assert_eq(at(m1b), at(moved), "the new server finds m1 where the old one put it, not in the stale byPos")
+        assert_eq(at(m1b) ~= at(m1), true, "and not on its pre-rollback dock")
+        assert_eq(at(d1b), at(d1), "d1 is untouched")
+        assert_eq(#said >= 1 and said[1]:find("older server", 1, true) ~= nil, true, "the load says why: " .. tostring(said[1]))
+    end,
+
+    ["a_file_the_new_server_wrote_is_read_by_position"] = function(assert_eq)
+        -- the legacy lists agree with byPos: byPos is used, nothing is said
+        local _, T, W, restore = server(nil)
+        local m1 = W.assignDock("MINER", "m1")
+        package.loaded["waypoints"] = nil
+        local W2 = require("waypoints")
+        local said = 0
+        W2.loadDockAssignments(function() said = said + 1 end, function() said = said + 1 end)
+        local m1b = W2.getDockFor("MINER", "m1")
+        restore()
+        assert_eq(at(m1b), at(m1), "the miner keeps its dock")
+        assert_eq(said, 0, "a file this server wrote loads silently")
+    end,
+
     -- FINAL REVIEW I1 (2026-11-11): the old cell used to be released at the
     -- move. A lost REBOOT left the miner on a cell the server called free.
     ["lost_reboot_is_resent_and_the_old_cell_is_never_given_away"] = function(assert_eq)

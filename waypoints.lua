@@ -65,6 +65,8 @@ W.docks = {
 -- dock_assignments.dat before per-bay types (see W.loadDockAssignments).
 local _where = {}
 local _sideOrder = { WORKER = {}, SUPPORT = {} }
+-- The reverse: _sideIndex["x,z"] = { side = "WORKER", index = i }.
+local _sideIndex = {}
 local function posKey(d) return d.x .. "," .. d.z end
 
 -- side: "WORKER" or "SUPPORT" -- which list of CFG.BAY_TYPES gives each bay's type.
@@ -91,6 +93,7 @@ local function generateBays(side, numBays, rowAZ, rowBZ)
                 assert(not _where[posKey(d)], "two docks at " .. posKey(d))
                 _where[posKey(d)] = { type = role, index = #docks }
                 table.insert(_sideOrder[side], posKey(d))
+                _sideIndex[posKey(d)] = { side = side, index = #_sideOrder[side] }
             end
         end
     end
@@ -118,15 +121,30 @@ local DOCK_SAVE_FILE = "dock_assignments.dat"
 -- types became a setting, every index past 16 named a different dock or none.
 -- byPos ("x,z" -> id) is what is read back; it survives any change to
 -- CFG.BAY_TYPES, because a dock's position does not move when its type does.
--- The typed lists are still written beside it so an older server reading this
--- file degrades (worker/support bay 1 keep their meaning) instead of erroring.
+--
+-- AND THE LEGACY LISTS IN THEIR OLD MEANING (final review, 2026-11-11), so a
+-- rollback past per-bay types reshuffles nobody. Before, DELIVERY[i] was the
+-- i-th dock of the worker side and SUPPORT[i] the i-th of the support side,
+-- whatever type each dock is now; that is what is written, and an older server
+-- reading this file finds every worker-side turtle on the dock it stands on.
+-- (Writing the typed lists instead left DELIVERY with bay 1 only: on rollback
+-- every miner looked dockless and was given an arbitrary dock -- the 11-03 boot
+-- rush.) No MINER list is written: an older server has no use for one. The one
+-- thing an older server cannot represent is a miner on the SUPPORT side: it
+-- looks for miners in DELIVERY only, so such a miner is dockless there (its
+-- SUPPORT entry still keeps the cell from anyone else).
+-- An older server also writes byPos back untouched, so the legacy lists, not
+-- byPos, are the check of who wrote last: see W.loadDockAssignments.
 local function saveDockAssignments()
-    local out = { byPos = {} }
+    local out = { byPos = {}, DELIVERY = {}, SUPPORT = {} }
     for t, slots in pairs(_assigned) do
-        out[t] = slots
         for i, id in pairs(slots) do
             local d = W.docks[t] and W.docks[t][i]
-            if d then out.byPos[posKey(d)] = id end
+            if d then
+                out.byPos[posKey(d)] = id
+                local s = _sideIndex[posKey(d)]
+                out[s.side == "WORKER" and "DELIVERY" or "SUPPORT"][s.index] = id
+            end
         end
     end
     local f = fs.open(DOCK_SAVE_FILE, "w")
@@ -146,7 +164,25 @@ function W.loadDockAssignments(info, warn)
     if type(data) ~= "table" then return end
     -- entries: { key = "x,z", id = turtleId, from = what the file said }
     local entries = {}
-    if type(data.byPos) == "table" then
+    -- byPos is trusted only while the legacy lists say exactly the same thing.
+    -- If they disagree, an older server rewrote the file after this one (it
+    -- keeps byPos as it found it, stale), so the legacy lists are the truth.
+    local byPosAgrees = type(data.byPos) == "table"
+    if byPosAgrees then
+        local legacy, n = {}, 0
+        for list, side in pairs({ DELIVERY = "WORKER", SUPPORT = "SUPPORT" }) do
+            for k, id in pairs(type(data[list]) == "table" and data[list] or {}) do
+                local key = _sideOrder[side][tonumber(k)]
+                if not key then byPosAgrees = false else legacy[key] = id; n = n + 1 end
+            end
+        end
+        for key, id in pairs(data.byPos) do
+            if legacy[key] ~= id then byPosAgrees = false end
+            n = n - 1
+        end
+        if n ~= 0 then byPosAgrees = false end
+    end
+    if byPosAgrees then
         for key, id in pairs(data.byPos) do
             entries[#entries + 1] = { key = key, id = id, from = key }
         end
@@ -157,7 +193,8 @@ function W.loadDockAssignments(info, warn)
         -- textutils.serialise turns number keys into strings, hence tonumber.
         -- IN A FIXED ORDER, so a clash resolves the same way on every load: the
         -- three types first, then any other key by name, each by index.
-        local order, seen = { "DELIVERY", "SUPPORT", "MINER" }, { DELIVERY = true, SUPPORT = true, MINER = true }
+        -- byPos (present when an older server wrote last) is not a type: skipped.
+        local order, seen = { "DELIVERY", "SUPPORT", "MINER" }, { DELIVERY = true, SUPPORT = true, MINER = true, byPos = true }
         local rest = {}
         for t in pairs(data) do if not seen[t] then rest[#rest + 1] = tostring(t) end end
         table.sort(rest)
@@ -183,7 +220,9 @@ function W.loadDockAssignments(info, warn)
                 end
             end
         end
-        if info and #entries > 0 then
+        if info and type(data.byPos) == "table" then
+            info(string.format("dock_assignments.dat was rewritten by an older server (its legacy lists disagree with byPos): %d docks read by side and index", #entries))
+        elseif info and #entries > 0 then
             info(string.format("dock_assignments.dat predates per-bay types: %d docks read by side and index", #entries))
         end
     end
