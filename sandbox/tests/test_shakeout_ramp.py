@@ -76,5 +76,41 @@ class RampPicksAndStops(unittest.TestCase):
         self.assertEqual(ramp.ramp(ctx, hold_min=20), 2)
 
 
+class TheRampRunsOnAWorkingFleet(unittest.TestCase):
+    """Final review I7: the ramp measured an idle server. on_poll is called at every sample; the shakeout ramp path passes the
+    feeder's tick, on the placed fleet."""
+
+    def test_on_poll_is_called_after_every_sample(self):
+        ctx = FakeCtx({1: 10.0, 2: 15.0, 3: 30.0, 4: 1.0})
+        seen = []
+        ramp.ramp(ctx, steps=(1, 2, 3), hold_min=20, on_poll=lambda: seen.append(len(ctx.samples)))
+        self.assertEqual(len(seen), len(ctx.samples), "one call per sample")
+        self.assertEqual(seen, list(range(1, len(ctx.samples) + 1)), "each straight after its sample")
+        self.assertEqual(len(ctx.samples), 3 * 20 * 60 // ramp.POLL_S, "the same samples as without a hook")
+        self.assertEqual(ctx.clock, 3 * 20 * 60)
+
+    def test_the_shakeout_ramp_ticks_the_feeder_on_the_placed_fleet(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("t_shakeout_drv", os.path.join(HERE, "..", "t2", "scenarios", "shakeout.py"))
+        drv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(drv)
+        ticks, setups = [], []
+
+        class Feed:
+            def tick(self, now):
+                ticks.append(now)
+        drv._feeder = lambda ctx: (Feed(), None)
+        drv.setup = lambda ctx: setups.append(1) or setattr(ctx, "shakeout_fleet", {"placed": {"node_1": {}}})
+        ctx = FakeCtx({1: 10.0, 2: 15.0, 3: 30.0, 4: 1.0})
+        self.assertEqual(drv.ramp_on_fleet(ctx, steps=(1, 2, 3), hold_min=20), 2)
+        self.assertEqual(setups, [1], "the fleet is placed first")
+        self.assertEqual(len(ticks), len(ctx.samples), "the feeder ticks at every sample of every hold")
+        self.assertGreater(len(ticks), 0)
+        ctx2 = FakeCtx({1: 10.0, 2: 50.0})
+        ctx2.shakeout_fleet = {"placed": {"node_1": {}}}
+        drv.ramp_on_fleet(ctx2, steps=(1, 2), hold_min=1)
+        self.assertEqual(setups, [1], "a fleet already placed is not placed again")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,23 @@ def _note(ctx, text):
         ctx.note(text)
 
 
-def ramp(ctx, steps=(1, 2, 3, 4), hold_min=20):
+POLL_S = 10                 # real seconds between tick samples (scenario.Ctx.wait_real's own default)
+
+
+def _hold(ctx, seconds, on_poll):
+    """Holds for `seconds` real seconds, sampling every POLL_S; on_poll() after EVERY sample (the shakeout ramp ticks its job
+    feeder there, so the fleet keeps working through the hold). Without a hook, one wait_real as before."""
+    if on_poll is None:
+        ctx.wait_real(seconds)
+        return
+    for _ in range(max(1, int(seconds // POLL_S))):
+        ctx.wait_real(POLL_S, POLL_S)
+        on_poll()
+
+
+def ramp(ctx, steps=(1, 2, 3, 4), hold_min=20, on_poll=None):
+    """on_poll: called after every tick sample of every hold (see _hold). scenarios/shakeout.py ramp_on_fleet passes the job
+    feeder's tick, so each speed is measured with the whole fleet working (final review I7: a ramp on an idle world held 4x)."""
     steps = sorted(steps)
     ctx.ramp_steps = []
     chosen = None
@@ -41,7 +57,7 @@ def ramp(ctx, steps=(1, 2, 3, 4), hold_min=20):
         rate = int(round(20 * speed))
         ctx.tickrate(rate)
         first = len(ctx.samples)
-        ctx.wait_real(hold_min * 60)
+        _hold(ctx, hold_min * 60, on_poll)
         held = [s for s in ctx.samples[first:] if s[3] == rate]
         settled = held[int(len(held) * SETTLE_SHARE):]
         mss = [s[2] for s in settled if s[2] is not None]

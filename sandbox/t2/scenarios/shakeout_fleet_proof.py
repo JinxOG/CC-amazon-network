@@ -4,7 +4,8 @@
 
 1. PLACEMENT: shakeout.setup(ctx) builds the world and places 160 fresh turtles with dock_assignments.dat seeded while the
    dispatch computer is off; its checks: every placed turtle registers, the server's dock for each is the cell it stands in,
-   it reports standing there, and no 'Assigned dock' / 'Dock moved' / 'No free docks' line names a placed turtle.
+   it reports standing there, and no SERVER 'Assigned dock ... to <node>' / 'Dock moved' / 'No free docks' line names a placed
+   turtle (shakeout.PLACEMENT_RX: the node the server's line names, not the source of a turtle's own 'Assigned dock' line).
 2. LOADER IDENTITY (spec 4.2.5; memory "copied turtles share a chunk ticket"): two miners are sent to one-sector mine jobs
    1,024 blocks apart (every other miner held); once both have placed their loaders, control.chunk_loaders() must list both
    loaders' computers at least 1,000 blocks apart.

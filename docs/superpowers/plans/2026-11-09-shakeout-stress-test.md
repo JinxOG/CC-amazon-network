@@ -319,8 +319,11 @@ pattern `sandbox/tests/test_t2_scenario.py` already uses.
 
 - [ ] **Step 1: Dress rehearsal (simulator).** `shakeout_replay.lua` with 160 turtles, a 24 h schedule (seed 1),
   `SANDBOX_NO_TRACE=1`, for a simulated week. Fix kit bugs only. Fleet bugs become cards.
-- [ ] **Step 2: Speed ramp on T2,** on the saved `shakeout-world`. Record the chosen speed. If `RampFailed`, stop
-  and mail the spec owner, who tells the user.
+- [ ] **Step 2: Speed ramp on T2,** ON THE PLACED FLEET WITH THE FEEDER RUNNING, not on the empty `shakeout-world`
+  (an idle server holds any speed; amended 2026-11-11 after the final review): `sandbox/t2/scenarios/shakeout_ramp.py`
+  runs `shakeout.setup` (all 160 turtles placed), then `ramp.ramp` with the job feeder's `tick` called at every tick
+  sample of every hold, so each speed is measured with the whole fleet working. Record the chosen speed. If
+  `RampFailed`, stop and mail the spec owner, who tells the user.
 - [ ] **Step 3: The 1x side test.** Bay 1 only: 16 turtles plus 4 miners, 6 real hours. Faults: radio loss and
   latency bursts, 1 world restart, 1 central-server crash, 1 ATC crash. Write the report.
 - [ ] **Step 4: Confirm with the user** that Windows Update is held off and the PC will be left alone. Then start

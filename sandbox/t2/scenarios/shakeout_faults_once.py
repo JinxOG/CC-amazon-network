@@ -79,3 +79,8 @@ def steps(ctx):
         ctx.expect(True, "the bridge answers /ping on 3000 at the end")
     except Exception as ex:  # noqa: BLE001
         ctx.expect(False, "the bridge does not answer /ping on 3000 at the end: %s" % ex)
+
+
+def after_stop(ctx):
+    """The shakeout report, once the game server is stopped (scenario.py calls it): shakeout.after_stop."""
+    return drv.after_stop(ctx)

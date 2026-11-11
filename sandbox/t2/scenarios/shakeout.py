@@ -16,13 +16,18 @@ setup(ctx), which the proof scenarios share (shakeout_fleet_proof.py, shakeout_f
   4. fleet.retire_strays: the copy's fleet turtles outside the docks go (a 161st turtle would find no MINER dock);
   5. fleet.place_fleet: 160 fresh turtles with fresh loaders, dock_assignments.dat seeded while the dispatch computer is off;
   6. PLACEMENT CHECKS (each with its evidence count): every placed node registers; the server's dock for each is the cell it
-     stands in, and it stands there; no 'Assigned dock', 'Dock moved' or 'No free docks' line names a placed node;
+     stands in, and it stands there; no SERVER 'Assigned dock ... to', 'Dock moved' or 'No free docks' line names a placed node
+     (PLACEMENT_RX: the node the server's line is about, never the line's source -- each turtle logs its own 'Assigned dock');
   7. save_point "shakeout-fleet" (a void run restarts from it without rebuilding).
 Then the schedule is made (or loaded), written to <run>/schedule.json BEFORE the first fault, and run_loop fires it by wall
 clock for SHAKEOUT_HOURS, with the Task-6 feeder and housekeeping when sandbox/t2/shakeout/feeder.py exists. run_loop ends,
 whatever happened, with schedule.teardown and a check that no filler file is left on any disk; then the end-of-run turtle probe
-(shakeout/final.json) and the Task-7 report (shakeout/report.md). run_loop also records a compact /state snapshot a minute
-(shakeout/state.jsonl, report.record_state), which is what the report judges the turtles on.
+(shakeout/final.json). The Task-7 report (shakeout/report.md) is written by after_stop, which scenario.py calls once the game
+server is stopped. run_loop also records a compact /state snapshot a minute (shakeout/state.jsonl, report.record_state), which
+is what the report judges the turtles on.
+
+THE SPEED RAMP (plan Task 8 Step 2) is ramp_on_fleet, run by scenarios/shakeout_ramp.py: setup, then ramp.ramp with the feeder
+ticking at every sample, so each speed is held with the 160 turtles working.
 """
 import importlib
 import json
@@ -35,6 +40,20 @@ from shakeout import report as shreport  # noqa: E402
 
 NAME = "shakeout"
 PLACEMENT_LINES = ("Assigned dock:", "Dock moved: ", "No free docks for ")
+# THE SERVER'S lines only, and the node they NAME (final review): every turtle logs its own "Assigned dock: bay 1 row A
+# (153,67,-2806)" on every register, prefixed with its own node id, so a search for any node_N in the line failed 160 of 160 on
+# a correct placement. These are central_server.lua registry.register's texts; the group is the node the line is about.
+PLACEMENT_RX = {
+    "Assigned dock:": re.compile(r"Assigned dock: bay \d+ row \w+ to (node_\d+)"),
+    "Dock moved: ": re.compile(r"Dock moved: (node_\d+) from "),
+    "No free docks for ": re.compile(r"No free docks for (node_\d+)"),
+}
+
+
+def placement_hits(lines, key, names):
+    """The server's `key` lines that name one of `names` (the PLACEMENT_RX group, never the line's source node)."""
+    rx = PLACEMENT_RX[key]
+    return [l for l in lines if any(m in names for m in rx.findall(l))]
 
 
 def env_int(name, default):
@@ -83,11 +102,22 @@ def placement_checks(ctx, placed):
     names = set(placed)
     for key in PLACEMENT_LINES:
         lines = ctx.log_lines(key)
-        new = [l for l in lines if names & set(re.findall(r"node_\d+", l))]
+        new = placement_hits(lines, key, names)
         ctx.expect(not new, "no '%s' line names a placed turtle (%d such lines of %d '%s' lines in the run)%s"
                    % (key.strip(), len(new), len(lines), key.strip(), (": " + new[0][:200]) if new else ""))
     registered = [l for l in ctx.log_lines("Registered node_") if names & set(re.findall(r"node_\d+", l))]
     ctx.note("placement evidence: %d 'Registered' lines naming placed nodes, %d placed nodes in /state" % (len(registered), len(reg)))
+
+
+def restart_and_wait_online(ctx, seconds=600):
+    """world.restart_after_build, then a wait until the dispatch computer has logged 'Central server online' once MORE than
+    before the restart (counted before it). Returns whether it did; the check says so with its evidence."""
+    n0 = len(ctx.log_lines("Central server online"))
+    world.restart_after_build(ctx)
+    ok = bool(ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > n0, seconds))
+    ctx.expect(ok, "the dispatch computer came back after setup's world restart ('Central server online' lines: %d before, %d now)"
+               % (n0, len(ctx.log_lines("Central server online"))))
+    return ok
 
 
 def setup(ctx):
@@ -123,10 +153,11 @@ def setup(ctx):
                                                                                          v["under_ok"], v["under_total"]))
 
     # 3b. one world restart before any turtle is placed: the RS network only picks up the creative storage block on a load
-    world.restart_after_build(ctx)
+    restart_and_wait_online(ctx)
     ctx.wait_registered(14, 600)
 
-    # 4-5. strays out, the fleet in
+    # 4-5. strays out, the fleet in. online0 is taken only once the restart's own 'Central server online' is in: taken before
+    # it, the wait below would pass on the restart's line instead of the seeding's (final review).
     sid = fleet.server_computer(ctx)
     keep = [i for i in (sid,) if i is not None]
     fleet.retire_strays(ctx, keep=keep)
@@ -154,27 +185,60 @@ def _feeder(ctx):
     return mod.Feeder(ctx), getattr(mod, "housekeep", None)
 
 
+NOTE_CAP = 20      # notes per error source (scheduler, feeder, housekeeping, state recorder) outside scheduled outages
+
+
+class _Errors:
+    """The driver's error notes, ONE CAP PER SOURCE (final review): the state recorder failing through every bridge outage used
+    to use up a cap shared with the feeder, hiding a later real feeder bug. And an error made while a scheduled outage is on
+    (schedule.in_quiet) is expected: it is counted, never noted one by one, and does not count toward the cap."""
+
+    def __init__(self, ctx, sched):
+        self.ctx, self.sched, self.n, self.quiet = ctx, sched, {}, {}
+
+    def __call__(self, source, wall, ex):
+        try:
+            quiet = schedule.in_quiet(self.ctx, self.sched, wall)
+        except Exception:  # noqa: BLE001
+            quiet = False
+        book = self.quiet if quiet else self.n
+        book[source] = book.get(source, 0) + 1
+        if not quiet and book[source] <= NOTE_CAP:
+            self.ctx.note("wall %d s: %s error %s: %s%s" % (wall // 1000, source, type(ex).__name__, ex,
+                                                           " (the last %s note; the rest are counted)" % source
+                                                           if book[source] == NOTE_CAP else ""))
+
+    def summary(self):
+        srcs = sorted(set(self.n) | set(self.quiet))
+        return ", ".join("%s %d (+%d during scheduled outages)" % (s, self.n.get(s, 0), self.quiet.get(s, 0)) for s in srcs) or "none"
+
+
 def run_loop(ctx, sched, seconds, poll=None):
     """Fires the schedule by wall clock for `seconds` real seconds; the feeder and housekeeping ride along when they exist.
-    Always ends with schedule.teardown and the no-filler-left check, whatever stopped the loop."""
+    Always ends with schedule.teardown, the no-filler-left check and the end-of-run probe, whatever stopped the loop. NOTHING
+    stops the loop but the clock ("24 h no matter what"): an error from the scheduler itself (a log the full drive will not take,
+    say), the feeder, housekeeping or the state recorder is noted (per source, capped: _Errors) and the run goes on. The shakeout
+    report is NOT written here: after_stop writes it once the game server is stopped."""
     poll = poll or env_int("SHAKEOUT_POLL_S", 15)
     feed, housekeep = _feeder(ctx)
     ctx.shakeout_entries = sched          # housekeeping tags a storage reading taken inside a scheduled storage fault as expected
     t0 = time.time()
-    errors = 0
+    err = _Errors(ctx, sched)
     try:
         while True:
             wall = int((time.time() - t0) * 1000)
             if wall >= seconds * 1000:
                 break
-            schedule.run_due(ctx, sched, wall)
-            for fn in ([feed.tick] if feed else []) + ([lambda now: housekeep(ctx, now)] if housekeep else []):
+            try:
+                schedule.run_due(ctx, sched, wall)
+            except Exception as ex:  # noqa: BLE001 - run_due catches every fault's errors; this is anything else
+                err("scheduler", wall, ex)
+            for source, fn in ([("feeder", feed.tick)] if feed else []) + (
+                    [("housekeeping", lambda now: housekeep(ctx, now))] if housekeep else []):
                 try:
                     fn(time.time())
                 except Exception as ex:  # noqa: BLE001 - a feeder error is a note, not the end of a 24-hour run
-                    errors += 1
-                    if errors <= 20:
-                        ctx.note("wall %d s: feeder/housekeeping error %s: %s" % (wall // 1000, type(ex).__name__, ex))
+                    err(source, wall, ex)
             try:
                 ctx.sample()
             except Exception:  # noqa: BLE001 - the server may be down for a scheduled fault
@@ -182,11 +246,10 @@ def run_loop(ctx, sched, seconds, poll=None):
             try:   # the /state snapshots the report reads (Task 7); a bridge that does not answer is written as a gap
                 shreport.record_state(ctx, wall, t0 * 1000)
             except Exception as ex:  # noqa: BLE001
-                errors += 1
-                if errors <= 20:
-                    ctx.note("wall %d s: state recorder error %s: %s" % (wall // 1000, type(ex).__name__, ex))
+                err("state recorder", wall, ex)
             time.sleep(poll)
     finally:
+        ctx.note("driver errors by source: %s" % err.summary())
         out = schedule.teardown(ctx, sched)
         st = schedule.state_of(ctx)
         phases = {}
@@ -196,12 +259,51 @@ def run_loop(ctx, sched, seconds, poll=None):
                    % (len(out["fillers_removed"]), len(out["fillers_left"]), out["fillers_left"]))
         ctx.note("schedule: %d entries; phases %s; ended at teardown %s; end errors %s; never fired %d"
                  % (len(sched), phases, out["ended"], out["end_errors"], len(out["never_fired"])))
-        for what, fn in (("final probe", lambda: shreport.probe_final(ctx)), ("shakeout report", lambda: shreport.write_report(ctx.run))):
-            try:
-                ctx.note("%s: %s" % (what, fn() if what == "shakeout report" else "%d turtles probed" % len(fn())))
-            except Exception as ex:  # noqa: BLE001 - the report can be written again from the run folder afterwards
-                ctx.note("%s failed: %s: %s (python sandbox/t2/shakeout/report.py <run>)" % (what, type(ex).__name__, ex))
+        try:   # needs the game server: here, while it is up
+            ctx.note("final probe: %d turtles probed" % len(shreport.probe_final(ctx)))
+        except Exception as ex:  # noqa: BLE001
+            ctx.note("final probe failed: %s: %s" % (type(ex).__name__, ex))
+        ctx.shakeout_report_due = True
     return out
+
+
+def after_stop(ctx):
+    """scenario.py calls this once the game server is stopped: the shakeout report reads a whole day's log files, which is no
+    job for the moment the server still holds its memory (final review). Returns the report's path, or why there is none."""
+    if not getattr(ctx, "shakeout_report_due", False):
+        return "no shakeout report: run_loop never ran"
+    try:
+        return "shakeout report: %s" % shreport.write_report(ctx.run)
+    except Exception as ex:  # noqa: BLE001 - it can be written again from the run folder
+        return "shakeout report failed: %s: %s (python sandbox/t2/shakeout/report.py %s)" % (type(ex).__name__, ex, ctx.run)
+
+
+def ramp_on_fleet(ctx, steps=(1, 2, 3, 4), hold_min=None):
+    """The speed ramp (plan Task 8 Step 2) ON THE PLACED FLEET WITH THE FEEDER RUNNING (final review I7): ramp.ramp alone held
+    each speed on whatever the world was doing, which on the saved shakeout-world is an idle server, and an idle server holds
+    4x. setup(ctx) places the 160 turtles (ctx.shakeout_fleet), then every tick sample of every hold also calls Feeder.tick
+    (and housekeeping), so the whole fleet is working while its tick time is measured. Returns the chosen speed; RampFailed
+    propagates (stop and tell the user)."""
+    from shakeout import ramp as shramp
+    if not getattr(ctx, "shakeout_fleet", None):
+        setup(ctx)
+    feed, housekeep = _feeder(ctx)
+    t0 = time.time()
+    err = _Errors(ctx, [])
+
+    def on_poll():
+        wall = int((time.time() - t0) * 1000)
+        for source, fn in ([("feeder", feed.tick)] if feed else []) + (
+                [("housekeeping", lambda now: housekeep(ctx, now))] if housekeep else []):
+            try:
+                fn(time.time())
+            except Exception as ex:  # noqa: BLE001
+                err(source, wall, ex)
+    hold = hold_min if hold_min is not None else env_int("SHAKEOUT_RAMP_HOLD_MIN", 20)
+    try:
+        return shramp.ramp(ctx, steps=steps, hold_min=hold, on_poll=on_poll)
+    finally:
+        ctx.note("ramp driver errors by source: %s" % err.summary())
 
 
 def steps(ctx):

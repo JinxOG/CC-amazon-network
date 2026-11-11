@@ -475,11 +475,13 @@ class BridgeWorld:
         if port in self.spawn_then_fail:                       # spawned, pid recorded, then no /ping in 300 s
             raise RuntimeError("the bridge on port %d did not answer /ping in 300 s (fake)" % port)
 
-    def proxy(self, ctx, e, listen, target, ms):
+    def proxy(self, ctx, e, listen, target, ms, st=None):
         self.calls.append(("proxy", listen, target, ms))
         if self.fail_proxy:
             raise OSError("proxy would not start (fake)")
         self.ports[listen], self.delay = "proxy", ms
+        if st is not None:
+            st["proxy"] = 4242      # as the real one does, straight after the spawn
         return 4242
 
     def proxy_stop(self, ctx, e, pid):
@@ -1067,6 +1069,342 @@ class TheReplay(unittest.TestCase):
         p = subprocess.run([world.lua_interpreter(), HARNESS], cwd=REPO, env=env, capture_output=True)
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("not a simulator verb", (p.stdout + p.stderr).decode("utf8", "replace"))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Final review fixes (2026-11-11)
+# ---------------------------------------------------------------------------------------------------------------------
+
+def load_driver(name="shakeout"):
+    return TheDriverLoop.load(name)
+
+
+class SavingControl(FakeControl):
+    """The world as a crash leaves it: a kill does not save, so after restart_after_crash every computer is on or off as it was at
+    the last save -- save-all, or the autosave before the run (the starting state). ignore_save_all: save-all saves nothing
+    (only the restore can then put a lost turn_on right)."""
+
+    def __init__(self, disks, ignore_save_all=False):
+        FakeControl.__init__(self, disks)
+        self.saved_on = dict(self.on)
+        self.ignore_save_all = ignore_save_all
+
+    def command(self, text):
+        if text == "save-all" and not self.ignore_save_all:
+            self.saved_on = dict(self.on)
+        return FakeControl.command(self, text)
+
+    def autosave(self):
+        self.saved_on = dict(self.on)
+
+    def restart_after_crash(self):
+        FakeControl.restart_after_crash(self)
+        self.on = dict(self.saved_on)
+
+
+class AnUndoSurvivesACrash(unittest.TestCase):
+    """I4: world_restart kind=crash and restart_burst5 kill the server without saving."""
+
+    def ctx(self, **kw):
+        ctx = FakeCtx()
+        ctx.control = ctx._raw = SavingControl(os.path.join(ctx.run, "disks"), **kw)
+        return ctx
+
+    def test_every_harness_turn_on_is_saved_at_once(self):
+        ctx = self.ctx()
+        c = ctx.control
+        s = [entry(1, 0, "server_crash", {"down_ms": 5000}), entry(2, 20000, "world_restart", {"kind": "crash"})]
+        schedule.run_due(ctx, s, 0)
+        c.autosave()                                         # the game's own autosave, with #95 off
+        schedule.run_due(ctx, s, 5000)                       # the window ends: #95 back on
+        names = [(x[0], x[1][0] if x[1] else None) for x in c.calls]
+        i = names.index(("turn_on", [95]))
+        self.assertEqual(names[i + 1], ("command", "save-all"), "save-all straight after the turn_on: %s" % names[i:i + 3])
+        self.assertTrue(c.saved_on[95], "the turn_on is on disk before any later crash")
+        schedule.run_due(ctx, s, 20000)                      # killed and back
+        self.assertTrue(c.on[95], "the dispatch computer is on after the crash restart")
+
+    def test_the_restore_after_a_crash_restart_is_the_safety_net(self):
+        ctx = self.ctx(ignore_save_all=True)                 # the save-all did not stick: the crash loses the turn_on
+        c = ctx.control
+        s = [entry(1, 0, "gps_down", {"dur_ms": 5000, "count": "all", "pick": 0}), entry(2, 20000, "world_restart", {"kind": "crash"})]
+        schedule.run_due(ctx, s, 0)
+        c.autosave()                                         # saved with the hosts off
+        schedule.run_due(ctx, s, 5000)
+        self.assertFalse(c.saved_on[48], "precondition: the turn_on is not on disk")
+        schedule.run_due(ctx, s, 20000)
+        self.assertEqual([h for h in (48, 49, 50, 51) if not c.on[h]], [], "every GPS host is on again after the crash")
+        restored = [x for x in c.calls if x[0] == "turn_on"][-1]
+        self.assertEqual(restored[1][0], [48, 49, 50, 51])
+        self.assertTrue(any(i["verb"] == "turn_on" and i["fault"] == "f002" for i in ctx.interventions), "an intervention, by f002")
+        with open(os.path.join(ctx.run, "shakeout", "faults.jsonl")) as f:
+            self.assertIn("restored-on", [json.loads(l)["phase"] for l in f])
+
+    def test_a_restart_burst_restores_too(self):
+        ctx = self.ctx(ignore_save_all=True)
+        c = ctx.control
+        s = [entry(1, 0, "atc_crash", {"down_ms": 5000}), entry(2, 20000, "restart_burst5", {"count": 5}, quiet_ms=50 * MIN)]
+        schedule.run_due(ctx, s, 0)
+        c.autosave()
+        schedule.run_due(ctx, s, 5000)
+        schedule.run_due(ctx, s, 20000)
+        self.assertTrue(c.on[300], "the ATC computer is on after the burst")
+
+    def test_a_computer_held_off_by_an_open_window_stays_off(self):
+        ctx = self.ctx(ignore_save_all=True)
+        c = ctx.control
+        s = [entry(1, 0, "server_crash", {"down_ms": 60000}), entry(2, 20000, "world_restart", {"kind": "crash"})]
+        schedule.run_due(ctx, s, 0)
+        c.autosave()
+        schedule.run_due(ctx, s, 20000)
+        self.assertFalse(c.on[95], "its window is still open: the restore leaves it off")
+        schedule.run_due(ctx, s, 60000)
+        self.assertTrue(c.on[95])
+
+    def test_a_crash_that_reverts_a_held_computer_to_on_has_it_switched_off_again(self):
+        ctx = self.ctx(ignore_save_all=True)
+        c = ctx.control                                      # the last save predates the shutdown: the crash brings #95 back on
+        s = [entry(1, 0, "server_crash", {"down_ms": 60000}), entry(2, 20000, "world_restart", {"kind": "crash"})]
+        schedule.run_due(ctx, s, 0)
+        schedule.run_due(ctx, s, 20000)
+        self.assertFalse(c.on[95], "the hold is put back: the window is still open")
+        self.assertEqual(calls_of(c, "shutdown")[-1][1], ([95],))
+
+
+class NoRestartInsideAChunkUnload(unittest.TestCase):
+    """I5: the control mod keeps an unloaded area's restore in JVM memory; a restart inside the window loses it for good."""
+
+    def test_fits_refuses_a_restart_inside_an_unload_window(self):
+        u = dict(entry(1, 60 * MIN, "chunk_unload", {"dur_ms": 10 * MIN, "target": {"role": "MINER"}, "radius_chunks": 1}))
+        lo, hi = 0, 24 * HOUR
+        for f, args, quiet in (("world_restart", {"kind": "clean"}, 10 * MIN), ("restart_burst5", {"count": 5}, 50 * MIN)):
+            self.assertFalse(schedule._fits(entry(2, 65 * MIN, f, args, quiet), [u], lo, hi), f + " inside the window")
+            self.assertFalse(schedule._fits(entry(2, 55 * MIN, f, args, quiet), [u], lo, hi), f + " still restarting when it opens")
+            self.assertTrue(schedule._fits(entry(2, 71 * MIN, f, args, quiet), [u], lo, hi), f + " after the window")
+        # disk_full restarts at its start AND at its end: an end inside the window is refused too
+        self.assertFalse(schedule._fits(entry(2, 40 * MIN, "disk_full", {"dur_ms": 25 * MIN, "leave_bytes": 0}), [u], lo, hi))
+        self.assertTrue(schedule._fits(entry(2, 75 * MIN, "disk_full", {"dur_ms": 25 * MIN, "leave_bytes": 0}), [u], lo, hi))
+        # and the other way round: an unload is not placed over a restart
+        r = entry(2, 65 * MIN, "world_restart", {"kind": "crash"}, 10 * MIN)
+        self.assertFalse(schedule._fits(u, [r], lo, hi))
+
+    def test_no_default_schedule_restarts_inside_an_unload(self):
+        checked = 0
+        for seed in range(1, 21):
+            s = schedule.make_schedule(seed, 24, schedule.DEFAULT_RATES)
+            unloads = [e for e in s if e["fault"] == "chunk_unload"]
+            restarts = [e for e in s if e["fault"] in schedule.RESTART_FAULTS]
+            for u in unloads:
+                for r in restarts:
+                    checked += 1
+                    self.assertFalse(schedule._restart_meets_unload(u, r), "seed %d: %s and %s" % (seed, u, r))
+        self.assertGreater(checked, 100)
+
+    def test_the_unload_restore_is_reissued_after_a_restart_and_taken_off_again(self):
+        ctx = FakeCtx()
+        c = ctx.control
+        s = [entry(1, 0, "chunk_unload", {"dur_ms": 30000, "target": {"role": "MINER", "index": 0, "prefer": "working"},
+                                          "radius_chunks": 1}),
+             entry(2, 10000, "world_restart", {"kind": "clean"})]
+        schedule.run_due(ctx, s, 0)
+        area = schedule.state_of(ctx)["status"]["f001"]["detail"]["area"]
+        schedule.run_due(ctx, s, 10000)
+        cmds = [x[1][0] for x in calls_of(c, "command")]
+        add = "forceload add %d %d %d %d" % tuple(area)
+        self.assertIn(add, cmds)
+        self.assertTrue(any(i["fault"] == "f001" and add in i["args"][0] for i in ctx.interventions), "recorded under the unload")
+        rm = "forceload remove %d %d %d %d" % tuple(area)
+        schedule.run_due(ctx, s, 10000 + schedule.FORCELOAD_HOLD_MS - 1)
+        self.assertNotIn(rm, [x[1][0] for x in calls_of(c, "command")], "held for FORCELOAD_HOLD_MS")
+        schedule.run_due(ctx, s, 10000 + schedule.FORCELOAD_HOLD_MS)
+        self.assertIn(rm, [x[1][0] for x in calls_of(c, "command")])
+        self.assertEqual(schedule.state_of(ctx)["forceloads"], [])
+
+    def test_teardown_takes_off_a_forceload_still_on(self):
+        ctx = FakeCtx()
+        s = [entry(1, 0, "chunk_unload", {"dur_ms": 30000, "target": {"role": "MINER", "index": 0}, "radius_chunks": 1}),
+             entry(2, 10000, "world_restart", {"kind": "clean"})]
+        schedule.run_due(ctx, s, 0)
+        schedule.run_due(ctx, s, 10000)
+        schedule.teardown(ctx, s)
+        self.assertTrue(any(x[1][0].startswith("forceload remove") for x in calls_of(ctx.control, "command")))
+
+
+class TheRunGoesOnWhateverHappens(unittest.TestCase):
+    def test_a_log_that_cannot_be_written_does_not_stop_a_fault(self):
+        ctx = FakeCtx()
+        with open(os.path.join(ctx.run, "shakeout"), "w") as f:       # a FILE where the log folder goes: makedirs fails
+            f.write("x")
+        acted = schedule.run_due(ctx, [entry(1, 0, "low_fuel", {"target": {"role": "MINER", "index": 0}, "fuel": 9})], 0)
+        self.assertIn(("f001", "begin"), acted)
+        self.assertGreaterEqual(ctx.shakeout_log_errors, 1)
+        self.assertTrue(any("faults.jsonl could not be written" in n for n in ctx.notes), ctx.notes)
+
+    def test_run_loop_survives_a_scheduler_that_raises(self):
+        drv = load_driver()
+        ctx = FakeCtx()
+        real = schedule.run_due
+        calls = []
+
+        def boom(c, s, wall):
+            calls.append(wall)
+            if len(calls) == 1:
+                raise OSError("No space left on device (fake)")
+            return real(c, s, wall)
+        drv.schedule.run_due = boom
+        try:
+            out = drv.run_loop(ctx, [entry(1, 0, "low_fuel", {"target": {"role": "MINER", "index": 0}, "fuel": 9})], 0.2, poll=0.01)
+        finally:
+            drv.schedule.run_due = real
+        self.assertGreaterEqual(len(calls), 2, "the loop went on after the error")
+        self.assertTrue(any("scheduler error OSError" in n for n in ctx.notes), ctx.notes)
+        self.assertEqual(schedule.state_of(ctx)["status"]["f001"]["phase"], "done")
+        self.assertIn("never_fired", out)
+
+    def test_each_source_has_its_own_note_cap_and_outages_do_not_count(self):
+        drv = load_driver()
+        ctx = FakeCtx()
+        s = [entry(1, 10 * MIN, "world_restart", {"kind": "clean"}, quiet_ms=10 * MIN)]
+        err = drv._Errors(ctx, s)
+        for i in range(drv.NOTE_CAP + 10):
+            err("state recorder", 0, OSError("bridge down %d" % i))
+        err("feeder", 0, KeyError("a real feeder bug"))
+        self.assertTrue(any("feeder error KeyError" in n for n in ctx.notes), "the recorder's errors do not hide the feeder's")
+        self.assertEqual(sum(1 for n in ctx.notes if "state recorder error" in n), drv.NOTE_CAP)
+        before = len(ctx.notes)
+        for i in range(50):
+            err("feeder", 12 * MIN, OSError("server down for the scheduled restart"))
+        self.assertEqual(len(ctx.notes), before, "errors inside a scheduled outage are counted, not noted")
+        self.assertEqual(err.quiet["feeder"], 50)
+        self.assertEqual(err.n["feeder"], 1, "and do not use up the cap")
+        self.assertIn("feeder 1 (+50 during scheduled outages)", err.summary())
+
+    def test_teardown_puts_the_bridge_and_the_tick_rate_back_whatever_the_windows_did(self):
+        b = BridgeWorld(self)
+        ctx = FakeCtx()
+        ctx.rate = 60
+        st = schedule.state_of(ctx)
+        b.ports, b.bridge_port, st["bridge_port"] = {3001: "bridge"}, 3001, 3001     # left on 3001 by a window nobody closed
+        out = schedule.teardown(ctx, [])
+        self.assertEqual(b.ports, {3000: "bridge"})
+        self.assertEqual(calls_of(ctx.control, "tick_rate")[-1][1], (60,))
+        self.assertEqual(out["end_errors"], [])
+
+    def test_the_proxy_pid_is_kept_even_when_the_pid_file_cannot_be_written(self):
+        ctx = FakeCtx()
+        os.makedirs(os.path.join(ctx.run, "shakeout", "proxy.pid"))              # a folder where the pid file goes
+        real = schedule.subprocess.Popen
+
+        class P:
+            pid = 31337
+
+            def __init__(self, *a, **k):
+                pass
+        schedule.subprocess.Popen = P
+        try:
+            st = schedule.state_of(ctx)
+            with self.assertRaises(OSError):
+                schedule._proxy_start(ctx, {"id": "f001"}, 3000, 3001, 100, st)
+        finally:
+            schedule.subprocess.Popen = real
+        self.assertEqual(st["proxy"], 31337, "teardown can still stop it")
+
+
+class ThePlacementCheckReadsTheServersLines(unittest.TestCase):
+    """I3: every turtle logs its own 'Assigned dock: bay 1 row A (x,y,z)' on every register."""
+
+    TURTLE = "2026-11-11T10:00:00Z node_201#201 INFO   Assigned dock: bay 1 row A (153,67,-2806)"
+    SERVER = "2026-11-11T10:00:00Z node_95#95 INFO   Assigned dock: bay 1 row A to node_201"
+
+    def run_checks(self, lines):
+        drv = load_driver()
+
+        class Ctx:
+            checks, notes = [], []
+
+            def state(self):
+                return {"turtles": {"node_201": {"dockX": 153, "dockZ": -2806, "position": {"x": 153, "y": 67, "z": -2806}}}}
+
+            def log_lines(self, substr=""):
+                return [l for l in lines if substr in l]
+
+            def expect(self, ok, message):
+                self.checks.append((bool(ok), message))
+
+            def note(self, text):
+                self.notes.append(text)
+        ctx = Ctx()
+        ctx.checks, ctx.notes = [], []
+        drv.placement_checks(ctx, {"node_201": {"x": 153, "y": 67, "z": -2806, "type": "DELIVERY"}})
+        return [m for ok, m in ctx.checks if not ok]
+
+    def test_the_turtles_own_line_is_not_a_placement(self):
+        self.assertEqual(self.run_checks([self.TURTLE]), [])
+
+    def test_the_servers_line_naming_a_placed_turtle_fails(self):
+        failed = self.run_checks([self.TURTLE, self.SERVER])
+        self.assertEqual(len(failed), 1, failed)
+        self.assertIn("'Assigned dock:' line names a placed turtle (1 such", failed[0])
+        moved = "2026-11-11T10:00:00Z node_95#95 INFO   Dock moved: node_201 from bay 2 row A (MINER) to bay 1 row A (DELIVERY)"
+        self.assertEqual(len(self.run_checks([moved])), 1)
+
+
+class SetupWaitsForItsOwnRestart(unittest.TestCase):
+    def ctx(self, comes_back=True):
+        lines = ["x Central server online (v1)"]
+
+        class Ctl:
+            def world_restart(self):
+                if comes_back:
+                    lines.append("y Central server online (v1)")
+
+        class Ctx:
+            control = _raw = Ctl()
+            rate = 20
+            checks, notes = [], []
+
+            def log_lines(self, substr=""):
+                return [l for l in lines if substr in l]
+
+            def wait_until(self, cond, s, poll=10):
+                return cond() or None
+
+            def expect(self, ok, message):
+                self.checks.append((bool(ok), message))
+        c = Ctx()
+        c.checks = []
+        return c
+
+    def test_it_waits_for_one_more_online_line(self):
+        drv = load_driver()
+        ctx = self.ctx()
+        self.assertTrue(drv.restart_and_wait_online(ctx))
+        self.assertEqual([ok for ok, _ in ctx.checks], [True])
+        self.assertIn("1 before, 2 now", ctx.checks[0][1])
+
+    def test_a_server_that_does_not_come_back_fails_the_check(self):
+        drv = load_driver()
+        ctx = self.ctx(comes_back=False)
+        self.assertFalse(drv.restart_and_wait_online(ctx))
+        self.assertEqual([ok for ok, _ in ctx.checks], [False])
+
+
+class TheReportIsWrittenAfterTheServerStops(unittest.TestCase):
+    def test_run_loop_leaves_the_report_to_after_stop(self):
+        drv = load_driver()
+        wrote = []
+        real_w, real_p = drv.shreport.write_report, drv.shreport.probe_final
+        drv.shreport.write_report = lambda run: wrote.append(run) or os.path.join(run, "shakeout", "report.md")
+        drv.shreport.probe_final = lambda ctx: {}
+        try:
+            ctx = FakeCtx()
+            drv.run_loop(ctx, [], 0.05, poll=0.01)
+            self.assertEqual(wrote, [], "not while the game server is up")
+            self.assertIn("shakeout report:", drv.after_stop(ctx))
+            self.assertEqual(wrote, [ctx.run])
+        finally:
+            drv.shreport.write_report, drv.shreport.probe_final = real_w, real_p
+        self.assertIn("never ran", drv.after_stop(FakeCtx()))
 
 
 if __name__ == "__main__":
