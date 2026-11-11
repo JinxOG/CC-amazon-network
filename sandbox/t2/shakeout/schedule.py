@@ -926,8 +926,11 @@ def _slow_begin(ctx, c, st, e):
     ms = int(e["args"]["ms"])
     try:
         _bridge_stop(ctx, e)
-        _bridge_start(ctx, e, SLOW_BRIDGE_PORT)
+        # BEFORE the start, not after: _bridge_start records the new pid and THEN waits for a ping, so a 3001 bridge that
+        # spawned but answers late raises with its pid recorded. With bridge_port still 3000 the restore below would find that
+        # pid alive, leave it, and leave 3000 dark (round-2 review). Marked 3001 first, the restore stops it and starts 3000.
         st["bridge_port"] = SLOW_BRIDGE_PORT
+        _bridge_start(ctx, e, SLOW_BRIDGE_PORT)
         st["proxy"] = _proxy_start(ctx, e, BRIDGE_PORT, SLOW_BRIDGE_PORT, ms)
         d["proxy"] = st["proxy"]
     except (Exception, SystemExit):

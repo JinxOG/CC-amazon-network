@@ -451,9 +451,9 @@ class TheVerbs(unittest.TestCase):
 class BridgeWorld:
     """What listens where: the real bridge, the delaying proxy, or nothing. Stands in for the bridge process verbs."""
 
-    def __init__(self, test, fail_start=(), fail_proxy=False):
+    def __init__(self, test, fail_start=(), fail_proxy=False, spawn_then_fail=()):
         self.ports, self.bridge_port, self.calls = {3000: "bridge"}, 3000, []
-        self.fail_start, self.fail_proxy = set(fail_start), fail_proxy
+        self.fail_start, self.fail_proxy, self.spawn_then_fail = set(fail_start), fail_proxy, set(spawn_then_fail)
         self.slow = False                                  # the bridge process runs but does not answer in time
         self.saved = {n: getattr(schedule, n) for n in ("_bridge_stop", "_bridge_start", "_proxy_start", "_proxy_stop", "_bridge_ping",
                                                        "_bridge_alive")}
@@ -472,6 +472,8 @@ class BridgeWorld:
         if port in self.fail_start:
             raise SystemExit("something still listens on 127.0.0.1:%d (fake)" % port)
         self.ports[port], self.bridge_port = "bridge", port
+        if port in self.spawn_then_fail:                       # spawned, pid recorded, then no /ping in 300 s
+            raise RuntimeError("the bridge on port %d did not answer /ping in 300 s (fake)" % port)
 
     def proxy(self, ctx, e, listen, target, ms):
         self.calls.append(("proxy", listen, target, ms))
@@ -549,6 +551,25 @@ class TheBridgeFaults(unittest.TestCase):
         self.assertEqual(b.calls[n:], [], "a slow bridge whose process is alive is never stopped or started")
         with open(os.path.join(ctx.run, "shakeout", "faults.jsonl")) as f:
             self.assertIn("bridge-slow-left-alone", f.read())
+
+    def test_a_3001_bridge_that_spawns_but_answers_late_is_stopped_and_3000_comes_back(self):
+        b = BridgeWorld(self, spawn_then_fail={3001})
+        ctx = FakeCtx()
+        schedule.run_due(ctx, [entry(1, 0, "bridge_slow", {"dur_ms": 5000, "ms": 1500})], 0)
+        self.assertEqual(b.ports, {3000: "bridge"}, "no orphan on 3001, and the fleet's bridge back on 3000")
+        self.assertEqual(b.calls, [("stop",), ("start", 3001), ("stop",), ("start", 3000)])
+
+    def test_a_bridge_whose_liveness_cannot_be_told_is_left_alone(self):
+        b = BridgeWorld(self)
+        ctx = FakeCtx()
+        b.slow = True                                         # no ping answer ...
+        schedule._bridge_alive = lambda ctx: None             # ... and pids.json unreadable
+        schedule._bridge_restore(ctx, None, schedule.state_of(ctx))
+        self.assertEqual(b.calls, [], "unknown is not dead: nothing stopped, nothing started")
+        with open(os.path.join(ctx.run, "shakeout", "faults.jsonl")) as f:
+            line = [l for l in f if "bridge-slow-left-alone" in l]
+        self.assertEqual(len(line), 1)
+        self.assertIn("unknown", line[0])
 
     def test_a_dead_bridge_is_started_again(self):
         b = BridgeWorld(self)
