@@ -57,12 +57,14 @@ def prepare_bridge(run):
         f.write("commit %s\ndirty files: %s\n" % (git("rev-parse", "HEAD"), git("status", "--short", "server.js", "public") or "none"))
 
 
-def start_bridge(run, rcon_port, rcon_password):
+def start_bridge(run, rcon_port, rcon_password, port=3000, append=False):
+    """Starts the real bridge detached; returns its pid. `port` other than 3000 is for the shakeout's slow-bridge fault, which
+    puts a delaying proxy on 3000 in front of it; `append` keeps the earlier bridge.out when the bridge is restarted mid-run."""
     node = shutil.which("node")
-    env = dict(os.environ, PORT="3000", RCON_HOST="127.0.0.1", RCON_PORT=str(rcon_port), RCON_PASSWORD=rcon_password)
+    env = dict(os.environ, PORT=str(port), RCON_HOST="127.0.0.1", RCON_PORT=str(rcon_port), RCON_PASSWORD=rcon_password)
     for k in ("DASH_USER", "DASH_PASS"):
         env.pop(k, None)
-    out = open(os.path.join(run, "bridge", "bridge.out"), "wb")
+    out = open(os.path.join(run, "bridge", "bridge.out"), "ab" if append else "wb")
     p = subprocess.Popen([node, "server.js"], cwd=os.path.join(run, "bridge"), env=env, stdout=out,
                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=DETACHED)
     return p.pid

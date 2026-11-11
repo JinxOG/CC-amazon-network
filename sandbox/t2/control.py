@@ -24,6 +24,16 @@ import run as runmod  # noqa: E402
 from rcon import Rcon  # noqa: E402
 
 
+# Files a computer writes as it runs (state, journals, logs, half-written saves, update markers). A new computer is given its
+# donor's CODE only, never these: a copied journal.dat or journal.tmp would make a fresh turtle resume someone else's job.
+STATE_SUFFIXES = (".dat", ".log", ".json", ".tmp", ".bak")
+STATE_NAMES = ("update_failed.txt", "update_ref.txt")
+
+
+def is_state_file(name):
+    return name.endswith(STATE_SUFFIXES) or name in STATE_NAMES
+
+
 class Unsupported(Exception):
     """Minecraft offers no way to do this verb; the message says why."""
 
@@ -140,7 +150,7 @@ class Control:
         """Places a new advanced turtle with a wireless modem at x, y, z (the spot must be air in a loaded chunk), gives it the
         code of an existing computer of the same role (the files at the top of the donor's disk; no state files) and turns
         it on. The fleet sees it register as a new node. Returns its computer id. `right` is a tool or peripheral upgrade for the
-        right side (for example "minecraft:diamond_pickaxe"); `items` maps slot (0-15) to (item, count), set before the turtle starts; `startup` is a path of a Lua file to install as the new turtle's
+        right side (for example "minecraft:diamond_pickaxe"); `items` maps slot (0-15) to (item, count) or (item, count, tag SNBT), set before the turtle starts; `startup` is a path of a Lua file to install as the new turtle's
         startup.lua in place of the donor's (a probe program; the turtle is then not a fleet node)."""
         before = set(self.computers())
         right_nbt = ',RightUpgrade:"%s"' % right if right else ""
@@ -166,12 +176,13 @@ class Control:
         os.makedirs(dest, exist_ok=True)
         for name in os.listdir(os.path.join(self.disks, str(donor))):
             src = os.path.join(self.disks, str(donor), name)
-            if os.path.isfile(src) and not name.endswith((".dat", ".log", ".json")) and name not in ("update_failed.txt", "update_ref.txt"):
+            if os.path.isfile(src) and not is_state_file(name):
                 shutil.copy(src, os.path.join(dest, name))
         if startup:
             shutil.copy(startup, os.path.join(dest, "startup.lua"))
-        for slot, (item, count) in (items or {}).items():
-            self.set_slot(new, slot, item, count)    # before it is turned on, so a program starts with them
+        for slot, stack in (items or {}).items():
+            item, count, tag = (tuple(stack) + (None,))[:3]
+            self.set_slot(new, slot, item, count, tag=tag)    # before it is turned on, so a program starts with them
         self.turn_on([new])
         return new
 
