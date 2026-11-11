@@ -173,8 +173,9 @@ def place(ctx, layout=None):
         control.time.sleep = real_sleep
 
 
-def dock_of_each(dat_path, nodes):
-    """What the REAL waypoints.lua makes of the seeded file: {node: (type, x, z)} and its warnings."""
+def dock_of_each(dat_path, nodes, infos=None):
+    """What the REAL waypoints.lua makes of the seeded file: {node: (type, x, z)} and its warnings (its INFO lines go into
+    `infos` when a list is given)."""
     d = tempfile.mkdtemp(prefix="shakeout_dock_read")
     with open(os.path.join(d, "ids.txt"), "w") as f:
         f.write("\n".join(nodes) + "\n")
@@ -204,6 +205,8 @@ end
             out[node] = (t, int(x), int(z))
         elif line.startswith("WARN "):
             warns.append(line)
+        elif line.startswith("INFO ") and infos is not None:
+            infos.append(line)
     return out, warns
 
 
@@ -279,9 +282,16 @@ class TheFleet(unittest.TestCase):
 
     def test_seeded_docks_match_positions(self):
         dat = os.path.join(self.disks, "95", "dock_assignments.dat")
-        docks, warns = dock_of_each(dat, sorted(self.placed))
+        infos = []
+        docks, warns = dock_of_each(dat, sorted(self.placed), infos)
         self.assertEqual(warns, [])
         self.assertEqual(mismatches(self.placed, docks), [])
+        # final review I2: the seed is the new saver's format, so it is read BY POSITION (its legacy lists agree with byPos);
+        # a seed in any other shape is read from the lists, which this line would name
+        self.assertEqual(infos, [], "the seed is read by position, silently")
+        with open(dat) as f:
+            data = f.read()
+        self.assertNotIn("MINER =", data, "no MINER list: an older server has no use for one")
         for n, cell in self.placed.items():
             b = self.turtle_at(cell)
             self.assertEqual(b["cid"], int(n.replace("node_", "")), "the turtle stands on the dock the file gives it")
@@ -300,7 +310,7 @@ class TheFleet(unittest.TestCase):
         nodes = sorted(self.placed)
         a, b = nodes[0], nodes[1]
         bad = text.replace('"%s"' % a, '"@@"').replace('"%s"' % b, '"%s"' % a).replace('"@@"', '"%s"' % b)
-        bad = re.sub(r'\[ "[^"]+" \] = "%s",?' % nodes[2], "", bad)
+        bad = re.sub(r'\[ [^\]]+ \] = "%s",?' % nodes[2], "", bad)       # from byPos AND from its legacy list
         path = os.path.join(tempfile.mkdtemp(), "dock_assignments.dat")
         with open(path, "w") as f:
             f.write(bad)

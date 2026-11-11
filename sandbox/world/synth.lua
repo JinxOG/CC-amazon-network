@@ -180,15 +180,39 @@ function Synth.layout(waypoints, opts)
   -- from before per-bay types reads) and by position (byPos "x,z", what code since reads). Each turtle is written
   -- under the list that holds the cell it stands on, whatever its kind: on old code a miner standing in a support
   -- bay is in its SUPPORT list, exactly as a live file would say.
+  -- Code with per-bay types writes its typed lists in their OLD meaning (final review I2, 2026-11-11): DELIVERY[i] the
+  -- i-th dock of the worker side, SUPPORT[i] the i-th of the support side, in generation order (bay, x, row A then B),
+  -- whatever type the dock is now, and no MINER list. That is what is written here for such code too, so its
+  -- loader finds byPos and the lists agreeing and reads by position, as it does a file of its own.
   if opts.preset_docks then
-    local byRole, byPos = { DELIVERY = {}, SUPPORT = {}, MINER = docks.MINER and {} or nil }, {}
+    local byRole, byPos = { DELIVERY = {}, SUPPORT = {}, MINER = nil }, {}
+    local sideOf = nil
+    if docks.MINER then
+      sideOf = {}
+      local sides = { DELIVERY = {}, SUPPORT = {} }
+      for _, list in pairs(docks) do
+        for _, d in ipairs(list) do
+          local s = sides[d.z < waypoints.WHITE_Z and "DELIVERY" or "SUPPORT"]
+          s[#s + 1] = d
+        end
+      end
+      for key, s in pairs(sides) do
+        table.sort(s, function(a, b)
+          if a.bay ~= b.bay then return a.bay < b.bay end
+          if a.x ~= b.x then return a.x < b.x end
+          return a.row < b.row
+        end)
+        for i, d in ipairs(s) do sideOf[d.x .. "," .. d.z] = { key = key, index = i } end
+      end
+    end
     for _, spec in ipairs(L) do
       if spec.kind == "turtle" and spec.pos and not spec.carried then
         for key, list in pairs(docks) do
           for i, d in ipairs(list) do
             if d.x == spec.pos.x and d.z == spec.pos.z then
-              byRole[key] = byRole[key] or {}
-              byRole[key][i] = "node_" .. spec.id
+              local at = sideOf and sideOf[d.x .. "," .. d.z] or { key = key, index = i }
+              byRole[at.key] = byRole[at.key] or {}
+              byRole[at.key][at.index] = "node_" .. spec.id
               byPos[#byPos + 1] = string.format("[%q] = %q", d.x .. "," .. d.z, "node_" .. spec.id)
             end
           end

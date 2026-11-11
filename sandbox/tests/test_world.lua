@@ -52,6 +52,41 @@ return {
     t.eq(back:digest(), w:digest())
   end,
 
+  -- final review I2 (2026-11-11): the preset dock file is written as per-bay code's own saver writes it (legacy lists
+  -- by side index, no MINER list), so that code reads it BY POSITION, silently, with every turtle on its own cell
+  ["synth preset dock file is read by position on per-bay code"] = function(t)
+    local saved = { fs = rawget(_G, "fs"), textutils = rawget(_G, "textutils") }
+    local text
+    _G.textutils = { unserialise = function(s)
+      local fn = load("return " .. s, "unserialise", "t", {}); if not fn then return nil end
+      local ok, v = pcall(fn); if ok then return v end; return nil end }
+    _G.fs = { exists = function() return text ~= nil end,
+              open = function(_, m) return { readAll = function() return text end, write = function(s) text = s end, close = function() end } end }
+    local ok, err = pcall(function()
+      local W = dofile("waypoints.lua")
+      local L = Synth.layout(W, { miners = 70, workers = 90, delivery = 10, support = 10, preset_docks = true, miners_on_delivery = 2 })
+      for _, spec in ipairs(L) do if spec.role == "server" then text = spec.files["dock_assignments.dat"] end end
+      t.ok(text ~= nil, "the server is given a dock file")
+      t.ok(not text:find("MINER =", 1, true), "no MINER list")
+      local W2 = dofile("waypoints.lua")
+      local said = {}
+      W2.loadDockAssignments(function(m) said[#said + 1] = m end, function(m) said[#said + 1] = m end)
+      t.eq(#said, 0, "read silently by position: " .. tostring(said[1]))
+      local n, wrong = 0, ""
+      for _, spec in ipairs(L) do
+        if spec.kind == "turtle" and spec.pos and not spec.carried then
+          local _, d = W2.dockOf("node_" .. spec.id)
+          n = n + 1
+          if not d or d.x ~= spec.pos.x or d.z ~= spec.pos.z then wrong = wrong .. "node_" .. spec.id .. "; " end
+        end
+      end
+      t.eq(n, 90, "turtles checked")
+      t.eq(wrong, "", "turtles whose dock is not the cell they stand on")
+    end)
+    _G.fs, _G.textutils = saved.fs, saved.textutils
+    if not ok then error(err, 0) end
+  end,
+
   ["synth world is identical for the same seed"] = function(t)
     t.eq(Synth.generate(11):digest(), Synth.generate(11):digest())
     t.ok(Synth.generate(11):digest() ~= Synth.generate(12):digest(), "different seeds gave the same world")

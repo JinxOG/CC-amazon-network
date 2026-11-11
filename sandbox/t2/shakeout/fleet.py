@@ -235,26 +235,25 @@ def make_loader(ctx, spot, donor, pin=None):
 
 def dock_seed_text(placed, layout):
     """dock_assignments.dat as waypoints.saveDockAssignments writes it (textutils.serialise's layout): byPos ("x,z" -> node id),
-    which is what loadDockAssignments reads, and each type's list by its index in W.docks (dock_cells' order is that order)."""
-    index, n = {}, {}
-    for cell in layout:
-        t = cell["type"]
-        n[t] = n.get(t, 0) + 1
-        index[(cell["x"], cell["z"])] = (t, n[t])
-    by_pos, typed = [], {}
+    which is what loadDockAssignments reads, and BESIDE it the legacy lists in their pre-per-bay meaning (final review I2):
+    DELIVERY[i] = the i-th dock of the worker side and SUPPORT[i] = the i-th of the support side, whatever type that dock is
+    now, in waypoints' generation order (bay, then slot dx -4..4, then row A before B). No MINER list. loadDockAssignments trusts
+    byPos only while those lists say the same thing (otherwise an older server wrote last), so a seed without them, or with the
+    old typed lists, would be read from the lists instead."""
+    side_index = {}
+    for side in ("WORKER", "SUPPORT"):
+        cells = sorted((cl for cl in layout if cl["side"] == side), key=lambda cl: (cl["bay"], cl["slot"], cl["row"]))
+        for i, cl in enumerate(cells, 1):
+            side_index[(cl["x"], cl["z"])] = (side, i)
+    by_pos, legacy = [], {"WORKER": {}, "SUPPORT": {}}
     for node, cell in sorted(placed.items(), key=lambda kv: (kv[1]["x"], kv[1]["z"])):
-        t, i = index[(cell["x"], cell["z"])]
         by_pos.append('    [ "%d,%d" ] = "%s",' % (cell["x"], cell["z"], node))
-        typed.setdefault(t, {})[i] = node
+        side, i = side_index[(cell["x"], cell["z"])]
+        legacy[side][i] = node
     out = ["{", "  byPos = {"] + by_pos + ["  },"]
-    for t in DOCK_TYPES:
-        slots = typed.get(t)
-        if not slots:
-            continue
-        if sorted(slots) == list(range(1, len(slots) + 1)):
-            out += ["  %s = {" % t] + ['    "%s",' % slots[i] for i in sorted(slots)] + ["  },"]
-        else:
-            out += ["  %s = {" % t] + ['    [ %d ] = "%s",' % (i, slots[i]) for i in sorted(slots)] + ["  },"]
+    for name, side in (("DELIVERY", "WORKER"), ("SUPPORT", "SUPPORT")):
+        slots = legacy[side]
+        out += ["  %s = {" % name] + ['    [ %d ] = "%s",' % (i, slots[i]) for i in sorted(slots)] + ["  },"]
     return "\n".join(out) + "\n}"
 
 
