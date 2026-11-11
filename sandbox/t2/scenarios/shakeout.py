@@ -119,6 +119,10 @@ def setup(ctx):
                "the world is built: dock cells air %d of %d, under-dock chests %d of %d" % (v["dock_air"], v["dock_total"],
                                                                                          v["under_ok"], v["under_total"]))
 
+    # 3b. one world restart before any turtle is placed: the RS network only picks up the creative storage block on a load
+    world.restart_after_build(ctx)
+    ctx.wait_registered(14, 600)
+
     # 4-5. strays out, the fleet in
     sid = fleet.server_computer(ctx)
     keep = [i for i in (sid,) if i is not None]

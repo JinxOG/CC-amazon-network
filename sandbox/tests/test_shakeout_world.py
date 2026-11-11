@@ -126,6 +126,13 @@ class FakeServer:
         self.saved.append(name)
         return name
 
+    def world_restart(self):
+        self.restarts = getattr(self, "restarts", 0) + 1
+        return "restarted"
+
+    def tick_rate(self, rate):
+        self.sent.append("tickrate %d" % rate)
+
 
 class FakeCtx:
     def __init__(self, server):
@@ -402,6 +409,26 @@ class Verify(unittest.TestCase):
 
 
 class RsCapacity(unittest.TestCase):
+    def test_a_coloured_controller_is_found(self):
+        s = seeded()
+        s.blocks.pop(world.RS_CONTROLLER)
+        s.put(world.RS_CONTROLLER, "refinedstorage:magenta_controller")
+        self.assertEqual(world.add_rs_capacity(FakeCtx(s).control)["controller"], "refinedstorage:magenta_controller")
+
+    def test_no_controller_at_the_position_is_an_error(self):
+        s = seeded()
+        s.blocks.pop(world.RS_CONTROLLER)
+        with self.assertRaises(RuntimeError):
+            world.add_rs_capacity(FakeCtx(s).control)
+
+    def test_restart_after_build_is_one_world_restart_and_puts_the_tick_rate_back(self):
+        s = seeded()
+        ctx = FakeCtx(s)
+        ctx.rate = 40
+        world.restart_after_build(ctx)
+        self.assertEqual(s.restarts, 1)
+        self.assertIn("tickrate 40", s.sent)
+
     def faces(self):
         x, y, z = world.RS_CONTROLLER
         return [(x + dx, y + dy, z + dz) for dx, dy, dz in world.RS_NEIGHBOURS]
@@ -597,7 +624,9 @@ class ProofScenario(unittest.TestCase):
         return ctx
 
     def test_every_check_passes_on_a_correct_build(self):
-        ctx = self.run_proof(ProofServer())
+        server = ProofServer()
+        ctx = self.run_proof(server)
+        self.assertEqual(server.restarts, 1, "the proof restarts the world once after the build, before reading RS capacity")
         self.assertGreaterEqual(len(ctx.checks), 15)
         self.assertEqual([m for ok, m in ctx.checks if not ok], [])
         self.assertTrue(any("160 of 160" in m for _, m in ctx.checks))

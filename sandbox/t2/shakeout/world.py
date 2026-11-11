@@ -518,12 +518,25 @@ RS_CREATIVE_BLOCK = "refinedstorage:creative_storage_block"     # Refined Storag
 RS_NEIGHBOURS = [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0)]
 
 
+RS_COLOURS = ("black", "blue", "brown", "cyan", "gray", "green", "light_blue", "light_gray", "lime", "magenta", "orange", "pink",
+              "purple", "red", "white", "yellow")
+RS_CONTROLLER_IDS = (["refinedstorage:controller", "refinedstorage:creative_controller"]
+                     + ["refinedstorage:%s_controller" % k for k in RS_COLOURS]
+                     + ["refinedstorage:%s_creative_controller" % k for k in RS_COLOURS])     # the world has a magenta_controller
+
+
 def add_rs_capacity(c, controller=RS_CONTROLLER):
-    """Sets a creative item storage block on the first free face of the RS controller (a node touching the controller joins the
-    network, no cable needed) so that storage cannot fill except as a scheduled fault. Idempotent: one already there is kept.
-    Returns {"pos", "placed", "block", "controller": whether a controller id was read there}. Raises when no face is free. VERIFY ON
-    T2: that the block joins the network is read back by the proof as capacity -1 in refinedstorage_disks.dat."""
-    ctrl = any(_passed(c, controller, spec) for spec in ("refinedstorage:controller", "refinedstorage:creative_controller"))
+    """Sets a creative item storage block on the first free face of the RS controller so that storage cannot fill except as a
+    scheduled fault. Idempotent: one already there is kept. Returns {"pos", "placed", "block", "controller": the id read there}.
+    Raises when no RS controller of any colour stands at `controller`, or no face is free.
+    THE BLOCK DOES NOT JOIN THE NETWORK UNTIL THE WORLD RESTARTS: Refined Storage 1.12.4 discovers a node only on a player's block
+    placement event (NetworkNodeListener.onBlockPlace); /setblock fires none, and the network rescans its neighbours only when the
+    controller is loaded. So build_world is always followed by restart_after_build (setup and the proof both do it), and capacity
+    is read after that."""
+    ctrl = next((spec for spec in RS_CONTROLLER_IDS if _passed(c, controller, spec)), None)
+    if ctrl is None:
+        raise RuntimeError("no Refined Storage controller at %s (tried %d ids): the creative storage block has nothing to join"
+                           % (controller, len(RS_CONTROLLER_IDS)))
     faces = [(controller[0] + dx, controller[1] + dy, controller[2] + dz) for dx, dy, dz in RS_NEIGHBOURS]
     for pos in faces:
         if _passed(c, pos, RS_CREATIVE_BLOCK):
@@ -536,6 +549,15 @@ def add_rs_capacity(c, controller=RS_CONTROLLER):
             return {"pos": pos, "placed": True, "block": RS_CREATIVE_BLOCK, "controller": ctrl}
     raise RuntimeError("no free face next to the RS controller at %s for the creative storage block" % (controller,))
 
+
+def restart_after_build(ctx):
+    """One clean world restart after build_world, BEFORE the fleet is placed: it is what makes the RS network pick up the creative
+    storage block (see add_rs_capacity). The run's tick rate is put back afterwards. Returns what the restart returned."""
+    out = ctx.control.world_restart()
+    rate = getattr(ctx, "rate", 20)
+    if rate != 20:
+        ctx.control.tick_rate(rate)
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------------------------

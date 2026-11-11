@@ -61,8 +61,11 @@ class FakeCtx:
             self.turtles["node_%d" % (300 + i)] = {"role": "DELIVERY", "status": "IDLE", "online": True}
         self.storage = [{"name": "minecraft:cobblestone", "amount": 5000}, {"name": "minecraft:iron_ore", "amount": 9000}]
 
+    lag_ms = 0          # serverTime - updatedAt: how old the snapshot the bridge is serving is
+
     def state(self):
-        return {"turtles": self.turtles, "jobs": list(self.jobs.values()), "storage": self.storage}
+        return {"turtles": self.turtles, "jobs": list(self.jobs.values()), "storage": self.storage,
+                "updatedAt": 5000000, "serverTime": 5000000 + self.lag_ms}
 
     def note(self, text):
         self.notes.append(text)
@@ -278,12 +281,124 @@ class FeederTests(unittest.TestCase):
         for st in ({"storage": []}, {"storage": [{"name": "minecraft:iron_ingot", "amount": 9999}], "storageTs": 1}):
             ctx = FakeCtx(deliverers=1, miners=0)
             ctx.state = lambda ctx=ctx, st=st: {"turtles": ctx.turtles, "jobs": list(ctx.jobs.values()), "storage": st["storage"],
-                                                "storageTs": st.get("storageTs")}
+                                                "storageTs": st.get("storageTs"), "updatedAt": 5000000, "serverTime": 5000000}
             f = feeder.Feeder(ctx, min_jobs=0, sites=0)
             f.tick(1e6)
             f.tick(1e6 + 400)
             names = [p["items"][0]["name"] for t, p in ctx.orders if t == "ORDER_DELIVERY"]
             self.assertEqual(names, ["minecraft:cobblestone"], st)
+
+
+class StaleStateTests(unittest.TestCase):
+    """A frozen or empty /state must not make the feeder order the same work every poll (reviewer sims sim_stale / sim_empty)."""
+
+    def test_frozen_state_for_30_minutes_places_no_orders(self):
+        import copy
+        ctx = FakeCtx(miners=128, deliverers=16)
+        f = feeder.Feeder(ctx)
+        for i, (tid, t) in enumerate(sorted(ctx.turtles.items())):
+            t["status"] = ("IDLE" if i < 8 else "WORKING") if t["role"] == "MINER" else ("IDLE" if i % 8 == 0 else "WORKING")
+        for k in range(120):
+            ctx.jobs["w%d" % k] = {"id": "w%d" % k, "type": "MINE", "status": "IN_PROGRESS", "zoneKey": "z%d" % (k // 12)}
+        frozen = copy.deepcopy(ctx.state())
+        elapsed = [0]
+
+        def replay():
+            st = copy.deepcopy(frozen)
+            st["serverTime"] += elapsed[0] * 1000          # the bridge stamps serverTime per request; updatedAt stays at the last push
+            return st
+        ctx.state = replay
+        for step in range(int(30 * 60 / 15)):
+            f.tick(1000.0 + step * 15)
+            elapsed[0] += 15
+        late = ctx.orders[len([o for o in ctx.orders if False]):]
+        # the first 30 s are inside the freshness window: a fresh state would justify at most the sites and the idle watch once
+        self.assertLessEqual(len(late), 6, "orders from a snapshot that was frozen for 30 min: %d" % len(late))
+        n_after_stale = len(ctx.orders)
+        for step in range(60):
+            f.tick(5000.0 + step * 15)
+            elapsed[0] += 15
+        self.assertEqual(len(ctx.orders), n_after_stale, "no order at all while the snapshot is more than 30 s old")
+        self.assertTrue(any("not fresh" in n for n in ctx.notes))
+        self.assertEqual(len([n for n in ctx.notes if "not fresh" in n]), 2, "one note per 30 minutes, not one per poll")
+
+    def test_empty_initial_state_for_4_minutes_places_no_orders(self):
+        ctx = FakeCtx(miners=128, deliverers=16)
+        f = feeder.Feeder(ctx)
+        ctx.state = lambda: {"turtles": {}, "jobs": [], "storage": [], "storageTs": 0, "updatedAt": None, "serverTime": 9000000}
+        for step in range(16):
+            f.tick(10000.0 + step * 15)
+        self.assertEqual(ctx.orders, [])
+        ctx.state = lambda: {"turtles": {}, "jobs": [], "storage": [], "updatedAt": 9000000, "serverTime": 9000000}
+        f.tick(11000.0)
+        self.assertEqual(ctx.orders, [], "a fresh stamp on an empty fleet is still no fleet")
+
+    def test_orders_a_fresh_state_never_shows_are_not_repeated_every_poll(self):
+        ctx = FakeCtx(miners=8, deliverers=0)
+        ctx.dispatch = lambda t, p=None: ctx.orders.append((t, p))          # the orders vanish: no job ever appears
+        f = feeder.Feeder(ctx, min_jobs=0, sites=0)
+        for step in range(int(30 * 60 / 15)):
+            f.tick(step * 15.0)
+        n = len([o for o in ctx.orders if o[0] == "ORDER_MINE"])
+        self.assertLessEqual(n, 3, "eight waiting miners, orders that never show: at most one retry per two snapshots past the grace (%d)" % n)
+        self.assertGreaterEqual(n, 1)
+        self.assertTrue(any("never showed up" in x for x in ctx.notes))
+
+    def test_assigned_jobs_whose_turtle_still_reads_idle_count_as_pending(self):
+        ctx = FakeCtx(miners=3, deliverers=0)
+        for i, tid in enumerate(sorted(ctx.turtles)):
+            ctx.jobs["a%d" % i] = {"id": "a%d" % i, "type": "MINE", "status": "ASSIGNED", "assignedTo": tid, "zoneKey": "k"}
+        f = feeder.Feeder(ctx, min_jobs=0, sites=0)
+        f.tick(0.0)
+        f.tick(400.0)
+        self.assertEqual(ctx.orders, [])
+
+    def test_a_failed_order_does_not_spend_the_zone(self):
+        ctx = FakeCtx(miners=1, deliverers=0)
+        f = feeder.Feeder(ctx, min_jobs=0, sites=0)
+
+        def boom(t, p=None):
+            raise OSError("bridge down")
+        ctx.dispatch = boom
+        f.tick(0.0)
+        with self.assertRaises(OSError):
+            f.tick(400.0)
+        self.assertEqual(f.next_zone, 0)
+        self.assertEqual(f.unseen, [])
+
+
+class LongSiteTests(unittest.TestCase):
+    def test_three_lanes_of_contiguous_disjoint_zones(self):
+        self.assertEqual(len(feeder.LONG_SITES), 3)
+        by_id = {z["id"]: z for z in feeder.ZONES}
+        boxes_all = []
+        for lane in feeder.LONG_SITES:
+            self.assertGreaterEqual(len(lane), 12, "a lane outlasts 24 h at ~2 h a zone")
+            zs = [by_id[i] for i in lane]
+            for a, b in zip(zs, zs[1:]):
+                self.assertEqual(b["z1"], a["z1"], "the follow-on zone is in the same row")
+                self.assertEqual(b["x1"] - a["x1"], feeder.ZONE_PITCH, "and directly next to it")
+            boxes_all += [server_bounds(z["x1"], z["z1"], z["x2"], z["z2"]) for z in zs]
+        for i, a in enumerate(boxes_all):
+            for b in boxes_all[i + 1:]:
+                self.assertFalse(overlap(a, b))
+        for a in boxes_all:
+            for w in feeder.WORKED_GROUND:
+                self.assertFalse(overlap(a, w))
+
+    def test_a_lane_orders_its_next_zone_when_its_zone_is_spent(self):
+        ctx = FakeCtx(miners=30, deliverers=0)
+        f = feeder.Feeder(ctx, min_jobs=0, sites=3)
+        f.tick(0.0)
+        first = [(p["x1"], p["z1"]) for t, p in ctx.orders if t == "ORDER_MINE"]
+        self.assertEqual(len(first), 3)
+        self.assertEqual(len({z for _, z in first}), 3, "three different lanes")
+        f.tick(15.0)                      # a fresh /state shows the three zones' jobs
+        for j in ctx.jobs.values():
+            j["status"] = "COMPLETE"
+        f.tick(feeder.GRACE_S + 100.0)
+        second = [(p["x1"], p["z1"]) for t, p in ctx.orders if t == "ORDER_MINE"][3:]
+        self.assertEqual(sorted((x - feeder.ZONE_PITCH, z) for x, z in second), sorted(first), "each lane moved one zone along")
 
 
 class Sim:
@@ -314,6 +429,8 @@ class Sim:
             t["blockedUntil"] = 0
         self.f = feeder.Feeder(ctx)
         self.bph, self.per_poll, self.hours, self.warmup = benches_per_hour, per_poll, hours, warmup
+        self.lane_keys = [{feeder.zone_key(z) for z in lane} for lane in self.f.lanes]
+        self.lane_open_s = [0.0] * len(self.lane_keys)
 
     def run(self):
         ctx, f, now, idle_start, worst = self.ctx, self.f, 0.0, {}, 0
@@ -352,6 +469,10 @@ class Sim:
                         n += 1
                         break
             f.tick(now)
+            live = {j.get("zoneKey") for j in ctx.jobs.values() if j["type"] == "MINE" and j["status"] in ("PENDING", "ASSIGNED", "IN_PROGRESS")}
+            for k, keys in enumerate(self.lane_keys):
+                if keys & live:
+                    self.lane_open_s[k] += 15
             for tid, t in ctx.turtles.items():
                 if t["status"] == "IDLE" and t["blockedUntil"] <= now:
                     idle_start.setdefault(tid, now)
@@ -373,6 +494,9 @@ class AdversarialFleetTests(unittest.TestCase):
         self.assertLessEqual(worst, 600, "worst un-benched idle time %.0f s" % worst)
         working = len([1 for t in ctx.turtles.values() if t["role"] == "MINER" and t["status"] != "IDLE"])
         self.assertGreater(working, 100, "the miners are working at the end (%d)" % working)
+        self.assertEqual(len(sim.lane_open_s), 3)
+        for k, secs in enumerate(sim.lane_open_s):
+            self.assertGreaterEqual(secs / 3600.0, 20, "long-running site %d was open %.1f h of 24" % (k, secs / 3600.0))
 
     def test_no_faults_24_hours(self):
         self.check(0, 8)

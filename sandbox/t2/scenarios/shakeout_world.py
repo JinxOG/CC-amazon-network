@@ -98,12 +98,14 @@ def steps(ctx):
     rs = report.get("rs_capacity") or {}
     ctx.expect(bool(rs.get("pos")) and world._passed(ctx._raw, rs["pos"], world.RS_CREATIVE_BLOCK),
                "the creative item storage block stands next to the RS controller (%s)" % (rs,))
+    world.restart_after_build(ctx)                          # the RS network only picks the block up when the world loads
+    ctx.note("one world restart after the build (setup does the same before placing the fleet)")
     if rs_world:
         ctx._raw.command("save-all flush")
         ctx.wait_game(30)
         cap_after = feeder.rs_capacity_of_world(rs_world)
         ctx.expect(cap_after == float("inf") or (cap_before is not None and cap_after is not None and cap_after > cap_before),
-                   "RS item capacity rose after the build (before %s, after %s, from <world>/data/refinedstorage_disks.dat)"
+                   "RS item capacity rose after the build and one world restart (before %s, after %s, from <world>/data/refinedstorage_disks.dat)"
                    % (cap_before, cap_after))
     else:
         ctx.note("no world folder on the control: RS capacity read-back skipped")

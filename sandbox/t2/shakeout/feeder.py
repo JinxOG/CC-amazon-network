@@ -6,6 +6,14 @@
 
 THE LOAD TARGET (not a pass check): at least min_jobs MINE/DELIVER jobs active at all times, and no online, unheld turtle sitting
 IDLE for more than max_idle_s outside a fault. Turtles between jobs or recovering are fine; the feeder only counts what /state shows.
+NEVER FROM A STALE /state: while the game server is down or restarting the bridge replays its last snapshot (and a restarted
+bridge answers with an empty initial one), so tick() orders nothing unless serverTime - updatedAt <= 30 s, turtles are present and
+a jobs list exists (a rate-limited note says so), and every order placed that no FRESH /state has shown yet counts as pending for
+its kind (a mining order is seen when its zoneKey shows, a delivery when a new job to its destination does; one unseen for two
+fresh snapshots past its grace is dropped and noted). ASSIGNED jobs whose turtle still reads IDLE count as pending too.
+LONG SITES: LONG_SITES names three lanes (the three grid rows nearest the base). When a lane's zone has no job left, the next
+zone of the same lane is ordered at once: contiguous, disjoint after pad and snap, clear of worked ground, so each site stays
+open for the run. Every other zone is short work. A zone is spent only once its order went through.
 IDLE WATCH: the idle clock is the evidence, so ordering resets NOTHING: a turtle's clock restarts only when it leaves IDLE (or is
 benched by blockedUntil, held, or offline: those are not being passed over). A turtle seen IDLE for IDLE_ACT_FRACTION of max_idle_s
 (a quarter: the dispatcher needs time to hand out a burst) is "waiting"; orders are placed against the waiting count LESS the jobs already PENDING for
@@ -88,7 +96,7 @@ WORKED_GROUND = [(x - PAD, z - PAD, x + PAD, z + PAD) for x, z in DUMP_SECTORS +
 ZONE_SECTORS = 6                 # a zone is 6x6 sectors
 MINERS_PER_ZONE = ZONE_SECTORS * ZONE_SECTORS // 3      # the server's SECTORS_PER_MINER = 3
 ZONE_PITCH = 224                 # 5 x 32 between the first and last centre + 64: the padded boxes end up 32 clear
-GRID_X0, GRID_Z0, GRID_COLS, GRID_ROWS = 512, -2400, 13, 11
+GRID_X0, GRID_Z0, GRID_COLS, GRID_ROWS = 512, -2400, 13, 13
 BASE_CENTRE = (200, -2800)
 SECTOR_SECONDS_1X = 9400         # one ore sector, one miner, at 1x (measured)
 
@@ -140,19 +148,55 @@ def _as_list(v):
     return list(v or [])
 
 
+STALE_MS = 30000            # /state older than this (serverTime - updatedAt) is a snapshot the bridge is replaying, not the fleet
+
+
+def state_is_fresh(st):
+    """(ok, why): whether /state describes the fleet NOW. The bridge keeps serving its last snapshot while the game server is down
+    or restarting (server.js /state: `serverTime` is stamped per request, `updatedAt` per CC push, null before the first), and a
+    restarted bridge answers with its initial empty state. Ordering from either would re-order the same work every poll."""
+    ut, sv = st.get("updatedAt"), st.get("serverTime")
+    if isinstance(ut, bool) or isinstance(sv, bool) or not isinstance(ut, (int, float)) or not isinstance(sv, (int, float)):
+        return False, "no updatedAt/serverTime (no CC push yet)"
+    if sv - ut > STALE_MS:
+        return False, "the snapshot is %.0f s old" % ((sv - ut) / 1000.0)
+    if not st.get("turtles"):
+        return False, "no turtles in it"
+    if not isinstance(st.get("jobs"), (list, dict)):
+        return False, "no jobs list in it"
+    return True, ""
+
+
+# The long-running sites (spec 2: at least 3 stay open for most of the run): three lanes, the three rows of the grid nearest the
+# base. When a lane's zone is spent the NEXT zone of the same lane is ordered at once: contiguous (the padded boxes 32 apart),
+# disjoint after pad and snap, and clear of worked ground like every zone. A lane of 13 zones at ~2 h a zone (36 sectors, twelve
+# miners, 4x) outlasts 24 h. Every other zone is short work for the rest of the fleet.
+LONG_SITES = [["zone_%d_%d" % (r, c) for c in range(GRID_COLS)] for r in range(3)]
+
+
 class Feeder:
     def __init__(self, ctx, min_jobs=10, max_idle_s=600, sites=3, destinations=4):
         self.ctx = ctx
         self.min_jobs, self.max_idle_s, self.sites = min_jobs, max_idle_s, sites
-        self.next_zone = 0
-        self.zones = list(ZONES)
-        self.open_sites = {}            # zone id -> when it was ordered
-        self.seen_keys = set()          # zone keys ever seen on an active job
+        by_id = {z["id"]: z for z in ZONES}
+        self.lanes = [[by_id[i] for i in lane if i in by_id] for lane in LONG_SITES[:max(sites, 0)]]
+        in_lane = {z["id"] for lane in self.lanes for z in lane}
+        self.short_pool = [z for z in ZONES if z["id"] not in in_lane]
+        self.lane_pos = [0] * len(self.lanes)
+        self.lane_zone = [None] * len(self.lanes)      # (zone id, when ordered) of each lane's current zone
+        self.short_next = 0
+        self.unseen = []                # orders placed that no FRESH /state has shown yet
+        self.known_deliveries = set()
         self.idle_since = {}            # node id -> when first seen idle
         self.next_dest = 0
         self.exhausted = False
         self.noted = {}
         self.dests = self._probe(list(DESTINATIONS), destinations)
+
+    @property
+    def next_zone(self):
+        """Zones ordered so far."""
+        return sum(self.lane_pos) + self.short_next
 
     def _note_every(self, now, key, text):
         if now - self.noted.get(key, -1e12) >= NOTE_EVERY_S:
@@ -181,29 +225,38 @@ class Feeder:
         return keep
 
     # -- reading ----------------------------------------------------------------------------------------------------
-    def _look(self):
-        st = self.ctx.state() or {}
+    def _look(self, st):
         jobs = [j for j in _as_list(st.get("jobs")) if isinstance(j, dict) and j.get("status") in ACTIVE
                 and j.get("type") in ("MINE", "DELIVER")]
         turtles = st.get("turtles") or {}
         if isinstance(turtles, list):
             turtles = {t.get("id"): t for t in turtles}
-        return st, jobs, turtles
+        return jobs, turtles
 
     # -- ordering ---------------------------------------------------------------------------------------------------
-    def _order_mine(self, now, miners):
-        """One order for the next fresh zone, asking for up to `miners` (at most what the zone holds). Returns the miners covered."""
-        if self.next_zone >= len(self.zones):
+    def _order_mine(self, now, lane=None):
+        """One order for the next fresh zone: the lane's own next zone, else (and for idle work) the next short-work zone. A zone
+        is spent only once its order went through. Always a full zone's worth of miners, so spare jobs wait for the next idle
+        miners. Returns the jobs the order makes (0 when there is no ground left)."""
+        z, took = None, None
+        if lane is not None and self.lane_pos[lane] < len(self.lanes[lane]):
+            z, took = self.lanes[lane][self.lane_pos[lane]], "lane"
+        elif self.short_next < len(self.short_pool):
+            z, took = self.short_pool[self.short_next], "short"
+        if z is None:
             if not self.exhausted:
                 self.exhausted = True
                 self.ctx.note("feeder: the mining zones are exhausted; no ground is reused, so no more are ordered")
             return 0
-        z = self.zones[self.next_zone]
-        self.next_zone += 1
-        k = max(1, min(int(miners), MINERS_PER_ZONE))
-        self.ctx.dispatch("ORDER_MINE", {"x1": z["x1"], "z1": z["z1"], "x2": z["x2"], "z2": z["z2"], "minerCount": k})
-        self.open_sites[z["id"]] = now
-        return k
+        self.ctx.dispatch("ORDER_MINE", {"x1": z["x1"], "z1": z["z1"], "x2": z["x2"], "z2": z["z2"], "minerCount": MINERS_PER_ZONE})
+        if took == "lane":
+            self.lane_pos[lane] += 1
+        else:
+            self.short_next += 1
+        if lane is not None:
+            self.lane_zone[lane] = (z["id"], now)
+        self.unseen.append({"kind": "MINE", "n": MINERS_PER_ZONE, "key": zone_key(z), "id": z["id"], "t": now, "fresh": 0})
+        return MINERS_PER_ZONE
 
     def _stock_item(self, st, now=None):
         """Ordinary stock to deliver. /state storage goes empty or stale after a restart with mining live (central_server.lua
@@ -233,9 +286,10 @@ class Feeder:
             self._note_every(now, "nodest", "feeder: no usable delivery destination")
             return False
         x, y, z = self.dests[self.next_dest % len(self.dests)]
-        self.next_dest += 1
         self.ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": item, "count": ITEM_COUNT}],
                                              "destination": {"x": x, "y": y, "z": z}})
+        self.next_dest += 1
+        self.unseen.append({"kind": "DELIVER", "n": 1, "dest": (x, z), "t": now, "fresh": 0})
         return True
 
     @staticmethod
@@ -246,25 +300,57 @@ class Feeder:
             return False
         return (bu / 1000.0 if bu > 1e11 else bu) > now
 
+    def _reconcile(self, now, jobs):
+        """Matches the orders placed since earlier fresh snapshots against this one. An order is SEEN when its zoneKey (mining) or a
+        new delivery job to its destination shows in /state; until then it counts as pending (the jobs it will make). One that has
+        stayed unseen for two fresh snapshots after its grace is dropped and noted. Returns (pending jobs by kind, job count)."""
+        keys = {j.get("zoneKey") for j in jobs if j.get("type") == "MINE" and j.get("zoneKey")}
+        new_del = [j for j in jobs if j.get("type") == "DELIVER" and j.get("id") not in self.known_deliveries]
+        keep = []
+        for o in self.unseen:
+            if o["kind"] == "MINE":
+                seen = o["key"] in keys
+            else:
+                match = next((j for j in new_del if isinstance(j.get("destination"), dict)
+                              and (j["destination"].get("x"), j["destination"].get("z")) == o["dest"]), None)
+                seen = match is not None
+                if seen:
+                    new_del.remove(match)
+            if seen:
+                continue
+            if now - o["t"] > GRACE_S:
+                o["fresh"] += 1
+                if o["fresh"] >= 2:
+                    if o["kind"] == "MINE":
+                        self.ctx.note("feeder: the order for %s never showed up as a job (zoneKey %s)" % (o["id"], o["key"]))
+                    continue
+            keep.append(o)
+        self.unseen = keep
+        self.known_deliveries |= {j.get("id") for j in jobs if j.get("type") == "DELIVER"}
+        extra = {"MINER": sum(o["n"] for o in keep if o["kind"] == "MINE"), "DELIVERY": sum(o["n"] for o in keep if o["kind"] == "DELIVER")}
+        return extra, sum(extra.values()), keys
+
     # -- the tick ---------------------------------------------------------------------------------------------------
     def tick(self, now):
-        """The idle clock is the evidence, so ORDERING RESETS NOTHING: a turtle's clock restarts only when it leaves IDLE (or is
-        benched, held or offline). Orders are placed against the idle turtles that have waited IDLE_ACT_FRACTION of the limit,
-        less the jobs already PENDING for their kind (a pending job is about to take one of them), and a mining order is always
-        a full zone: the spare jobs wait for the next idle miners instead of locking a zone to one miner for hours."""
-        st, jobs, turtles = self._look()
-        keys_open = {j.get("zoneKey") for j in jobs if j.get("type") == "MINE" and j.get("zoneKey")}
-        self.seen_keys |= keys_open
-        pending = {"MINER": sum(1 for j in jobs if j.get("type") == "MINE" and j.get("status") == "PENDING"),
-                   "DELIVERY": sum(1 for j in jobs if j.get("type") == "DELIVER" and j.get("status") == "PENDING")}
-        by_id = {z["id"]: z for z in self.zones}
-        for zid in list(self.open_sites):
-            key = zone_key(by_id[zid])
-            if key not in keys_open and now - self.open_sites[zid] > GRACE_S:
-                if key not in self.seen_keys:
-                    self.ctx.note("feeder: the order for %s never showed up as a job (zoneKey %s)" % (zid, key))
-                    self.seen_keys.add(key)
-                del self.open_sites[zid]
+        """Never orders from a stale /state. The idle clock is the evidence, so ORDERING RESETS NOTHING: a turtle's clock restarts
+        only when it leaves IDLE (or is benched, held, offline). Orders go against the idle turtles that have waited
+        IDLE_ACT_FRACTION of the limit, less the jobs already PENDING for their kind (the state's PENDING, its ASSIGNED jobs whose
+        turtle still shows IDLE, and every order placed that no fresh /state has shown yet), and a mining order is always a full
+        zone: the spare jobs wait for the next idle miners instead of locking a zone to one miner for hours."""
+        st = self.ctx.state() or {}
+        fresh, why = state_is_fresh(st)
+        if not fresh:
+            self._note_every(now, "stale", "feeder: /state is not fresh (%s): no orders until it is" % why)
+            return
+        jobs, turtles = self._look(st)
+        extra, extra_jobs, keys_open = self._reconcile(now, jobs)
+        pending = {"MINER": extra["MINER"] + sum(1 for j in jobs if j.get("type") == "MINE" and j.get("status") == "PENDING"),
+                   "DELIVERY": extra["DELIVERY"] + sum(1 for j in jobs if j.get("type") == "DELIVER" and j.get("status") == "PENDING")}
+        for j in jobs:      # assigned, but the turtle still reads IDLE: the dispatch has gone out and has not landed yet
+            t = turtles.get(j.get("assignedTo"))
+            if j.get("status") == "ASSIGNED" and isinstance(t, dict) and t.get("status") == "IDLE":
+                pending["MINER" if j.get("type") == "MINE" else "DELIVERY"] += 1
+        n_jobs = len(jobs) + extra_jobs
 
         # who is idle and waiting (benched, held, offline turtles are not: they are not being passed over)
         act_after = self.max_idle_s * IDLE_ACT_FRACTION
@@ -287,28 +373,32 @@ class Feeder:
 
         placed = 0
 
-        def mine_order():
-            got = self._order_mine(now, MINERS_PER_ZONE)
+        def mine_order(lane=None):
+            got = self._order_mine(now, lane)
             if got:
                 pending["MINER"] += got
-                jobs.append({"type": "MINE", "status": "PENDING"})
             return got
 
         def delivery_order():
             if self._order_delivery(st, now):
                 pending["DELIVERY"] += 1
-                jobs.append({"type": "DELIVER", "status": "PENDING"})
                 return True
             return False
 
-        # 1. keep `sites` sites open
-        while len(self.open_sites) < self.sites and placed < MAX_ORDERS_PER_TICK:
-            if not mine_order():
-                break
-            placed += 1
+        # 1. keep `sites` long-running sites open: a lane whose zone has no job left (past its grace) opens its next zone
+        for k in range(len(self.lanes)):
+            cur = self.lane_zone[k]
+            if cur is not None:
+                zone = next(z for z in self.lanes[k] + self.short_pool if z["id"] == cur[0])
+                if zone_key(zone) not in keys_open and now - cur[1] > GRACE_S and not any(
+                        o["kind"] == "MINE" and o["id"] == cur[0] for o in self.unseen):
+                    self.lane_zone[k] = cur = None
+            if cur is None and placed < MAX_ORDERS_PER_TICK and mine_order(k):
+                placed += 1
+                n_jobs += MINERS_PER_ZONE
 
         # 2. keep the job count up: a delivery for an idle delivery turtle with nothing pending, else a mining zone
-        shortfall = self.min_jobs - len(jobs)
+        shortfall = self.min_jobs - n_jobs
         while shortfall > 0 and placed < MAX_ORDERS_PER_TICK:
             if idle["DELIVERY"] > pending["DELIVERY"] and delivery_order():
                 shortfall -= 1
@@ -341,7 +431,7 @@ HOUSEKEEP_EVERY_S = 30 * MIN
 LOW_FREE_FRACTION = 0.20            # free under this share of capacity is "low"
 INFLOW_PER_DAY = 16000000           # items a full-load day brings in (5-16M measured); low also when free < TWO periods of it
 RS_DISKS_FILE = os.path.join("data", "refinedstorage_disks.dat")
-STORAGE_FAULTS = ("rs_offline", "rs_stall", "disk_full")     # scheduled faults that explain a bad storage reading
+STORAGE_FAULTS = ("rs_offline", "rs_stall")     # scheduled faults that explain a bad RS reading (disk_full fills a CC disk, not RS)
 
 
 def _env_int(name):
@@ -476,6 +566,9 @@ def _turtle_in_box(turtles, box, pad=2):
 def _clear_delivery_spots(ctx, st):
     out = []
     state = ctx.state() or {}
+    ok, why = state_is_fresh(state)
+    if not ok:      # a replayed snapshot cannot say whether a turtle is at a spot: never clear on it
+        return ["clear-delivery-spots skipped: /state is not fresh (%s)" % why]
     turtles = state.get("turtles") or {}
     if isinstance(turtles, list):
         turtles = {t.get("id"): t for t in turtles}
