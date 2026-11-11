@@ -919,10 +919,11 @@ def housekeeping(R):
 def _why_quotes(by_node, a, end, n=5):
     """The lines that say WHY, for each of a finding's reasons: around each stuck episode; the server's NEEDS HANDS line nearest
     the raise and the latest hands line after it (so a clear that the final /state contradicts shows); the turtle's own last
-    lines before it went silent. Deduplicated, at most n."""
+    lines before it went silent. Deduplicated, at most n. THE REASON-SPECIFIC LINES COME FIRST (final review): the NEEDS HANDS
+    raise and its latest hands line, and a gone turtle's own last lines, are what the finding is about; the stuck episodes'
+    context lines come after them, so a turtle with three episodes cannot push its NEEDS HANDS line out of the n."""
     tid, ls, out = a["id"], by_node.get(a["id"], []), []
-    for e in a["episodes"]:
-        out += _quotes(by_node, tid, e["since"] - 10 * MIN, e["until"] if e["until"] is not None else end, 2)
+    context = []
     if a.get("needs_hands_raised") is not None and a.get("needs_hands"):
         hands = [l for l in ls if "NEEDS HANDS" in l["msg"] or "back in service" in l["msg"]]
         raised = [l for l in hands if "NEEDS HANDS" in l["msg"]]
@@ -932,10 +933,13 @@ def _why_quotes(by_node, a, end, n=5):
             after = [l for l in hands if l["rt"] > near["rt"]]
             if after:
                 out.append(after[-1]["raw"][:260])
-        out += _quotes(by_node, tid, a["needs_hands_raised"] - 10 * MIN, a["needs_hands_raised"] + MIN, 1)
+        context += _quotes(by_node, tid, a["needs_hands_raised"] - 10 * MIN, a["needs_hands_raised"] + MIN, 1)
     if (a["gone"]["silent_ms"] or 0) > GONE_MS and a["gone"]["since"] is not None:
         own = [l for l in ls if l["src"] == tid and l["rt"] <= a["gone"]["since"] + 1000]
         out += [l["raw"][:260] for l in own[-2:]]
+    for e in a["episodes"]:
+        out += _quotes(by_node, tid, e["since"] - 10 * MIN, e["until"] if e["until"] is not None else end, 2)
+    out += context
     for sl in a["silences"]:
         own = [l for l in ls if l["src"] == tid and l["rt"] <= sl["since"] + 1000]
         out += [l["raw"][:260] for l in own[-1:]]

@@ -156,6 +156,25 @@ class FixRound1(unittest.TestCase):
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    def test_reason_lines_come_first_within_the_cap(self):
+        # final review: three stuck episodes (two context lines each) used to fill the five quotes before the NEEDS HANDS line
+        def line(t, src, level, msg):
+            return {"rt": t, "src": src, "level": level, "msg": msg, "raw": "%d %s %s %s" % (t, src, level, msg)}
+        ls = []
+        for k in range(3):
+            base = (10 + 30 * k) * MIN
+            ls += [line(base - MIN, "node_8", "WARN", "episode %d warn a" % k), line(base, "node_8", "WARN", "episode %d warn b" % k)]
+        ls.append(line(100 * MIN, "server", "ERROR", "NEEDS HANDS: node_8 stuck_no_fix: facing unknown"))
+        ls.append(line(110 * MIN, "node_8", "INFO", "last own line before silence"))
+        a = {"id": "node_8", "episodes": [{"since": (10 + 30 * k) * MIN, "until": (12 + 30 * k) * MIN} for k in range(3)],
+             "needs_hands_raised": 100 * MIN, "needs_hands": "stuck_no_fix", "silences": [],
+             "gone": {"silent_ms": 3 * HOUR, "since": 110 * MIN}}
+        q = report._why_quotes({"node_8": ls}, a, 4 * HOUR)
+        self.assertEqual(len(q), 5)
+        self.assertTrue(any("NEEDS HANDS: node_8" in x for x in q), q)
+        self.assertTrue(any("last own line before silence" in x for x in q), q)
+        self.assertIn("NEEDS HANDS", q[0], "the reason's own line is first")
+
     def test_missing_faults_file_is_truncated_not_zero(self):
         e = {"id": "f001", "t_ms": 0, "fault": "radio_loss", "args": {"dur_ms": MIN}, "quiet_ms": 0}
         run = make_run(hours=1, faults_file=False, entries=[e])
