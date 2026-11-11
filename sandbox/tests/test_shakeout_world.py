@@ -162,6 +162,8 @@ def seeded():
                 s.put(under, "enderstorage:ender_chest{rot: %s, keepPacked: 0b, Frequency: %s}" % (rot, SUPPORT_FREQ))
             elif c["slot"] > 0:
                 s.put(under, "enderstorage:ender_chest{rot: %s, keepPacked: 0b, Frequency: %s}" % (rot, WORKER_FREQ))
+        elif c["side"] == "WORKER" and c["bay"] == 2 and c["row"] == "A" and c["slot"] > 0:
+            s.put(under, "enderstorage:ender_chest{rot: 2b, keepPacked: 0b, Frequency: %s}" % WORKER_FREQ)   # right chest, lid the other way
         elif c["side"] == "WORKER" and c["bay"] == 2:
             s.put(under, "enderstorage:ender_chest{rot: 2b, keepPacked: 0b, Frequency: {left: 5, middle: 0, right: 0}}")   # wrong frequency
         elif c["side"] == "SUPPORT" and c["bay"] in (2, 3):
@@ -176,8 +178,25 @@ def seeded():
     s.put((158, 67, -2797), "computercraft:turtle_advanced[facing=north]", cid=97)
     s.put((167, 67, -2810), "computercraft:turtle_advanced[facing=south]", cid=98)
     s.put((185, 67, -2808), "computercraft:turtle_advanced[facing=south]", cid=99)      # a stray in bay 3's aisle
-    s.put((164, 67, -2810), "computercraft:turtle_advanced[facing=south]", cid=100)     # between bays: not a bay cell, left alone
+    for i, p in enumerate([(164, 67, -2812), (164, 67, -2811), (164, 67, -2810), (164, 67, -2809), (165, 67, -2810)]):
+        s.put(p, "computercraft:turtle_advanced[facing=south]", cid=100 + i)            # between bays 1 and 2, as in the copy
+    s.put((164, 67, -2807), "computercraft:computer_advanced[facing=north]", cid=105)
+    s.put((183, 66, -2812), "enderstorage:ender_chest{rot: 0b, keepPacked: 0b, Frequency: {left: 3, middle: 3, right: 3}}")  # a floor chest
     return s
+
+
+BETWEEN_BAYS = {100: (164, 67, -2812), 101: (164, 67, -2811), 102: (164, 67, -2810), 103: (164, 67, -2809), 104: (165, 67, -2810),
+                105: (164, 67, -2807)}
+
+
+def expected_source(s, c):
+    """The ruling of 2026-11-10, written out on its own: bay 1's twin when a chest is under it, else the nearest bay-1 dock in the same
+    side and row with a chest (by slot, lower slot on a tie)."""
+    row = [d for d in CELLS if d["bay"] == 1 and d["side"] == c["side"] and d["row"] == c["row"]]
+    for d in [bay1_cell(c)] + sorted(row, key=lambda d: (abs(d["slot"] - c["slot"]), d["slot"])):
+        if s.at((d["x"], d["y"] - 1, d["z"]))[0] == "enderstorage:ender_chest":
+            return d
+    raise AssertionError("no chest in the row")
 
 
 def built():
@@ -265,29 +284,49 @@ class UnderDock(unittest.TestCase):
         s, ctx, report = built()
         new = [c for c in CELLS if c["bay"] != 1]
         self.assertEqual(len(new), 128)
-        nbt_cells, already = 0, 0
+        kept, fallback = 0, 0
         for c in new:
-            src = bay1_cell(c)
+            src = expected_source(before, c)
+            fallback += 1 if src is not bay1_cell(c) else 0
             spos, dpos = (src["x"], src["y"] - 1, src["z"]), (c["x"], c["y"] - 1, c["z"])
             want_id, _, want_nbt, _ = s.at(spos)
+            self.assertEqual(want_id, "enderstorage:ender_chest")
             sets = [t for t in s.sent if t.startswith("setblock %d %d %d " % dpos) and "minecraft:air" not in t]
-            if before.at(dpos)[:3] == before.at(spos)[:3]:
-                already += 1                                  # already a copy (a factory block under a factory block): left as it is
+            b = before.at(dpos)
+            if b[0] == want_id and world.chest_identity("{%s}" % b[2]) == world.chest_identity("{%s}" % want_nbt):
+                kept += 1                                     # already the right chest: left alone
                 self.assertEqual(sets, [], dpos)
             else:
                 self.assertTrue(sets, "a setblock under %s" % (dpos,))
                 got_id, _, got_nbt = split_spec(sets[-1].split(" ", 4)[4])
                 self.assertEqual(got_id, want_id, dpos)
-                if want_nbt:
-                    nbt_cells += 1
-                    self.assertEqual(world.canonical_nbt(got_nbt), world.canonical_nbt("{%s}" % want_nbt), dpos)
-                    self.assertIn(world.frequency_of(re.sub(r"\s+", "", want_nbt)), re.sub(r"\s+", "", got_nbt))
-            self.assertEqual(s.at(dpos)[0], want_id)
-            self.assertEqual(world.canonical_nbt("{%s}" % s.at(dpos)[2] if s.at(dpos)[2] is not None else None),
-                             world.canonical_nbt("{%s}" % want_nbt if want_nbt is not None else None), dpos)
-        self.assertEqual(nbt_cells, 64 + 32, "64 support-side cells and 32 worker-side cells get an ender chest with bay 1's NBT")
-        self.assertEqual(already, 24, "worker bays 3-5, left of the centre column: a factory block was already under each dock")
-        self.assertEqual((report["under"]["copied"], report["under"]["same"]), (128 - already, already))
+                self.assertEqual(world.canonical_nbt(got_nbt), world.canonical_nbt("{%s}" % want_nbt), dpos)
+                self.assertIn(world.frequency_of(re.sub(r"\s+", "", want_nbt)), re.sub(r"\s+", "", got_nbt))
+            self.assertEqual(s.at(dpos)[0], "enderstorage:ender_chest", dpos)
+            self.assertEqual(world.chest_identity("{%s}" % s.at(dpos)[2]), world.chest_identity("{%s}" % want_nbt), dpos)
+        self.assertEqual(fallback, 32, "worker bays 2-5 west of the centre column: worker bay 1 has no chest there")
+        self.assertEqual(kept, 4, "worker bay 2 row A east: the right chest was already there")
+        self.assertEqual((report["under"]["copied"], report["under"]["same"], report["under"]["fallback"]), (124, 4, 32))
+
+    def test_the_fallback_takes_the_nearest_chest_in_the_same_row(self):
+        s, ctx, report = built()
+        src = report["under"]["sources"]
+        self.assertEqual(src[(181, 66, -2806)], (158, 66, -2806), "bay 3 row A slot -4: bay 1 row A slot +1")
+        self.assertEqual(src[(184, 66, -2810)], (158, 66, -2810), "bay 3 row B slot -1: bay 1 row B slot +1")
+        self.assertEqual(src[(188, 66, -2810)], (160, 66, -2810), "bay 3 row B slot +3: its own twin")
+        self.assertEqual(src[(171 - 4, 66, -2797)], (153, 66, -2797), "support bay 2 row A slot -4: its own twin")
+
+    def test_no_chest_is_ever_replaced_with_anything_but_a_chest(self):
+        before = seeded()
+        s, ctx, report = built()
+        chests = [p for p, b in before.blocks.items() if b[0] == "enderstorage:ender_chest"]
+        self.assertGreater(len(chests), 40)
+        for p in chests:
+            self.assertEqual(s.at(p)[0], "enderstorage:ender_chest", "a chest at %s is gone" % (p,))
+            for t in s.sent:
+                if t.startswith("setblock %d %d %d " % p) and "minecraft:air" not in t:
+                    self.assertTrue(t.split(" ", 4)[4].startswith("enderstorage:ender_chest"), t)
+        self.assertEqual(report["floor"]["chests_kept"], [(183, 66, -2812)], "a chest in a floor cell is kept, not floored over")
 
     def test_the_position_keys_are_not_copied(self):
         nbt = world.nbt_without_position('{x: 158, y: 66, z: -2806, id: "enderstorage:ender_chest", rot: 0b, Frequency: {left: 0, middle: 0, right: 14}}')
@@ -311,8 +350,13 @@ class Bays(unittest.TestCase):
         for c in CELLS:
             self.assertEqual(s.at((c["x"], c["y"], c["z"]))[0], "minecraft:air", c)
         removed = {r["id"] for r in report["removed"]}
-        self.assertEqual(removed, {96, 97, 98, 99}, "dock and bay-aisle turtles are removed and named")
-        self.assertEqual(s.at((164, 67, -2810))[3], 100, "a turtle outside every bay is left alone")
+        self.assertEqual(removed, {96, 97, 98}, "turtles on dock cells are removed and named")
+        self.assertTrue(all(r["why"] == "dock cell" for r in report["removed"]), "nothing but dock cells loses a turtle")
+        self.assertEqual(s.at((185, 67, -2808))[3], 99, "a turtle in a bay aisle is left standing")
+        self.assertEqual([r["id"] for r in report["left_standing"]], [99], "...and named")
+        for cid, p in BETWEEN_BAYS.items():
+            self.assertEqual(s.at(p)[3], cid, "the turtles and computer between bays 1 and 2 are untouched")
+            self.assertFalse([t for t in s.sent if t.startswith("setblock %d %d %d " % p)], p)
 
     def test_floor_and_pillars_copied_from_bay_1(self):
         s, ctx, report = built()
@@ -338,18 +382,19 @@ class Verify(unittest.TestCase):
         s, ctx, report = built()
         v = world.verify_world(ctx)
         self.assertEqual((v["dock_air"], v["dock_total"]), (160, 160))
-        self.assertEqual((v["under_equal"], v["under_total"]), (128, 128))
-        self.assertEqual(v["under_with_nbt"], 96)
+        self.assertEqual((v["under_ok"], v["under_total"]), (128, 128))
+        self.assertEqual((v["under_exact"], v["under_fallback"]), (124, 32), "4 kept chests differ only in their lid direction")
         self.assertEqual(v["bad"], [])
 
     def test_verify_can_fail(self):
         s, ctx, report = built()
         s.put((172, 66, -2806), "enderstorage:ender_chest{rot: 0b, keepPacked: 0b, Frequency: {left: 1, middle: 0, right: 0}}")
+        s.put((181, 66, -2810), "xkdeco:factory_block")
         s.put((209, 67, -2797), "computercraft:turtle_advanced", cid=7)
         v = world.verify_world(ctx)
-        self.assertEqual(v["under_equal"], 127)
+        self.assertEqual(v["under_ok"], 126, "a wrong frequency and a floor block instead of a chest both fail")
         self.assertEqual(v["dock_air"], 159)
-        self.assertEqual(len(v["bad"]), 2)
+        self.assertEqual(len(v["bad"]), 3)
 
 
 class Gps(unittest.TestCase):
@@ -502,7 +547,7 @@ class ProofScenario(unittest.TestCase):
         self.assertGreaterEqual(len(ctx.checks), 15)
         self.assertEqual([m for ok, m in ctx.checks if not ok], [])
         self.assertTrue(any("160 of 160" in m for _, m in ctx.checks))
-        self.assertTrue(any("128 of 128; 96 of them block entities" in m for _, m in ctx.checks))
+        self.assertTrue(any("ender chest" in m and "128 of 128" in m and "32 from the nearest" in m for _, m in ctx.checks))
         self.assertTrue(any("0 clone(s)" in m and "recorded console commands" in m for _, m in ctx.checks))
 
     def test_the_gps_checks_fail_when_new_towers_are_silent(self):

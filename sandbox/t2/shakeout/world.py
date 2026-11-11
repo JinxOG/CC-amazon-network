@@ -7,13 +7,16 @@
 
 What build_world does, in order:
   1. forceloads BASE_AREAS (the building, both holes and their shafts, the arrivals column and holding line, every GPS host);
-  2. empties every dock cell (all 160) and every cell of bays 2-5 at the floor level the turtles drive on; a turtle or computer
-     found there is removed and NAMED in the report (the world copy's old fleet stands on some docks; the shakeout places 160
-     fresh turtles there);
+  2. empties every dock cell (all 160): a turtle or computer on a dock is removed and NAMED in the report (the world copy's old
+     fleet stands on some docks; the shakeout places 160 fresh turtles there). Turtles are removed from DOCK CELLS ONLY: the rest
+     of bays 2-5's driving level loses plain blocks, but a turtle or computer there (or in a pillar cell) is left standing and
+     named in report["left_standing"];
   3. builds bays 2-5 on both sides from bay 1: the floor layer and the pillar east of the bay, cell by cell with setblock (never
-     /clone: a cloned turtle is a copy of a computer), reading bay 1's blocks from the running world;
-  4. copies the block under each new dock cell, NBT included (the ender chest's Frequency), from bay 1's dock in the same side,
-     row and slot, read with block_data;
+     /clone: a cloned turtle is a copy of a computer), reading bay 1's blocks from the running world; an ender chest is never
+     replaced with floor;
+  4. puts an ender chest under each new dock cell, NBT included (the Frequency), copied from bay 1's dock in the same side, row
+     and slot when that one has a chest, else from the nearest bay-1 dock in the same row that has one (worker bay 1 has none
+     under its west half); a cell that already holds the right chest (lid direction aside) is left alone;
   5. places the ATC computer (spawn_computer, the atc profile's files from the pin: w3_atc_pair.py's show() and ATC_FILES);
   6. places a GPS host computer at each GPS_TOWERS entry (spawn_computer running the host call gps_host.lua makes).
 
@@ -262,12 +265,13 @@ def nbt_without_position(text):
     return _dump(("c", [(k, x) for k, x in v[1] if k not in POSITION_KEYS]))
 
 
-def canonical_nbt(text):
-    """A comparable form: no position keys, no whitespace outside strings, compound keys sorted at every level. None stays None."""
+def canonical_nbt(text, drop=()):
+    """A comparable form: no position keys (nor the top-level keys in `drop`), no whitespace outside strings, compound keys sorted
+    at every level. None stays None."""
     if text is None:
         return None
     v = parse_snbt(text)
-    return _dump(("c", [(k, x) for k, x in v[1] if k not in POSITION_KEYS]), sort=True)
+    return _dump(("c", [(k, x) for k, x in v[1] if k not in POSITION_KEYS and k not in drop]), sort=True)
 
 
 def nbt_of(reply):
@@ -509,11 +513,58 @@ def _note(ctx, text):
         ctx.note(text)
 
 
-def _clear(c, pos, comps, report, why):
-    """Makes pos air. A computer standing there is removed and named in report["removed"]."""
+CHEST = "enderstorage:ender_chest"
+CC_BLOCKS = ("computercraft:turtle_normal", "computercraft:turtle_advanced", "computercraft:computer_normal",
+             "computercraft:computer_advanced", "computercraft:computer_command")
+COSMETIC_KEYS = ("rot",)     # which way an ender chest's lid faces: two chests that differ only in it are the same chest
+
+
+def is_chest(spec):
+    return spec.split("[")[0].split("{")[0] == CHEST
+
+
+def chest_identity(nbt):
+    """What makes an under-dock chest the right one: its NBT without position and lid direction (the Frequency, keepPacked...)."""
+    return canonical_nbt(nbt, drop=COSMETIC_KEYS)
+
+
+def under_pos(cell):
+    return (cell["x"], cell["y"] - 1, cell["z"])
+
+
+def under_source(c, cells, cell, cache=None):
+    """(source dock, state, NBT, fallback) for the block under a new dock (ruling 2026-11-10): bay 1's dock in the same side, row
+    and slot when an ender chest is under it; otherwise the nearest bay-1 dock in the same side and row that has one (nearest by
+    slot, the lower slot on a tie). Every shakeout dock gets a chest. Raises when no bay-1 dock in that row has a chest."""
+    twin = bay1_twin(cells, cell)
+    spec, nbt = read_block(c, under_pos(twin), cache)
+    if is_chest(spec):
+        return twin, spec, nbt, False
+    row = [d for d in cells if d["bay"] == 1 and d["side"] == cell["side"] and d["row"] == cell["row"]]
+    for d in sorted(row, key=lambda d: (abs(d["slot"] - cell["slot"]), d["slot"])):
+        s, n = read_block(c, under_pos(d), cache)
+        if is_chest(s):
+            return d, s, n, True
+    raise RuntimeError("no ender chest under any bay-1 dock in %s row %s: nothing to copy under %s" % (cell["side"], cell["row"],
+                                                                                                    under_pos(cell)))
+
+
+def under_matches(c, dst, spec, nbt):
+    """True when dst already holds that chest: same block, same identity (lid direction aside)."""
+    if not _passed(c, dst, spec):
+        return False
+    return chest_identity(nbt_of(c.block_data(dst))) == chest_identity(nbt)
+
+
+def _clear(c, pos, comps, report, why, computers_too=True):
+    """Makes pos air. A computer standing there is removed and named in report["removed"] when computers_too (dock cells only);
+    otherwise it is left standing and named in report["left_standing"]."""
     if is_air(c, pos):
         return False
     cid = comps.get(tuple(pos))
+    if not computers_too and (cid is not None or any(_passed(c, pos, k) for k in CC_BLOCKS)):   # not in the dump, still a computer
+        report["left_standing"].append({"pos": tuple(pos), "id": cid, "why": why})
+        return False
     report["removed"].append({"pos": tuple(pos), "id": cid, "why": why})
     out = c.command("setblock %d %d %d minecraft:air" % tuple(pos))
     if "Changed the block" not in out:
@@ -546,8 +597,9 @@ def build_world(ctx, cells=None):
     c = ctx.control
     cells = cells or dock_cells()
     frames = bay_frames(cells)
-    report = {"forceload": [], "removed": [], "floor": {"set": 0, "same": 0}, "pillars": {"set": 0, "same": 0},
-              "under": {"copied": 0, "same": 0, "frequencies": {}}, "atc": None, "gps": [], "gps_present": [], "gps_blocked": []}
+    report = {"forceload": [], "removed": [], "left_standing": [], "floor": {"set": 0, "same": 0, "chests_kept": []},
+              "pillars": {"set": 0, "same": 0}, "under": {"copied": 0, "same": 0, "fallback": 0, "sources": {}, "frequencies": {}},
+              "atc": None, "gps": [], "gps_present": [], "gps_blocked": []}
 
     # 1. Keep the base loaded.
     for area in BASE_AREAS:
@@ -556,15 +608,18 @@ def build_world(ctx, cells=None):
         if "Marked" not in out and "No chunks were marked" not in out:
             raise RuntimeError("forceload add %s -> %r" % (area, out.strip()[:200]))
 
-    # 2. Empty every dock cell and the driving level of bays 2-5.
+    # 2. Empty every dock cell (turtles on docks are removed and named: ONLY there). The rest of the driving level of bays 2-5 is
+    #    cleared of plain blocks; a turtle or computer there is left standing and named (Task 5 identifies them).
     comps = {tuple(v["pos"]): k for k, v in c.computers().items()}
     for (side, bay), f in sorted(frames.items()):
+        for x, z in sorted(f["docks"]):
+            _clear(c, (x, f["y"], z), comps, report, "dock cell")
         if bay == 1:
-            cellset = sorted(f["docks"])
-        else:
-            cellset = [(x, z) for x in range(f["xs"][0], f["xs"][1] + 1) for z in range(f["zs"][0], f["zs"][1] + 1)]
-        for x, z in cellset:
-            _clear(c, (x, f["y"], z), comps, report, "dock cell" if (x, z) in f["docks"] else "bay %s %d driving level" % (side, bay))
+            continue
+        for x in range(f["xs"][0], f["xs"][1] + 1):
+            for z in range(f["zs"][0], f["zs"][1] + 1):
+                if (x, z) not in f["docks"]:
+                    _clear(c, (x, f["y"], z), comps, report, "bay %s %d driving level" % (side, bay), computers_too=False)
 
     # 3. The floor and the pillar of bays 2-5, from bay 1's.
     cache = {}
@@ -582,6 +637,8 @@ def build_world(ctx, cells=None):
                 dst = (x + shift, f["y"] - 1, z)
                 if same_block(c, dst, spec, nbt):
                     report["floor"]["same"] += 1
+                elif not is_chest(spec) and _passed(c, dst, CHEST):
+                    report["floor"]["chests_kept"].append(dst)        # a chest is never replaced with floor
                 else:
                     set_block(c, dst, spec, nbt)
                     report["floor"]["set"] += 1
@@ -594,21 +651,26 @@ def build_world(ctx, cells=None):
             if same_block(c, dst, spec, nbt):
                 report["pillars"]["same"] += 1
                 continue
-            _clear(c, dst, comps, report, "pillar cell") if dst in comps else None
+            if dst in comps or any(_passed(c, dst, k) for k in CC_BLOCKS):
+                report["left_standing"].append({"pos": dst, "id": comps.get(dst), "why": "in a pillar cell: pillar not built there"})
+                continue
             set_block(c, dst, spec, nbt)
             report["pillars"]["set"] += 1
 
-    # 4. The block under each new dock, from bay 1's twin.
+    # 4. The block under each new dock: an ender chest, copied with its NBT from bay 1's twin, or from the nearest bay-1 dock in the
+    #    same row with a chest when the twin has none (ruling 2026-11-10). A cell that already holds the right chest is left alone.
     for cell in cells:
         if cell["bay"] == 1:
             continue
-        twin = bay1_twin(cells, cell)
-        spec, nbt = read_block(c, (twin["x"], twin["y"] - 1, twin["z"]), cache)
-        if nbt and frequency_of(nbt):
-            key = "%s row %s slot %d" % (twin["side"], twin["row"], twin["slot"])
-            report["under"]["frequencies"][key] = frequency_of(nbt)
-        dst = (cell["x"], cell["y"] - 1, cell["z"])
-        if same_block(c, dst, spec, nbt):
+        src, spec, nbt, fallback = under_source(c, cells, cell, cache)
+        if not is_chest(spec):
+            raise RuntimeError("under-dock source %s is not a chest" % (under_pos(src),))   # under_source never returns one; belt and braces
+        report["under"]["fallback"] += 1 if fallback else 0
+        report["under"]["sources"][under_pos(cell)] = under_pos(src)
+        if frequency_of(nbt or ""):
+            report["under"]["frequencies"]["%s row %s slot %d" % (src["side"], src["row"], src["slot"])] = frequency_of(nbt)
+        dst = under_pos(cell)
+        if under_matches(c, dst, spec, nbt):
             report["under"]["same"] += 1
         else:
             set_block(c, dst, spec, nbt)
@@ -648,12 +710,13 @@ def build_world(ctx, cells=None):
 
 
 def verify_world(ctx, cells=None):
-    """The checks the T2 proof makes after the build, as counts (each can fail): every dock cell air; every new dock's under-block
-    the same state and NBT as its bay-1 twin's. Returns {"dock_air", "dock_total", "under_equal", "under_total", "under_with_nbt",
-    "bad": [what failed]}."""
+    """The checks the T2 proof makes after the build, as counts (each can fail): every dock cell air; under every new dock an ender
+    chest whose NBT equals its source cell's (under_source: bay 1's twin, or the nearest bay-1 chest in the row), the lid direction
+    aside. Returns {"dock_air", "dock_total", "under_ok", "under_total", "under_exact" (NBT equal with the lid direction too),
+    "under_fallback", "bad": [what failed]}."""
     c = ctx.control
     cells = cells or dock_cells()
-    out = {"dock_air": 0, "dock_total": len(cells), "under_equal": 0, "under_total": 0, "under_with_nbt": 0, "bad": []}
+    out = {"dock_air": 0, "dock_total": len(cells), "under_ok": 0, "under_total": 0, "under_exact": 0, "under_fallback": 0, "bad": []}
     for cell in cells:
         pos = (cell["x"], cell["y"], cell["z"])
         if is_air(c, pos):
@@ -664,15 +727,15 @@ def verify_world(ctx, cells=None):
         if cell["bay"] == 1:
             continue
         out["under_total"] += 1
-        twin = bay1_twin(cells, cell)
-        spec, nbt = read_block(c, (twin["x"], twin["y"] - 1, twin["z"]))
-        dst = (cell["x"], cell["y"] - 1, cell["z"])
+        src, spec, nbt, fallback = under_source(c, cells, cell)
+        out["under_fallback"] += 1 if fallback else 0
+        dst = under_pos(cell)
         have = nbt_of(c.block_data(dst))
-        if _passed(c, dst, spec) and canonical_nbt(have) == canonical_nbt(nbt):
-            out["under_equal"] += 1
-            out["under_with_nbt"] += 1 if nbt else 0
+        if is_chest(spec) and _passed(c, dst, spec) and nbt is not None and chest_identity(have) == chest_identity(nbt):
+            out["under_ok"] += 1
+            out["under_exact"] += 1 if canonical_nbt(have) == canonical_nbt(nbt) else 0
         else:
-            out["bad"].append("under %s: want %s %s, have %s" % (dst, spec, nbt, have))
+            out["bad"].append("under %s: want %s %s (from %s), have %s" % (dst, spec, nbt, under_pos(src), have))
     return out
 
 

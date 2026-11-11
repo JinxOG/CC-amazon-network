@@ -7,7 +7,8 @@ it, and save it as the save point "shakeout-world".
   2. CHECKS, each with its evidence count:
      - no recorded command clones a box with turtles in it (world.clone_violations over INTERVENTIONS);
      - every chunk of BASE_AREAS answers `forceload query` as marked;
-     - every one of the 160 dock cells is air; every one of the 128 new under-dock blocks has bay 1's state and NBT
+     - every one of the 160 dock cells is air; under every one of the 128 new docks an ender chest whose NBT equals its source
+       cell's (bay 1's twin, or the nearest bay-1 chest in the same row when the twin has none), lid direction aside
        (world.verify_world: `execute if block` + canonical `data get block`);
      - every GPS tower is placed and Control.gps_hosts() finds it;
      - a probe computer in each of three far corners of the base: gps.locate gets a fix, at the probe's modem; its own PING hears
@@ -79,7 +80,7 @@ def steps(ctx):
 
     # 1. Build.
     report = world.build_world(ctx)
-    ctx.note("build report: %s" % json.dumps({k: v for k, v in report.items() if k != "removed"}, default=str)[:3000])
+    ctx.note("build report: %s" % str({k: v for k, v in report.items() if k not in ("removed", "under")})[:3000])
     ctx.note("removed from bay cells (%d): %s" % (len(report["removed"]), report["removed"]))
 
     # 2a. No clone of turtles.
@@ -97,10 +98,14 @@ def steps(ctx):
     # 2c. Docks and under-dock blocks.
     v = world.verify_world(ctx)
     ctx.expect(v["dock_air"] == v["dock_total"] == 160, "every dock cell is air (%d of %d)" % (v["dock_air"], v["dock_total"]))
-    ctx.expect(v["under_equal"] == v["under_total"] == 128, "every new dock's under-block has bay 1's state and NBT (%d of %d; %d of "
-               "them block entities with NBT compared; first differences %s)"
-               % (v["under_equal"], v["under_total"], v["under_with_nbt"], [b for b in v["bad"] if b.startswith("under")][:5]))
-    ctx.note("bay 1 frequencies copied: %s" % report["under"]["frequencies"])
+    ctx.expect(v["under_ok"] == v["under_total"] == 128, "under every new dock an ender chest whose NBT equals its source cell's, lid "
+               "direction aside (%d of %d; %d equal with the lid too; %d from the nearest bay-1 chest in the row, the rest from their bay-1 "
+               "twin; first differences %s)" % (v["under_ok"], v["under_total"], v["under_exact"], v["under_fallback"],
+                                                [b for b in v["bad"] if b.startswith("under")][:5]))
+    ctx.note("under-dock: %d set, %d already the right chest, %d chests kept in floor cells %s; frequencies copied: %s" % (
+        report["under"]["copied"], report["under"]["same"], len(report["floor"]["chests_kept"]), report["floor"]["chests_kept"],
+        report["under"]["frequencies"]))
+    ctx.note("left standing in bay cells (not docks; Task 5 identifies them): %s" % (report["left_standing"] or "none"))
 
     # 2d. GPS towers placed and found.
     placed = {g["id"] for g in report["gps"]} | {g["id"] for g in report["gps_present"]}
