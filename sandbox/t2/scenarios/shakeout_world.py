@@ -15,8 +15,8 @@ it, and save it as the save point "shakeout-world".
      - every GPS tower is placed and Control.gps_hosts() finds it;
      - a probe computer in each of three far corners of the base: gps.locate gets a fix within 0.01 per axis of the probe's OWN
        computer block (CC measures a down-facing modem's distances from the block it faces: the computer; the towers announce
-       their computer blocks, so a tower announcing its modem would show here as an offset); its own PING hears at least 6
-       hosts; and the replies of the NEW towers alone trilaterate to the probe's block within 0.01 (so the fix does not lean on
+       their computer blocks, so a tower announcing its modem would show here as an offset); its own PING hears EVERY
+       host, all 4 old and all 8 new (counted by reply); and the replies of the NEW towers alone trilaterate to the probe's block within 0.01 (so the fix does not lean on
        the old four). The measured fix and residuals are in the report, so a wrong offset is visible;
      - the ATC logs 'ATC online'. That line reaches the bridge through the central server's log relay, so "not online" can
        also mean the central server (or the bridge) is down: look at the server's own lines before blaming the ATC.
@@ -35,7 +35,6 @@ from shakeout import feeder, world  # noqa: E402  (sandbox/t2 is on the path: th
 NAME = "shakeout_world"
 PROBE_CORNERS = [(129, -2847), (271, -2770), (129, -2770)]     # NW, SE, SW corners of BASE_AREAS
 PROBE_REPLY_CH = 64999                                          # no fleet program uses it (fleet 1-5, 1000+id, 65000, GPS 65534)
-MIN_HOSTS = 6
 FIX_TOLERANCE = 0.01                                            # per axis: gps.locate rounds to 0.01
 NBT_PROBE_XZ = (133, -2843)                                     # a spare cell for the frequency read-back chest (NW, outside the bays)
 NBT_PROBE_FREQ = (1, 2, 3)
@@ -178,7 +177,14 @@ def steps(ctx):
         fix = r.get("fix")
         ctx.note("probe #%d at %s: fix %s, %d hosts heard: %s" % (pid, spot, fix, len(heard), heard))
         ctx.expect(bool(got) and not r.get("err"), "probe #%d at %s ran (%s)" % (pid, spot, r.get("err") or "ok"))
-        ctx.expect(len(heard) >= MIN_HOSTS, "probe at %s heard %d GPS hosts (need %d)" % (spot, len(heard), MIN_HOSTS))
+        # EVERY HOST AT EVERY PROBE (final review): "at least 6" passed with four of the eight new towers silent. Counted by
+        # reply, not by announced position, so a tower announcing the wrong block is still heard (the offset checks catch it).
+        old_n = sum(1 for h in heard if tuple(h["pos"]) in old_hosts)
+        new_n = len(heard) - old_n
+        need = len(old_hosts) + len(new_towers)
+        ctx.expect(old_n == len(old_hosts) and new_n == len(new_towers),
+                   "probe at %s heard %d GPS hosts (need all %d: %d of the %d old, %d of the %d new towers)"
+                   % (spot, len(heard), need, old_n, len(old_hosts), new_n, len(new_towers)))
         off = [round(a - b, 3) for a, b in zip(fix, truth)] if fix else None
         ok_fix = bool(fix) and max(abs(d) for d in off) <= FIX_TOLERANCE
         ctx.expect(ok_fix, "gps.locate at %s gave %s, the probe's computer is at %s (offset %s, tolerance %s per axis)"

@@ -429,6 +429,21 @@ class RsCapacity(unittest.TestCase):
         self.assertEqual(s.restarts, 1)
         self.assertIn("tickrate 40", s.sent)
 
+    def test_restart_after_build_turns_the_t2_logs_back_on(self):
+        # final review: the control mod's radio and event logs live in JVM memory; setup's restart must re-enable them for --t2logs
+        s = seeded()
+        s.radio_log = lambda state="on": s.sent.append("t2 radio log " + state)
+        s.events_log = lambda state="on": s.sent.append("t2 events log " + state)
+        ctx = FakeCtx(s)
+        ctx.t2logs = True
+        world.restart_after_build(ctx)
+        self.assertIn("t2 radio log on", s.sent)
+        self.assertIn("t2 events log on", s.sent)
+        plain = seeded()
+        plain.radio_log = lambda state="on": plain.sent.append("t2 radio log " + state)
+        world.restart_after_build(FakeCtx(plain))
+        self.assertNotIn("t2 radio log on", plain.sent, "only when the run asked for them")
+
     def faces(self):
         x, y, z = world.RS_CONTROLLER
         return [(x + dx, y + dy, z + dz) for dx, dy, dz in world.RS_NEIGHBOURS]
@@ -637,8 +652,15 @@ class ProofScenario(unittest.TestCase):
         silent = [tuple(t) for t in world.GPS_TOWERS[:7]]
         ctx = self.run_proof(ProofServer(deaf_to=silent))
         failed = [m for ok, m in ctx.checks if not ok]
-        self.assertTrue(any("GPS hosts (need 6)" in m for m in failed), failed)
+        self.assertTrue(any("GPS hosts (need all 12" in m for m in failed), failed)
         self.assertTrue(any("NEW towers" in m for m in failed), failed)
+
+    def test_one_silent_new_tower_fails_the_hosts_check_at_every_probe(self):
+        # final review: "at least 6 heard" passed with a new tower silent (11 >= 6); every host must be heard at every probe
+        ctx = self.run_proof(ProofServer(deaf_to=[tuple(world.GPS_TOWERS[3])]))
+        failed = [m for ok, m in ctx.checks if not ok and "GPS hosts (need all 12" in m]
+        self.assertEqual(len(failed), 3, [m for ok, m in ctx.checks if not ok])
+        self.assertTrue(all("7 of the 8 new towers" in m for m in failed), failed)
 
 
     def test_a_tower_announcing_its_modem_makes_the_gps_checks_fail(self):
@@ -653,7 +675,7 @@ class ProofScenario(unittest.TestCase):
         failed = [m for ok, m in ctx.checks if not ok]
         self.assertTrue(any(m.startswith("gps.locate at") for m in failed), failed)
         self.assertTrue(any("NEW towers" in m for m in failed), failed)
-        self.assertFalse([m for m in failed if "GPS hosts (need 6)" in m], "it still hears every host: only the offset fails")
+        self.assertFalse([m for m in failed if "GPS hosts (need all 12" in m], "it still hears every host: only the offset fails")
 
     def test_chest_nbt_that_is_not_applied_fails_the_read_back_but_not_the_128_check(self):
         """Why the read-back exists: bay 1 is on the default frequency, so chests set WITHOUT their NBT pass the 128-chest check."""
