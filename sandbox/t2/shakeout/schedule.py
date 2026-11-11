@@ -78,6 +78,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -595,8 +596,10 @@ def _gps_end(ctx, c, st, e, detail):
 
 
 def _tick_seen(c, want):
+    """The tick rate read back: a number in the reply EXACTLY equal to the rate set (a substring test let 2 match "20")."""
     reply = c.command("tickrate")
-    return {"want": want, "reply": reply.strip()[:80], "ok": str(want) in reply}
+    nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", reply)]
+    return {"want": want, "reply": reply.strip()[:80], "numbers": nums, "ok": float(want) in nums}
 
 
 def _tps_begin(ctx, c, st, e):
@@ -822,9 +825,18 @@ def _bridge_ping(port, timeout=10):
         conn.request("GET", "/ping")
         conn.getresponse().read()
         conn.close()
-    except OSError:
+    except (OSError, http.client.HTTPException):
         return None
     return (time.time() - t0) * 1000.0
+
+
+def _bridge_alive(ctx):
+    """Whether the recorded bridge PROCESS is alive (pids.json, then the process table); None when that cannot be told."""
+    try:
+        pid = _read_pids(ctx).get("bridge")
+        return bool(pid) and runmod.alive(pid)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _bridge_stop(ctx, e):
@@ -874,15 +886,28 @@ def _proxy_stop(ctx, e, pid):
 
 
 def _bridge_restore(ctx, e, st):
-    """The real bridge on 3000, whatever state a bridge fault left: any proxy stopped; then, unless 3000 already answers (the
-    real bridge: no proxy is left), the recorded bridge stopped (the one on 3001, or a dead one) and a bridge started on 3000.
-    Idempotent: the end of bridge_down and bridge_slow, their compensating undo, and teardown all use it."""
+    """The real bridge on 3000, whatever state a bridge fault left. Idempotent: the end of bridge_down and bridge_slow, their
+    compensating undo, and teardown all use it.
+      - any proxy is stopped;
+      - a bridge we moved to 3001 (st["bridge_port"]) is stopped and one started on 3000: that move is the fault's own;
+      - otherwise a bridge on 3000 is NEVER stopped because a ping went unanswered. A bridge can be merely slow (pushes of
+        143 s were measured when the host starves it), and killing it would be an intervention nobody scheduled. It is
+        started again only when its PROCESS is dead (pids.json pid); alive, or unknown, it is left alone and that is logged."""
     if st.get("proxy"):
         _proxy_stop(ctx, e, st["proxy"])
         st["proxy"] = None
+    if st.get("bridge_port", BRIDGE_PORT) != BRIDGE_PORT:
+        _bridge_stop(ctx, e)
+        _bridge_start(ctx, e, BRIDGE_PORT)
+        st["bridge_port"] = BRIDGE_PORT
+        return
     if _bridge_ping(BRIDGE_PORT) is not None:
         return
-    _bridge_stop(ctx, e)
+    alive = _bridge_alive(ctx)
+    if alive is not False:
+        _log(ctx, st.get("_wall", 0), e, "bridge-slow-left-alone",
+             error="3000 did not answer /ping but the bridge process is %s: not restarted" % ("alive" if alive else "unknown"))
+        return
     _bridge_start(ctx, e, BRIDGE_PORT)
 
 
@@ -902,6 +927,7 @@ def _slow_begin(ctx, c, st, e):
     try:
         _bridge_stop(ctx, e)
         _bridge_start(ctx, e, SLOW_BRIDGE_PORT)
+        st["bridge_port"] = SLOW_BRIDGE_PORT
         st["proxy"] = _proxy_start(ctx, e, BRIDGE_PORT, SLOW_BRIDGE_PORT, ms)
         d["proxy"] = st["proxy"]
     except (Exception, SystemExit):

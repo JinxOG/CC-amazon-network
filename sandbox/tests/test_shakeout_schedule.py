@@ -29,6 +29,7 @@ HOUR = 3600000
 schedule.DISK_SETTLE_S = 0
 schedule.DISK_POLL_S = 0
 schedule.DISK_WAIT_S = 1
+REAL_PING = schedule._bridge_ping
 schedule._bridge_ping = lambda port, timeout=10: None
 
 FACING_LETTER = {"n": "north", "e": "east", "s": "south", "w": "west"}
@@ -292,6 +293,23 @@ class TheSchedule(unittest.TestCase):
             elif e["fault"] in ("radio_latency", "low_fuel", "put_back_turned"):
                 self.assertEqual(e["quiet_ms"], 0, "the fleet keeps talking through %s" % e["fault"])
 
+    def test_the_default_24_hour_schedule_builds_for_seeds_1_to_20(self):
+        for seed in range(1, 21):
+            s = schedule.make_schedule(seed, 24, schedule.DEFAULT_RATES)
+            self.assertEqual(len(s), sum(schedule.DEFAULT_RATES.values()), "seed %d" % seed)
+
+    def test_the_tick_rate_read_back_is_exact(self):
+        class C:
+            def __init__(self, reply):
+                self.reply = reply
+
+            def command(self, text):
+                return self.reply
+        self.assertFalse(schedule._tick_seen(C("The tick rate is 20 per second"), 2)["ok"], "2 is not 20")
+        self.assertTrue(schedule._tick_seen(C("The tick rate is 20 per second"), 20)["ok"])
+        self.assertTrue(schedule._tick_seen(C("Target tick rate: 15.0"), 15)["ok"])
+        self.assertFalse(schedule._tick_seen(C("Target tick rate: 150"), 15)["ok"])
+
     def test_rates_must_name_every_fault(self):
         rates = dict(schedule.DEFAULT_RATES)
         del rates["low_fuel"]
@@ -436,9 +454,12 @@ class BridgeWorld:
     def __init__(self, test, fail_start=(), fail_proxy=False):
         self.ports, self.bridge_port, self.calls = {3000: "bridge"}, 3000, []
         self.fail_start, self.fail_proxy = set(fail_start), fail_proxy
-        self.saved = {n: getattr(schedule, n) for n in ("_bridge_stop", "_bridge_start", "_proxy_start", "_proxy_stop", "_bridge_ping")}
+        self.slow = False                                  # the bridge process runs but does not answer in time
+        self.saved = {n: getattr(schedule, n) for n in ("_bridge_stop", "_bridge_start", "_proxy_start", "_proxy_stop", "_bridge_ping",
+                                                       "_bridge_alive")}
         schedule._bridge_stop, schedule._bridge_start = self.stop, self.start
         schedule._proxy_start, schedule._proxy_stop, schedule._bridge_ping = self.proxy, self.proxy_stop, self.ping
+        schedule._bridge_alive = lambda ctx: "bridge" in self.ports.values()
         test.addCleanup(lambda: [setattr(schedule, n, f) for n, f in self.saved.items()])
 
     def stop(self, ctx, e):
@@ -464,6 +485,8 @@ class BridgeWorld:
         self.ports = {p: v for p, v in self.ports.items() if v != "proxy"}
 
     def ping(self, port, timeout=10):
+        if self.slow:
+            return None
         v = self.ports.get(port)
         if v == "proxy":
             return float(self.delay) if self.ports.get(3001) == "bridge" else None
@@ -512,6 +535,43 @@ class TheBridgeFaults(unittest.TestCase):
         self.assertIn(("f001", "fail"), acted)
         self.assertEqual(b.ports, {3000: "bridge"})
         self.assertEqual(schedule.teardown(ctx, s)["end_errors"], [])
+
+    def test_a_bridge_that_is_only_slow_is_never_killed(self):
+        b = BridgeWorld(self)
+        ctx = FakeCtx()
+        s = [entry(1, 0, "bridge_down", {"dur_ms": 5000})]
+        schedule.run_due(ctx, s, 0)
+        b.ports = {3000: "bridge"}                            # the stop did not take: the process lives on ...
+        b.slow = True                                        # ... and is too slow to answer a ping
+        n = len(b.calls)
+        schedule.run_due(ctx, s, 5000)                       # the window's end
+        schedule.teardown(ctx, s)
+        self.assertEqual(b.calls[n:], [], "a slow bridge whose process is alive is never stopped or started")
+        with open(os.path.join(ctx.run, "shakeout", "faults.jsonl")) as f:
+            self.assertIn("bridge-slow-left-alone", f.read())
+
+    def test_a_dead_bridge_is_started_again(self):
+        b = BridgeWorld(self)
+        ctx = FakeCtx()
+        b.ports = {}                                          # its process died
+        schedule._bridge_restore(ctx, None, schedule.state_of(ctx))
+        self.assertEqual((b.calls, b.ports), ([("start", 3000)], {3000: "bridge"}), "started, and nothing stopped first")
+
+    def test_a_ping_that_gets_a_garbled_reply_reads_as_no_answer(self):
+        import socketserver
+        import threading
+
+        class Garbage(socketserver.BaseRequestHandler):
+            def handle(self):
+                self.request.recv(1024)
+                self.request.sendall(b"not http at all" + bytes([13, 10, 13, 10]))
+        srv = socketserver.TCPServer(("127.0.0.1", 0), Garbage)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            self.assertIsNone(REAL_PING(srv.server_address[1], 3), "an HTTPException is no answer, not a crash")
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_a_slow_bridge_whose_proxy_will_not_start_is_put_back(self):
         b = BridgeWorld(self, fail_proxy=True)
