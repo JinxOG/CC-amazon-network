@@ -10,11 +10,16 @@ it, and save it as the save point "shakeout-world".
      - every one of the 160 dock cells is air; under every one of the 128 new docks an ender chest whose NBT equals its source
        cell's (bay 1's twin, or the nearest bay-1 chest in the same row when the twin has none), lid direction aside
        (world.verify_world: `execute if block` + canonical `data get block`);
+     - setblock really applies chest NBT: bay 1's chests are all on the default frequency 0,0,0, which a chest WITHOUT its NBT
+       would also show, so one chest is set with Frequency 1,2,3 on a spare cell, read back, and taken away again;
      - every GPS tower is placed and Control.gps_hosts() finds it;
-     - a probe computer in each of three far corners of the base: gps.locate gets a fix, at the probe's modem; its own PING hears
-       at least 6 hosts; and the replies of the NEW towers alone trilaterate to the probe's modem (so the fix does not lean on
-       the old four);
-     - the ATC logs 'ATC online'.
+     - a probe computer in each of three far corners of the base: gps.locate gets a fix within 0.01 per axis of the probe's OWN
+       computer block (CC measures a down-facing modem's distances from the block it faces: the computer; the towers announce
+       their computer blocks, so a tower announcing its modem would show here as an offset); its own PING hears at least 6
+       hosts; and the replies of the NEW towers alone trilaterate to the probe's block within 0.01 (so the fix does not lean on
+       the old four). The measured fix and residuals are in the report, so a wrong offset is visible;
+     - the ATC logs 'ATC online'. That line reaches the bridge through the central server's log relay, so "not online" can
+       also mean the central server (or the bridge) is down: look at the server's own lines before blaming the ATC.
   3. The probes are taken away again, then save_point "shakeout-world" (under <run>/savepoints/), which must hold level.dat.
 
 Run (pin the commit under test, 1x):
@@ -22,6 +27,7 @@ Run (pin the commit under test, 1x):
 The save point stays in the run folder after the run stops; later runs restore it with Control.restore_save_point or copy it."""
 import json
 import os
+import re
 import tempfile
 
 from shakeout import world  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
@@ -30,6 +36,9 @@ NAME = "shakeout_world"
 PROBE_CORNERS = [(129, -2847), (271, -2770), (129, -2770)]     # NW, SE, SW corners of BASE_AREAS
 PROBE_REPLY_CH = 64999                                          # no fleet program uses it (fleet 1-5, 1000+id, 65000, GPS 65534)
 MIN_HOSTS = 6
+FIX_TOLERANCE = 0.01                                            # per axis: gps.locate rounds to 0.01
+NBT_PROBE_XZ = (133, -2843)                                     # a spare cell for the frequency read-back chest (NW, outside the bays)
+NBT_PROBE_FREQ = (1, 2, 3)
 
 PROBE_LUA = '''
 local modem = peripheral.find("modem", function(_, m) return m.isWireless() end)
@@ -107,6 +116,20 @@ def steps(ctx):
         report["under"]["frequencies"]))
     ctx.note("left standing in bay cells (not docks; Task 5 identifies them): %s" % (report["left_standing"] or "none"))
 
+    # 2c'. setblock applies chest NBT (else the check above could pass on chests that only show the default frequency).
+    spot = probe_spot(ctx._raw, *NBT_PROBE_XZ)
+    ctx.expect(spot is not None, "a spare cell for the NBT read-back chest near %s (%s)" % (NBT_PROBE_XZ, spot))
+    if spot is not None:
+        freq = dict(zip(("left", "middle", "right"), NBT_PROBE_FREQ))
+        world.set_block(c, spot, world.CHEST, "{rot:0b,keepPacked:0b,Frequency:{left:%(left)d,middle:%(middle)d,right:%(right)d}}" % freq)
+        back = re.sub(r"\s+", "", world.nbt_of(ctx._raw.block_data(spot)) or "")
+        got = world.frequency_of(back) or ""
+        ok = all(re.search(r"\b%s:%d\b" % kv, got) for kv in freq.items())
+        ctx.expect(ok, "a chest set with Frequency %s reads back with it (read back: %s): setblock applies the NBT we copy"
+                   % (NBT_PROBE_FREQ, got or back[:160] or "no block data"))
+        c.command("setblock %d %d %d minecraft:air" % spot)
+        ctx.expect(world.is_air(ctx._raw, spot), "the read-back chest at %s is gone again" % (spot,))
+
     # 2d. GPS towers placed and found.
     placed = {g["id"] for g in report["gps"]} | {g["id"] for g in report["gps_present"]}
     hosts = set(ctx._raw.gps_hosts())
@@ -119,7 +142,8 @@ def steps(ctx):
     probe_path = os.path.join(tempfile.mkdtemp(prefix="shakeout_gps_probe_"), "startup.lua")
     with open(probe_path, "w", encoding="utf8", newline="\n") as f:
         f.write(PROBE_LUA)
-    new_modems = {world.gps_modem_pos(t) for t in world.GPS_TOWERS}
+    old_hosts = {tuple(t) for t in world.EXISTING_GPS_HOSTS}
+    new_towers = {tuple(t) for t in world.GPS_TOWERS}
     probes = []
     for x, z in PROBE_CORNERS:
         ctx.expect(world.covers(world.BASE_AREAS, x, z, x, z), "probe corner %d,%d lies in BASE_AREAS" % (x, z))
@@ -131,27 +155,35 @@ def steps(ctx):
         probes.append((pid, spot))
         got = ctx.wait_until(lambda: disk_json(ctx._raw, pid, "gps_probe.json").get("t"), 120, poll=3)
         r = disk_json(ctx._raw, pid, "gps_probe.json")
-        truth = world.gps_modem_pos(spot)
+        truth = tuple(spot)                                     # the probe's own computer block
         heard = r.get("hosts") or []
         fix = r.get("fix")
         ctx.note("probe #%d at %s: fix %s, %d hosts heard: %s" % (pid, spot, fix, len(heard), heard))
         ctx.expect(bool(got) and not r.get("err"), "probe #%d at %s ran (%s)" % (pid, spot, r.get("err") or "ok"))
         ctx.expect(len(heard) >= MIN_HOSTS, "probe at %s heard %d GPS hosts (need %d)" % (spot, len(heard), MIN_HOSTS))
-        ok_fix = bool(fix) and max(abs(a - b) for a, b in zip(fix, truth)) <= 1.0
-        ctx.expect(ok_fix, "gps.locate at %s gave %s, the probe's modem is at %s" % (spot, fix, truth))
-        fixes = [{"pos": tuple(h["pos"]), "d": h["d"]} for h in heard if tuple(h["pos"]) in new_modems]
+        off = [round(a - b, 3) for a, b in zip(fix, truth)] if fix else None
+        ok_fix = bool(fix) and max(abs(d) for d in off) <= FIX_TOLERANCE
+        ctx.expect(ok_fix, "gps.locate at %s gave %s, the probe's computer is at %s (offset %s, tolerance %s per axis)"
+                   % (spot, fix, truth, off, FIX_TOLERANCE))
+        # every reply that is not one of the old four: a new tower announcing the wrong block is IN this set and shows as an offset
+        fixes = [{"pos": tuple(h["pos"]), "d": h["d"]} for h in heard if tuple(h["pos"]) not in old_hosts]
+        odd = sorted(f["pos"] for f in fixes if f["pos"] not in new_towers)
+        ctx.note("probe at %s: %d new-tower replies, %d of them at a GPS_TOWERS position; announced elsewhere: %s"
+                 % (spot, len(fixes), len(fixes) - len(odd), odd or "none"))
         pos, rms = world.trilaterate(fixes) if len(fixes) >= 4 else (None, None)
-        ok_new = pos is not None and max(abs(a - b) for a, b in zip(pos, truth)) <= 0.5
-        ctx.expect(ok_new, "the %d NEW towers heard at %s alone trilaterate to %s (rms %s), the modem is at %s"
-                   % (len(fixes), spot, tuple(round(a, 2) for a in pos) if pos else None, rms, truth))
+        noff = [round(a - b, 3) for a, b in zip(pos, truth)] if pos else None
+        ok_new = pos is not None and max(abs(d) for d in noff) <= FIX_TOLERANCE
+        ctx.expect(ok_new, "the %d NEW towers heard at %s alone trilaterate to %s (offset %s, rms residual %s), the probe is at %s"
+                   % (len(fixes), spot, tuple(round(a, 3) for a in pos) if pos else None, noff, rms, truth))
         if len(heard) >= 4:
             ctx.note("all %d hosts at %s: least squares %s, rms %.3f" % ((len(heard), spot) + world.trilaterate(
                 [{"pos": tuple(h["pos"]), "d": h["d"]} for h in heard])))
 
     # 2f. The ATC.
     on = ctx.wait_until(lambda: len(ctx.log_lines("ATC online")) > online0, 180)
-    ctx.expect(bool(on), "the ATC computer #%s at %s logged 'ATC online' (%s)" % (
-        report["atc"]["id"], report["atc"]["pos"], (ctx.log_lines("ATC online")[-1:] or ["nothing"])[0][:160]))
+    ctx.expect(bool(on), "the ATC computer #%s at %s logged 'ATC online' (%s; its lines come through the central server, so "
+               "'nothing' can also mean the server or the bridge is down)" % (
+                   report["atc"]["id"], report["atc"]["pos"], (ctx.log_lines("ATC online")[-1:] or ["nothing"])[0][:160]))
 
     # 3. Probes away, then the save point.
     for pid, (x, y, z) in probes:

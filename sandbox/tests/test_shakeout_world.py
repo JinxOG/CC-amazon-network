@@ -14,6 +14,7 @@ import control  # noqa: E402
 
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 COORD = r"(-?\d+) (-?\d+) (-?\d+)"
+CHEST_DEFAULT = "rot: 0b, keepPacked: 0b, Frequency: {left: 0, middle: 0, right: 0}"
 CC_BLOCKS = ("computercraft:turtle_advanced", "computercraft:turtle_normal", "computercraft:computer_advanced")
 BE_BLOCKS = ("enderstorage:ender_chest",) + CC_BLOCKS
 
@@ -79,6 +80,8 @@ class FakeServer:
                 return "Could not set the block"          # vanilla: same state, nothing changes, the NBT is NOT applied
             if bid == "minecraft:air":
                 self.blocks.pop(pos, None)
+            elif bid == "enderstorage:ender_chest" and not nbt:
+                self.blocks[pos] = (bid, props, CHEST_DEFAULT, None)          # the game's defaults: what a chest WITHOUT NBT shows
             else:
                 self.blocks[pos] = (bid, props, (nbt[1:-1] if nbt else "") if bid in BE_BLOCKS else None, None)
             return "Changed the block at %d, %d, %d" % pos
@@ -409,8 +412,7 @@ class Gps(unittest.TestCase):
 
     def test_trilateration_from_the_new_towers_alone_finds_the_probe(self):
         probe = (131, 70, -2845)
-        fixes = [{"pos": world.gps_modem_pos(t), "d": sum((a - b) ** 2 for a, b in zip(world.gps_modem_pos(t), probe)) ** 0.5}
-                 for t in world.GPS_TOWERS]
+        fixes = [{"pos": t, "d": sum((a - b) ** 2 for a, b in zip(t, probe)) ** 0.5} for t in world.GPS_TOWERS]
         pos, rms = world.trilaterate(fixes)
         self.assertLess(max(abs(a - b) for a, b in zip(pos, probe)), 0.01)
         self.assertLess(rms, 0.01)
@@ -425,7 +427,8 @@ class Gps(unittest.TestCase):
         self.assertEqual(control.Control.match_gps_hosts(programs, {}), sorted(programs), "gps_down/gps_up will find every new tower")
         for sp in hosts:
             x, y, z = sp["pos"]
-            self.assertIn('"host", %d, %d, %d)' % (x, y + 1, z), sp["startup"], "it announces its modem's position (one above)")
+            self.assertEqual(sp["startup"], 'shell.run("gps", "host", %d, %d, %d)\n' % (x, y, z),
+                             "it announces its own computer block, where CC measures a down-facing modem from")
         self.assertEqual(len(report["gps"]), len(world.GPS_TOWERS))
         self.assertEqual(report["gps_blocked"], [])
 
@@ -470,15 +473,27 @@ def load_proof():
     return mod
 
 
-class ProofServer(FakeServer):
-    """FakeServer plus what the T2 proof uses: disks, gps_hosts, shutdown, a real save-point folder, and a probe computer that
-    'hears' every host it is told is up (with true distances) and writes gps_probe.json as the probe Lua would."""
+HOST_CALL = re.compile(r'shell\.run\("gps", "host", (-?\d+), (-?\d+), (-?\d+)\)')
 
-    def __init__(self, deaf_to=()):
+
+class ProofServer(FakeServer):
+    """FakeServer plus what the T2 proof uses: disks, gps_hosts, shutdown, a real save-point folder, and a probe computer that hears
+    every host that is up and writes gps_probe.json as the probe Lua would. Distances are measured between COMPUTER blocks (CC:Tweaked
+    1.20.1: a down-facing modem reports the block it faces), each host replies with the coordinates its program ANNOUNCES, and the
+    fix is the least-squares answer to those replies rounded to 0.01, as gps.locate rounds. drop_nbt: setblock ignores a chest's NBT
+    (the chest then shows the game's defaults)."""
+
+    def __init__(self, deaf_to=(), drop_nbt=False):
         FakeServer.__init__(self)
         self.blocks = seeded().blocks                     # the world copy's shape, old turtles on docks and all
         self.disks = tempfile.mkdtemp(prefix="shakeout_disks")
         self.deaf_to = set(deaf_to)
+        self.drop_nbt = drop_nbt
+
+    def command(self, text):
+        if self.drop_nbt and text.startswith("setblock") and "enderstorage:ender_chest{" in text:
+            text = text.split("{", 1)[0]
+        return FakeServer.command(self, text)
 
     def gps_hosts(self):
         return sorted(sp["id"] for sp in self.spawned if sp["startup"].startswith('shell.run("gps"'))
@@ -495,13 +510,19 @@ class ProofServer(FakeServer):
     def spawn_computer(self, x, y, z, startup, files=None, modem=True):
         cid = FakeServer.spawn_computer(self, x, y, z, startup, files, modem)
         if "gps_probe.json" in self.spawned[-1]["startup"]:
-            me = (x, y + 1, z)
-            announced = [world.gps_modem_pos(sp["pos"]) for sp in self.spawned if sp["startup"].startswith('shell.run("gps"')]
-            hosts = [{"pos": list(p), "d": sum((a - b) ** 2 for a, b in zip(p, me)) ** 0.5}
-                     for p in announced + list(world.EXISTING_GPS_HOSTS) if p not in self.deaf_to]
+            me = (x, y, z)                                 # measured from the probe's computer block
+            hosts_up = [(tuple(int(v) for v in HOST_CALL.match(sp["startup"]).groups()), sp["pos"])
+                        for sp in self.spawned if sp["startup"].startswith('shell.run("gps"')]
+            hosts_up += [(h, h) for h in world.EXISTING_GPS_HOSTS]
+            hosts = [{"pos": list(said), "d": sum((a - b) ** 2 for a, b in zip(at, me)) ** 0.5}
+                     for said, at in hosts_up if said not in self.deaf_to]
+            fix = None
+            if len(hosts) >= 4:
+                pos, _ = world.trilaterate([{"pos": tuple(h["pos"]), "d": h["d"]} for h in hosts])
+                fix = [round(v, 2) for v in pos] if pos else None
             os.makedirs(os.path.join(self.disks, str(cid)))
             with open(os.path.join(self.disks, str(cid), "gps_probe.json"), "w") as f:
-                f.write(__import__("json").dumps({"t": 1, "fix": list(me) if len(hosts) >= 4 else None, "hosts": hosts}))
+                f.write(__import__("json").dumps({"t": 1, "fix": fix, "hosts": hosts}))
         return cid
 
 
@@ -551,11 +572,37 @@ class ProofScenario(unittest.TestCase):
         self.assertTrue(any("0 clone(s)" in m and "recorded console commands" in m for _, m in ctx.checks))
 
     def test_the_gps_checks_fail_when_new_towers_are_silent(self):
-        silent = [world.gps_modem_pos(t) for t in world.GPS_TOWERS[:7]]
+        silent = [tuple(t) for t in world.GPS_TOWERS[:7]]
         ctx = self.run_proof(ProofServer(deaf_to=silent))
         failed = [m for ok, m in ctx.checks if not ok]
         self.assertTrue(any("GPS hosts (need 6)" in m for m in failed), failed)
         self.assertTrue(any("NEW towers" in m for m in failed), failed)
+
+
+    def test_a_tower_announcing_its_modem_makes_the_gps_checks_fail(self):
+        """The control for the T2 run: one tower announcing y+1 (its modem, the old mistake) must fail the fix checks."""
+        right = world.gps_host_program
+        wrong = tuple(world.GPS_TOWERS[0])
+        world.gps_host_program = lambda tw: right((tw[0], tw[1] + 1, tw[2])) if tuple(tw) == wrong else right(tw)
+        try:
+            ctx = self.run_proof(ProofServer())
+        finally:
+            world.gps_host_program = right
+        failed = [m for ok, m in ctx.checks if not ok]
+        self.assertTrue(any(m.startswith("gps.locate at") for m in failed), failed)
+        self.assertTrue(any("NEW towers" in m for m in failed), failed)
+        self.assertFalse([m for m in failed if "GPS hosts (need 6)" in m], "it still hears every host: only the offset fails")
+
+    def test_chest_nbt_that_is_not_applied_fails_the_read_back_but_not_the_128_check(self):
+        """Why the read-back exists: bay 1 is on the default frequency, so chests set WITHOUT their NBT pass the 128-chest check."""
+        server = ProofServer(drop_nbt=True)
+        for p, b in list(server.blocks.items()):           # bay 1 all on the default frequency, as the real copy has it
+            if b[2] and "right: 14" in b[2]:
+                server.blocks[p] = (b[0], b[1], b[2].replace("right: 14", "right: 0"), b[3])
+        ctx = self.run_proof(server)
+        failed = [m for ok, m in ctx.checks if not ok]
+        self.assertTrue(any("reads back with it" in m for m in failed), failed)
+        self.assertFalse([m for m in failed if "128" in m], "the default-frequency chests look right to the 128-chest check")
 
 
 if __name__ == "__main__":

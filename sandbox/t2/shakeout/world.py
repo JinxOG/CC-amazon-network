@@ -53,10 +53,14 @@ BASE_AREAS = [
     (318, -2816, 331, -2805),   # the four GPS hosts the world already has
 ]
 
-# The world's four GPS host computers (their disks run shell.run("gps", "host", x, y, z) with these numbers; the modem is one above).
+# The world's four GPS host computers. Their disks run shell.run("gps", "host", x, y, z) with these numbers, their OWN computer
+# block, and that is right: the modem on top faces down, and CC:Tweaked 1.20.1's wireless modem reports as its position the block
+# it faces (WirelessModemBlockEntity$Peripheral.getPosition: the modem's position stepped one block in its facing direction, checked
+# in the test server's cc-tweaked-1.20.1-forge-1.120.2.jar). So distances are measured from the computer block. gps_host.lua says
+# the same: "the actual coordinates of THIS computer".
 EXISTING_GPS_HOSTS = [(322, 92, -2814), (322, 92, -2809), (327, 92, -2814), (322, 96, -2814)]
 
-# New GPS host computers (the modem goes one above each). Spread over the whole base area at six different heights, so no four of
+# New GPS host computers (spawn_computer puts the modem on top, facing down; each announces its own computer block). Spread over the whole base area at six different heights, so no four of
 # them are near one plane, all inside BASE_AREAS (kept loaded), all above the roof (y 85-87) and below 160 (the lowest travel and
 # lease heights the fleet uses are 160-175), and none on the dispatch column (143,-2813), the arrivals column (228,-2782) or the
 # holding line (x 228-256, z -2782..-2778).
@@ -77,7 +81,11 @@ ATC_CANDIDATES = [(x, 67, z) for z in (-2786, -2784) for x in range(160, 221, 4)
 
 # Block states `execute if block` is asked about, most common first. Every block the 2026-10-18 copy has in bay 1's floor, under its
 # docks and in its pillars is here (read from its region files: factory_block, factory_danger, light_blue_concrete, ender_chest,
-# double stone slabs). A block with properties is listed once per state, so the copy keeps its state.
+# double stone slabs). The slabs have block-state properties and are listed once per `type` (their `waterlogged` is left to the
+# default, false, as it is in the copy). factory_block, factory_danger, ender_chest, the concretes, quartz_block, gravel, dirt,
+# grass_block and stone have NO block-state properties in the copy's palette (checked offline), so the bare id is their whole state;
+# an ender chest's lid direction is NBT (rot), copied with the rest of its NBT. A new block with properties must be listed per state
+# here, or a copy would silently get its default state.
 BLOCK_CANDIDATES = [
     "xkdeco:factory_block", "xkdeco:factory_danger", "enderstorage:ender_chest", "minecraft:light_blue_concrete",
     "minecraft:stone_slab[type=double]", "minecraft:stone_slab[type=top]", "minecraft:stone_slab[type=bottom]",
@@ -321,16 +329,11 @@ def atc_files(pin):
 # GPS
 # ---------------------------------------------------------------------------------------------------------------------------
 
-def gps_modem_pos(tower):
-    """A host's modem sits one block above its computer (spawn_computer); distances are measured from it."""
-    x, y, z = tower
-    return (x, y + 1, z)
-
-
 def gps_host_program(tower):
-    """The startup.lua of a tower: the one call gps_host.lua makes, with the modem's coordinates. Exactly the form the world's
-    own hosts run, which Control.gps_hosts() recognises (so gps_down / gps_up reach the new towers too)."""
-    return 'shell.run("gps", "host", %d, %d, %d)\n' % gps_modem_pos(tower)
+    """The startup.lua of a tower: the one call gps_host.lua makes, with the tower's OWN computer coordinates (where CC measures a
+    down-facing modem's distances from: see EXISTING_GPS_HOSTS). Exactly the form the world's own hosts run, which
+    Control.gps_hosts() recognises (so gps_down / gps_up reach the new towers too)."""
+    return 'shell.run("gps", "host", %d, %d, %d)\n' % tuple(tower)
 
 
 def _det3(a, b, c):
@@ -700,7 +703,7 @@ def build_world(ctx, cells=None):
             report["gps_blocked"].append({"pos": tuple(t), "why": "the cell or the one above it is not air"})
             continue
         gid = c.spawn_computer(t[0], t[1], t[2], _write_startup(gps_host_program(t), "shakeout_gps_"))
-        report["gps"].append({"pos": tuple(t), "id": gid, "announces": gps_modem_pos(t)})
+        report["gps"].append({"pos": tuple(t), "id": gid, "announces": tuple(t)})
     _note(ctx, "shakeout world: %d removed from bay cells, floor set %d / same %d, pillars set %d / same %d, under-dock copied %d / "
           "same %d, GPS towers placed %d, present %d, blocked %d" % (
               len(report["removed"]), report["floor"]["set"], report["floor"]["same"], report["pillars"]["set"],
