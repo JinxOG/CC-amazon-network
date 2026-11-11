@@ -445,7 +445,7 @@ class TheVerbs(unittest.TestCase):
         self.assertTrue(all(isinstance(i["game_seconds"], (int, float)) for i in ctx.interventions))
         with open(os.path.join(ctx.run, "shakeout", "faults.jsonl")) as f:
             log = [json.loads(l) for l in f]
-        self.assertEqual([(l["id"], l["phase"]) for l in log], [("f001", "begin")])
+        self.assertEqual([(l["id"], l["phase"]) for l in log], [("f001", "start"), ("f001", "begin")])
 
 
 class BridgeWorld:

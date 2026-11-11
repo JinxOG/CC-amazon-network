@@ -1099,6 +1099,8 @@ def _begin(ctx, st, e, wall_ms, acted):
         acted.append((e["id"], "fail"))
         return
     s["attempts"] = s.get("attempts", 0) + 1
+    if s["attempts"] == 1:     # logged BEFORE the verb: a restart takes minutes, and a watchdog must see it has started (watch_run)
+        _log(ctx, wall_ms, e, "start")
     c = _Recorder(ctx, getattr(ctx, "_raw", ctx.control), e["id"])
     st["_wall"] = wall_ms
     try:

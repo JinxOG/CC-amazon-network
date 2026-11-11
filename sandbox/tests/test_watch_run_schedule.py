@@ -146,6 +146,31 @@ class WatchTests(unittest.TestCase):
         code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "0.25")
         self.assertEqual(code, 4, out)
 
+    def test_started_but_not_begun_restart_holds_its_window_open(self):
+        # a restart that fired on time, whose verb is still running (a start line, no begin yet) 20 minutes after the plan:
+        # the server is down and the fleet silent, and that is the restart, not a void
+        self.h.write_schedule([{"id": "f001", "t_ms": 0, "fault": "world_restart", "args": {}, "quiet_ms": 10 * MIN}])
+        self.h.log_fault("f001", "world_restart", "start", 0)
+        self.h.alive[111] = False
+        code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "0.4")
+        self.assertEqual(code, 0, out)
+
+    def test_started_window_is_capped(self):
+        # ...but not forever: 10 + 30 minutes after the start with still no begin, the dead server is STOPPED
+        self.h.write_schedule([{"id": "f001", "t_ms": 0, "fault": "world_restart", "args": {}, "quiet_ms": 10 * MIN}])
+        self.h.log_fault("f001", "world_restart", "start", 0)
+        self.h.alive[111] = False
+        code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "1.5")
+        self.assertEqual(code, 4, out)
+        self.assertGreaterEqual((self.h.clock.now - self.h.t0) / 60.0, 40)
+
+    def test_failed_fault_has_no_window(self):
+        self.h.write_schedule([{"id": "f001", "t_ms": 0, "fault": "bridge_down", "args": {}, "quiet_ms": 20 * MIN}])
+        self.h.log_fault("f001", "bridge_down", "start", 0)
+        self.h.log_fault("f001", "bridge_down", "fail", 1000, error="x")
+        code, out = self.h.watch("--schedule", self.h.sched, "--max-hours", "0.25")
+        self.assertEqual(code, 3, out)
+
     def test_max_hours_default_is_raised_only_with_a_schedule(self):
         self.assertEqual(watch_run.default_max_hours(None), 6.0)
         self.assertGreaterEqual(watch_run.default_max_hours("x.json"), 24.0)

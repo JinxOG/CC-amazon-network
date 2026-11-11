@@ -122,15 +122,23 @@ def _read_jsonl(path):
     return out
 
 
-def quiet_windows(run, schedule_path):
+ANCHOR_PHASES = ("start", "begin", "retry")      # lines that say a fault really began; a "fail" line is not one
+START_OPEN_CAP_S = 1800                          # a fault that has started but not logged its begin stays open this long past quiet_ms
+
+
+def quiet_windows(run, schedule_path, now=None):
     """[{start, end, fault, id, restart}] in epoch seconds: when the fleet is EXPECTED to be silent.
 
-    The start is when the fault really began: the earliest faults.jsonl line for the entry gives wall_ms (ms since the schedule
-    started) and its log time; the schedule's own epoch is the earliest (log time - wall_ms) seen, since a line is logged after
-    the call that took the time. Failing that the schedule file's mtime (written just before the first fault). An entry with no
-    line yet uses its planned t_ms. The length is the schedule's quiet_ms; a begin that took long (a restart) extends the window
-    to when its line was logged. A restart fault's end also opens a restart-sized window (a disk fill is undone with another).
+    The start is when the fault really began: the earliest start/begin/retry line for the entry in faults.jsonl gives wall_ms (ms
+    since the schedule started) and its log time; the schedule's own epoch is the earliest (log time - wall_ms) seen on such a line,
+    since a line is logged after the call that took the time. Failing that, the schedule file's mtime: the run driver writes
+    schedule.json just before it starts firing, so it is the schedule's start to within seconds. An entry with no line yet uses its
+    planned t_ms. The length is the schedule's quiet_ms; a begin that took long (a restart) extends the window to when its line
+    was logged. A fault whose `start` line is there but no begin or fail yet is still running its verb (a restart takes minutes):
+    its window stays open (end = now), capped at quiet_ms + 30 minutes. A fault that failed outright has no window. A restart
+    fault's end also opens a restart-sized window (a disk fill is undone with another restart).
     """
+    now = time.time() if now is None else now
     try:
         with open(schedule_path, encoding="utf8") as f:
             doc = json.load(f)
@@ -139,7 +147,7 @@ def quiet_windows(run, schedule_path):
         return []
     lines = _read_jsonl(os.path.join(run, "shakeout", "faults.jsonl"))
     t0s = [_epoch(l.get("time")) - l["wall_ms"] / 1000.0 for l in lines
-           if isinstance(l.get("wall_ms"), (int, float)) and _epoch(l.get("time")) is not None]
+           if l.get("phase") in ANCHOR_PHASES and isinstance(l.get("wall_ms"), (int, float)) and _epoch(l.get("time")) is not None]
     if t0s:
         epoch0 = min(t0s)
     else:
@@ -154,7 +162,11 @@ def quiet_windows(run, schedule_path):
         if quiet_s <= 0 and not restart:
             continue
         mine = [l for l in lines if l.get("id") == e.get("id") and isinstance(l.get("wall_ms"), (int, float))]
-        start = epoch0 + (min(l["wall_ms"] for l in mine) if mine else e.get("t_ms", 0)) / 1000.0
+        phases = {l.get("phase") for l in mine}
+        anchors = [l for l in mine if l.get("phase") in ANCHOR_PHASES]
+        if "fail" in phases and "begin" not in phases:
+            continue
+        start = epoch0 + (min(l["wall_ms"] for l in anchors) if anchors else e.get("t_ms", 0)) / 1000.0
         end = start + (quiet_s if quiet_s > 0 else RESTART_QUIET_S)
         for l in mine:
             if l.get("phase") == "begin" and _epoch(l.get("time")) is not None:
@@ -162,6 +174,8 @@ def quiet_windows(run, schedule_path):
             if l.get("phase") == "end" and restart:
                 at = epoch0 + l["wall_ms"] / 1000.0
                 out.append({"start": at, "end": at + RESTART_QUIET_S, "fault": e.get("fault"), "id": e.get("id"), "restart": True})
+        if "start" in phases and not phases & {"begin", "fail", "undo", "end"}:
+            end = max(end, min(now, start + (quiet_s if quiet_s > 0 else RESTART_QUIET_S) + START_OPEN_CAP_S))
         out.append({"start": start, "end": end, "fault": e.get("fault"), "id": e.get("id"), "restart": restart})
     return out
 
