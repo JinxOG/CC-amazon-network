@@ -20,7 +20,9 @@ setup(ctx), which the proof scenarios share (shakeout_fleet_proof.py, shakeout_f
   7. save_point "shakeout-fleet" (a void run restarts from it without rebuilding).
 Then the schedule is made (or loaded), written to <run>/schedule.json BEFORE the first fault, and run_loop fires it by wall
 clock for SHAKEOUT_HOURS, with the Task-6 feeder and housekeeping when sandbox/t2/shakeout/feeder.py exists. run_loop ends,
-whatever happened, with schedule.teardown and a check that no filler file is left on any disk.
+whatever happened, with schedule.teardown and a check that no filler file is left on any disk; then the end-of-run turtle probe
+(shakeout/final.json) and the Task-7 report (shakeout/report.md). run_loop also records a compact /state snapshot a minute
+(shakeout/state.jsonl, report.record_state), which is what the report judges the turtles on.
 """
 import importlib
 import json
@@ -29,6 +31,7 @@ import re
 import time
 
 from shakeout import fleet, schedule, world  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
+from shakeout import report as shreport  # noqa: E402
 
 NAME = "shakeout"
 PLACEMENT_LINES = ("Assigned dock:", "Dock moved: ", "No free docks for ")
@@ -176,6 +179,12 @@ def run_loop(ctx, sched, seconds, poll=None):
                 ctx.sample()
             except Exception:  # noqa: BLE001 - the server may be down for a scheduled fault
                 pass
+            try:   # the /state snapshots the report reads (Task 7); a bridge that does not answer is written as a gap
+                shreport.record_state(ctx, wall, t0 * 1000)
+            except Exception as ex:  # noqa: BLE001
+                errors += 1
+                if errors <= 20:
+                    ctx.note("wall %d s: state recorder error %s: %s" % (wall // 1000, type(ex).__name__, ex))
             time.sleep(poll)
     finally:
         out = schedule.teardown(ctx, sched)
@@ -187,6 +196,11 @@ def run_loop(ctx, sched, seconds, poll=None):
                    % (len(out["fillers_removed"]), len(out["fillers_left"]), out["fillers_left"]))
         ctx.note("schedule: %d entries; phases %s; ended at teardown %s; end errors %s; never fired %d"
                  % (len(sched), phases, out["ended"], out["end_errors"], len(out["never_fired"])))
+        for what, fn in (("final probe", lambda: shreport.probe_final(ctx)), ("shakeout report", lambda: shreport.write_report(ctx.run))):
+            try:
+                ctx.note("%s: %s" % (what, fn() if what == "shakeout report" else "%d turtles probed" % len(fn())))
+            except Exception as ex:  # noqa: BLE001 - the report can be written again from the run folder afterwards
+                ctx.note("%s failed: %s: %s (python sandbox/t2/shakeout/report.py <run>)" % (what, type(ex).__name__, ex))
     return out
 
 
