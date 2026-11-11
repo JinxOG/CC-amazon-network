@@ -1,0 +1,517 @@
+"""Shakeout Task 4: the world builder (sandbox/t2/shakeout/world.py), against a fake server that keeps blocks and answers rcon the
+way Minecraft 1.20.1 does (`execute if block`, `data get block`, `setblock`, `forceload`). Nothing here talks to a real server."""
+import os
+import re
+import shutil
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "t2"))
+from shakeout import world  # noqa: E402
+import control  # noqa: E402
+
+REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
+COORD = r"(-?\d+) (-?\d+) (-?\d+)"
+CC_BLOCKS = ("computercraft:turtle_advanced", "computercraft:turtle_normal", "computercraft:computer_advanced")
+BE_BLOCKS = ("enderstorage:ender_chest",) + CC_BLOCKS
+
+
+def split_spec(spec):
+    """'id[a=b]{nbt}' -> (id, {a: b}, nbt text or None)."""
+    m = re.match(r"^([a-z0-9_:.#-]+)(\[[^\]]*\])?(\{.*\})?$", spec.strip())
+    if not m:
+        raise ValueError("bad block spec %r" % spec)
+    props = {}
+    if m.group(2):
+        for kv in m.group(2)[1:-1].split(","):
+            if kv.strip():
+                k, v = kv.split("=")
+                props[k.strip()] = v.strip()
+    return m.group(1), props, m.group(3)
+
+
+class FakeServer:
+    """Blocks by position: (id, props, nbt inner text or None, computer id or None). Everything unset is air."""
+
+    def __init__(self):
+        self.blocks = {}
+        self.sent = []
+        self.forced = set()
+        self.spawned = []
+        self.saved = []
+        self.next_id = 500
+
+    # -- seeding -------------------------------------------------------------------------------------------
+    def put(self, pos, spec, cid=None):
+        bid, props, nbt = split_spec(spec)
+        self.blocks[tuple(pos)] = (bid, props, nbt[1:-1] if nbt else None, cid)
+
+    def at(self, pos):
+        return self.blocks.get(tuple(pos), ("minecraft:air", {}, None, None))
+
+    # -- the Control surface build_world uses -------------------------------------------------------------
+    def command(self, text):
+        self.sent.append(text)
+        m = re.match(r"^execute if block %s (.+)$" % COORD, text)
+        if m:
+            pos = tuple(int(m.group(i)) for i in (1, 2, 3))
+            bid, props, nbt = split_spec(m.group(4))
+            have = self.at(pos)
+            ok = have[0] == bid and all(have[1].get(k, self.default_prop(have[0], k)) == v for k, v in props.items())
+            return "Test passed" if ok else "Test failed"
+        m = re.match(r"^data get block %s\s*(.*)$" % COORD, text)
+        if m:
+            pos = tuple(int(m.group(i)) for i in (1, 2, 3))
+            bid, _, nbt, cid = self.at(pos)
+            if bid not in BE_BLOCKS:
+                return "The target block is not a block entity"
+            inner = ("ComputerId: %d, " % cid if cid is not None else "") + (nbt or "")
+            return "%d, %d, %d has the following block data: {x: %d, y: %d, z: %d, id: \"%s\", %s}" % (
+                pos + pos + (bid, inner.strip(", ")))
+        m = re.match(r"^setblock %s (.+)$" % COORD, text)
+        if m:
+            pos = tuple(int(m.group(i)) for i in (1, 2, 3))
+            bid, props, nbt = split_spec(m.group(4))
+            have = self.at(pos)
+            if have[0] == bid and have[1] == props:
+                return "Could not set the block"          # vanilla: same state, nothing changes, the NBT is NOT applied
+            if bid == "minecraft:air":
+                self.blocks.pop(pos, None)
+            else:
+                self.blocks[pos] = (bid, props, (nbt[1:-1] if nbt else "") if bid in BE_BLOCKS else None, None)
+            return "Changed the block at %d, %d, %d" % pos
+        m = re.match(r"^forceload add (-?\d+) (-?\d+) (-?\d+) (-?\d+)$", text)
+        if m:
+            x1, z1, x2, z2 = (int(m.group(i)) for i in (1, 2, 3, 4))
+            new = {(cx, cz) for cx in range(min(x1, x2) >> 4, (max(x1, x2) >> 4) + 1)
+                   for cz in range(min(z1, z2) >> 4, (max(z1, z2) >> 4) + 1)} - self.forced
+            self.forced |= new
+            return "Marked %d chunks in minecraft:overworld to be force loaded" % len(new) if new else "No chunks were marked for force loading"
+        m = re.match(r"^forceload query (-?\d+) (-?\d+)$", text)
+        if m:
+            cx, cz = int(m.group(1)) >> 4, int(m.group(2)) >> 4
+            return "Chunk at (%d, %d) in minecraft:overworld is %smarked for force loading" % (cx, cz, "" if (cx, cz) in self.forced else "not ")
+        if text.startswith(("computercraft ", "time query")):
+            return "ok"
+        raise AssertionError("the fake server does not know %r" % text)
+
+    @staticmethod
+    def default_prop(bid, k):
+        return {"waterlogged": "false"}.get(k)
+
+    def computers(self):
+        return {b[3]: {"on": True, "pos": p} for p, b in self.blocks.items() if b[3] is not None}
+
+    def block_data(self, pos, path=""):
+        return self.command(("data get block %d %d %d %s" % (tuple(pos) + (path,))).strip())
+
+    def spawn_computer(self, x, y, z, startup, files=None, modem=True):
+        for p in ((x, y, z), (x, y + 1, z)):
+            assert self.at(p)[0] in ("minecraft:air", "minecraft:cave_air"), "spawn_computer on a non-air cell %s" % (p,)
+        self.next_id += 1
+        cid = self.next_id
+        self.blocks[(x, y, z)] = ("computercraft:computer_advanced", {}, None, cid)
+        if modem:
+            self.blocks[(x, y + 1, z)] = ("computercraft:wireless_modem_advanced", {"facing": "down"}, None, None)
+        with open(startup, encoding="utf8") as f:
+            self.spawned.append({"id": cid, "pos": (x, y, z), "startup": f.read(), "files": dict(files or {})})
+        return cid
+
+    def save_point(self, name):
+        self.saved.append(name)
+        return name
+
+
+class FakeCtx:
+    def __init__(self, server):
+        self.control = server
+        self._raw = server
+        self.pin = "HEAD"
+        self.interventions = []
+        self.notes = []
+        self.run = tempfile.mkdtemp(prefix="shakeout_world_test")
+
+    def note(self, text):
+        self.notes.append(text)
+
+
+CELLS = world.dock_cells()
+WORKER_FREQ = "{left: 0, middle: 0, right: 0}"
+SUPPORT_FREQ = "{left: 0, middle: 0, right: 14}"
+
+
+def bay1_cell(cell):
+    return next(c for c in CELLS if c["bay"] == 1 and c["side"] == cell["side"] and c["row"] == cell["row"] and c["slot"] == cell["slot"])
+
+
+def seeded():
+    """The test world's shape as the 2026-10-18 copy has it (read offline from its region files, see the task report): a floor at y 66
+    everywhere, bay 1's under-dock blocks (worker bay 1: factory blocks left of the centre column, ender chests right of it; support bay 1:
+    ender chests), bay 1's pillar east of it, bays 2-5 with the wrong or no under-blocks and no pillars, old turtles on docks."""
+    s = FakeServer()
+    for x in range(140, 236):
+        for z in range(-2816, -2786):
+            s.put((x, 66, z), "xkdeco:factory_block")
+    for c in CELLS:
+        under = (c["x"], c["y"] - 1, c["z"])
+        rot = "0b" if c["row"] == "A" else "2b"
+        if c["bay"] == 1:
+            if c["side"] == "SUPPORT":
+                s.put(under, "enderstorage:ender_chest{rot: %s, keepPacked: 0b, Frequency: %s}" % (rot, SUPPORT_FREQ))
+            elif c["slot"] > 0:
+                s.put(under, "enderstorage:ender_chest{rot: %s, keepPacked: 0b, Frequency: %s}" % (rot, WORKER_FREQ))
+        elif c["side"] == "WORKER" and c["bay"] == 2:
+            s.put(under, "enderstorage:ender_chest{rot: 2b, keepPacked: 0b, Frequency: {left: 5, middle: 0, right: 0}}")   # wrong frequency
+        elif c["side"] == "SUPPORT" and c["bay"] in (2, 3):
+            s.blocks.pop(under, None)                                                                                   # a hole
+    for pz in (-2808, -2795):
+        for y in (67, 68):
+            s.put((164, y, pz), "xkdeco:factory_danger")
+        for y in (69, 70, 71):
+            s.put((164, y, pz), "minecraft:stone_slab[type=double]")
+    s.put((157, 66, -2804), "minecraft:light_blue_concrete")       # bay 1's centre column, a floor cell that differs from the default
+    s.put((153, 67, -2806), "computercraft:turtle_advanced[facing=south]", cid=96)      # old fleet on docks
+    s.put((158, 67, -2797), "computercraft:turtle_advanced[facing=north]", cid=97)
+    s.put((167, 67, -2810), "computercraft:turtle_advanced[facing=south]", cid=98)
+    s.put((185, 67, -2808), "computercraft:turtle_advanced[facing=south]", cid=99)      # a stray in bay 3's aisle
+    s.put((164, 67, -2810), "computercraft:turtle_advanced[facing=south]", cid=100)     # between bays: not a bay cell, left alone
+    return s
+
+
+def built():
+    s = seeded()
+    ctx = FakeCtx(s)
+    world.atc_files = lambda pin: ("-- atc.lua at %s\n" % pin, dict({n: "-- %s\n" % n for n in world.atc_file_names()}, **{"role.txt": "atc"}))
+    report = world.build_world(ctx)
+    return s, ctx, report
+
+
+class DockCells(unittest.TestCase):
+    def test_dock_cells_match_waypoints(self):
+        self.assertEqual(len(CELLS), 160)
+        types = {}
+        for c in CELLS:
+            types.setdefault((c["side"], c["bay"]), set()).add(c["type"])
+            self.assertEqual(set(c) >= {"type", "bay", "row", "x", "y", "z", "facing"}, True, c)
+        self.assertEqual(types[("WORKER", 1)], {"DELIVERY"})
+        self.assertEqual(types[("SUPPORT", 1)], {"SUPPORT"})
+        for b in range(2, 6):
+            self.assertEqual(types[("WORKER", b)], {"MINER"})
+            self.assertEqual(types[("SUPPORT", b)], {"MINER"})
+        self.assertEqual(len({(c["x"], c["z"]) for c in CELLS}), 160, "no two docks share a cell")
+        first = CELLS[0]
+        self.assertEqual((first["type"], first["x"], first["y"], first["z"], first["facing"]), ("DELIVERY", 153, 67, -2806, "south"))
+
+    def test_dock_cells_are_read_from_waypoints_not_retyped(self):
+        tmp = tempfile.mkdtemp(prefix="wp")
+        try:
+            with open(os.path.join(REPO, "waypoints.lua"), encoding="utf8") as f:
+                text = f.read()
+            changed = text.replace('WORKER  = { "DELIVERY", "MINER",', 'WORKER  = { "DELIVERY", "DELIVERY",', 1)
+            self.assertNotEqual(text, changed, "the test's edit must hit waypoints.lua's BAY_TYPES")
+            path = os.path.join(tmp, "waypoints.lua")
+            with open(path, "w", encoding="utf8", newline="\n") as f:
+                f.write(changed)
+            cells = world.dock_cells(path)
+            self.assertEqual(sum(1 for c in cells if c["type"] == "DELIVERY"), 32)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Forceload(unittest.TestCase):
+    def test_forceload_covers_arrivals(self):
+        self.assertTrue(world.covers(world.BASE_AREAS, 224, -2816, 271, -2769))
+        self.assertFalse(world.covers(world.BASE_AREAS, 224, -2816, 400, -2769), "covers() can say no")
+
+    def test_base_areas_cover_the_building_holes_and_every_gps_host(self):
+        for x, z in ((143, -2813), (228, -2782), (136, -2802), (148, -2829)):     # dispatch hole, arrivals hole, server, warehouse
+            self.assertTrue(world.covers(world.BASE_AREAS, x, z, x, z), (x, z))
+        for c in CELLS:
+            self.assertTrue(world.covers(world.BASE_AREAS, c["x"], c["z"], c["x"], c["z"]), c)
+        for x, y, z in list(world.GPS_TOWERS) + list(world.EXISTING_GPS_HOSTS):
+            self.assertTrue(world.covers(world.BASE_AREAS, x, z, x, z), (x, y, z))
+
+    def test_build_world_forceloads_every_area(self):
+        s, ctx, report = built()
+        for (x1, z1, x2, z2) in world.BASE_AREAS:
+            self.assertIn("forceload add %d %d %d %d" % (x1, z1, x2, z2), s.sent)
+        self.assertEqual(world.area_chunks(world.BASE_AREAS), s.forced)
+
+
+class NoClones(unittest.TestCase):
+    def test_build_never_clones_turtles(self):
+        s, ctx, report = built()
+        self.assertEqual(world.clone_violations(s.sent), [])
+        self.assertFalse([t for t in s.sent if t.split()[0] == "clone"], "the builder uses setblock only")
+
+    def test_the_clone_check_can_fail(self):
+        box = "clone 150 66 -2812 162 70 -2790 164 66 -2812"
+        self.assertEqual(len(world.clone_violations([box])), 1, "a bare clone is a violation")
+        cleaned = [box, "fill 164 66 -2812 176 70 -2790 minecraft:air replace computercraft:turtle_advanced",
+                   "fill 164 66 -2812 176 70 -2790 minecraft:air replace computercraft:turtle_normal"]
+        self.assertEqual(world.clone_violations(cleaned), [], "cloned, then every turtle kind removed from the same box")
+        late = [box, "t2 resume"] + cleaned[1:]
+        self.assertEqual(len(world.clone_violations(late)), 1, "a resume before the removal is a violation")
+        small = [box, "fill 164 66 -2812 170 70 -2790 minecraft:air replace computercraft:turtle_advanced",
+                 "fill 164 66 -2812 170 70 -2790 minecraft:air replace computercraft:turtle_normal"]
+        self.assertEqual(len(world.clone_violations(small)), 1, "a removal that misses part of the box is a violation")
+
+
+class UnderDock(unittest.TestCase):
+    def test_under_dock_copies_nbt(self):
+        before = seeded()
+        s, ctx, report = built()
+        new = [c for c in CELLS if c["bay"] != 1]
+        self.assertEqual(len(new), 128)
+        nbt_cells, already = 0, 0
+        for c in new:
+            src = bay1_cell(c)
+            spos, dpos = (src["x"], src["y"] - 1, src["z"]), (c["x"], c["y"] - 1, c["z"])
+            want_id, _, want_nbt, _ = s.at(spos)
+            sets = [t for t in s.sent if t.startswith("setblock %d %d %d " % dpos) and "minecraft:air" not in t]
+            if before.at(dpos)[:3] == before.at(spos)[:3]:
+                already += 1                                  # already a copy (a factory block under a factory block): left as it is
+                self.assertEqual(sets, [], dpos)
+            else:
+                self.assertTrue(sets, "a setblock under %s" % (dpos,))
+                got_id, _, got_nbt = split_spec(sets[-1].split(" ", 4)[4])
+                self.assertEqual(got_id, want_id, dpos)
+                if want_nbt:
+                    nbt_cells += 1
+                    self.assertEqual(world.canonical_nbt(got_nbt), world.canonical_nbt("{%s}" % want_nbt), dpos)
+                    self.assertIn(world.frequency_of(re.sub(r"\s+", "", want_nbt)), re.sub(r"\s+", "", got_nbt))
+            self.assertEqual(s.at(dpos)[0], want_id)
+            self.assertEqual(world.canonical_nbt("{%s}" % s.at(dpos)[2] if s.at(dpos)[2] is not None else None),
+                             world.canonical_nbt("{%s}" % want_nbt if want_nbt is not None else None), dpos)
+        self.assertEqual(nbt_cells, 64 + 32, "64 support-side cells and 32 worker-side cells get an ender chest with bay 1's NBT")
+        self.assertEqual(already, 24, "worker bays 3-5, left of the centre column: a factory block was already under each dock")
+        self.assertEqual((report["under"]["copied"], report["under"]["same"]), (128 - already, already))
+
+    def test_the_position_keys_are_not_copied(self):
+        nbt = world.nbt_without_position('{x: 158, y: 66, z: -2806, id: "enderstorage:ender_chest", rot: 0b, Frequency: {left: 0, middle: 0, right: 14}}')
+        self.assertEqual(nbt, "{rot:0b,Frequency:{left:0,middle:0,right:14}}")
+        self.assertEqual(world.canonical_nbt("{b: 1, a: {d: \"x y\", c: [I; 1, 2]}}"), world.canonical_nbt('{a:{c:[I;1,2],d:"x y"},b:1}'))
+        self.assertNotEqual(world.canonical_nbt("{a: 1}"), world.canonical_nbt("{a: 2}"))
+
+    def test_a_second_build_changes_nothing_under_the_docks(self):
+        s, ctx, report = built()
+        n = len(s.sent)
+        report2 = world.build_world(ctx)
+        changes = [t for t in s.sent[n:] if t.startswith("setblock")]
+        self.assertEqual(report2["under"]["copied"], 0)
+        self.assertEqual(report2["under"]["same"], 128)
+        self.assertFalse([t for t in changes if " 66 " in t], "no under-dock or floor block is set again")
+
+
+class Bays(unittest.TestCase):
+    def test_every_dock_cell_is_air_and_old_turtles_are_reported(self):
+        s, ctx, report = built()
+        for c in CELLS:
+            self.assertEqual(s.at((c["x"], c["y"], c["z"]))[0], "minecraft:air", c)
+        removed = {r["id"] for r in report["removed"]}
+        self.assertEqual(removed, {96, 97, 98, 99}, "dock and bay-aisle turtles are removed and named")
+        self.assertEqual(s.at((164, 67, -2810))[3], 100, "a turtle outside every bay is left alone")
+
+    def test_floor_and_pillars_copied_from_bay_1(self):
+        s, ctx, report = built()
+        for b in range(2, 6):
+            cx = 157 + 14 * (b - 1)
+            self.assertEqual(s.at((cx, 66, -2804))[0], "minecraft:light_blue_concrete", "bay %d's centre column floor" % b)
+            px = cx + 7
+            for pz in (-2808, -2795):
+                self.assertEqual([s.at((px, y, pz))[0] for y in (67, 68, 69, 71, 72)],
+                                 ["xkdeco:factory_danger"] * 2 + ["minecraft:stone_slab"] * 2 + ["minecraft:air"], (px, pz))
+                self.assertEqual(s.at((px, 70, pz))[1], {"type": "double"})
+
+    def test_an_unknown_block_in_bay_1_stops_the_build(self):
+        s = seeded()
+        s.put((158, 66, -2806), "minecraft:sponge")
+        world.atc_files = lambda pin: ("-- atc\n", {"role.txt": "atc"})
+        with self.assertRaises(world.UnknownBlock):
+            world.build_world(FakeCtx(s))
+
+
+class Verify(unittest.TestCase):
+    def test_verify_passes_on_the_built_world_and_counts_evidence(self):
+        s, ctx, report = built()
+        v = world.verify_world(ctx)
+        self.assertEqual((v["dock_air"], v["dock_total"]), (160, 160))
+        self.assertEqual((v["under_equal"], v["under_total"]), (128, 128))
+        self.assertEqual(v["under_with_nbt"], 96)
+        self.assertEqual(v["bad"], [])
+
+    def test_verify_can_fail(self):
+        s, ctx, report = built()
+        s.put((172, 66, -2806), "enderstorage:ender_chest{rot: 0b, keepPacked: 0b, Frequency: {left: 1, middle: 0, right: 0}}")
+        s.put((209, 67, -2797), "computercraft:turtle_advanced", cid=7)
+        v = world.verify_world(ctx)
+        self.assertEqual(v["under_equal"], 127)
+        self.assertEqual(v["dock_air"], 159)
+        self.assertEqual(len(v["bad"]), 2)
+
+
+class Gps(unittest.TestCase):
+    def test_at_least_eight_new_towers_spread_out(self):
+        t = world.GPS_TOWERS
+        self.assertGreaterEqual(len(t), 8)
+        self.assertEqual(len(set(t)), len(t))
+        self.assertGreaterEqual(len({y for _, y, _ in t}), 6, "different heights")
+        self.assertFalse(set(t) & set(world.EXISTING_GPS_HOSTS))
+        self.assertGreater(world.spread_volume(t), 10000, "not on one plane: the best tetrahedron of towers is big")
+        self.assertLess(world.spread_volume([(0, 90, 0), (10, 90, 0), (0, 90, 10), (10, 90, 10)]), 1e-9, "spread_volume can say flat")
+
+    def test_trilateration_from_the_new_towers_alone_finds_the_probe(self):
+        probe = (131, 70, -2845)
+        fixes = [{"pos": world.gps_modem_pos(t), "d": sum((a - b) ** 2 for a, b in zip(world.gps_modem_pos(t), probe)) ** 0.5}
+                 for t in world.GPS_TOWERS]
+        pos, rms = world.trilaterate(fixes)
+        self.assertLess(max(abs(a - b) for a, b in zip(pos, probe)), 0.01)
+        self.assertLess(rms, 0.01)
+        bad = [dict(f, d=f["d"] + 3) if i == 0 else f for i, f in enumerate(fixes)]
+        self.assertGreater(world.trilaterate(bad)[1], 0.1, "a wrong distance shows in the residual")
+
+    def test_towers_are_placed_as_gps_hosts_the_kit_can_find(self):
+        s, ctx, report = built()
+        hosts = [sp for sp in s.spawned if "gps" in sp["startup"]]
+        self.assertEqual(sorted(sp["pos"] for sp in hosts), sorted(world.GPS_TOWERS))
+        programs = {sp["id"]: sp["startup"] for sp in hosts}
+        self.assertEqual(control.Control.match_gps_hosts(programs, {}), sorted(programs), "gps_down/gps_up will find every new tower")
+        for sp in hosts:
+            x, y, z = sp["pos"]
+            self.assertIn('"host", %d, %d, %d)' % (x, y + 1, z), sp["startup"], "it announces its modem's position (one above)")
+        self.assertEqual(len(report["gps"]), len(world.GPS_TOWERS))
+        self.assertEqual(report["gps_blocked"], [])
+
+    def test_a_blocked_tower_is_reported_not_moved(self):
+        s = seeded()
+        x, y, z = world.GPS_TOWERS[0]
+        s.put((x, y + 1, z), "minecraft:stone")
+        world.atc_files = lambda pin: ("-- atc\n", {"role.txt": "atc"})
+        report = world.build_world(FakeCtx(s))
+        self.assertEqual([b["pos"] for b in report["gps_blocked"]], [(x, y, z)])
+        self.assertEqual(len(report["gps"]), len(world.GPS_TOWERS) - 1)
+
+
+class Atc(unittest.TestCase):
+    def test_the_atc_computer_gets_the_atc_profile_from_the_pin(self):
+        s, ctx, report = built()
+        atc = [sp for sp in s.spawned if sp["startup"].startswith("-- atc.lua")]
+        self.assertEqual(len(atc), 1)
+        self.assertEqual(atc[0]["startup"], "-- atc.lua at HEAD\n")
+        self.assertEqual(set(atc[0]["files"]), set(world.atc_file_names()) | {"role.txt"})
+        self.assertEqual(atc[0]["files"]["role.txt"], "atc")
+        self.assertEqual(report["atc"]["id"], atc[0]["id"])
+        x, y, z = atc[0]["pos"]
+        self.assertFalse(any(abs(x - c["x"]) <= 5 and abs(z - c["z"]) <= 4 for c in CELLS), "the ATC stands in no bay")
+
+    def test_atc_file_names_are_w3s(self):
+        self.assertEqual(tuple(world.atc_file_names()), ("protocol.lua", "updater.lua", "logship.lua", "waypoints.lua"))
+
+
+class SavePoint(unittest.TestCase):
+    def test_save_point_is_the_control_verb(self):
+        s = FakeServer()
+        world.save_point(FakeCtx(s), "shakeout-world")
+        self.assertEqual(s.saved, ["shakeout-world"])
+
+
+def load_proof():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("shakeout_world_proof", os.path.join(HERE, "..", "t2", "scenarios", "shakeout_world.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class ProofServer(FakeServer):
+    """FakeServer plus what the T2 proof uses: disks, gps_hosts, shutdown, a real save-point folder, and a probe computer that
+    'hears' every host it is told is up (with true distances) and writes gps_probe.json as the probe Lua would."""
+
+    def __init__(self, deaf_to=()):
+        FakeServer.__init__(self)
+        self.blocks = seeded().blocks                     # the world copy's shape, old turtles on docks and all
+        self.disks = tempfile.mkdtemp(prefix="shakeout_disks")
+        self.deaf_to = set(deaf_to)
+
+    def gps_hosts(self):
+        return sorted(sp["id"] for sp in self.spawned if sp["startup"].startswith('shell.run("gps"'))
+
+    def shutdown(self, ids):
+        self.sent.extend("computercraft shutdown #%d" % i for i in ids)
+
+    def save_point(self, name):
+        dest = os.path.join(self.disks, "savepoints", name)
+        os.makedirs(dest)
+        open(os.path.join(dest, "level.dat"), "w").close()
+        return dest
+
+    def spawn_computer(self, x, y, z, startup, files=None, modem=True):
+        cid = FakeServer.spawn_computer(self, x, y, z, startup, files, modem)
+        if "gps_probe.json" in self.spawned[-1]["startup"]:
+            me = (x, y + 1, z)
+            announced = [world.gps_modem_pos(sp["pos"]) for sp in self.spawned if sp["startup"].startswith('shell.run("gps"')]
+            hosts = [{"pos": list(p), "d": sum((a - b) ** 2 for a, b in zip(p, me)) ** 0.5}
+                     for p in announced + list(world.EXISTING_GPS_HOSTS) if p not in self.deaf_to]
+            os.makedirs(os.path.join(self.disks, str(cid)))
+            with open(os.path.join(self.disks, str(cid), "gps_probe.json"), "w") as f:
+                f.write(__import__("json").dumps({"t": 1, "fix": list(me) if len(hosts) >= 4 else None, "hosts": hosts}))
+        return cid
+
+
+class ProofCtx(FakeCtx):
+    def __init__(self, server):
+        FakeCtx.__init__(self, server)
+        self.checks = []
+
+    @property
+    def interventions(self):
+        return [{"verb": "command", "args": [repr(t)]} for t in self.control.sent
+                if __import__("scenario").world_changing_command(t)]
+
+    @interventions.setter
+    def interventions(self, v):
+        pass
+
+    def log_lines(self, substr=""):
+        atc = any(sp["files"].get("role.txt") == "atc" for sp in self.control.spawned)
+        return ["2026-11-10T00:00:00Z atc#1 INFO ATC online"] if atc and substr == "ATC online" else []
+
+    def wait_until(self, cond, game_seconds, poll=10):
+        return cond() or None
+
+    def wait_game(self, seconds, poll=10):
+        pass
+
+    def expect(self, ok, message):
+        self.checks.append((bool(ok), message))
+
+
+class ProofScenario(unittest.TestCase):
+    """The unrun T2 proof, driven against the fake: every check passes on a correct build, and its checks can fail."""
+
+    def run_proof(self, server):
+        world.atc_files = lambda pin: ("-- atc.lua\n", dict({n: "--\n" for n in world.atc_file_names()}, **{"role.txt": "atc"}))
+        ctx = ProofCtx(server)
+        load_proof().steps(ctx)
+        return ctx
+
+    def test_every_check_passes_on_a_correct_build(self):
+        ctx = self.run_proof(ProofServer())
+        self.assertGreaterEqual(len(ctx.checks), 15)
+        self.assertEqual([m for ok, m in ctx.checks if not ok], [])
+        self.assertTrue(any("160 of 160" in m for _, m in ctx.checks))
+        self.assertTrue(any("128 of 128; 96 of them block entities" in m for _, m in ctx.checks))
+        self.assertTrue(any("0 clone(s)" in m and "recorded console commands" in m for _, m in ctx.checks))
+
+    def test_the_gps_checks_fail_when_new_towers_are_silent(self):
+        silent = [world.gps_modem_pos(t) for t in world.GPS_TOWERS[:7]]
+        ctx = self.run_proof(ProofServer(deaf_to=silent))
+        failed = [m for ok, m in ctx.checks if not ok]
+        self.assertTrue(any("GPS hosts (need 6)" in m for m in failed), failed)
+        self.assertTrue(any("NEW towers" in m for m in failed), failed)
+
+
+if __name__ == "__main__":
+    unittest.main()
