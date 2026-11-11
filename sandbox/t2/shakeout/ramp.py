@@ -60,9 +60,13 @@ def ramp(ctx, steps=(1, 2, 3, 4), hold_min=20):
             break
         chosen = speed
     if chosen is None:
-        s = ctx.ramp_steps[0] if ctx.ramp_steps else {}
-        raise RampFailed("1x does not hold: mean tick %s ms, limit %.0f ms (80%% of 50 ms), %d samples -- stop and tell the user"
-                         % (s.get("mean_ms"), limit_ms(steps[0] if steps else 1), s.get("samples", 0)))
+        s = ctx.ramp_steps[0] if ctx.ramp_steps else {"speed": steps[0] if steps else None, "samples": 0, "mean_ms": None}
+        if not s.get("samples"):
+            raise RampFailed("no tick data read at %sx (0 'forge tps' samples in %d real min): the speed is unmeasured, not "
+                             "too slow -- fix the sampling, then ramp again" % (s.get("speed"), hold_min))
+        raise RampFailed("%sx (the first step) does not hold: mean tick %s ms, limit %.2f ms (80%% of %.1f ms), %d samples -- stop "
+                         "and tell the user" % (s["speed"], s.get("mean_ms"), limit_ms(s["speed"]), TICK_MS / s["speed"],
+                                                s.get("samples", 0)))
     ctx.tickrate(int(round(20 * chosen)))
     _note(ctx, "ramp: chosen speed %sx (the highest step that held)" % chosen)
     return chosen

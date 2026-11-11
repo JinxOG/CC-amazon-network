@@ -97,6 +97,123 @@ class TwoFaultsOneCount(unittest.TestCase):
         self.assertEqual(found["counts"]["stuck_recovered"], 1)
 
 
+class FixRound1(unittest.TestCase):
+    def test_a_fault_mid_episode_does_not_shorten_recovery(self):
+        # stuck from 0 to 120 min; an unrelated fleet-wide radio_loss fires at 100: recovery is 121 min, not 21
+        t = timeline(sitting(0, 120 * MIN) + [(121 * MIN, DOCK, "IDLE/")])
+        a = report.analyse(t, [window("f009", "radio_loss", 100 * MIN, 105 * MIN)])
+        self.assertEqual(len(a["episodes"]), 1)
+        ep = a["episodes"][0]
+        self.assertEqual(ep["recovery_from"], 0)
+        self.assertEqual(ep["recovery_ms"], 121 * MIN)
+        self.assertEqual(ep["faults"], [])
+        self.assertEqual(ep["later_faults"], ["f009"])
+
+    def test_window_end_is_start_plus_quiet_not_end_plus_quiet(self):
+        e = {"id": "f001", "t_ms": 0, "fault": "server_crash", "args": {"down_ms": 5 * MIN}, "quiet_ms": 8 * MIN}
+        lines = [{"wall_ms": 1000, "id": "f001", "fault": "server_crash", "phase": "start"},
+                 {"wall_ms": 2000, "id": "f001", "fault": "server_crash", "phase": "begin", "detail": {}},
+                 {"wall_ms": 5 * MIN + 2000, "id": "f001", "fault": "server_crash", "phase": "end"}]
+        w = report.windows_from([e], lines, 60 * MIN)[0]
+        self.assertEqual((w["begin"], w["end"]), (1000, 1000 + 8 * MIN))
+        late = lines[:2] + [dict(lines[2], wall_ms=20 * MIN)]          # an end that came late is the end
+        self.assertEqual(report.windows_from([e], late, 60 * MIN)[0]["end"], 20 * MIN)
+        self.assertEqual(report.windows_from([e])[0]["end"], 8 * MIN, "planned: t_ms + max(dur, quiet_ms)")
+
+    def test_excused_share_of_a_day_stays_under_37_percent(self):
+        from shakeout import schedule
+        for seed in (1, 2, 3):
+            w = report.windows_from(schedule.make_schedule(seed, 24, schedule.DEFAULT_RATES))
+            fleet = report._merge([(x["begin"], x["end"]) for x in w if x["targets"] is None])
+            share = report._covered(0, 24 * HOUR, fleet) / float(24 * HOUR)
+            self.assertLessEqual(share, 0.37, (seed, share))
+            self.assertGreater(share, 0.2, (seed, share))      # the windows are there at all
+
+    def test_needs_hands_quotes_the_raise_and_lost_line_says_unknown(self):
+        hands = lambda t: {"node_8": {"x": 171, "y": 67, "z": -2810, "status": "IDLE", "phase": "DOCKED", "dockX": 171,  # noqa: E731
+                                      "dockZ": -2810, "lastSeen": T0 + t - 1000, "online": True, "role": "MINER",
+                                      "needsHands": "stuck_no_fix: facing unknown" if t >= 30 * MIN else None}}
+        extra = [(30 * MIN, "server", "ERROR", "NEEDS HANDS: node_8 — stuck_no_fix: facing unknown at 171,67,-2810. It carries on")]
+        extra += [(m * MIN, "node_8", "INFO", "[node_8][INFO] loop baseline: healthy") for m in range(35, 120, 7)]
+        run = make_run(hours=2, extra_lines=extra, turtles_at=hands)
+        try:
+            rep = report.build_report(run)
+            a = next(x for x in rep["turtles"] if x["id"] == "node_8")
+            self.assertEqual(a["verdict"], "decommissioned")
+            self.assertTrue(any("NEEDS HANDS: node_8" in q for q in a["quotes"]), a["quotes"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            lost = next(l for l in md.splitlines() if l.startswith("- No turtle lost"))
+            self.assertIn("1 decommissioned with findability unknown", lost)
+            self.assertIn("TRUNCATED", lost)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+        run = make_run(hours=2, extra_lines=extra, turtles_at=hands, final={"node_8": {"present": True}})
+        try:
+            with open(report.write_report(run), encoding="utf8") as f:
+                lost = next(l for l in f.read().splitlines() if l.startswith("- No turtle lost"))
+            self.assertNotIn("TRUNCATED", lost)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_missing_faults_file_is_truncated_not_zero(self):
+        e = {"id": "f001", "t_ms": 0, "fault": "radio_loss", "args": {"dur_ms": MIN}, "quiet_ms": 0}
+        run = make_run(hours=1, faults_file=False, entries=[e])
+        try:
+            rep = report.build_report(run)
+            self.assertEqual(rep["faults"]["radio_loss"]["planned"], 1)
+            self.assertEqual(rep["faults"]["radio_loss"]["begin"], report.TRUNCATED)
+            with open(report.write_report(run), encoding="utf8") as f:
+                row = next(l for l in f.read().splitlines() if l.startswith("| radio_loss |"))
+            self.assertIn("TRUNCATED", row)
+            self.assertTrue(all(h["faults_fired"] == report.TRUNCATED for h in rep["hours"]))
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_not_recovered_counts_turtles_once_and_failed_job_needs_home_and_work(self):
+        def ts(t):
+            return {
+                # node_9: failed at 20, home from 25, a new job at 40 -> home and back to work
+                "node_9": {"x": 185, "y": 67, "z": -2806, "status": "IDLE", "dockX": 185, "dockZ": -2806, "lastSeen": T0 + t,
+                           "online": True} if t >= 25 * MIN else
+                          {"x": 100 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 185, "dockZ": -2806,
+                           "lastSeen": T0 + t, "online": True},
+                # node_10: failed at 20, wanders (never stuck), never home
+                "node_10": {"x": 300 + t // MIN, "y": 70, "z": -2600, "status": "BUSY", "dockX": 199, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True},
+                # node_12: failed at 20, home from 25, never given work again -> not "back to work"
+                "node_12": {"x": 227, "y": 67, "z": -2806, "status": "IDLE", "dockX": 227, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True} if t >= 25 * MIN else
+                           {"x": 400 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 227, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True},
+                # node_11: stuck, silent AND needs hands at the end: one turtle, counted once
+                "node_11": {"x": 900, "y": 20, "z": -2900, "status": "ERROR", "dockX": 213, "dockZ": -2806, "lastSeen": T0,
+                            "online": False, "needsHands": "stuck_no_fix"},
+            }
+        extra = [(10 * MIN, "server", "INFO", "Dispatched job_0101 [DELIVER] -> node_9"),
+                 (10 * MIN, "server", "INFO", "Dispatched job_0103 [DELIVER] -> node_10"),
+                 (20 * MIN, "server", "WARN", "Job permanently failed: job_0101 (departure_failed)"),
+                 (20 * MIN, "server", "WARN", "Job permanently failed: job_0103 (departure_failed)"),
+                 (11 * MIN, "server", "INFO", "Dispatched job_0104 [DELIVER] -> node_12"),
+                 (20 * MIN, "server", "WARN", "Job permanently failed: job_0104 (departure_failed)"),
+                 (40 * MIN, "server", "INFO", "Job job_0102 accepted by node_9")]
+        run = make_run(hours=2, extra_lines=extra, turtles_at=ts)
+        try:
+            rep = report.build_report(run)
+            self.assertEqual(rep["failed_job"]["node_9"]["how"], "home and back to work")
+            self.assertEqual(rep["failed_job"]["node_10"]["how"], "never home")
+            self.assertEqual(rep["failed_job"]["node_12"]["how"], "home, but no later job")
+            self.assertEqual(rep["not_recovered"], ["node_11"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**1 turtle(s) not recovered**", md)
+            self.assertIn("**0 jam(s) never cleared**", md)
+            self.assertIn("**2 of 3** judged did NOT", md)
+            self.assertIn("Evidence: 0 remove_item fault window(s)", md)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
 class GrowthFailsFlatPasses(unittest.TestCase):
     def series(self, f, hours=24, every=10 * MIN, seed=7):
         rng = random.Random(seed)
@@ -236,15 +353,20 @@ def iso(ms):
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ms / 1000.0)) + ".%03dZ" % (ms % 1000)
 
 
-def make_run(hours, missing_hours=(), jobs_in_hours=None, disk=None, extra_lines=(), stuck_node=False):
+def make_run(hours, missing_hours=(), jobs_in_hours=None, disk=None, extra_lines=(), stuck_node=False, turtles_at=None,
+             faults_file=True, entries=None, final=None):
     """A T2 shakeout run folder: schedule.json, shakeout/faults.jsonl, shakeout/state.jsonl (a snapshot every 5 minutes, none in a
     missing hour: the bridge was down) and bridge/logs (a server line a minute, none in a missing hour)."""
     run = tempfile.mkdtemp()
     os.makedirs(os.path.join(run, "shakeout"))
     os.makedirs(os.path.join(run, "bridge", "logs"))
     with open(os.path.join(run, "schedule.json"), "w") as f:
-        json.dump({"format": "shakeout-schedule/1", "seed": 42, "hours": hours, "entries": []}, f)
-    open(os.path.join(run, "shakeout", "faults.jsonl"), "w").close()
+        json.dump({"format": "shakeout-schedule/1", "seed": 42, "hours": hours, "entries": entries or []}, f)
+    if faults_file:
+        open(os.path.join(run, "shakeout", "faults.jsonl"), "w").close()
+    if final is not None:
+        with open(os.path.join(run, "shakeout", "final.json"), "w") as f:
+            json.dump(final, f)
     lines, seq = [], 0
     jobs_in_hours = jobs_in_hours or {}
     for h in range(hours):
@@ -277,6 +399,8 @@ def make_run(hours, missing_hours=(), jobs_in_hours=None, disk=None, extra_lines
             if stuck_node:
                 turtles["node_7"] = {"x": OFF[0], "y": OFF[1], "z": OFF[2], "status": "ERROR", "phase": None, "dockX": 171,
                                      "dockZ": -2806, "lastSeen": T0 + t - 2000, "online": True, "role": "DELIVERY"}
+            if turtles_at:
+                turtles.update(turtles_at(t))
             f.write(json.dumps({"wall_ms": t, "epoch_ms": T0 + t, "fresh": True, "updatedAt": T0 + t - 1000,
                                 "disk_bytes": int(disk(t)) if disk else 250000, "disk_free": None, "pending": 2, "jobs": [],
                                 "turtles": turtles}) + "\n")

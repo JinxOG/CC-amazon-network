@@ -61,8 +61,14 @@ class RampPicksAndStops(unittest.TestCase):
         self.assertNotIn(40, ctx.rates, "nothing faster is tried once 1x fails")
         # no tick samples at all at 1x is not a pass either
         empty = FakeCtx({1: None, 2: 1.0})
-        with self.assertRaises(ramp.RampFailed):
+        with self.assertRaises(ramp.RampFailed) as cm:
             ramp.ramp(empty, hold_min=20)
+        self.assertIn("no tick data read at 1x", str(cm.exception))
+        # the message names the step that actually came first
+        with self.assertRaises(ramp.RampFailed) as cm:
+            ramp.ramp(FakeCtx({2: 30.0, 3: 1.0}), steps=(2, 3), hold_min=20)
+        self.assertIn("2x (the first step) does not hold", str(cm.exception))
+        self.assertIn("20.00", str(cm.exception))
 
     def test_settling_samples_are_left_out(self):
         # the first quarter of a hold is the server settling into the new rate: a slow start does not fail a step that holds

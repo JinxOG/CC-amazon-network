@@ -14,7 +14,8 @@ WHAT IT READS (Review Focus 5: files on disk, never only through the bridge; a g
   <run>/shakeout/faults.jsonl what actually fired, with wall_ms (ms since the schedule started): start / begin / retry / fail /
                               undo / end-retry / end lines (schedule.py's module doc);
   <run>/shakeout/state.jsonl  /state snapshots, compact (record_state below, called by scenarios/shakeout.py run_loop every
-                              SNAPSHOT_EVERY_S): positions, status and phase, docks, lastSeen, NEEDS HANDS, disk, the job queue.
+                              SNAPSHOT_EVERY_S, 21-34 KB each with 160 turtles: ~31-49 MB a day): positions, status and phase,
+                              docks, lastSeen, NEEDS HANDS, disk, the job queue.
                               The first line is a header with the schedule's start (t0_epoch_ms), the clock everything is put on;
   <run>/shakeout/housekeeping.log  HOUSEKEEPING lines (feeder.py): storage-headroom-low is a FINDING;
   <run>/shakeout/final.json   probe_final: whether each turtle off its dock at the end is still a turtle block where it last said
@@ -28,13 +29,14 @@ THE RULES (spec section 2, the spec owner's table):
   stuck           off its dock and making no progress (position unchanged and no new status/phase) for more than STUCK_MS
                   (10 real minutes), counted OUTSIDE every fault window that touches the turtle and outside every stretch the
                   files do not cover (a /state gap: a turtle could have moved and come back unseen). A fault window is from its
-                  actual begin (the "start" line) to its end line + its quiet_ms; a one-shot fault (turtle_reboot, low_fuel ...)
+                  actual begin (the "start" line) to the later of its end line and start + quiet_ms (quiet_ms holds the duration
+                  already); a one-shot fault (turtle_reboot, low_fuel ...)
                   is a window of no length. A fleet-wide fault touches everyone; a one-turtle fault its computer; chunk_unload
                   its computer and whoever stood in its area.
   recovered       a stuck turtle that later moves, changes phase or parks on its dock. ONE stretch of no progress is ONE
                   finding however many faults hit it (Review Focus 4), and its recovery time is measured from the LAST fault
-                  that touched it (begun by the time it recovered, and not over more than TOUCH_GRACE_MS before it stopped);
-                  from the moment it stopped when no fault did.
+                  that touched it by the time it was stuck (begun by its onset, not over more than TOUCH_GRACE_MS before it
+                  stopped); from the moment it stopped when none did. Faults that begin later, mid-episode, are listed apart.
   gone            no heartbeat (lastSeen, or a log line of its own) for more than GONE_MS (30 real minutes), counted the same
                   way. Gone at the end is decommissioned; gone and back by itself is a recovered finding.
   decommissioned  stuck at the end of the run; or NEEDS HANDS raised and never cleared; or gone at the end.
@@ -162,7 +164,8 @@ TURTLE_KEYS = ("x", "y", "z", "status", "phase", "dockX", "dockZ", "lastSeen", "
 
 
 def compact_state(st):
-    """The parts of /state the report uses, small enough to keep one a minute for 24 hours (~15 KB with 160 turtles)."""
+    """The parts of /state the report uses, one a minute for 24 hours: 21-34 KB each with 160 turtles (measured in review), so
+    ~31-49 MB a day."""
     fresh, why = feeder.state_is_fresh(st)
     ts = st.get("turtles") or {}
     if isinstance(ts, list):
@@ -281,8 +284,9 @@ def _window_ms(e):
 def windows_from(schedule, fault_lines=None, end_ms=None):
     """Fault windows {id, fault, begin, end, targets (None: everyone, or a set of node ids), area, planned}. `schedule` is either
     windows already (each with "begin") or schedule.json entries. Without fault_lines the windows are the PLANNED ones (t_ms to
-    t_ms + dur + quiet_ms, a one-turtle fault aimed at nobody known); with them, measured: the "start" line to the "end" line (or
-    the run's end when it never ended, or its begin line for a one-shot) + quiet_ms. A fault that never began is no window."""
+    t_ms + max(dur, quiet_ms), a one-turtle fault aimed at nobody known); with them, measured: the "start" line to the later of
+    the "end" line (or the run's end when it never ended, or its begin line for a one-shot) and start + quiet_ms (quiet_ms is
+    measured from the start and already holds the duration). A fault that never began is no window."""
     if schedule and all("begin" in w for w in schedule):
         return sorted([dict(w, targets=set(w["targets"]) if w.get("targets") is not None else None) for w in schedule],
                       key=lambda w: w["begin"])
@@ -295,7 +299,7 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
         if fault_lines is None:
             b = int(e["t_ms"])
             targets = set() if f in ONE_TURTLE_FAULTS or f == "chunk_unload" else None
-            out.append({"id": e.get("id"), "fault": f, "begin": b, "end": b + _window_ms(e) + _quiet(e), "targets": targets,
+            out.append({"id": e.get("id"), "fault": f, "begin": b, "end": b + max(_window_ms(e), _quiet(e)), "targets": targets,
                         "area": None, "planned": True})
             continue
         ls = sorted(by_id.get(e.get("id"), []), key=lambda r: r.get("wall_ms", 0))
@@ -317,7 +321,10 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
             targets = {"node_%s" % cid} if cid is not None else set()
             if f == "chunk_unload" and isinstance(detail, dict) and detail.get("area"):
                 area = list(detail["area"])
-        out.append({"id": e.get("id"), "fault": f, "begin": int(start["wall_ms"]), "end": stop + _quiet(e), "targets": targets,
+        # quiet_ms counts from the fault's start and already holds its duration (schedule.py): the window is the later of the end
+        # line and start + quiet_ms, never the end line PLUS quiet_ms (that counted the duration twice: 40-45% of a day excused)
+        out.append({"id": e.get("id"), "fault": f, "begin": int(start["wall_ms"]),
+                    "end": max(stop, int(start["wall_ms"]) + _quiet(e)), "targets": targets,
                     "area": area, "planned": False})
     return sorted(out, key=lambda w: w["begin"])
 
@@ -409,10 +416,15 @@ def analyse(timeline, windows, end_ms=None):
         if onset >= b:
             continue
         hit = touching(a, b)
-        frm = max(w["begin"] for w in hit) if hit else a      # Review Focus 4: from the LAST fault that touched it
+        # Review Focus 4: recovery from the LAST fault that touched it -- among those that began by the time it was stuck. A
+        # fault that begins later, mid-episode, is listed apart: counting it would shorten every long episode to the time since
+        # whatever unrelated fault fired last (72 fleet-wide a day).
+        cause = [w for w in hit if w["begin"] <= onset]
+        later = [w for w in hit if w["begin"] > onset]
+        frm = max(w["begin"] for w in cause) if cause else a
         episodes.append({"since": a, "onset": onset, "until": None if is_open else b, "pos": list(p) if p else None,
-                         "open": is_open, "faults": [w["id"] for w in hit], "recovery_from": frm,
-                         "recovery_ms": None if is_open else b - frm})
+                         "open": is_open, "faults": [w["id"] for w in cause], "later_faults": [w["id"] for w in later],
+                         "recovery_from": frm, "recovery_ms": None if is_open else b - frm})
 
     # heartbeats
     heard = sorted({s["seen"] for s in samples if s.get("seen") is not None} | set(timeline.get("heard") or []))
@@ -435,7 +447,7 @@ def analyse(timeline, windows, end_ms=None):
         reasons.append("gone: no heartbeat for %d min outside any fault (last heard run %s)" % (gone["silent_ms"] // MIN,
                                                                                               _hm(gone["since"])))
     if nh:
-        reasons.append("NEEDS HANDS never cleared: %s" % nh)
+        reasons.append("NEEDS HANDS never cleared: %s (raised run %s)" % (nh, _hm(nh_raised)))
     removals = [w for w in mine if w["fault"] == "remove_item"]
     asked = nh_raised is not None and any(nh_raised >= w["begin"] for w in removals)
     decom = bool(reasons)
@@ -869,6 +881,12 @@ def fault_stats(R):
         for f in R["sim_faults"] or []:
             rows.setdefault(f.get("name"), {"planned": 0, "begin": 0})["begin"] += 1
         return rows, len(R["sim_faults"] or [])
+    if R["fault_lines"] is None:        # no faults.jsonl: what fired is unknown, never 0
+        for row in rows.values():
+            for k in list(row):
+                if k != "planned":
+                    row[k] = TRUNCATED
+        return rows, 0
     for r in R["fault_lines"] or []:
         f = r.get("fault")
         if f is None:
@@ -896,6 +914,37 @@ def housekeeping(R):
         if tag == "storage-headroom-low":
             low.append(line)
     return {"lines": len(R["hk"]), "tags": tags, "low": low, "unknown": tags.get("storage-headroom-unknown", 0), "missing": False}
+
+
+def _why_quotes(by_node, a, end, n=5):
+    """The lines that say WHY, for each of a finding's reasons: around each stuck episode; the server's NEEDS HANDS line nearest
+    the raise and the latest hands line after it (so a clear that the final /state contradicts shows); the turtle's own last
+    lines before it went silent. Deduplicated, at most n."""
+    tid, ls, out = a["id"], by_node.get(a["id"], []), []
+    for e in a["episodes"]:
+        out += _quotes(by_node, tid, e["since"] - 10 * MIN, e["until"] if e["until"] is not None else end, 2)
+    if a.get("needs_hands_raised") is not None and a.get("needs_hands"):
+        hands = [l for l in ls if "NEEDS HANDS" in l["msg"] or "back in service" in l["msg"]]
+        raised = [l for l in hands if "NEEDS HANDS" in l["msg"]]
+        if raised:
+            near = min(raised, key=lambda l: abs(l["rt"] - a["needs_hands_raised"]))
+            out.append(near["raw"][:260])
+            after = [l for l in hands if l["rt"] > near["rt"]]
+            if after:
+                out.append(after[-1]["raw"][:260])
+        out += _quotes(by_node, tid, a["needs_hands_raised"] - 10 * MIN, a["needs_hands_raised"] + MIN, 1)
+    if (a["gone"]["silent_ms"] or 0) > GONE_MS and a["gone"]["since"] is not None:
+        own = [l for l in ls if l["src"] == tid and l["rt"] <= a["gone"]["since"] + 1000]
+        out += [l["raw"][:260] for l in own[-2:]]
+    for sl in a["silences"]:
+        own = [l for l in ls if l["src"] == tid and l["rt"] <= sl["since"] + 1000]
+        out += [l["raw"][:260] for l in own[-1:]]
+    seen, uniq = set(), []
+    for q in out:
+        if q not in seen:
+            seen.add(q)
+            uniq.append(q)
+    return uniq[:n]
 
 
 def _quotes(by_node, tid, a, b, n=3):
@@ -961,8 +1010,7 @@ def build_report(run_dir, expected=None):
 
     # quotes, reasons, expected
     for a in fd["turtles"]:
-        lo = min([e["since"] for e in a["episodes"]] + [s["since"] for s in a["silences"]] + [end]) - 10 * MIN
-        a["quotes"] = _quotes(by_node, a["id"], lo, end) or _quotes(by_node, a["id"], -10 ** 15, end)
+        a["quotes"] = _why_quotes(by_node, a, end) or _quotes(by_node, a["id"], -10 ** 15, end)
         a["expected"] = _expected_card(expected, a["reasons"] + a["quotes"])
 
     # hours
@@ -1049,26 +1097,43 @@ def build_report(run_dir, expected=None):
 
     stuck_end = sum(1 for a in fd["all"].values() if any(e["open"] for e in a["episodes"]))
     gone_end = sum(1 for a in fd["all"].values() if (a["gone"]["silent_ms"] or 0) > GONE_MS)
+    hands_end = sum(1 for a in fd["all"].values() if a["needs_hands"] and a["verdict"] != "expected_hands")
+    not_recovered = sorted((a["id"] for a in fd["all"].values() if a["verdict"] in ("decommissioned", "lost")), key=_node_key)
+    unknown_where = sum(1 for a in fd["all"].values() if a["verdict"] == "decommissioned" and a.get("present") is None)
+    removals = [w for w in W if w["fault"] == "remove_item"]
     # a turtle whose job failed: the failure lines name the job, so the job is traced to the turtle it was last given to
-    failed_job, fail_lines, holder = {}, 0, {}
+    # ... then judged on what it did next: home (on its dock in a later sample) AND a later job (accepted or dispatched to it)
+    failed_job, fail_lines, holder, given, last_fail = {}, 0, {}, {}, {}
     for l in R["lines"]:
         if l["src"] != "server":
             continue
         m = ACCEPT_RX.match(l["msg"]) or DISPATCH_RX.match(l["msg"])
         if m:
             holder[m.group(1)] = m.group(2)
+            given.setdefault(m.group(2), []).append(l["rt"])
             continue
         m = JOB_FAIL_RX.match(l["msg"])
         if m:
             fail_lines += 1
             tid = holder.get(m.group(1) or m.group(2))
             if tid in fd["all"]:
-                failed_job[tid] = fd["all"][tid]["verdict"]
+                last_fail[tid] = l["rt"]
+    for tid, tf in last_fail.items():
+        home = any(s.get("on_dock") and s["t"] > tf for s in tls[tid]["samples"]) if tid in tls else False
+        again = any(t > tf for t in given.get(tid, []))
+        if home and again:
+            how = "home and back to work"
+        elif end - tf < 30 * MIN:
+            how = "too late to judge (failed %d min before the end)" % ((end - tf) // MIN)
+        else:
+            how = "never home" if not home else "home, but no later job"
+        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how}
     return {
         "run": run_dir, "kind": R["kind"], "t0_epoch_ms": R["t0"], "end_ms": end, "seed": seed, "schedule": R["schedule_path"],
         "notes": R["notes"], "windows": [dict(w, targets=sorted(w["targets"]) if w["targets"] is not None else None) for w in W],
         "verdicts": {tid: a["verdict"] for tid, a in fd["all"].items()}, "counts": fd["counts"], "stuck_ever": fd["stuck_ever"],
-        "stuck_at_end": stuck_end, "gone_at_end": gone_end, "failed_job": failed_job, "failed_job_lines": fail_lines,
+        "stuck_at_end": stuck_end, "gone_at_end": gone_end, "hands_at_end": hands_end, "not_recovered": not_recovered,
+        "findability_unknown": unknown_where, "remove_item_windows": len(removals), "failed_job": failed_job, "failed_job_lines": fail_lines,
         "turtles": fd["turtles"], "jams": fd["jams"], "jam_evidence": fd["jam_evidence"], "jobs": done,
         "long_sites": [dict(s, jobs=sorted(s["jobs"])) for s in long_sites(R)] if R["kind"] == "t2" else None,
         "faults": fstats, "fault_evidence": fevidence, "housekeeping": hk, "hours": hours, "drift": drift,
@@ -1104,13 +1169,18 @@ def _render(rep):
     o += ["", "## Pass bar", "",
           "Every count is of %d turtles judged (evidence: %d snapshots, %d log lines)." % (judged, ev["snapshots"], ev["log_lines"]),
           "",
-          "- No turtle lost: **%d lost**" % c["lost"],
-          "- Everything recovered: **%d not recovered** (%d stuck at the end, %d gone at the end, %d jams never cleared)"
-          % (rep["stuck_at_end"] + rep["gone_at_end"] + sum(1 for j in rep["jams"] if j["clear"] is None), rep["stuck_at_end"],
-             rep["gone_at_end"], sum(1 for j in rep["jams"] if j["clear"] is None)),
-          "- A turtle that fails a job gets itself home and back to work: **%d of %d** turtles with a failed or retried job ended "
-          "decommissioned or lost (evidence: %d failed/retried job lines, traced to %d turtles)%s" % (
-              sum(1 for v in rep["failed_job"].values() if v in ("decommissioned", "lost")), len(rep["failed_job"]),
+          "- No turtle lost: **%d lost**%s" % (c["lost"], " (%d decommissioned with findability unknown -- TRUNCATED: no "
+                                                "final.json, chunk not loaded, or a simulator run)" % rep["findability_unknown"]
+                                                if rep["findability_unknown"] else ""),
+          "- Everything recovered: **%d turtle(s) not recovered** (each counted once; of them %d stuck at the end, %d gone at the "
+          "end, %d NEEDS HANDS never cleared -- one turtle can be several); and **%d jam(s) never cleared**"
+          % (len(rep["not_recovered"]), rep["stuck_at_end"], rep["gone_at_end"], rep["hands_at_end"],
+             sum(1 for j in rep["jams"] if j["clear"] is None)),
+          "- A turtle that fails a job gets itself home and back to work: **%d of %d** judged did NOT (on its dock after the "
+          "failure AND given a later job); %d too late to judge (evidence: %d failed/retried job lines, traced to %d turtles)%s" % (
+              sum(1 for v in rep["failed_job"].values() if not v["how"].startswith(("home and back", "too late"))),
+              sum(1 for v in rep["failed_job"].values() if not v["how"].startswith("too late")),
+              sum(1 for v in rep["failed_job"].values() if v["how"].startswith("too late")),
               rep["failed_job_lines"], len(rep["failed_job"]),
               "" if rep["failed_job"] else " -- TRUNCATED: no failed job traced to a turtle, so this item has no evidence"),
           "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, counted apart)" % (c["decommissioned"],
@@ -1128,7 +1198,9 @@ def _render(rep):
         eps = "; ".join("stuck from %s (stopped %s) %s%s" % (
             _hm(e["onset"]), _hm(e["since"]), "until %s, recovered in %d min from %s" % (
                 _hm(e["until"]), e["recovery_ms"] // MIN, _hm(e["recovery_from"])) if not e["open"] else "to the END",
-            (", faults " + ",".join(e["faults"])) if e["faults"] else "") for e in a["episodes"])
+            ((", faults " + ",".join(e["faults"])) if e["faults"] else "") +
+            ((", later faults (not its cause) " + ",".join(e["later_faults"])) if e.get("later_faults") else ""))
+            for e in a["episodes"])
         sil = "; ".join("silent %d min from %s" % (s["silent_ms"] // MIN, _hm(s["since"])) for s in a["silences"])
         o.append("- **%s** %s at %s: %s" % (a["id"], a["verdict"], (a["episodes"][-1]["pos"] if a["episodes"] else "?"),
                                           "; ".join(x for x in (eps, sil, "; ".join(a["reasons"])) if x) or "-"))
@@ -1168,7 +1240,9 @@ def _render(rep):
           "| fault | planned | begun | failed | undone | ended | latest begin (s late) |", "|---|---|---|---|---|---|---|"]
     for f, r in sorted(rep["faults"].items(), key=lambda kv: str(kv[0])):
         o.append("| %s | %s | %s | %s | %s | %s | %s |" % (f, r.get("planned", ""), r.get("begin", ""), r.get("fail", ""),
-                                                          r.get("undo", ""), r.get("end", ""), (r.get("late_max_ms") or 0) // 1000))
+                                                          r.get("undo", ""), r.get("end", ""),
+                                                          r["late_max_ms"] if r.get("late_max_ms") == TRUNCATED else
+                                                          (r.get("late_max_ms") or 0) // 1000))
     if not rep["faults"]:
         o.append("| (none fired) | | | | | | |")
 
@@ -1184,8 +1258,8 @@ def _render(rep):
 
     o += ["", "## Expected hands", ""]
     eh = [a for a in rep["turtles"] if a["verdict"] == "expected_hands"]
-    o.append("%d turtle(s): an item was taken by a remove_item fault and it asked for hands (counted apart from decommissioned)."
-             % len(eh))
+    o.append("%d turtle(s): an item was taken by a remove_item fault and it asked for hands (counted apart from decommissioned). "
+             "Evidence: %d remove_item fault window(s), %d turtles judged." % (len(eh), rep["remove_item_windows"], judged))
     for a in eh:
         o.append("- %s: %s (faults %s)" % (a["id"], a["needs_hands"], ",".join(a["touching"])))
 
