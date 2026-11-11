@@ -130,6 +130,19 @@ class FeederTests(unittest.TestCase):
         self.assertTrue(all("ore" not in p["items"][0]["name"] for t, p in ctx.orders if t == "ORDER_DELIVERY"),
                         "deliveries carry ordinary stock, not ore")
 
+    def test_consecutive_orders_are_at_least_2_ms_apart(self):
+        # final review: the server drops a /command whose "ts:type" (ms) it has seen; one tick posts several orders at once
+        import time as _time
+        ctx = FakeCtx()
+        stamps = []
+        real = ctx.dispatch
+        ctx.dispatch = lambda type_, params=None: stamps.append(_time.perf_counter()) or real(type_, params)
+        f = feeder.Feeder(ctx)
+        f.tick(1000.0)
+        self.assertGreaterEqual(len(stamps), 3, "one tick places several orders (%d)" % len(stamps))
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        self.assertGreaterEqual(min(gaps), feeder.POST_GAP_S, gaps)
+
     def test_feeder_refills_after_jobs_end(self):
         ctx = FakeCtx()
         f = feeder.Feeder(ctx)

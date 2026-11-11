@@ -126,6 +126,9 @@ IDLE_ACT_FRACTION = 0.25    # a turtle is given work after this share of max_idl
 MAX_ORDERS_PER_TICK = 6     # the site / top-up orders; idle-watch orders have their own, larger, cap
 MAX_IDLE_ORDERS_PER_TICK = 30
 NOTE_EVERY_S = 30 * MIN     # how often one kind of complaint may be repeated
+# At least this long between two POST /command (final review): the server drops a command whose "ts:type" it has seen, and
+# ts is in milliseconds, so two orders of one type posted inside the same millisecond were one order to the server.
+POST_GAP_S = 0.002
 
 
 def zone_key(z):
@@ -192,6 +195,18 @@ class Feeder:
         self.exhausted = False
         self.noted = {}
         self.dests = self._probe(list(DESTINATIONS), destinations)
+        self._last_post = None
+
+    def _dispatch(self, type_, params):
+        """ctx.dispatch, never two within POST_GAP_S of each other (the server's ts:type dedupe)."""
+        if self._last_post is not None:
+            wait = POST_GAP_S - (time.perf_counter() - self._last_post)
+            if wait > 0:
+                time.sleep(wait)
+        try:
+            return self.ctx.dispatch(type_, params)
+        finally:
+            self._last_post = time.perf_counter()
 
     @property
     def next_zone(self):
@@ -248,7 +263,7 @@ class Feeder:
                 self.exhausted = True
                 self.ctx.note("feeder: the mining zones are exhausted; no ground is reused, so no more are ordered")
             return 0
-        self.ctx.dispatch("ORDER_MINE", {"x1": z["x1"], "z1": z["z1"], "x2": z["x2"], "z2": z["z2"], "minerCount": MINERS_PER_ZONE})
+        self._dispatch("ORDER_MINE", {"x1": z["x1"], "z1": z["z1"], "x2": z["x2"], "z2": z["z2"], "minerCount": MINERS_PER_ZONE})
         if took == "lane":
             self.lane_pos[lane] += 1
         else:
@@ -286,7 +301,7 @@ class Feeder:
             self._note_every(now, "nodest", "feeder: no usable delivery destination")
             return False
         x, y, z = self.dests[self.next_dest % len(self.dests)]
-        self.ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": item, "count": ITEM_COUNT}],
+        self._dispatch("ORDER_DELIVERY", {"items": [{"name": item, "count": ITEM_COUNT}],
                                              "destination": {"x": x, "y": y, "z": z}})
         self.next_dest += 1
         self.unseen.append({"kind": "DELIVER", "n": 1, "dest": (x, z), "t": now, "fresh": 0})
