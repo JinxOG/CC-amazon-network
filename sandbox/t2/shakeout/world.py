@@ -552,11 +552,12 @@ def add_rs_capacity(c, controller=RS_CONTROLLER):
 
 def restart_after_build(ctx):
     """One clean world restart after build_world, BEFORE the fleet is placed: it is what makes the RS network pick up the creative
-    storage block (see add_rs_capacity). The run's tick rate is put back afterwards. Returns what the restart returned."""
+    storage block (see add_rs_capacity). Afterwards schedule._after_restart, the one after-restart routine every harness restart
+    uses (the run's tick rate back; the control mod's radio and event logs on again for --t2logs, since they live in JVM memory;
+    ...), instead of a copy of part of it here. Returns what the restart returned."""
+    from shakeout import schedule       # here, not at the top: schedule imports this module
     out = ctx.control.world_restart()
-    rate = getattr(ctx, "rate", 20)
-    if rate != 20:
-        ctx.control.tick_rate(rate)
+    schedule._after_restart(ctx, ctx.control)
     return out
 
 

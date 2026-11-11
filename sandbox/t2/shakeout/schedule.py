@@ -230,11 +230,44 @@ def _group(fault):
     return next((g for g in EXCLUSIVE if fault in g), None)
 
 
+RESTART_FAULTS = ("world_restart", "restart_burst5", "disk_full")
+
+
+def restart_spans(e):
+    """[(from, to)] in schedule ms: when this entry restarts the game server. world_restart one restart; restart_burst5 the whole
+    burst (its quiet window); disk_full TWO, the remeasuring restart at its start and another at its end."""
+    t, f = e["t_ms"], e["fault"]
+    if f == "world_restart":
+        return [(t, t + RESTART_QUIET_MS)]
+    if f == "restart_burst5":
+        return [(t, t + max(int(e.get("quiet_ms") or 0), RESTART_QUIET_MS))]
+    if f == "disk_full":
+        w = window_ms(e)
+        return [(t, t + RESTART_QUIET_MS), (t + w, t + w + RESTART_QUIET_MS)]
+    return []
+
+
+def _unload_span(e):
+    return (e["t_ms"], e["t_ms"] + max(window_ms(e), 1)) if e["fault"] == "chunk_unload" else None
+
+
+def _restart_meets_unload(a, b):
+    """True when one of a, b restarts the game server while the other's chunk_unload window is open. The control mod keeps the
+    unloaded tickets' restore in JVM memory, so a restart inside the window loses it and the area stays unloaded for good."""
+    for x, y in ((a, b), (b, a)):
+        u = _unload_span(y)
+        if u and any(f < u[1] and u[0] < t for f, t in restart_spans(x)):
+            return True
+    return False
+
+
 def _fits(e, placed, lo, hi):
     t, end = e["t_ms"], e["t_ms"] + max(window_ms(e), 1)
     if not lo <= t <= hi:
         return False
     for o in placed:
+        if _restart_meets_unload(e, o):
+            return False
         if o["fault"] == "restart_burst5" and o["t_ms"] <= t < o["t_ms"] + o["quiet_ms"]:
             return False
         if e["fault"] == "restart_burst5" and (t <= o["t_ms"] < t + e["quiet_ms"] or o["t_ms"] <= t < o["t_ms"] + max(window_ms(o), 1)):
@@ -415,12 +448,21 @@ def state_of(ctx):
 
 
 def _log(ctx, wall_ms, e, phase, **detail):
-    d = os.path.join(ctx.run, "shakeout")
-    os.makedirs(d, exist_ok=True)
-    rec = dict({"wall_ms": wall_ms, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "id": e["id"] if e else None,
-                "fault": e["fault"] if e else None, "phase": phase}, **detail)
-    with open(os.path.join(d, "faults.jsonl"), "a", encoding="utf8") as f:
-        f.write(json.dumps(rec, default=repr) + "\n")
+    """One line of <run>/shakeout/faults.jsonl. NEVER RAISES (final review): a log that cannot be written (a full drive, say)
+    must not stop a fault, its undo or the 24-hour run; the failure is counted on ctx and the first few are noted."""
+    try:
+        d = os.path.join(ctx.run, "shakeout")
+        os.makedirs(d, exist_ok=True)
+        rec = dict({"wall_ms": wall_ms, "time": time.strftime("%Y-%m-%dT%H:%M:%S"), "id": e["id"] if e else None,
+                    "fault": e["fault"] if e else None, "phase": phase}, **detail)
+        with open(os.path.join(d, "faults.jsonl"), "a", encoding="utf8") as f:
+            f.write(json.dumps(rec, default=repr) + "\n")
+    except Exception as ex:  # noqa: BLE001
+        n = getattr(ctx, "shakeout_log_errors", 0) + 1
+        ctx.shakeout_log_errors = n
+        if n <= 5 and hasattr(ctx, "note"):
+            ctx.note("faults.jsonl could not be written (%d so far): %s: %s -- %s %s" % (n, type(ex).__name__, ex, phase,
+                                                                                  e["id"] if e else ""))
 
 
 def _game_ms(ctx, real_ms):
@@ -523,10 +565,112 @@ def _reply_ok(reply):
 
 # -- the verbs ---------------------------------------------------------------------------------------------------------------
 
-def _after_restart(ctx, c):
+def _save_all(ctx, c, st):
+    """save-all, so what the harness just did is on disk before any later crash (a kill does not save)."""
+    try:
+        c.command("save-all")
+    except Exception as ex:  # noqa: BLE001 - the restore after a crash restart is the safety net
+        _log(ctx, st.get("_wall", 0), None, "save-all-failed", error="%s: %s" % (type(ex).__name__, ex))
+
+
+def _turn_on(ctx, c, st, ids):
+    """EVERY harness turn_on (final review I4). The computers on, then save-all at once: world_restart kind=crash and
+    restart_burst5 kill the server without saving, so a computer turned back on since the last autosave came back OFF -- an undo
+    lost. They are also remembered (st["turned_on"]): _restore_on turns them on again after any restart if they are off."""
+    ids = list(ids)
+    c.turn_on(ids)
+    st.setdefault("turned_on", set()).update(ids)
+    _save_all(ctx, c, st)
+
+
+def _snapshot_on(c, st):
+    """Which computers are on, read just before the harness kills the server (st["on_before_crash"])."""
+    try:
+        st["on_before_crash"] = {i for i, v in c.computers().items() if v.get("on")}
+    except Exception:  # noqa: BLE001 - no snapshot: _restore_on still has every computer the harness turned on
+        pass
+
+
+def _restore_on(ctx, c, st):
+    """THE SAFETY NET after a restart (I4): every computer that should be on -- on just before the crash, or turned on by the
+    harness -- and is not held off by an open window (st["holds"]) is turned on if the restart left it off. And the other way:
+    a crash that reverts the world to a save from before a hold's shutdown brings that computer back ON in the middle of its
+    window, so every held computer that is on is switched off again. Returns the ids turned on."""
+    want = set(st.get("on_before_crash") or ()) | set(st.get("turned_on") or ())
+    held = set(st["holds"])
+    if not want and not held:
+        return []
+    comps = c.computers()
+    off = sorted(i for i in want if i in comps and comps[i].get("on") is False and i not in held)
+    back_on = sorted(i for i in held if i in comps and comps[i].get("on"))
+    if back_on:
+        c.shutdown(back_on)
+        _log(ctx, st.get("_wall", 0), None, "holds-reapplied", computers=back_on)
+    if off:
+        c.turn_on(off)
+    if off or back_on:
+        _save_all(ctx, c, st)
+    if off:
+        _log(ctx, st.get("_wall", 0), None, "restored-on", computers=off)
+    return off
+
+
+FORCELOAD_HOLD_MS = 60000     # real ms an area is force-loaded after a restart, so its computers boot and re-take their tickets
+
+
+def _reissue_unload_restores(ctx, st):
+    """I5: the control mod puts an unloaded area's tickets back from JVM memory, so a restart inside (or soon after) a chunk_unload
+    window loses that restore and the area stays unloaded for good. After every restart each chunk_unload that has begun is
+    force-loaded (vanilla forceload) for FORCELOAD_HOLD_MS: its computers boot and the loaders re-force their own chunks (the
+    mod's M3 proof: after forceload add and remove the loader holds the chunk itself). run_due takes the forceload off again."""
+    raw = getattr(ctx, "_raw", ctx.control)
+    for uid, area in sorted((st.get("unloads") or {}).items()):
+        x1, z1, x2, z2 = area
+        _Recorder(ctx, raw, uid).command("forceload add %d %d %d %d" % (x1, z1, x2, z2))
+        st.setdefault("forceloads", []).append({"id": uid, "area": list(area), "until": st.get("_wall", 0) + FORCELOAD_HOLD_MS})
+        _log(ctx, st.get("_wall", 0), {"id": uid, "fault": "chunk_unload"}, "unload-restore", area=list(area))
+
+
+def _drop_forceloads(ctx, st, wall_ms, every=False):
+    """The forceloads _reissue_unload_restores added, taken off once their time is up (or all of them, at teardown)."""
+    raw = getattr(ctx, "_raw", ctx.control)
+    keep = []
+    for f in st.get("forceloads") or []:
+        if not every and f["until"] > wall_ms:
+            keep.append(f)
+            continue
+        try:
+            x1, z1, x2, z2 = f["area"]
+            _Recorder(ctx, raw, f["id"]).command("forceload remove %d %d %d %d" % (x1, z1, x2, z2))
+        except Exception as ex:  # noqa: BLE001 - tried again on the next call
+            _log(ctx, wall_ms, {"id": f["id"], "fault": "chunk_unload"}, "forceload-remove-failed", error=str(ex))
+            keep.append(f)
+    st["forceloads"] = keep
+
+
+def _after_restart(ctx, c, st=None):
+    """After EVERY restart of the game server the harness makes (and setup's, world.restart_after_build): the run's tick rate
+    back; the control mod's radio and event logs on again when the run asked for them (--t2logs: they live in JVM memory too);
+    every computer that should be on, on (_restore_on); every chunk_unload's restore re-issued. Each step is tried on its own;
+    a failed tick rate is raised at the end (the run's speed is wrong), the rest are logged."""
+    st = state_of(ctx) if st is None else st
+    err = None
     rate = getattr(ctx, "rate", 20)
     if rate != 20:
-        c.tick_rate(rate)
+        try:
+            c.tick_rate(rate)
+        except Exception as ex:  # noqa: BLE001
+            err = ex
+    steps = [("restore-on", lambda: _restore_on(ctx, c, st)), ("unload-restores", lambda: _reissue_unload_restores(ctx, st))]
+    if getattr(ctx, "t2logs", False):
+        steps.insert(0, ("t2logs", lambda: (c.radio_log("on"), c.events_log("on"))))
+    for name, fn in steps:
+        try:
+            fn()
+        except Exception as ex:  # noqa: BLE001
+            _log(ctx, st.get("_wall", 0), None, "after-restart-failed", step=name, error="%s: %s" % (type(ex).__name__, ex))
+    if err is not None:
+        raise err
 
 
 def _server_answers(c):
@@ -545,28 +689,30 @@ def _crash_computer(find):
     def end(ctx, c, st, e, detail):
         cid = detail.get("computer")
         if cid is not None and _release(st, cid, e["id"]):
-            c.turn_on([cid])
+            _turn_on(ctx, c, st, [cid])
     return begin, end
 
 
 def _world_restart(ctx, c, st, e):
     d = _partial(st, e)
     if e["args"].get("kind") == "crash":
+        _snapshot_on(c, st)
         c.server_crash()
         c.restart_after_crash()
     else:
         c.world_restart()
-    _after_restart(ctx, c)
+    _after_restart(ctx, c, st)
     return _observe(d, lambda: _server_answers(c))
 
 
 def _burst(ctx, c, st, e):
     d = _partial(st, e)
+    _snapshot_on(c, st)
     for i in range(int(e["args"].get("count", 5))):
         c.server_crash()
         c.restart_after_crash()            # returns once the server says Done: then it is killed again at once
         d["restarts"] = i + 1
-    _after_restart(ctx, c)
+    _after_restart(ctx, c, st)
     return _observe(d, lambda: dict(_server_answers(c), restarts=d["restarts"]))
 
 
@@ -592,7 +738,7 @@ def _gps_begin(ctx, c, st, e):
 def _gps_end(ctx, c, st, e, detail):
     back = [h for h in detail.get("hosts", []) if _release(st, h, e["id"])]
     if back:
-        c.turn_on(back)
+        _turn_on(ctx, c, st, back)
 
 
 def _tick_seen(c, want):
@@ -630,6 +776,7 @@ def _chunk_unload(ctx, c, st, e):
     cid = d["computer"] = _pick_turtle(c, ctx, e["args"]["target"], accept=clear)
     area = d["area"] = unload_area(_pos(c, cid), r)
     reply = c.chunk_unload(0, area=area, dur=_game_ms(ctx, e["args"]["dur_ms"]))
+    st.setdefault("unloads", {})[e["id"]] = area     # its restore is re-issued after any later restart (_after_restart)
     return _observe(d, lambda: {"reply": reply, "ok": _reply_ok(reply)})
 
 
@@ -639,7 +786,7 @@ def _turtle_reboot(ctx, c, st, e):
     c.shutdown([cid])
     off = _on(c, cid)
     time.sleep(int(e["args"].get("off_ms", 0)) / 1000.0)
-    c.turn_on([cid])
+    _turn_on(ctx, c, st, [cid])
     d["observed"] = {"on_while_off": off, "ok": off is False}
     return d
 
@@ -735,7 +882,7 @@ def _remeasure(ctx, c, st, e):
     handed to need_relaunch, and never stands between a filler and its removal."""
     try:
         c.world_restart()
-        _after_restart(ctx, c)
+        _after_restart(ctx, c, st)
         return True
     except (Exception, SystemExit) as ex:  # noqa: BLE001
         st["need_relaunch"] = True
@@ -864,12 +1011,14 @@ def _bridge_start(ctx, e, port):
     raise RuntimeError("the bridge on port %d did not answer /ping in 300 s" % port)
 
 
-def _proxy_start(ctx, e, listen, target, ms):
+def _proxy_start(ctx, e, listen, target, ms, st=None):
     d = os.path.join(ctx.run, "shakeout")
     os.makedirs(d, exist_ok=True)
     out = open(os.path.join(d, "proxy.out"), "ab")
     p = subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "proxy", str(listen), str(target), str(ms)],
                          stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=runmod.DETACHED)
+    if st is not None:
+        st["proxy"] = p.pid        # AT ONCE (final review): a pid-file write that fails must not leave a proxy nobody stops
     with open(os.path.join(d, "proxy.pid"), "w") as f:
         f.write(str(p.pid))
     _intervention(ctx, e["id"], "proxy_start", listen, target, ms, p.pid)
@@ -931,7 +1080,7 @@ def _slow_begin(ctx, c, st, e):
         # pid alive, leave it, and leave 3000 dark (round-2 review). Marked 3001 first, the restore stops it and starts 3000.
         st["bridge_port"] = SLOW_BRIDGE_PORT
         _bridge_start(ctx, e, SLOW_BRIDGE_PORT)
-        st["proxy"] = _proxy_start(ctx, e, BRIDGE_PORT, SLOW_BRIDGE_PORT, ms)
+        st["proxy"] = _proxy_start(ctx, e, BRIDGE_PORT, SLOW_BRIDGE_PORT, ms, st)
         d["proxy"] = st["proxy"]
     except (Exception, SystemExit):
         try:
@@ -1069,7 +1218,7 @@ def _relaunch(ctx, st, wall_ms, acted):
     c = _Recorder(ctx, getattr(ctx, "_raw", ctx.control), "relaunch")
     try:
         c.restart_after_crash()
-        _after_restart(ctx, c)
+        _after_restart(ctx, c, st)
         st["need_relaunch"] = False
         _log(ctx, wall_ms, None, "relaunched")
         acted.append((None, "relaunched"))
@@ -1148,6 +1297,8 @@ def run_due(ctx, schedule, wall_ms):
     acted = []
     if st["need_relaunch"]:
         _relaunch(ctx, st, wall_ms, acted)
+    if st.get("forceloads"):
+        _drop_forceloads(ctx, st, wall_ms)
     todo = []
     for e in schedule:
         s = st["status"].setdefault(e["id"], {"phase": "pending", "attempts": 0})
@@ -1199,11 +1350,37 @@ def teardown(ctx, schedule):
             acted = []
             _end(ctx, st, e, wall, acted)
             (out["ended"] if (e["id"], "end") in acted else out["end_errors"]).append(e["id"])
+    # UNCONDITIONALLY (final review): the bridge back on 3000 and the run's tick rate, whatever the windows above did or
+    # failed to do -- a window that was never recorded as active, or an end that raised, must not leave either behind.
+    for what, fn in (("bridge", lambda: _bridge_restore(ctx, None, st)),
+                     ("tick rate", lambda: _Recorder(ctx, raw, None).tick_rate(getattr(ctx, "rate", 20))),
+                     ("forceloads", lambda: _drop_forceloads(ctx, st, wall, every=True))):
+        try:
+            fn()
+        except (Exception, SystemExit) as ex:  # noqa: BLE001
+            out["end_errors"].append("%s: %s: %s" % (what, type(ex).__name__, ex))
     if st.get("proxy"):
         _proxy_stop(ctx, None, st["proxy"])
         st["proxy"] = None
     _log(ctx, wall, None, "teardown", **{k: v for k, v in out.items()})
     return out
+
+
+def in_quiet(ctx, schedule, wall_ms):
+    """True while a scheduled outage is on: inside any entry's quiet window (from its actual begin when it has begun), or while
+    a restart fault has left the server down (need_relaunch). The driver's note caps do not count errors made then."""
+    st = state_of(ctx)
+    if st.get("need_relaunch"):
+        return True
+    for e in schedule:
+        q = int(e.get("quiet_ms") or 0)
+        if q <= 0:
+            continue
+        s = st["status"].get(e["id"]) or {}
+        start = s.get("began_ms", e["t_ms"])
+        if start <= wall_ms < start + q:
+            return True
+    return False
 
 
 if __name__ == "__main__" and len(sys.argv) >= 5 and sys.argv[1] == "proxy":

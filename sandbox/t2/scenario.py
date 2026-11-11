@@ -478,6 +478,7 @@ def main():
     ctx = Ctx(run_id)
     ctx.install = install
     ctx.pin = pin
+    ctx.t2logs = t2logs        # the shakeout scheduler turns the mod's logs on again after each restart it makes
     error = None
     try:
         ctx.wait_registered()
@@ -509,6 +510,14 @@ def main():
     write_report(ctx, scenario, pin, error, since_iso, tools, started)
     if "--keep-running" not in args:
         runmod.stop(run_id)
+    # A scenario's own work for after the game server is stopped (the shakeout report reads a day of logs: not while the
+    # server still holds its memory). Its failure is printed, never raised: the run's report is already written.
+    after = getattr(scenario, "after_stop", None)
+    if after is not None:
+        try:
+            print("after_stop:", after(ctx))
+        except Exception as e:  # noqa: BLE001
+            print("after_stop failed: %s: %s" % (type(e).__name__, e))
     print("report:", os.path.join(ctx.run, "report.md"))
     if error:
         print("ERROR", error)
