@@ -238,6 +238,98 @@ local server
 
 local registry = {}
 
+-- --- A dock move's old cell (final review, 2026-11-11) ----------------------
+-- A turtle moved off a dock of the wrong type while standing on it keeps that
+-- old dock RESERVED -- still recorded under its name, so W.assignDock cannot give
+-- it to anyone -- until it is seen standing somewhere else. _vacating[id] is
+-- { type, x, z, bay, row, sent = REBOOTs sent, lastAt = ms of the last REBOOT or
+-- REGISTER }. In memory only: after a server restart the file still holds both
+-- docks, and the turtle's REGISTER notes it again (registry.settleOtherDocks).
+-- Fields of registry, not file locals: server.run is near CC's 200-local limit.
+registry._vacating = {}
+registry.VACATE_RETRY_MS    = 60000   -- a REBOOT is re-sent no sooner than this
+registry.VACATE_MAX_REBOOTS = 5       -- re-sends after the first; then it is let go
+
+-- true when position (a turtle's report) is the dock's cell; false when it is
+-- known and elsewhere; nil when there is no position to judge by.
+function registry.standsOn(position, d)
+    if type(position) ~= "table" or position.x == nil or position.z == nil then return nil end
+    return position.x == d.x and position.z == d.z
+end
+
+-- Records (or refreshes) the reserved old cell. A REGISTER restarts its clock:
+-- a turtle that has just booted needs time to drive off it.
+function registry.noteVacating(id, dockType, d)
+    local v = registry._vacating[id]
+    if not (v and v.x == d.x and v.z == d.z) then
+        v = { type = dockType, x = d.x, z = d.z, bay = d.bay, row = d.row, sent = 0 }
+        registry._vacating[id] = v
+    end
+    v.lastAt = os.epoch("utc")
+    return v
+end
+
+-- Every dock id holds of a type other than keepType is let go -- except one it
+-- is standing on and not mid-job, which stays reserved until it is seen off it.
+function registry.settleOtherDocks(id, keepType, position, midJob)
+    for _, t in ipairs({ "DELIVERY", "SUPPORT", "MINER" }) do
+        if t ~= keepType then
+            local d = W.getDockFor(t, id)
+            while d do
+                if not midJob and registry.standsOn(position, d) then
+                    registry.noteVacating(id, t, d)
+                    break
+                end
+                W.releaseDock(t, id)
+                logInfo(string.format("Dock released: %s also held bay %d row %s (%s) -- one dock per turtle",
+                    id, d.bay, d.row, t))
+                d = W.getDockFor(t, id)
+            end
+        end
+    end
+    local v = registry._vacating[id]
+    if v and not W.getDockFor(v.type, id) then registry._vacating[id] = nil end
+end
+
+-- On every heartbeat. Lets the old cell go once the turtle is seen off it; while
+-- it still stands there idle, re-sends REBOOT every VACATE_RETRY_MS, at most
+-- VACATE_MAX_REBOOTS times, then lets it go with a WARN (it never moved).
+function registry.checkVacating(id)
+    local v = registry._vacating[id]
+    if not v then return end
+    local t = state.registry[id]
+    local held = W.getDockFor(v.type, id)
+    if not t or not held or held.x ~= v.x or held.z ~= v.z then
+        registry._vacating[id] = nil
+        return
+    end
+    local on = registry.standsOn(t.position, v)
+    if on == nil then return end
+    if not on then
+        W.releaseDock(v.type, id)
+        registry._vacating[id] = nil
+        logInfo(string.format("Dock released: %s is off bay %d row %s (%s), the dock it was moved from",
+            id, v.bay, v.row, v.type))
+        return
+    end
+    if (t.reportedStatus or t.status) ~= proto.STATUS.IDLE or t.jobId then return end
+    local now = os.epoch("utc")
+    if now - (v.lastAt or 0) < registry.VACATE_RETRY_MS then return end
+    -- v.sent counts the first REBOOT (sent with the REGISTER_ACK) too.
+    if v.sent > registry.VACATE_MAX_REBOOTS then
+        W.releaseDock(v.type, id)
+        registry._vacating[id] = nil
+        logWarn(string.format("%s never left bay %d row %s (%s), the dock it was moved from, after %d REBOOTs -- "
+            .. "that dock is released with it still standing on it", id, v.bay, v.row, v.type, v.sent))
+        return
+    end
+    v.sent = v.sent + 1
+    v.lastAt = now
+    sendTo(id, proto.MSG.REBOOT, {})
+    logInfo(string.format("Rebooting %s again (re-send %d of %d): it still stands on bay %d row %s (%s), the dock it was moved from",
+        id, v.sent - 1, registry.VACATE_MAX_REBOOTS, v.bay, v.row, v.type))
+end
+
 -- registry.register returns (dock, reSendJob).
 -- reSendJob is non-nil when a rebooted turtle had an active job — the caller
 -- must send JOB_ASSIGN AFTER sending REGISTER_ACK so the turtle sets its dock
@@ -294,7 +386,6 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
         local heldType, held = W.dockOf(id)
         dock = W.assignDock(dockType, id)
         if dock and held then
-            W.releaseDock(heldType, id)
             logInfo(string.format("Dock moved: %s from bay %d row %s (%s) to bay %d row %s (%s) -- per-bay types",
                 id, held.bay, held.row, heldType, dock.bay, dock.row, dockType))
             -- THE MOVE CHANGES THE RECORDS, NOT THE TURTLE (review, 2026-11-10).
@@ -307,8 +398,18 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
             -- A mid-job turtle needs nothing: it is not on the cell, and every
             -- way home (home.dock / fromSky / internal) reads _self.dock when it
             -- runs, which the ACK has already set to the new dock.
-            if not midJob and type(position) == "table"
-               and position.x == held.x and position.z == held.z then
+            --
+            -- THE OLD CELL STAYS RESERVED UNTIL IT IS SEEN EMPTY (final review,
+            -- 2026-11-11). It used to be released here, at once. If the one
+            -- REBOOT was lost the miner stayed on that cell while the server
+            -- called it free, and the next delivery turtle could be given it:
+            -- one cell, two turtles. Now the old record is kept (nothing else can
+            -- be assigned it) by registry.settleOtherDocks below, and
+            -- registry.checkVacating, on every heartbeat, lets it go once the
+            -- turtle is seen off it, or re-sends the REBOOT a bounded number of
+            -- times while it still stands there idle. One not on the cell, or
+            -- mid-job, has it released below at once, as before.
+            if not midJob and registry.standsOn(position, held) then
                 rebootForDock = true
             end
         elseif held then
@@ -325,11 +426,10 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
     -- one of another type (the file was saved between a move's assign and its
     -- release, or a role changed long ago) lets the other go, so it is not
     -- reserved for good under a name that is not using it.
+    -- Except the cell it is standing on: that one stays reserved until it is
+    -- seen off it (registry.settleOtherDocks / registry.checkVacating).
     if dock and dock.role == dockType then
-        for _, other in ipairs(W.releaseOtherDocks(id, dockType)) do
-            logInfo(string.format("Dock released: %s also held bay %d row %s (%s) -- one dock per turtle",
-                id, other.dock.bay, other.dock.row, other.type))
-        end
+        registry.settleOtherDocks(id, dockType, position, midJob)
     end
 
     state.registry[id] = {
@@ -3697,6 +3797,10 @@ handlers[proto.MSG.REGISTER] = function(msg)
     -- the next REGISTER finds the new dock and moves nothing.
     if state.registry[msg.from] and state.registry[msg.from].rebootForDock then
         state.registry[msg.from].rebootForDock = nil
+        -- The first REBOOT counts against the bound; if it is lost,
+        -- registry.checkVacating sends it again from the heartbeats.
+        local v = registry._vacating[msg.from]
+        if v then v.sent = v.sent + 1; v.lastAt = os.epoch("utc") end
         sendTo(msg.from, proto.MSG.REBOOT, {})
         logInfo(string.format("Rebooting %s so it drives to its new dock now (it stands on the one it was moved from)", msg.from))
     end
@@ -3734,6 +3838,7 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
         registry.reSendOnHeartbeat(msg.from, p.status)
+        registry.checkVacating(msg.from)
         local t = state.registry[msg.from]
         -- Solo-miner telemetry. nil for every other role, so this is a no-op for them.
         if t then
@@ -7111,6 +7216,7 @@ if _G.__CC_SERVER_TEST then
         recomputeZoneOre = recomputeZoneOre,
         -- The dock load exactly as server.run does it, loggers included.
         loadDocks = function() W.loadDockAssignments(logInfo, logWarn) end,
+        registry = registry,
     }
     return server
 end

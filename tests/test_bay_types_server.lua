@@ -104,7 +104,102 @@ local function holdersAt(W, x, z, ids)
     return out
 end
 
+-- An idle heartbeat from id at pos, at time ms (os.epoch is the clock).
+local function heartbeat(T, id, pos, ms)
+    os.epoch = function() return ms end
+    T.handlers[proto.MSG.HEARTBEAT]({ type = proto.MSG.HEARTBEAT, from = id, to = "server",
+        payload = { status = proto.STATUS.IDLE, fuel = 100000, position = pos } })
+end
+
+-- A miner on DELIVERY[1], idle, moved by its REGISTER at t = 1,000,000 ms.
+local function movedOnOldCell()
+    local srv, T, W, restore = server('{ DELIVERY = { [ 1 ] = "node_118" } }')
+    local old = W.docks.DELIVERY[1]
+    local oldPos = { x = old.x, y = old.y, z = old.z }
+    register(T, "node_118", proto.ROLE.MINER, oldPos, false)
+    return srv, T, W, restore, old, oldPos
+end
+
 return {
+    -- FINAL REVIEW I1 (2026-11-11): the old cell used to be released at the
+    -- move. A lost REBOOT left the miner on a cell the server called free.
+    ["lost_reboot_is_resent_and_the_old_cell_is_never_given_away"] = function(assert_eq)
+        local _, T, W, restore, old, oldPos = movedOnOldCell()
+        local first = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        local delFree = W.freeDocks("DELIVERY")
+        -- 16 delivery turtles arrive: none may be given the miner's old cell
+        local ids = { "node_118" }
+        for i = 1, 16 do register(T, "d" .. i, proto.ROLE.DELIVERY); ids[#ids + 1] = "d" .. i end
+        local holders = holdersAt(W, old.x, old.z, ids)
+        T.sent = {}
+        heartbeat(T, "node_118", oldPos, 1000000 + 30000)   -- REBOOT lost: still there, 30 s on
+        local at30 = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        heartbeat(T, "node_118", oldPos, 1000000 + 61000)   -- 61 s on
+        local at61 = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        heartbeat(T, "node_118", oldPos, 1000000 + 90000)
+        local at90 = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        local stillHeld = W.getDockFor("DELIVERY", "node_118")
+        restore()
+        assert_eq(first, 1, "the first REBOOT goes with the move")
+        assert_eq(delFree, 15, "the old cell is not free while the miner stands on it")
+        assert_eq(#holders == 1 and holders[1], "node_118", "no delivery turtle is given the old cell")
+        assert_eq(at30, 0, "no re-send inside 60 s")
+        assert_eq(at61, 1, "the REBOOT is re-sent once 60 s have passed")
+        assert_eq(at90, 1, "and not again for another 60 s")
+        assert_eq(stillHeld, old, "the old cell stays reserved meanwhile")
+    end,
+
+    ["old_cell_is_released_once_the_turtle_is_seen_at_its_new_dock"] = function(assert_eq)
+        local _, T, W, restore, old, oldPos = movedOnOldCell()
+        local new = W.getDockFor("MINER", "node_118")
+        -- the REBOOT worked: it boots and re-registers still on the old cell (it
+        -- registers before it drives) -- no second REBOOT, the cell stays reserved
+        T.sent = {}
+        os.epoch = function() return 1000000 + 5000 end
+        register(T, "node_118", proto.ROLE.MINER, oldPos, false)
+        local onReRegister = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        local heldAfterReReg = W.getDockFor("DELIVERY", "node_118")
+        -- it drives home: heartbeats from its new dock
+        heartbeat(T, "node_118", { x = new.x, y = new.y, z = new.z }, 1000000 + 40000)
+        local released = W.getDockFor("DELIVERY", "node_118")
+        local said = count(T, "Dock released: node_118 is off bay 1 row A (DELIVERY)")
+        local delFree = W.freeDocks("DELIVERY")
+        T.sent = {}
+        heartbeat(T, "node_118", { x = new.x, y = new.y, z = new.z }, 1000000 + 400000)
+        local later = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        restore()
+        assert_eq(onReRegister, 0, "a REGISTER from the old cell sends no REBOOT (no reboot loop)")
+        assert_eq(heldAfterReReg, old, "the cell is still reserved after that REGISTER")
+        assert_eq(released, nil, "seen at its new dock, the old cell is let go")
+        assert_eq(said, 1, "and that is logged once")
+        assert_eq(delFree, 16, "every DELIVERY dock is free again")
+        assert_eq(later, 0, "nothing more is sent")
+    end,
+
+    ["registering_at_the_new_dock_releases_the_old_cell"] = function(assert_eq)
+        local _, T, W, restore, old = movedOnOldCell()
+        local new = W.getDockFor("MINER", "node_118")
+        register(T, "node_118", proto.ROLE.MINER, { x = new.x, y = new.y, z = new.z }, false)
+        local held = W.getDockFor("DELIVERY", "node_118")
+        restore()
+        assert_eq(held, nil, "a REGISTER from its new dock lets the old cell go")
+    end,
+
+    ["the_re_sends_are_bounded_then_the_cell_is_released_with_a_warn"] = function(assert_eq)
+        local _, T, W, restore, old, oldPos = movedOnOldCell()
+        T.sent = {}
+        for i = 1, 20 do heartbeat(T, "node_118", oldPos, 1000000 + i * 61000) end
+        local resent = countOf(sentTypes(T, "node_118"), proto.MSG.REBOOT)
+        local warned = count(T, "node_118 never left bay 1 row A (DELIVERY)", "WARN")
+        local held = W.getDockFor("DELIVERY", "node_118")
+        local miner = W.getDockFor("MINER", "node_118")
+        restore()
+        assert_eq(resent, 5, "five re-sends after the first, no more")
+        assert_eq(warned, 1, "one WARN says it never moved")
+        assert_eq(held, nil, "the old record is let go")
+        assert_eq(miner ~= nil, true, "it keeps its new MINER dock")
+    end,
+
     ["misplaced_miner_moves_once"] = function(assert_eq)
         -- The live fleet today: a miner in worker bay 1, which is now a DELIVERY bay.
         local _, T, W, restore = server('{ DELIVERY = { [ 1 ] = "node_118" } }')
