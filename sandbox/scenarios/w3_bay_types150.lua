@@ -78,6 +78,15 @@ return {
     local stuck = sim:capture_log("STUCK ")
     local moved = sim:capture_log("Dock moved: ")
     local deliveries = sim:capture_log("[DELIVER] -> node_")
+    -- COMPLETIONS FROM THE SERVER'S OWN LINES (final review, 2026-11-11): /state lists only active jobs, so the old sweep of
+    -- its COMPLETE jobs counted 0 of the 64 the log shows done (run 20261111-045214). "Dispatched job_N [TYPE] -> node_X
+    -- support job_M -> node_Y" names each job's type and turtle; "INFO Job complete: job_N" (the server's, not the
+    -- warehouse's "[WH] Job complete") says it is done.
+    local dispatched = sim:capture_log("Dispatched job_")
+    local doneLines = sim:capture_log("Job complete: job_")
+    -- ONE COMMAND PER SIMULATED MILLISECOND: the server drops a bridge command whose "ts:type" it has seen, so 112 holds
+    -- posted in one millisecond were ONE hold (111 "duplicate ignored" in the same run) and 14 miners flew, not 8.
+    local function post(cmd) sim:dispatch(cmd); sim:run_for(2) end
     local function reg(name) return (((sim.sched.standin.state or {}).turtles) or {})[name] end
     sim:storage_set("minecraft:cobblestone", 10000000)
     sim:storage_set("minecraft:chest", 100000)
@@ -95,7 +104,7 @@ return {
     sim:expect(north == 4 and south == 2, string.format("found the free miners (%d north, %d south)", north, south))
     for _, c in ipairs(workers(sim)) do
       if c.role == "miner" and not free[c.name] then
-        sim:dispatch{ type = "HOLD_TURTLE", params = { turtleId = c.name, reason = "w3_bay_types150: not one of the eight" } }
+        post{ type = "HOLD_TURTLE", params = { turtleId = c.name, reason = "w3_bay_types150: not one of the eight" } }
       end
     end
     sim:run_for(60000)
@@ -106,13 +115,13 @@ return {
       local x = area.x1 + 64 * 3 * (nextZone % 40)
       local z = area.z1 + 64 * 3 * math.floor(nextZone / 40)
       nextZone = nextZone + 1
-      sim:dispatch{ type = "ORDER_MINE", params = { x1 = x, z1 = z, x2 = x + 64, z2 = z, minerCount = 2 } }
+      post{ type = "ORDER_MINE", params = { x1 = x, z1 = z, x2 = x + 64, z2 = z, minerCount = 2 } }
     end
     -- each order a little different: the server drops a bridge command identical to one it just took
     local function orderDelivery()
       nextDest = nextDest % 4 + 1
       ordered = ordered + 1
-      sim:dispatch{ type = "ORDER_DELIVERY", params = { items = { { name = "minecraft:cobblestone", count = 32 + ordered } },
+      post{ type = "ORDER_DELIVERY", params = { items = { { name = "minecraft:cobblestone", count = 32 + ordered } },
         destination = { x = 112 + 12 * nextDest, y = 67, z = -2820 - 4 * nextDest } } }
     end
     -- completed jobs, by id, as the server's /state shows them (a finished job may later be pruned from it)
@@ -193,6 +202,21 @@ return {
     local byType, northMine, movedMine = {}, 0, 0
     local isMoved = {}
     for _, n in ipairs(MOVED) do isMoved[n] = true end
+    local jobOf = {}
+    for _, l in ipairs(dispatched.lines) do
+      local id, ty, by = l:match("Dispatched (job_%d+) %[(%u[%u_]*)%] %-> (node_%d+)")
+      if id then jobOf[id] = { type = ty, by = by } end
+      local sid, sby = l:match("support (job_%d+) %-> (node_%d+)")
+      if sid then jobOf[sid] = { type = "SUPPORT_FOLLOW", by = sby } end
+    end
+    for _, l in ipairs(doneLines.lines) do
+      local id = l:match("INFO%s+Job complete: (job_%d+)")
+      if id and jobOf[id] and not completed[id] then
+        local t = reg(jobOf[id].by)
+        completed[id] = { type = jobOf[id].type, by = jobOf[id].by, dockZ = t and t.dockZ }
+      end
+    end
+    sim.results.done_lines = #doneLines.lines
     for _, j in pairs(completed) do
       byType[j.type or "?"] = (byType[j.type or "?"] or 0) + 1
       if j.type == "MINE" then
