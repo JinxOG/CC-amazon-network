@@ -324,8 +324,9 @@ pattern `sandbox/tests/test_t2_scenario.py` already uses.
   runs `shakeout.setup` (all 160 turtles placed), then `ramp.ramp` with the job feeder's `tick` called at every tick
   sample of every hold, so each speed is measured with the whole fleet working. Record the chosen speed. If
   `RampFailed`, stop and mail the spec owner, who tells the user.
-- [ ] **Step 3: The 1x side test.** Bay 1 only: 16 turtles plus 4 miners, 6 real hours. Faults: radio loss and
-  latency bursts, 1 world restart, 1 central-server crash, 1 ATC crash. Write the report.
+- [ ] **Step 3: The 1x side test.** Bay 1 only: 16 turtles plus 4 miners, 3 real hours (user, 2026-11-12; was 6).
+  Faults: radio loss and latency bursts, 1 world restart, 1 central-server crash, 1 ATC crash, the four one-offs
+  about 40 minutes apart. Write the report.
 - [ ] **Step 4: Confirm with the user** that Windows Update is held off and the PC will be left alone. Then start
   the **24-hour run** at the chosen speed, with `watch_run.py --schedule`.
 - [ ] **Step 5: Write the report, then:**

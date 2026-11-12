@@ -34,7 +34,9 @@ run proves timing.
 
 **The 1x side test (spec owner's call):**
 - **Fleet:** the live fleet's size, bay 1 only (16 delivery and support turtles plus a handful of miners).
-- **Length:** 6 real hours.
+- **Length:** 3 real hours (the user's call, 2026-11-12; it was 6). The four one-off faults are spread about 40 minutes
+  apart, so each one's recovery is read on its own. Six hours would have added samples of rare timing failures, and
+  the 24-hour run gives those; slow drift is the 24-hour run's job either way.
 - **Faults:** radio loss and latency bursts, one world restart, one central-server crash and one ATC crash.
 - **Pass bar:** the same as the main run.
 - **If it fails:** it makes cards, but it does not block the 24-hour run unless a turtle is decommissioned.
