@@ -336,6 +336,19 @@ def gps_host_program(tower):
     return 'shell.run("gps", "host", %d, %d, %d)\n' % tuple(tower)
 
 
+def silent_towers(heard, towers=None):
+    """The GPS_TOWERS entries no reply in `heard` (a list of {"pos": [x, y, z], ...}) announced: a probe that hears 11 of 12 hosts
+    must say WHICH one is missing."""
+    said = {tuple(h["pos"]) for h in heard}
+    return [tuple(t) for t in (GPS_TOWERS if towers is None else towers) if tuple(t) not in said]
+
+
+def towers_off(computers, placed):
+    """placed: [{"pos", "id"}] of towers; computers: Control.computers() ({id: {"on", "pos"}}). The towers whose computer is not on
+    (a computer that is off answers no ping, and gps_hosts() reads disks, so it still lists it)."""
+    return [(tuple(g["pos"]), g["id"]) for g in placed if not computers.get(g["id"], {}).get("on")]
+
+
 def _det3(a, b, c):
     return (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0]))
 

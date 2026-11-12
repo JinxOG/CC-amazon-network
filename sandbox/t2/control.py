@@ -241,8 +241,14 @@ class Control:
         shutil.copy(startup, os.path.join(dest, "startup.lua"))
         self.shutdown([new])
         time.sleep(2)
-        self.turn_on([new])
-        return new
+        # A turn-on is a console command whose answer nobody read: in shakeout-world-a the last tower of eight saved On=0 and never
+        # answered a GPS ping. So look at the computer list and turn it on again until it says it is on (it is not on until then).
+        for attempt in range(6):
+            self.turn_on([new])
+            time.sleep(2)
+            if self.computers().get(new, {}).get("on"):
+                return new
+        raise RuntimeError("computer #%d at %d,%d,%d would not turn on after 6 tries" % (new, x, y, z))
 
     def spawn_listener(self, x, y, z, channels=None):
         """RETIRED by the control mod's radio log (radio_log("on"), t2_lines("radio")) now that the mod exists; kept for runs without it.

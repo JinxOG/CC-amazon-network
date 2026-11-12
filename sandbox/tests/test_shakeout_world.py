@@ -677,6 +677,55 @@ class ProofScenario(unittest.TestCase):
         self.assertTrue(any("NEW towers" in m for m in failed), failed)
         self.assertFalse([m for m in failed if "GPS hosts (need all 12" in m], "it still hears every host: only the offset fails")
 
+    def test_a_tower_computer_that_is_off_fails_a_check_that_names_it(self):
+        """shakeout-world-a: the 8th tower saved On=0; gps_hosts() reads disks so it still counted. The proof must name it."""
+        class OffServer(ProofServer):
+            def computers(self):
+                out = ProofServer.computers(self)
+                for i, v in out.items():
+                    if v["pos"] == tuple(world.GPS_TOWERS[7]):
+                        v["on"] = False
+                return out
+        ctx = self.run_proof(OffServer(deaf_to=[tuple(world.GPS_TOWERS[7])]))
+        failed = [m for ok, m in ctx.checks if not ok]
+        self.assertTrue(any("tower computer is on" in m and str(world.GPS_TOWERS[7]) in m for m in failed), failed)
+        named = [m for m in failed if "GPS hosts (need all 12" in m]
+        self.assertEqual(len(named), 3)
+        self.assertTrue(all("not heard: [%s]" % (world.GPS_TOWERS[7],) in m for m in named), named)
+
+    def test_silent_towers_names_the_missing_entries(self):
+        heard = [{"pos": list(t), "d": 1.0} for t in world.GPS_TOWERS[:-1]]
+        self.assertEqual(world.silent_towers(heard), [tuple(world.GPS_TOWERS[-1])])
+        self.assertEqual(world.silent_towers([{"pos": list(t)} for t in world.GPS_TOWERS]), [])
+
+    def test_spawn_computer_turns_a_computer_that_stays_off_on_again(self):
+        class Stub:
+            disks = tempfile.mkdtemp(prefix="stub_disks")
+            def __init__(self, ignore):
+                self.ignore, self.ons, self.state, self.n = ignore, 0, {}, 0
+            def command(self, text):
+                return "Changed the block"
+            def computers(self):
+                self.n += 1
+                return {7: {"on": self.state.get(7, False), "pos": (1, 2, 3)}} if self.n > 1 else {}
+            def shutdown(self, ids):
+                pass
+            def turn_on(self, ids):
+                self.ons += 1
+                if self.ons > self.ignore:
+                    self.state[7] = True
+        real = control.time.sleep
+        control.time.sleep = lambda s: None
+        try:
+            f = tempfile.NamedTemporaryFile("w", suffix=".lua", delete=False); f.write("x"); f.close()
+            ok = Stub(2)
+            self.assertEqual(control.Control.spawn_computer(ok, 1, 2, 3, f.name), 7)
+            self.assertEqual(ok.ons, 3)
+            with self.assertRaises(RuntimeError):
+                control.Control.spawn_computer(Stub(99), 1, 2, 3, f.name)
+        finally:
+            control.time.sleep = real
+
     def test_chest_nbt_that_is_not_applied_fails_the_read_back_but_not_the_128_check(self):
         """Why the read-back exists: bay 1 is on the default frequency, so chests set WITHOUT their NBT pass the 128-chest check."""
         server = ProofServer(drop_nbt=True)

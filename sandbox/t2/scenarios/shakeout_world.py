@@ -154,6 +154,9 @@ def steps(ctx):
                "found %d of them, %d hosts in all, blocked %s)" % (len(world.GPS_TOWERS), len(placed), len(placed & hosts), len(hosts),
                                                                    report["gps_blocked"] or "none"))
 
+    # 2d'. ... and ON (gps_hosts() reads disks, so it lists a tower whose computer is off: shakeout-world-a had one).
+    towers_down = world.towers_off(ctx._raw.computers(), report["gps"] + report["gps_present"])
+    ctx.expect(not towers_down, "every GPS tower computer is on (off: %s)" % (["#%d at %s" % (i, p) for p, i in towers_down] or "none"))
     # 2e. Probes in three far corners.
     ctx.wait_game(10)                                           # the hosts boot
     probe_path = os.path.join(tempfile.mkdtemp(prefix="shakeout_gps_probe_"), "startup.lua")
@@ -183,8 +186,9 @@ def steps(ctx):
         new_n = len(heard) - old_n
         need = len(old_hosts) + len(new_towers)
         ctx.expect(old_n == len(old_hosts) and new_n == len(new_towers),
-                   "probe at %s heard %d GPS hosts (need all %d: %d of the %d old, %d of the %d new towers)"
-                   % (spot, len(heard), need, old_n, len(old_hosts), new_n, len(new_towers)))
+                   "probe at %s heard %d GPS hosts (need all %d: %d of the %d old, %d of the %d new towers; GPS_TOWERS not heard: %s)"
+                   % (spot, len(heard), need, old_n, len(old_hosts), new_n, len(new_towers),
+                      world.silent_towers(heard) or "none"))
         off = [round(a - b, 3) for a, b in zip(fix, truth)] if fix else None
         ok_fix = bool(fix) and max(abs(d) for d in off) <= FIX_TOLERANCE
         ctx.expect(ok_fix, "gps.locate at %s gave %s, the probe's computer is at %s (offset %s, tolerance %s per axis)"
