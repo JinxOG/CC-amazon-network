@@ -28,6 +28,8 @@ import os
 import re
 import tempfile
 
+from shakeout import world
+
 NAME = "w3_bay_types"
 _spec = importlib.util.spec_from_file_location("w3_atc_pair", os.path.join(os.path.dirname(os.path.abspath(__file__)), "w3_atc_pair.py"))
 _pair = importlib.util.module_from_spec(_spec)
@@ -102,6 +104,53 @@ def must(ctx, text, want="Test passed"):
     return out
 
 
+def side_indexes(cells):
+    """{(x, z): (side, index)}: each dock's place in its side's list, in waypoints.lua's generation order (bay, then slot dx
+    ascending, then row A before B), which is what a dock index meant before per-bay types and what the saver still writes."""
+    out = {}
+    for side in ("WORKER", "SUPPORT"):
+        mine = sorted((c for c in cells if c["side"] == side), key=lambda c: (c["bay"], c["slot"], c["row"]))
+        for i, c in enumerate(mine, 1):
+            out[(c["x"], c["z"])] = (side, i)
+    return out
+
+
+def dock_file_text(pos_by_name, cells, with_bypos):
+    """dock_assignments.dat text for {turtle: (x, z)}: the legacy lists by side index (DELIVERY = worker side, SUPPORT = support side),
+    plus byPos when with_bypos -- the way the current saver writes it (waypoints.lua saveDockAssignments; byPos alone is ignored by
+    the loader unless the legacy lists say the same). Without byPos it is the file an OLD server wrote."""
+    idx = side_indexes(cells)
+    lists = {"DELIVERY": [], "SUPPORT": []}
+    by_pos = []
+    for n, (x, z) in sorted(pos_by_name.items()):
+        side, i = idx[(x, z)]
+        lists["DELIVERY" if side == "WORKER" else "SUPPORT"].append('[%d] = "%s"' % (i, n))
+        by_pos.append('["%d,%d"] = "%s"' % (x, z, n))
+    parts = []
+    if with_bypos:
+        parts.append("byPos = { %s }" % ", ".join(by_pos))
+    for k in ("DELIVERY", "SUPPORT"):
+        parts.append("%s = { %s }" % (k, ", ".join(lists[k])))
+    return "{ %s }" % ", ".join(parts)
+
+
+def rewrite_dock_file(ctx, sid, text, why):
+    """Server off, its disk's dock_assignments.dat replaced, server on and answering again. Recorded in INTERVENTIONS."""
+    c = ctx.control
+    c.shutdown([sid])
+    ctx.wait_game(5)
+    with open(os.path.join(c.disks, str(sid), "dock_assignments.dat"), "w", encoding="utf8", newline="\n") as f:
+        f.write(text)
+    ctx.interventions.append({"verb": "write_disk", "args": [repr(sid), repr("dock_assignments.dat")],
+                              "kwargs": {"text": repr(text[:300])}, "game_seconds": ctx.game_seconds()})
+    ctx.note("dock_assignments.dat on #%d rewritten (%s): %s" % (sid, why, text[:400]))
+    online0 = len(ctx.log_lines("Central server online"))
+    c.turn_on([sid])
+    ok = ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > online0, 300)
+    ctx.expect(bool(ok), "the dispatch computer came back (%s)" % why)
+    ctx.wait_until(lambda: len(turtles(ctx)) >= 14, 300)
+
+
 def steps(ctx):
     ctx.wait_registered(14, 300)
     c = ctx.control
@@ -121,7 +170,6 @@ def steps(ctx):
     # The world copy has bays 2-5's floor and pillars but not the ender chests under the new docks. The server may send the old miners
     # to ANY free MINER dock, so copy the chest under all of them, from bay 1 (world.py's step 4, on its own; the control wrapper
     # records each setblock as an intervention). The checks below still fail loudly if this did not happen.
-    from shakeout import world
     cells = world.dock_cells()
     miner_docks = [d for d in cells if d["type"] == "MINER"]
     under = world.new_under_report()
@@ -151,12 +199,30 @@ def steps(ctx):
     ctx.expect(bool(ctx.wait_until(lambda: ctx.log_lines("settled: rebuilt"), 120)), "it settled and rebuilt")
     ctx.wait_until(lambda: len(ctx.log_lines("ATC heard")) >= 10, 180)
 
-    # 2. The move path: miners the old file had on worker bay 1 (now DELIVERY) moved once each, and standing there.
+    # 2. The move path: a miner the old file has on a worker bay 1 cell (now DELIVERY) is moved once, and ends standing on a MINER
+    # dock. The world copy's miners are NOT misplaced (they registered on bay 2 before the server restarted: run b), so this stages
+    # one: the dispatch computer is stopped and given an OLD-format file (legacy lists only, no byPos) that puts one miner on a free
+    # bay-1 DELIVERY cell; its server then reads the file by side and index and must move that miner.
     ts = turtles(ctx)
     miners = sorted(n for n, e in ts.items() if (e.get("role") or "").upper() == "MINER")
     ctx.expect(bool(miners), "the fleet has miners (%s)" % miners)
     if not miners:
         return
+    cells = world.dock_cells()
+    sid0 = server_computer(ctx)
+    ctx.expect(sid0 is not None, "found the dispatch computer (#%s)" % sid0)
+    if sid0 is None:
+        return
+    held = {(e.get("dockX"), e.get("dockZ")) for e in ts.values()}
+    free = [d for d in cells if d["bay"] == 1 and d["type"] == "DELIVERY" and (d["x"], d["z"]) not in held]
+    if not free:
+        raise RuntimeError("staging: no free bay-1 DELIVERY dock to put a miner on")
+    stray, spot = miners[-1], free[0]
+    assign = {n: (int(e.get("dockX")), int(e.get("dockZ"))) for n, e in ts.items()
+              if isinstance(e.get("dockX"), (int, float)) and isinstance(e.get("dockZ"), (int, float))}
+    assign[stray] = (spot["x"], spot["z"])
+    rewrite_dock_file(ctx, sid0, dock_file_text(assign, cells, False),
+                      "OLD format, %s put on bay 1 row %s DELIVERY dock %d,%d" % (stray, spot["row"], spot["x"], spot["z"]))
     moved = ctx.wait_until(lambda: ctx.log_lines("Dock moved: "), 300) or []
     ctx.note("'Dock moved' lines: %s" % moved)
     for m in miners:
@@ -181,23 +247,12 @@ def steps(ctx):
     ctx.expect(sid is not None, "found the dispatch computer (#%s)" % sid)
     if sid is None:
         return
-    entries = []
+    assign = {}
     for n, e in sorted(ts.items()):
         x, z = (NORTH_DOCK if n == who else (e.get("dockX"), e.get("dockZ")))
         if isinstance(x, (int, float)) and isinstance(z, (int, float)):
-            entries.append('["%d,%d"] = "%s"' % (x, z, n))
-    text = "{ byPos = { %s } }" % ", ".join(entries)
-    c.shutdown([sid])
-    ctx.wait_game(5)
-    with open(os.path.join(c.disks, str(sid), "dock_assignments.dat"), "w", encoding="utf8", newline="\n") as f:
-        f.write(text)
-    ctx.interventions.append({"verb": "write_disk", "args": [repr(sid), repr("dock_assignments.dat")],
-                              "kwargs": {"text": repr(text[:300])}, "game_seconds": ctx.game_seconds()})
-    ctx.note("dock_assignments.dat on #%d rewritten from /state with %s on %s: %s" % (sid, who, NORTH_DOCK, text[:400]))
-    online0 = len(ctx.log_lines("Central server online"))
-    c.turn_on([sid])
-    ctx.expect(bool(ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > online0, 300)), "the dispatch computer came back")
-    ctx.wait_until(lambda: len(turtles(ctx)) >= 14, 300)
+            assign[n] = (int(x), int(z))
+    rewrite_dock_file(ctx, sid, dock_file_text(assign, cells, True), "%s on %s, the current saver's format" % (who, NORTH_DOCK))
     reg = ctx.wait_until(lambda: (lambda e: e if e and (e.get("dockX"), e.get("dockZ")) == NORTH_DOCK else None)(turtles(ctx).get(who)), 300)
     ctx.expect(bool(reg), "the server has %s on the north dock %s after the restart (%s)" % (who, NORTH_DOCK,
                {k: (turtles(ctx).get(who) or {}).get(k) for k in ("dock", "dockX", "dockZ")}))
