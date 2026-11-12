@@ -2180,7 +2180,7 @@ function departImpl(noDescend)
             -- sandbox/scenarios/w3_atc_pair_split.lua). So it waits STAGE_WAIT_S.
             logInfo("Waiting for SUPPORT_STAGED...")
             local deadline = os.epoch("utc") / 1000 + atc.stageWaitS()
-            local staged = false
+            local staged, gaveUp = false, nil
             while os.epoch("utc") / 1000 < deadline do
                 if base.isRecalled() then break end
                 local msg = base.receive(5)
@@ -2189,6 +2189,14 @@ function departImpl(noDescend)
                 elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
                     logInfo("Support staged — descending together.")
                     staged = true
+                    break
+                elseif msg.type == proto.MSG.JOB_ABORT and msg.from == _self.partnerId then
+                    -- The support has given up on this job (it waits only 180 s for
+                    -- HOLE_READY, and under the ATC a departure can take longer to be
+                    -- let in). Waiting out STAGE_WAIT_S for it held the dispatch hole
+                    -- 10 minutes per pair, and every pair behind timed out the same
+                    -- way (w3_bay_types150, 2026-11-12: 12 supports, a 16,140 s wait).
+                    gaveUp = msg.payload and msg.payload.reason or "its job was aborted"
                     break
                 end
                 -- Any other message (HEARTBEAT_ACK etc.) is silently ignored here;
@@ -2199,7 +2207,10 @@ function departImpl(noDescend)
             -- following a turtle that has gone. One that went down anyway ended at
             -- "Delivery ascending - holding position" and held the dispatch hole for
             -- the rest of a 150-turtle run (w3_bay_types150, 2026-11-11).
-            if not staged then
+            if gaveUp then
+                logWarn(string.format("Support %s gave up (%s) -- going down alone",
+                    tostring(_self.partnerId), tostring(gaveUp)))
+            elseif not staged then
                 logWarn(string.format("Support %s never staged in %ds -- going down alone; told it to stand down",
                     tostring(_self.partnerId), atc.stageWaitS()))
                 base.atc.signalSupport(proto.MSG.PARTNER_LEFT, _self.partnerId)
