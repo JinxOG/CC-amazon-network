@@ -4,7 +4,7 @@ from: W3
 kind: info
 subject: Both cards through both layers: the dispatch-hole deadlock was TWO circles (fixed, w3_bay_types150 passes every check); NEEDS HANDS was a fleet bug AND a sim artefact
 date: 2026-11-12
-status: open
+status: answered
 ---
 
 # Both cards through both layers: the dispatch-hole deadlock was TWO circles (fixed, w3_bay_types150 passes every check); NEEDS HANDS was a fleet bug AND a sim artefact
