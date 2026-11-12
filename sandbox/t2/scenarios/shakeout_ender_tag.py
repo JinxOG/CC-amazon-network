@@ -37,9 +37,9 @@ r.chest = turtle.getItemDetail(1)
 turtle.select(1)
 -- the first cell that takes the chest wins; every refusal is recorded so a failure names why
 local dirs = {
-  {"front", turtle.place, turtle.drop, turtle.detect, turtle.inspect},
-  {"down", turtle.placeDown, turtle.dropDown, turtle.detectDown, turtle.inspectDown},
-  {"up", turtle.placeUp, turtle.dropUp, turtle.detectUp, turtle.inspectUp},
+  {"front", turtle.place, turtle.drop, turtle.detect, turtle.inspect, turtle.suck},
+  {"down", turtle.placeDown, turtle.dropDown, turtle.detectDown, turtle.inspectDown, turtle.suckDown},
+  {"up", turtle.placeUp, turtle.dropUp, turtle.detectUp, turtle.inspectUp, turtle.suckUp},
 }
 for turn = 0, 3 do
   if turn > 0 then turtle.turnRight() end
@@ -53,6 +53,15 @@ for turn = 0, 3 do
         if ok then
           r.placed = true
           r.place_dir = d[1]
+          -- a bay chest may be full (the dock chests of frequency 0,0,0 are the fuel chests), so take one item OUT first:
+          -- that proves the connection by itself and makes room for the diamond
+          turtle.select(3)
+          local sok, swhy = d[6]()   -- a whole stack: a full chest then has a free slot for the diamond
+          r.suck = sok
+          r.suck_why = swhy
+          local got = turtle.getItemDetail(3)
+          r.sucked = got and got.name
+          r.sucked_n = got and got.count
           turtle.select(2)
           local dok, dwhy = d[3](1)
           r.drop = dok
@@ -70,13 +79,16 @@ READER_LUA = '''
 while true do
   local n, seen = 0, 0
   local inv = peripheral.wrap("bottom")
+  local total, names = 0, {}
   if inv and peripheral.hasType("bottom", "inventory") then
     seen = 1
     for _, st in pairs(inv.list()) do
       if st.name == "minecraft:diamond" then n = n + st.count end
+      total = total + st.count
+      names[st.name] = true
     end
   end
-  local f = fs.open("reader.json", "w"); f.write(textutils.serialiseJSON({diamonds = n, inventories = seen, t = os.epoch("utc")})); f.close()
+  local f = fs.open("reader.json", "w"); f.write(textutils.serialiseJSON({diamonds = n, total = total, names = names, inventories = seen, t = os.epoch("utc")})); f.close()
   sleep(2)
 end
 '''
@@ -195,6 +207,7 @@ def steps(ctx):
     if not r0.get("inventories"):
         return
     n_before = r0["diamonds"]
+    t_before = r0.get("total")
 
     # ---- the placer: start once with no chest, then clean up the stale result before the real run ----
     x, y, z = c.free_spot()
@@ -225,6 +238,9 @@ def steps(ctx):
     ctx.expect(bool(done), "the placer finished its probe (ender_probe.json written)")
     ctx.note("placer result: %s" % result)
     ctx.expect(result.get("placed") is True, "the turtle placed the tagged ender chest (%s)" % result.get("place_why"))
+    ctx.expect(result.get("suck") is True and result.get("sucked") in (r0.get("names") or {}),
+               "the turtle took an item OUT of the placed chest and it is one bay 1's chest holds (%s x%s; chest holds %s; %s)"
+               % (result.get("sucked"), result.get("sucked_n"), sorted(r0.get("names") or {}), result.get("suck_why")))
     ctx.expect(result.get("drop") is True, "the turtle dropped the diamond into it (%s)" % result.get("drop_why"))
 
     # ---- the connection: the reader beside bay 1's chest must now count one more diamond ----

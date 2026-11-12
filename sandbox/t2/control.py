@@ -132,6 +132,24 @@ class Control:
                          % (x, y, z, slot, slot))
         raise RuntimeError("slot %d of #%d would not clear" % (slot, computer_id))
 
+    @staticmethod
+    def owner_of(block_text):
+        """The Owner compound of a computer block's data as SNBT with no spaces ('{UpperId:..L,LowerId:..L,Name:"..."}'), or None."""
+        m = re.search(r"Owner:\s*(\{[^{}]*\})", block_text)
+        return re.sub(r"\s+(?=(?:[A-Za-z]+:)|\")", "", m.group(1)).replace(": ", ":") if m else None
+
+    def owner_snbt(self, limit=40):
+        """The Owner of the first world-copy turtle that has one (cached). A turtle placed by setblock has NO owner, and CC places
+        blocks with a fake player made from the owner: without one every turtle.place is refused ("Cannot place block here")."""
+        if getattr(self, "_owner", None) is None:
+            self._owner = ""
+            for cid, info in list(self.computers().items())[:limit]:
+                found = self.owner_of(self.block_data(info["pos"]))
+                if found:
+                    self._owner = found
+                    break
+        return self._owner or None
+
     def free_spot(self, y=67, tall=2):
         """A position near the base where `tall` blocks above each other are air (for spawn_turtle / spawn_listener)."""
         for x in range(160, 200, 3):
@@ -155,8 +173,10 @@ class Control:
         caller can check its disk before its own boot writes anything there (then turn_on it)."""
         before = set(self.computers())
         right_nbt = ',RightUpgrade:"%s"' % right if right else ""
+        owner = self.owner_snbt()
+        owner_nbt = ",Owner:%s" % owner if owner else ""
         out = self.command('setblock %d %d %d computercraft:turtle_advanced[facing=%s]{LeftUpgrade:"computercraft:wireless_modem_advanced",'
-                           'LeftUpgradeNbt:{active:1b},Fuel:%d%s}' % (x, y, z, facing, fuel, right_nbt))
+                           'LeftUpgradeNbt:{active:1b},Fuel:%d%s%s}' % (x, y, z, facing, fuel, right_nbt, owner_nbt))
         if "Changed the block" not in out:
             raise RuntimeError(out)
         new = None

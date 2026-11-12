@@ -40,5 +40,33 @@ class SetSlotTag(unittest.TestCase):
         self.assertEqual(append_command(r), 'data modify block 10 67 -20 Items append value {Slot:3b,id:"minecraft:coal",Count:2b}')
 
 
+class Owner(unittest.TestCase):
+    REAL = 'x has the following block data: {Owner: {UpperId: -47L, LowerId: -81L, Name: "HighJinxOG"}, Fuel: 5, id: "computercraft:turtle_advanced"}'
+
+    def test_owner_of_reads_the_compound(self):
+        self.assertEqual(control.Control.owner_of(self.REAL), '{UpperId:-47L,LowerId:-81L,Name:"HighJinxOG"}')
+        self.assertIsNone(control.Control.owner_of("{Fuel: 5, id: x}"))
+
+    def test_spawn_turtle_gives_the_new_turtle_the_world_copy_owner(self):
+        r = Recorder()
+        r.computers = lambda: {7: {"on": True, "pos": (1, 2, 3)}}
+        r.block_data = lambda pos, path="": self.REAL
+        out = []
+        r.command = lambda text: out.append(text) or "Changed the block"
+        with self.assertRaises(RuntimeError):      # no new computer ever appears in the fake; only the setblock matters here
+            self._spawn_setblock(r)
+        self.assertIn(',Owner:{UpperId:-47L,LowerId:-81L,Name:"HighJinxOG"}}', out[0])
+
+    @staticmethod
+    def _spawn_setblock(r):
+        import time
+        orig = time.sleep
+        time.sleep = lambda s: None
+        try:
+            r.spawn_turtle(5, 5, 5, "SUPPORT")
+        finally:
+            time.sleep = orig
+
+
 if __name__ == "__main__":
     unittest.main()
