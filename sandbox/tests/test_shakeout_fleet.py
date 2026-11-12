@@ -88,6 +88,11 @@ class FakeGame:
             if item is None:
                 return "Found no elements matching Items[{Slot:%db}]" % slot
             return "%d, %d, %d has the following block data: %s" % (pos + (item,))
+        m = re.match(r"^data get block %s$" % COORD, text)       # the whole block: a world-copy turtle has an Owner
+        if m:
+            pos = tuple(int(m.group(i)) for i in (1, 2, 3))
+            return '%d, %d, %d has the following block data: {Owner: {UpperId: -47L, LowerId: -81L, Name: "HighJinxOG"}, ComputerId: %d}' % (
+                pos + (self.comp_at(pos)["cid"],))
         m = re.match(r"^data get block %s (Fuel|RightUpgrade|LeftUpgrade)$" % COORD, text)
         if m:
             pos = tuple(int(m.group(i)) for i in (1, 2, 3))
@@ -224,6 +229,12 @@ class TheFleet(unittest.TestCase):
 
     def turtle_at(self, cell):
         return self.game.blocks.get((cell["x"], cell["y"], cell["z"]))
+
+    def test_every_placed_turtle_carries_the_world_copy_owner(self):
+        """A turtle set by setblock has no Owner, and CC places blocks with a fake player made from it: an ownerless turtle
+        cannot turtle.place anything (T2 run shakeout-ender-e), so every place_fleet turtle must be given the Owner."""
+        for node, cell in self.placed.items():
+            self.assertIn('Owner:{UpperId:-47L,LowerId:-81L,Name:"HighJinxOG"}', self.turtle_at(cell)["nbt"], node)
 
     def test_fleet_is_fresh(self):
         placed, game = self.placed, self.game

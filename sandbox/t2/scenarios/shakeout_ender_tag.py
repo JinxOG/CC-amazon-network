@@ -17,6 +17,13 @@ Slot numbering: NBT slot 0 = Lua slot 1 (set_slot/get_slot take NBT numbers, the
      from N to N+1: the only way that can happen is the placed chest being on bay 1's frequency. Both the placer's own
      results (placed, drop, failure reason) and the count change are asserted, so each step can fail.
 
+  5. LINK ON 0,10,0: the fuel chest (0,0,0) is refilled by an RS exporter, so a drop into it proves nothing either way. On
+     frequency 0,10,0 (free space, no exporter) one turtle places its own chest and counts it; a second places a chest and
+     drops a diamond; the first must count N -> N+1.
+  The connection check for the fuel frequency is taking an item OUT of the freshly placed chest (a new chest holds items only
+  if it is linked); the reader's count is supporting evidence. Spawned turtles need an Owner (Control.owner_snbt), else
+  turtle.place is refused.
+
 Side effects: the run leaves one diamond in bay 1's chest and the reader and placer turtles (and the placed chest) standing in the
 world, so use a throwaway world copy.
 
@@ -56,7 +63,8 @@ for turn = 0, 3 do
           -- a bay chest may be full (the dock chests of frequency 0,0,0 are the fuel chests), so take one item OUT first:
           -- that proves the connection by itself and makes room for the diamond
           turtle.select(3)
-          local sok, swhy = d[6]()   -- a whole stack: a full chest then has a free slot for the diamond
+          local sok, swhy = false, "skipped"
+          if not fs.exists("nosuck") then sok, swhy = d[6]() end   -- a whole stack: a full chest then has a free slot
           r.suck = sok
           r.suck_why = swhy
           local got = turtle.getItemDetail(3)
@@ -73,6 +81,25 @@ for turn = 0, 3 do
 end
 if not r.placed then r.placed = false end
 local f = fs.open("ender_probe.json", "w"); f.write(textutils.serialiseJSON(r)); f.close()
+'''
+
+READER10_LUA = '''
+-- places its own chest in front (a turtle with an Owner can), then counts what the chest holds every 2 s
+turtle.select(1)
+local ok, why = turtle.place()
+while true do
+  local n, total, names = 0, 0, {}
+  local inv = peripheral.wrap("front")
+  if inv and peripheral.hasType("front", "inventory") then
+    for _, st in pairs(inv.list()) do
+      if st.name == "minecraft:diamond" then n = n + st.count end
+      total = total + st.count
+      names[st.name] = true
+    end
+  end
+  local f = fs.open("reader.json", "w"); f.write(textutils.serialiseJSON({diamonds = n, total = total, names = names, placed = ok, why = why, inventories = inv and 1 or 0, t = os.epoch("utc")})); f.close()
+  sleep(2)
+end
 '''
 
 READER_LUA = '''
@@ -114,6 +141,13 @@ def frequency_of(text):
 
 
 FACING = {(1, 0): "east", (-1, 0): "west", (0, 1): "south", (0, -1): "north"}
+
+
+def facing_for(raw, x, y, z):
+    """A facing whose front cell is air with a solid block under it (somewhere to place a chest), or None."""
+    return next((f for (dx, dz), f in FACING.items()
+                 if "Test passed" in raw.command("execute if block %d %d %d air" % (x + dx, y, z + dz))
+                 and "Test passed" in raw.command("execute unless block %d %d %d air" % (x + dx, y - 1, z + dz))), None)
 
 
 def frequency_pairs(text):
@@ -211,9 +245,7 @@ def steps(ctx):
 
     # ---- the placer: start once with no chest, then clean up the stale result before the real run ----
     x, y, z = c.free_spot()
-    facing = next((f for (dx, dz), f in FACING.items()
-                   if "Test passed" in raw.command("execute if block %d %d %d air" % (x + dx, y, z + dz))
-                   and "Test passed" in raw.command("execute unless block %d %d %d air" % (x + dx, y - 1, z + dz))), None)
+    facing = facing_for(raw, x, y, z)
     ctx.expect(facing is not None, "the placer's spot %s has an air cell beside it with a solid block under it to place the chest into" % ((x, y, z),))
     if facing is None:
         return
@@ -241,12 +273,53 @@ def steps(ctx):
     ctx.expect(result.get("suck") is True and result.get("sucked") in (r0.get("names") or {}),
                "the turtle took an item OUT of the placed chest and it is one bay 1's chest holds (%s x%s; chest holds %s; %s)"
                % (result.get("sucked"), result.get("sucked_n"), sorted(r0.get("names") or {}), result.get("suck_why")))
-    ctx.expect(result.get("drop") is True, "the turtle dropped the diamond into it (%s)" % result.get("drop_why"))
+    # The fuel chest (frequency 0,0,0) is kept topped up with coal by an RS exporter, so a freed slot is refilled at once and a
+    # drop into it may say "No space for items" whatever the link: the drop is only noted here, and proven on frequency 0,10,0 below.
+    now = disk_json(c, reader, "reader.json")
+    ctx.note("fuel chest: the turtle's drop of the diamond: %s (%s); the reader's diamonds %s -> %s, total %s -> %s" % (
+        result.get("drop"), result.get("drop_why"), n_before, now.get("diamonds"), t_before, now.get("total")))
 
-    # ---- the connection: the reader beside bay 1's chest must now count one more diamond ----
-    ctx.wait_until(lambda: disk_json(c, reader, "reader.json").get("diamonds") != n_before, 60, poll=3)
+    # ---- frequency 0,10,0 (the delivery hand-off chest, free space, no exporter): a second linked chest reads what the first got ----
+    tag10 = "{Frequency:{left:0,middle:10,right:0}}"
+    x2, y2, z2 = c.free_spot()
+    f2 = facing_for(raw, x2, y2, z2)
+    ctx.expect(f2 is not None, "a spot %s for the 0,10,0 reader's own chest" % ((x2, y2, z2),))
+    if f2 is None:
+        return
+    r10_lua = os.path.join(ctx.run, "ender_reader10.lua")
+    write_probe(ctx, r10_lua, READER10_LUA)
+    reader10 = c.spawn_turtle(x2, y2, z2, "SUPPORT", startup=r10_lua, fuel=100, facing=f2, items={0: (ENDER_ITEM, 1, tag10)})
+    ctx.wait_until(lambda: "diamonds" in disk_json(c, reader10, "reader.json"), 120, poll=3)
+    q0 = disk_json(c, reader10, "reader.json")
+    ctx.note("0,10,0 reader #%d first reading: %s" % (reader10, q0))
+    ctx.expect(q0.get("placed") is True and q0.get("inventories") == 1,
+               "the 0,10,0 reader placed its chest and sees it as an inventory (%s)" % q0.get("why"))
+    if not q0.get("inventories"):
+        return
+    x3, y3, z3 = c.free_spot()
+    f3 = facing_for(raw, x3, y3, z3)
+    ctx.expect(f3 is not None, "a spot %s for the 0,10,0 giver" % ((x3, y3, z3),))
+    if f3 is None:
+        return
+    giver = c.spawn_turtle(x3, y3, z3, "SUPPORT", startup=placer_lua, fuel=1000, facing=f3)
+    c.shutdown([giver])
+    if os.path.exists(os.path.join(c.disks, str(giver), "ender_probe.json")):
+        os.remove(os.path.join(c.disks, str(giver), "ender_probe.json"))
+    with open(os.path.join(c.disks, str(giver), "nosuck"), "w") as fh:
+        fh.write("1")
+    ctx.interventions.append({"verb": "write_disk_file", "args": [repr(giver), repr("nosuck")], "kwargs": {}, "game_seconds": ctx.game_seconds()})
+    c.set_slot(giver, 0, ENDER_ITEM, 1, tag=tag10)
+    c.set_slot(giver, 1, "minecraft:diamond", 1)
+    c.turn_on([giver])
+    ctx.wait_until(lambda: "placed" in disk_json(c, giver, "ender_probe.json"), 120, poll=3)
+    g = disk_json(c, giver, "ender_probe.json")
+    ctx.note("0,10,0 giver result: %s" % g)
+    ctx.expect(g.get("placed") is True and g.get("drop") is True,
+               "the 0,10,0 giver placed its chest and dropped the diamond (%s / %s)" % (g.get("place_why"), g.get("drop_why")))
+    ctx.wait_until(lambda: disk_json(c, reader10, "reader.json").get("diamonds") != q0.get("diamonds"), 60, poll=3)
     time.sleep(3)
-    n_after = disk_json(c, reader, "reader.json").get("diamonds")
-    ctx.note("diamonds seen by the reader: before %s, after %s" % (n_before, n_after))
-    ctx.expect(n_after == n_before + 1, "bay 1's chest gained exactly the dropped diamond (%s -> %s): the placed chest is on bay 1's frequency"
-               % (n_before, n_after))
+    q1 = disk_json(c, reader10, "reader.json")
+    ctx.note("0,10,0 reader: before %s, after %s" % (q0, q1))
+    ctx.expect(q1.get("diamonds") == q0.get("diamonds", 0) + 1,
+               "the 0,10,0 reader's chest gained exactly the giver's diamond (%s -> %s): two placed chests on one frequency are linked"
+               % (q0.get("diamonds"), q1.get("diamonds")))
