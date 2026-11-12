@@ -68,9 +68,19 @@ def steps(ctx):
     miners = sorted((n for n, cell in placed.items() if cell["type"] == "MINER"), key=lambda n: (placed[n]["x"], placed[n]["z"]))
     two = [miners[0], miners[-1]]                    # worker bay 2's first dock and support bay 5's last: both sides of the base
     ctx.expect(all(n in loaders for n in two), "the two miners carry fresh loaders (%s)" % {n: loaders.get(n) for n in two})
-    for n in miners:
-        if n not in two:
-            ctx.dispatch("HOLD_TURTLE", {"turtleId": n, "reason": "shakeout_fleet_proof: only %s mine" % " and ".join(two)})
+    held = [n for n in miners if n not in two]
+    for n in held:
+        ctx.dispatch("HOLD_TURTLE", {"turtleId": n, "reason": "shakeout_fleet_proof: only %s mine" % " and ".join(two)})
+
+    def unheld():    # the server's own 'HOLD: <node> is not offered work' line is the evidence a hold landed
+        text = "\n".join(ctx.log_lines("HOLD: node_"))
+        return [n for n in held if ("HOLD: %s " % n) not in text]
+    ctx.wait_until(lambda: not unheld(), 120)
+    missing = unheld()
+    ctx.expect(not missing, "the server holds every other miner (%d of %d; not held: %s; 'duplicate ignored' lines: %d)"
+               % (len(held) - len(missing), len(held), missing[:8], len(ctx.log_lines("duplicate ignored"))))
+    if missing:
+        return
     ctx.wait_game(10)
     sent0 = len(ctx.log_lines("Dispatched job_"))
     for x, z in ZONES:

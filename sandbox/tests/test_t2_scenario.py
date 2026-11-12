@@ -46,6 +46,28 @@ class GameTime(unittest.TestCase):
         self.assertIn("nothing", str(cm.exception))
 
 
+class DispatchSpacing(unittest.TestCase):
+    """central_server drops a bridge command whose (bridge ms stamp, type) it has seen: 126 HOLD_TURTLEs posted back to back
+    lost 29 as 'duplicate ignored' (shakeout-fleet-d, 2026-11-12). No two posts may reach the bridge in one millisecond."""
+
+    def test_back_to_back_posts_are_at_least_two_ms_apart(self):
+        clock = [1000.0]
+        sent = []
+        orig = (scenario.time.monotonic, scenario.time.sleep, scenario.runmod.bridge_post)
+        scenario.time.monotonic = lambda: clock[0]
+        scenario.time.sleep = lambda s: clock.__setitem__(0, clock[0] + s)
+        scenario.runmod.bridge_post = lambda path, obj: sent.append(clock[0]) or "{}"
+        try:
+            c = scenario.Ctx.__new__(scenario.Ctx)
+            c.notes, c.g0 = [], None
+            for _ in range(5):
+                c.dispatch("HOLD_TURTLE", {"turtleId": "node_1"})
+        finally:
+            scenario.time.monotonic, scenario.time.sleep, scenario.runmod.bridge_post = orig
+        self.assertEqual(len(sent), 5)
+        self.assertTrue(all(b - a >= 0.002 for a, b in zip(sent, sent[1:])), sent)
+
+
 class JobSummary(unittest.TestCase):
     def test_the_ore_in_a_real_sector_line_is_counted(self):
         class Ctx:

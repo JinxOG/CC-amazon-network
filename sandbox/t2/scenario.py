@@ -202,9 +202,22 @@ class Ctx:
         self.wait_until(lambda: False, seconds, poll)
 
     # -- the bridge ---------------------------------------------------------------------------------------------
+    POST_GAP_S = 0.003   # central_server drops a command whose (bridge ms stamp, type) it has already seen (isDuplicate)
+
     def dispatch(self, type_, params=None):
+        """POST /command. The bridge stamps each command with Date.now() and central_server ignores a second command of the same
+        type with the same stamp as a duplicate: 126 HOLD_TURTLEs posted back to back lost 29 that way (shakeout-fleet-d,
+        2026-11-12). So a post starts at least POST_GAP_S after the previous one returned, and no two share a millisecond."""
         self.notes.append("game time %.0f s: POST /command %s %s" % (self.game_seconds(), type_, json.dumps(params or {})))
-        return runmod.bridge_post("/command", {"type": type_, "params": params or {}})
+        last = getattr(self, "_last_post", None)
+        if last is not None:
+            wait = last + self.POST_GAP_S - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+        try:
+            return runmod.bridge_post("/command", {"type": type_, "params": params or {}})
+        finally:
+            self._last_post = time.monotonic()
 
     def state(self):
         return json.loads(runmod.bridge_get("/state"))
