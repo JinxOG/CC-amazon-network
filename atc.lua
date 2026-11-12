@@ -114,6 +114,19 @@ local function routeFree(st, list, id, group, cur)
     return true
 end
 
+-- Its partner (same group, another turtle) already holds a booking: the pair is
+-- part-way through the base together. An older waiter that overlaps can only be
+-- waiting for what the pair holds -- it cannot move until the pair has gone --
+-- so holding the second half of the pair back for it is a circle: the shakeout's
+-- 150-turtle sim froze the dispatch hole that way (w3_bay_types150, 2026-11-11).
+local function partnerIn(st, id, group)
+    if group == nil then return false end
+    for _, x in pairs(st.res) do
+        if x.group == group and x.id ~= id then return true end
+    end
+    return false
+end
+
 local function olderWaiterOverlaps(st, list, id, now)
     local mine = st.waiting[id]
     local since = mine and mine.since or now
@@ -165,7 +178,7 @@ function core.handle(st, id, p, now)
         local r = rid and st.res[rid]
         if r and r.list[1] == list[1] and #r.list == #list then return { ok = true, rid = rid } end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
-        if free and not olderWaiterOverlaps(st, list, id, now) then
+        if free and (partnerIn(st, id, p.group) or not olderWaiterOverlaps(st, list, id, now)) then
             local nrid = admit(st, id, list, p.cur, now, p.cur ~= nil)
             st.res[nrid].group = p.group
             st.waiting[id] = nil

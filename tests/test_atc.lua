@@ -145,6 +145,26 @@ return {
         end
     end,
 
+    -- The shakeout's per-bay 150 sim (w3_bay_types150, runs 053838/193503/194547, 2026-11-11): a delivery held DH at
+    -- the hole waiting for its support; an older request wanted DH too and had waited past FAIR_MS, so the fairness
+    -- rule kept the support out behind it; the older one could never get in while the pair held DH. A circle: the
+    -- delivery left alone after 600 s, its support went down after it and held DH for good (waits of 19,353 s).
+    ["a support whose delivery is already let in is not kept out by an older waiter"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "del", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "del" }, t).ok, true)
+        for _, s in ipairs({ "S1", "J1", "W1", "DH" }) do core.handle(st, "del", { op = "enter", sec = s }, t) end
+        for _, s in ipairs({ "S1", "J1", "W1" }) do core.handle(st, "del", { op = "leave", sec = s }, t) end
+        local OLD = { "S2", "J2", "W2", "J1", "W1", "DH" }
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, t).ok, false, "DH is the pair's")
+        local later = t + core.CFG.FAIR_MS + 1
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, later).ok, false, "still waiting, past FAIR_MS")
+        local r = core.handle(st, "sup", { op = "request", route = { "N1", "J1", "W1", "DH" }, group = "del" }, later)
+        assert_eq(r.ok, true, "its partner is in: the older waiter cannot move until this pair has gone ("
+            .. tostring(r.why) .. ")")
+        assert_eq(core.handle(st, "other", { op = "request", route = { "N2", "J2" } }, later).ok, false,
+            "a stranger is still held behind the older waiter")
+    end,
+
     ["a request kept waiting holds off later ones that overlap it"] = function(assert_eq)
         local core, st, t = live()
         -- b sits in W2 (part of long's route) for longer than FAIR_MS

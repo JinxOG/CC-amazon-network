@@ -72,6 +72,49 @@ return {
         assert_eq(body:find("slot = 11", 1, true) ~= nil, true, "with the slot in it")
     end,
 
+    -- The shakeout's per-bay 150 sim (w3_bay_types150, 2026-11-11): a delivery gave up waiting for its support and
+    -- went down alone; the support went down after it anyway, ended at "Delivery ascending - holding position" and
+    -- held the dispatch hole (DH) for the rest of the run. A support whose delivery has left must stand down.
+    ["a support told its delivery has left gives up waiting to be let in"] = function(assert_eq)
+        local c = stub.install({ pos = { x = 158, y = 67, z = -2806, facing = 0 } })
+        gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"] = nil
+        local base = require("turtle_base")
+        local proto = require("protocol")
+        sleep = function() end
+        base.initPositionForTest()
+        base.setPartnerId("node_37")
+        local asked = 0
+        base.atc.ensure = function() return true end
+        base.atc.ask = function()
+            asked = asked + 1
+            if asked > 50 then error("never gave up", 0) end
+            if asked == 3 then
+                os.queueEvent("modem_message", "top", 1, 1,
+                    proto.encode(proto.MSG.PARTNER_LEFT, "node_37", "broadcast", {}), 5)
+                base.receive(1)
+            end
+            return { ok = false, why = "after an older request" }
+        end
+        local ok, why = base.atc.book({ { x = 158, y = 67, z = -2811 }, { x = 143, y = 67, z = -2811 } }, "departure",
+            function() return base.partnerLeft() and "partner_left" end)
+        assert_eq(ok, false, "it gave up once its delivery said it had left")
+        assert_eq(tostring(why):find("partner_left", 1, true) ~= nil, true, tostring(why))
+        assert_eq(asked <= 4, true, "and promptly (" .. asked .. " asks)")
+        base.setPartnerId("node_9")
+        assert_eq(base.partnerLeft(), false, "a new partner starts with a clean slate")
+    end,
+
+    ["a word from some other turtle that it left does not stand a support down"] = function(assert_eq)
+        local base = fresh()
+        local proto = require("protocol")
+        base.setPartnerId("node_37")
+        os.queueEvent("modem_message", "top", 1, 1, proto.encode(proto.MSG.PARTNER_LEFT, "node_77", "broadcast", {}), 5)
+        base.receive(1)
+        assert_eq(base.partnerLeft(), false)
+    end,
+
     ["a stall under the bound reports nothing"] = function(assert_eq)
         local base = fresh()
         local proto = require("protocol")

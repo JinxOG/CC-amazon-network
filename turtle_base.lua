@@ -37,6 +37,7 @@ local _self = {
     dock       = nil,    -- assigned dock from waypoints
     partnerId  = nil,
     partnerSlot = nil,   -- the holding slot its delivery named (base.atc.preferSlot)
+    partnerLeft = false, -- its delivery said it went down without it (PARTNER_LEFT)
     status     = proto.STATUS.IDLE,
     jobId      = nil,
     modem      = nil,
@@ -102,7 +103,8 @@ function base.getPos()           return { x=_self.pos.x, y=_self.pos.y, z=_self.
 function base.getFacing()        return _self.facing     end
 function base.getDock()          return _self.dock       end
 function base.getPartnerId()     return _self.partnerId  end
-function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil end
+function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false end
+function base.partnerLeft()      return _self.partnerLeft == true end
 function base.setCanDig(val)     _self.canDig = val      end
 function base.isServerDown()     return _self.serverDown  end
 function base.isRecalled()       return _self.recalled    end
@@ -478,6 +480,21 @@ function base.drainCtrl() return inboxDrain(_ctrlInbox) end
 local RECENT_MAX = 16
 local _recentKeys, _recentSet = {}, {}
 local function firstSight(msg)
+    -- What a support's delivery says about itself is noted HERE, the one place
+    -- both loops pass every message through: its holding slot (ASCENDING /
+    -- RETURN_TO_DOCK) and that it went down without the support (PARTNER_LEFT).
+    -- Noted in the job's pump only, a PARTNER_LEFT that arrived while the job
+    -- slept between ATC asks was read by the control loop, filed in the job inbox
+    -- the booking wait never reads, and the support went down after a delivery
+    -- that had gone (sandbox/scenarios/w3_atc_partner_left.lua, 2026-11-12).
+    if msg.from ~= nil and msg.from == _self.partnerId then
+        if (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
+           and type(msg.payload) == "table" and tonumber(msg.payload.slot) then
+            _self.partnerSlot = tonumber(msg.payload.slot)
+        elseif msg.type == proto.MSG.PARTNER_LEFT then
+            _self.partnerLeft = true
+        end
+    end
     -- Live-only types are never queued, so the control loop's copy is simply
     -- dropped and the job's wait must still get its own. Claiming one here
     -- starved mine_flow's beacon wait: the control loop saw every beacon first.
@@ -520,13 +537,6 @@ local function pumpFor(q, wantType, timeout)
             if parsed then
                 local valid, msg = proto.decode(parsed)
                 if valid and (msg.to == _self.id or msg.to == "broadcast") then
-                    -- A support's delivery names its holding slot when it says hold or
-                    -- come home; noted here, whichever loop reads the message.
-                    if msg.from ~= nil and msg.from == _self.partnerId
-                       and (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
-                       and type(msg.payload) == "table" and tonumber(msg.payload.slot) then
-                        _self.partnerSlot = tonumber(msg.payload.slot)
-                    end
                     if firstSight(msg) then
                         if wantMatches(msg, wantType)
                            and ((CTRL_TYPES[msg.type] and q == _ctrlInbox)
@@ -1632,15 +1642,16 @@ end
 
 -- Before a step from section `cur` into section `sec`: wait for the grant.
 function atc.waitEnter(sec, cur)
-    local report
+    local report, last
     while true do
         local r = atc.ask(proto.MSG.ATC_ENTER, { sec = sec, cur = cur, route = atc.remaining(cur, sec) })
+        last = r
         if r and r.ok then return true end
         local now = os.clock()
         if r and r.why ~= "settling" then atc.stalled("ATC: " .. tostring(r.why) .. " for " .. sec) end
         report = report or waitReporter(function()
             return string.format("ATC: waiting to enter %s at %d,%d,%d (%s)", sec,
-                _self.pos.x, _self.pos.y, _self.pos.z, r and tostring(r.why) or "no answer from the ATC")
+                _self.pos.x, _self.pos.y, _self.pos.z, last and tostring(last.why) or "no answer from the ATC")
         end, now)
         report(now)
         sleep(r and 1 or 2)
@@ -1650,22 +1661,35 @@ end
 -- Book a route (waypoints, in move.to's order) from where the turtle stands.
 -- Returns once admitted: the turtle waits HERE -- its dock, the holding line, the
 -- sky -- until the route's first section is free.
-function atc.book(waypoints, label)
+-- giveUp (optional): called before every ask; a reason string ends the wait --
+-- the booking is cancelled and book returns false, reason. A support whose
+-- delivery went down without it stops waiting (PARTNER_LEFT, base.depart).
+function atc.book(waypoints, label, giveUp)
     if not atc.ensure() then return true end
     local list = W.routeSections(base.getPos(), waypoints)
     atc.route = list
     if #list == 0 then return true end
-    local report
+    local report, last
     while true do
+        local stop = giveUp and giveUp()
+        if stop then
+            atc.send(proto.MSG.ATC_CANCEL, { cur = atc.here() })
+            atc.route = nil
+            logWarn(string.format("ATC: %s no longer wanted (%s) -- not waiting to be let in", label or "route", tostring(stop)))
+            return false, stop
+        end
         local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group })
+        last = r
         if r and r.ok then
             atc.progressed()
             return true
         end
         local now = os.clock()
+        -- The reason of the LATEST answer, not the first: the shakeout review read
+        -- a turtle still quoting a refusal from hours before.
         report = report or waitReporter(function()
             return string.format("ATC: %s waiting to be let in (%s) at %d,%d,%d", label or "route",
-                r and tostring(r.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
+                last and tostring(last.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
         end, now)
         report(now)
         sleep(r and 2 or 3)
@@ -2007,16 +2031,17 @@ end
 
 -- A holding slot from the ATC; waits (outside the base) until it gives one.
 function atc.holdSlot(line, prefer)
-    local report
+    local report, last
     -- A turtle that cannot dig (support) takes the slot it stands under or none.
     local strict = prefer ~= nil and not _self.canDig
     while true do
         local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer, strict = strict })
+        last = r
         if r and r.ok and r.slot then return r.slot end
         local now = os.clock()
         report = report or waitReporter(function()
             return string.format("ATC: no %s holding slot yet (%s) at %d,%d,%d", line,
-                r and tostring(r.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
+                last and tostring(last.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
         end, now)
         report(now)
         sleep(r and 2 or 3)
@@ -2155,6 +2180,7 @@ function departImpl(noDescend)
             -- sandbox/scenarios/w3_atc_pair_split.lua). So it waits STAGE_WAIT_S.
             logInfo("Waiting for SUPPORT_STAGED...")
             local deadline = os.epoch("utc") / 1000 + atc.stageWaitS()
+            local staged = false
             while os.epoch("utc") / 1000 < deadline do
                 if base.isRecalled() then break end
                 local msg = base.receive(5)
@@ -2162,12 +2188,22 @@ function departImpl(noDescend)
                     -- timeout tick — keep waiting
                 elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
                     logInfo("Support staged — descending together.")
+                    staged = true
                     break
                 end
                 -- Any other message (HEARTBEAT_ACK etc.) is silently ignored here;
                 -- controlLoop also receives it via parallel and handles it there.
             end
             if base.isRecalled() then return true end
+            -- Going down without it: say so, so the support stands down instead of
+            -- following a turtle that has gone. One that went down anyway ended at
+            -- "Delivery ascending - holding position" and held the dispatch hole for
+            -- the rest of a 150-turtle run (w3_bay_types150, 2026-11-11).
+            if not staged then
+                logWarn(string.format("Support %s never staged in %ds -- going down alone; told it to stand down",
+                    tostring(_self.partnerId), atc.stageWaitS()))
+                base.atc.signalSupport(proto.MSG.PARTNER_LEFT, _self.partnerId)
+            end
         end
 
         if not noDescend then
@@ -2187,7 +2223,13 @@ function departImpl(noDescend)
         -- One party with the delivery it follows: it may share the dispatch
         -- corner its partner is holding for it.
         atc.group = _self.partnerId
-        atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }), "departure")
+        local function partnerGone() return base.partnerLeft() and "partner_left" end
+        local booked, why = atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }),
+            "departure", partnerGone)
+        if not booked then
+            logWarn("Delivery " .. tostring(_self.partnerId) .. " went down without me -- staying docked")
+            return false, why
+        end
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end
 
@@ -2200,6 +2242,15 @@ function departImpl(noDescend)
 
         -- Brief pause so delivery starts descending first (clears the hole entrance)
         sleep(1)
+
+        -- Its delivery may have gone down without it while it came: do not follow
+        -- a turtle that has left -- back to the dock, and the job goes back.
+        if partnerGone() then
+            logWarn("Delivery " .. tostring(_self.partnerId) .. " went down without me -- back to my dock, not down the hole")
+            atc.finish()
+            base.returnToDock()
+            return false, "partner_left"
+        end
 
         -- Move to hole and descend
         move.to(W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.y, W.DISPATCH_HOLE.z)
@@ -3911,8 +3962,11 @@ function base.sendComplete(result)
 end
 
 function base.sendFailed(reason, recoverable)
-    -- Tell support to abort immediately so it doesn't wait 180s for HOLE_READY
-    if _self.partnerId then
+    -- Tell support to abort immediately so it doesn't wait 180s for HOLE_READY.
+    -- Not when this turtle is a support standing down because its delivery went
+    -- on without it: the delivery is out working, and this JOB_ABORT ended its job
+    -- at the destination (sandbox/scenarios/w3_atc_partner_left.lua, 2026-11-12).
+    if _self.partnerId and not tostring(reason):find("partner_left", 1, true) then
         base.signalPartnerDirect(proto.MSG.JOB_ABORT, _self.partnerId, { reason = reason })
     end
     comms.toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(_self.jobId, reason, recoverable))
