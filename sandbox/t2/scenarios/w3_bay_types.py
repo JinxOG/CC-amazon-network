@@ -322,9 +322,10 @@ def steps(ctx):
         # The trip home is driven by a recall, not by the job finishing: this sector held 2013 ores at its first level
         # and node_179 was still mining it 80 minutes in (run c). This test is about docks and the ATC, not a sector.
         adm_out = len(ctx.log_lines("admitted %s:" % who))
-        dock_r = len(ctx.log_lines("Docked at bay"))
+        # A miner back from a job logs "<name> phase: DOCKED" (server) -- "Docked at bay" is only the boot-time homing line (run e)
+        dock_r = len(ctx.log_lines("%s phase: DOCKED" % who))
         ctx.dispatch("RECALL_ALL", {"reason": "w3_bay_types: bring %s home through the ATC" % who})
-        home = ctx.wait_until(lambda: [l for l in ctx.log_lines("Docked at bay")[dock_r:] if who in l], 1800)
+        home = ctx.wait_until(lambda: ctx.log_lines("%s phase: DOCKED" % who)[dock_r:], 1800)
         ctx.expect(bool(home), "%s docked again after the recall (%s)" % (who, home[-1:] if home else "nothing"))
         p = _pair.positions(ctx).get(who)
         ctx.expect(bool(p) and (p[0], p[2]) == NORTH_DOCK and p[1] == 67, "%s is back on its north dock %s (%s)" % (who, NORTH_DOCK, p))
