@@ -43,6 +43,7 @@ class FakeServer:
         self.spawned = []
         self.saved = []
         self.next_id = 500
+        self.off = set()
 
     # -- seeding -------------------------------------------------------------------------------------------
     def put(self, pos, spec, cid=None):
@@ -105,7 +106,11 @@ class FakeServer:
         return {"waterlogged": "false"}.get(k)
 
     def computers(self):
-        return {b[3]: {"on": True, "pos": p} for p, b in self.blocks.items() if b[3] is not None}
+        return {b[3]: {"on": b[3] not in self.off, "pos": p} for p, b in self.blocks.items() if b[3] is not None}
+
+    def shutdown(self, ids):
+        self.off.update(ids)
+        self.sent.extend("computercraft shutdown #%d" % i for i in ids)
 
     def block_data(self, pos, path=""):
         return self.command(("data get block %d %d %d %s" % (tuple(pos) + (path,))).strip())
@@ -573,9 +578,6 @@ class ProofServer(FakeServer):
     def gps_hosts(self):
         return sorted(sp["id"] for sp in self.spawned if sp["startup"].startswith('shell.run("gps"'))
 
-    def shutdown(self, ids):
-        self.sent.extend("computercraft shutdown #%d" % i for i in ids)
-
     def save_point(self, name):
         dest = os.path.join(self.disks, "savepoints", name)
         os.makedirs(dest)
@@ -725,6 +727,46 @@ class ProofScenario(unittest.TestCase):
                 control.Control.spawn_computer(Stub(99), 1, 2, 3, f.name)
         finally:
             control.time.sleep = real
+
+    def test_retry_setblock_survives_an_empty_reply_and_a_turtle_in_the_way(self):
+        class Flaky(FakeServer):
+            def __init__(self, replies):
+                FakeServer.__init__(self)
+                self.replies = list(replies)
+            def command(self, text):
+                if text.startswith("setblock") and self.replies:
+                    r = self.replies.pop(0)
+                    if r is not None:
+                        return r
+                return FakeServer.command(self, text)
+        real, world.RETRY_WAIT = world.RETRY_WAIT, 0
+        try:
+            for bad in ("", "Error: invalid set - turtles" + chr(10) + "Could not set the block"):
+                f = Flaky([bad, bad])
+                world.retry_setblock(f, (1, 2, 3), "minecraft:stone")
+                self.assertEqual(f.at((1, 2, 3))[0], "minecraft:stone")
+            f = Flaky(["", ""] * 10)
+            with self.assertRaises(RuntimeError) as cm:
+                world.retry_setblock(f, (1, 2, 3), "minecraft:stone")
+            self.assertIn("(1, 2, 3)", str(cm.exception))
+            self.assertIn("5 attempt", str(cm.exception))
+            f = Flaky(["Could not set the block"])           # a real refusal is final: no retries
+            with self.assertRaises(RuntimeError) as cm:
+                world.retry_setblock(f, (1, 2, 3), "minecraft:stone")
+            self.assertIn("1 attempt", str(cm.exception))
+        finally:
+            world.RETRY_WAIT = real
+
+    def test_quiet_turtles_switches_off_turtles_only_and_the_build_does_it(self):
+        server = ProofServer()
+        turtles = [i for i, v in server.computers().items()
+                   if server.at(v["pos"])[0].startswith("computercraft:turtle")]
+        others = [i for i in server.computers() if i not in turtles]
+        self.assertTrue(turtles and others)
+        ctx = self.run_proof(server)
+        self.assertTrue(all(i in server.off for i in turtles))
+        self.assertFalse(any(i in server.off for i in others if i not in turtles and i in server.computers()))
+        self.assertEqual([m for ok, m in ctx.checks if not ok], [])
 
     def test_chest_nbt_that_is_not_applied_fails_the_read_back_but_not_the_128_check(self):
         """Why the read-back exists: bay 1 is on the default frequency, so chests set WITHOUT their NBT pass the 128-chest check."""

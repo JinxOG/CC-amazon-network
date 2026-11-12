@@ -33,6 +33,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 T2 = os.path.dirname(HERE)
@@ -514,10 +515,61 @@ def set_block(c, pos, spec, nbt=None):
     ("Could not set the block") and then applies no NBT."""
     x, y, z = pos
     if spec.split("[")[0] not in AIR and _passed(c, pos, spec.split("[")[0]):
-        c.command("setblock %d %d %d minecraft:air" % pos)
-    out = c.command("setblock %d %d %d %s%s" % (x, y, z, spec, nbt or ""))
-    if "Changed the block" not in out:
-        raise RuntimeError("setblock %s %s%s -> %r" % (pos, spec, nbt or "", out.strip()[:200]))
+        retry_setblock(c, pos, "minecraft:air")
+    retry_setblock(c, pos, spec + (nbt or ""))
+
+
+RETRIES = 5
+RETRY_WAIT = 1.0
+
+
+def retry_setblock(c, pos, spec, tries=None, wait=None, done=None):
+    """setblock pos spec, retried when the reply is empty (rcon under 'Can't keep up!' lag) or 'invalid set - turtles' (a turtle
+    flying through the cell): each retry first re-reads the cell (`done(c, pos)`, default: it already holds the spec's block, which
+    the empty reply may have hidden) and waits. Any other refusal is final. Raises naming the cell after `tries` attempts."""
+    tries = RETRIES if tries is None else tries
+    text = "setblock %d %d %d %s" % (tuple(pos) + (spec,))
+    out = ""
+    for attempt in range(tries):
+        out = c.command(text)
+        if "Changed the block" in out:
+            return out
+        transient = not out.strip() or "invalid set - turtles" in out
+        if not transient:
+            break
+        if attempt + 1 < tries:
+            time.sleep(RETRY_WAIT if wait is None else wait)
+            if done is not None and done(c, pos):
+                return out
+            if "{" not in spec and "[" not in spec and _passed(c, pos, spec):
+                return out
+    raise RuntimeError("setblock %s %s -> %r (after %d attempt(s))" % (tuple(pos), spec, out.strip()[:200], attempt + 1))
+
+
+def quiet_turtles(c, note=None):
+    """Shuts down every turtle in the world copy (their block is a turtle; not the server, warehouse or admin computers, which are
+    plain computers anyway) and waits until computers() shows them off: the copy's turtles boot on the pinned code and fly through
+    the base, into dock cells the build is clearing. They stay off: place_fleet and retire_strays switch them off again anyway and
+    the shakeout replaces them. Returns the ids."""
+    ids = []
+    for cid, v in sorted(c.computers().items()):
+        if (_role(c, cid) or "") in ("server", "warehouse", "admin"):
+            continue
+        if any(_passed(c, v["pos"], k) for k in ("computercraft:turtle_advanced", "computercraft:turtle_normal")):
+            ids.append(cid)
+    if ids:
+        c.shutdown(ids)
+        for _ in range(30):
+            now = c.computers()
+            if not any(now.get(i, {}).get("on") for i in ids):
+                break
+            time.sleep(1)
+            c.shutdown([i for i in ids if now.get(i, {}).get("on")])
+        else:
+            raise RuntimeError("turtles still on after shutdown: %s" % [i for i in ids if c.computers().get(i, {}).get("on")])
+    if note:
+        note("world copy turtles shut down before the build (%d): %s" % (len(ids), ids))
+    return ids
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -636,9 +688,9 @@ def _clear(c, pos, comps, report, why, computers_too=True):
         report["left_standing"].append({"pos": tuple(pos), "id": cid, "why": why})
         return False
     report["removed"].append({"pos": tuple(pos), "id": cid, "why": why})
-    out = c.command("setblock %d %d %d minecraft:air" % tuple(pos))
-    if "Changed the block" not in out:
-        raise RuntimeError("clearing %s -> %r" % (pos, out.strip()[:200]))
+    if cid is not None:
+        c.shutdown([cid])                                  # a turtle that is off cannot be 'invalid set - turtles'
+    retry_setblock(c, pos, "minecraft:air", done=is_air)
     return True
 
 
@@ -677,6 +729,9 @@ def build_world(ctx, cells=None):
         report["forceload"].append((area, out.strip()[:120]))
         if "Marked" not in out and "No chunks were marked" not in out:
             raise RuntimeError("forceload add %s -> %r" % (area, out.strip()[:200]))
+
+    # 1b. Quiet the copy's turtles: they fly around the base while it is built (run b: one entered dock cell 183,67,-2795).
+    report["quieted"] = quiet_turtles(c, lambda t: _note(ctx, t))
 
     # 2. Empty every dock cell (turtles on docks are removed and named: ONLY there). The rest of the driving level of bays 2-5 is
     #    cleared of plain blocks; a turtle or computer there is left standing and named (Task 5 identifies them).
