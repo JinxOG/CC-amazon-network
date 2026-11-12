@@ -769,17 +769,35 @@ async function rcon(cmd) {
     }
 }
 
+// Whether the Dynmap marker set is usable. null = not attempted yet, so an
+// unknown state can never be mistaken for a healthy one.
+let markerSetReady = null;
+
 async function initMarkerSet() {
     try {
         await rcon(`dmarker addset id:${CFG.dynmap.set} label:Turtles hidebydefault:false`);
+        markerSetReady = true;
         console.log('[RCON] Marker set created');
     } catch (e) {
         // Already exists — update it to ensure it's visible
         try {
             await rcon(`dmarker updateset id:${CFG.dynmap.set} label:Turtles hidebydefault:false`);
+            markerSetReady = true;
             console.log('[RCON] Marker set updated (hidebydefault:false)');
         } catch (e2) {
-            console.log('[RCON] Marker set already exists (ok)');
+            // Reaching here means BOTH commands failed at the TRANSPORT level.
+            // A set that already exists does not land here: Dynmap answers
+            // "set already exists" as a normal reply, which rcon() returns
+            // rather than throwing, so a pre-existing set takes the addset
+            // path above and logs "created". This branch is RCON unreachable,
+            // refused, or mis-credentialled -- and it used to print
+            // "Marker set already exists (ok)", reporting the broken case as
+            // the healthy one. Measured 2026-11-10: with nothing listening on
+            // the RCON port the bridge still said "(ok)", so the map could
+            // stop updating and the log would never say so.
+            markerSetReady = false;
+            console.warn('[RCON] marker set could not be created or updated — Dynmap '
+                + 'markers are NOT being updated: ' + ((e2 && e2.message) || e2));
         }
     }
 }

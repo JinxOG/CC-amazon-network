@@ -151,8 +151,11 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
             raise SystemExit(
                 "the bridge did not come up within 60s and has been stopped; see "
                 + os.path.join(run, "bridge", "bridge.out")
-                + " -- if that file ENDS with the 'listening on' line it was merely slow, not broken "
-                  "(216s was observed on 2026-11-10), and the wait here is what needs raising")
+                + " -- if that file ENDS with the 'listening on' line the bridge was merely SLOW, not "
+                  "broken, and the cause is environmental rather than this wait being short: W5 measured a "
+                  "healthy cold start at ~1 s (express off the G: junction, 161 ms), so 60 s is already ~60x "
+                  "headroom. One 216 s start was seen on 2026-11-10 and stands UNCAUSED. Do not raise this "
+                  "number -- it would only delay the failure you want to see.")
     console = os.path.join(run, "console.log")
     since = os.path.getsize(console) if (append and os.path.exists(console)) else 0
     proc, log = phase0.start(run, append=append)
