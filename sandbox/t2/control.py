@@ -174,7 +174,11 @@ class Control:
         before = set(self.computers())
         right_nbt = ',RightUpgrade:"%s"' % right if right else ""
         owner = self.owner_snbt()
-        owner_nbt = ",Owner:%s" % owner if owner else ""
+        if not owner:
+            # Never fall back to an ownerless turtle: it cannot place any block, so every delivery and miner it played would
+            # fail for a reason the fleet does not have (shakeout-ender-e, 2026-11-12).
+            raise RuntimeError("no world-copy turtle has an Owner to copy; a turtle spawned without one cannot place blocks")
+        owner_nbt = ",Owner:%s" % owner
         out = self.command('setblock %d %d %d computercraft:turtle_advanced[facing=%s]{LeftUpgrade:"computercraft:wireless_modem_advanced",'
                            'LeftUpgradeNbt:{active:1b},Fuel:%d%s%s}' % (x, y, z, facing, fuel, right_nbt, owner_nbt))
         if "Changed the block" not in out:

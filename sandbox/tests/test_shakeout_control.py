@@ -57,6 +57,17 @@ class Owner(unittest.TestCase):
             self._spawn_setblock(r)
         self.assertIn(',Owner:{UpperId:-47L,LowerId:-81L,Name:"HighJinxOG"}}', out[0])
 
+    def test_spawn_turtle_refuses_when_no_world_turtle_has_an_owner(self):
+        r = Recorder()
+        r.computers = lambda: {7: {"on": True, "pos": (1, 2, 3)}}
+        r.block_data = lambda pos, path="": "{Fuel: 5, id: x}"
+        out = []
+        r.command = lambda text: out.append(text) or "Changed the block"
+        with self.assertRaises(RuntimeError) as e:
+            self._spawn_setblock(r)
+        self.assertIn("Owner", str(e.exception))
+        self.assertEqual(out, [])                     # nothing was placed: an ownerless turtle is never spawned
+
     @staticmethod
     def _spawn_setblock(r):
         import time
