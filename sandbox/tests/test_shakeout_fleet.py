@@ -4,6 +4,7 @@ the way Minecraft 1.20.1 and CC:Tweaked do; the seeded dock_assignments.dat is r
 
     python -I sandbox/tests/test_shakeout_fleet.py
 """
+import json
 import os
 import re
 import shutil
@@ -41,6 +42,9 @@ class FakeGame:
 
     def command(self, text):
         self.sent.append(text)
+        if text == "t2 computers":     # the control mod's full list (the dump stops at 99 rows)
+            return json.dumps({"computers": [{"id": b["cid"], "on": b["on"], "x": p[0], "y": p[1], "z": p[2]}
+                                             for p, b in sorted(self.blocks.items()) if b.get("cid") is not None]})
         if text == "computercraft dump":
             return "\n".join("#%d | %s | %d, %d, %d" % ((b["cid"], "Y" if b["on"] else "N") + p)
                              for p, b in sorted(self.blocks.items()) if b.get("cid") is not None)

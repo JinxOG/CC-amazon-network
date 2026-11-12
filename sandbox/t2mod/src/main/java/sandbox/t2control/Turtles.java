@@ -37,6 +37,23 @@ public final class Turtles {
         return null;
     }
 
+    /** Every computer the game has loaded: {"computers":[{"id","on","x","y","z"}]}. `/computercraft dump` stops at 99 rows ("1 additional
+     *  rows..."), which hid every new computer past that from the harness (diag-dump-limit-b, 2026-11-12); this reads the same registry
+     *  it reads, with no limit. */
+    public static String list(MinecraftServer server) {
+        StringBuilder out = new StringBuilder("{\"computers\":[");
+        boolean first = true;
+        for (ServerComputer c : ServerContext.get(server).registry().getComputers()) {
+            BlockPos p = c.getPosition();
+            if (!first) out.append(',');
+            first = false;
+            out.append("{\"id\":").append(c.getID()).append(",\"on\":").append(c.isOn());
+            if (p != null) out.append(",\"x\":").append(p.getX()).append(",\"y\":").append(p.getY()).append(",\"z\":").append(p.getZ());
+            out.append('}');
+        }
+        return out.append("]}").toString();
+    }
+
     private static TurtleBlockEntity turtle(ServerComputer c) {
         BlockEntity be = c.getLevel().getBlockEntity(c.getPosition());
         return be instanceof TurtleBlockEntity ? (TurtleBlockEntity) be : null;

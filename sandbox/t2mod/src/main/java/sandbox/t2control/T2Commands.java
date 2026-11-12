@@ -97,6 +97,7 @@ public final class T2Commands {
                                 StringArgumentType.getString(c, "name"), T2Control.currentTick()))))))
             .then(Commands.literal("events").then(Commands.literal("log")
                 .then(Commands.argument("state", StringArgumentType.word()).executes(c -> toggle(c.getSource(), "events", StringArgumentType.getString(c, "state"))))))
+            .then(Commands.literal("computers").executes(c -> reply(c.getSource(), Turtles.list(c.getSource().getServer()))))
             .then(Commands.literal("status").executes(c -> reply(c.getSource(), Logs.status()))));
     }
 

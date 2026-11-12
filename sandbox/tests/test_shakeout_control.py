@@ -79,5 +79,35 @@ class Owner(unittest.TestCase):
             time.sleep = orig
 
 
+class ComputerList(unittest.TestCase):
+    """`computercraft dump` stops at 99 rows ("1 additional rows..."): every computer past that was invisible (diag-dump-limit-b,
+    2026-11-12). computers() reads the control mod's full list, and never trusts a cut-off dump."""
+
+    @staticmethod
+    def control(replies):
+        r = Recorder()
+        r.command = lambda text: replies[text] if text in replies else "Unknown or incomplete command"
+        return r
+
+    def test_reads_the_mods_full_list(self):
+        many = ",".join('{"id":%d,"on":%s,"x":%d,"y":67,"z":-2800}' % (i, "true" if i % 2 else "false", i) for i in range(150))
+        r = self.control({"t2 computers": '{"computers":[%s,{"id":999,"on":true}]}' % many})
+        got = r.computers()
+        self.assertEqual(len(got), 151)
+        self.assertEqual(got[149], {"on": True, "pos": (149, 67, -2800)})
+        self.assertEqual(got[2], {"on": False, "pos": (2, 67, -2800)})
+        self.assertIsNone(got[999]["pos"])                    # a computer with no position is listed, not dropped
+
+    def test_falls_back_to_the_dump_without_the_mod(self):
+        r = self.control({"computercraft dump": "Computer | On | Position\n=====\n#94      | Y  | 154, 67, -2793\n#3 | N | 1, 2, 3"})
+        self.assertEqual(r.computers(), {94: {"on": True, "pos": (154, 67, -2793)}, 3: {"on": False, "pos": (1, 2, 3)}})
+
+    def test_a_cut_off_dump_is_refused_not_trusted(self):
+        r = self.control({"computercraft dump": "Computer | On | Position\n#94 | Y | 154, 67, -2793\n1 additional rows\u2026"})
+        with self.assertRaises(RuntimeError) as e:
+            r.computers()
+        self.assertIn("additional rows", str(e.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

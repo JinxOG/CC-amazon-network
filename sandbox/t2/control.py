@@ -70,8 +70,24 @@ class Control:
 
     # -- reading ------------------------------------------------------------------------------------------------
     def computers(self):
+        """{id: {"on", "pos"}} for EVERY loaded computer. `computercraft dump` stops at 99 rows ("1 additional rows..."), so past
+        that the newest computers were missing (diag-dump-limit-b, 2026-11-12: a new loader 'never appeared' at ~105 computers).
+        The control mod's `t2 computers` reads the same registry with no limit; the dump is only the fallback for a server without
+        the mod, and a cut-off dump is refused rather than read as the whole list."""
+        reply = self.command("t2 computers").strip()
+        if reply.startswith("{"):
+            try:
+                listed = json.loads(reply)["computers"]
+            except (ValueError, KeyError, TypeError):
+                raise RuntimeError("t2 computers -> %r" % reply[:200])
+            return {int(e["id"]): {"on": bool(e.get("on")),
+                                   "pos": (int(e["x"]), int(e["y"]), int(e["z"])) if "x" in e else None} for e in listed}
         out = {}
-        for line in self.command("computercraft dump").splitlines():
+        dump = self.command("computercraft dump")
+        if "additional rows" in dump:
+            raise RuntimeError("computercraft dump is cut off (%r) and the control mod's t2 computers is not answering (%r): "
+                               "the computer list would be incomplete" % (dump.strip().splitlines()[-1][:60], reply[:120]))
+        for line in dump.splitlines():
             m = re.match(r"#(\d+)\s*\|\s*([YN])\s*\|\s*(-?\d+),\s*(-?\d+),\s*(-?\d+)", line)
             if m:
                 out[int(m.group(1))] = {"on": m.group(2) == "Y", "pos": tuple(int(m.group(i)) for i in (3, 4, 5))}
