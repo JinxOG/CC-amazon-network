@@ -21,7 +21,12 @@
 --   4. at least one MINE job was completed by a miner docked north of the taxiway, and one by a moved miner
 --   5. no turtle waited more than 30 s at a section edge for an answered ATC request (the ATC bound,
 --      docs/superpowers/specs/2026-11-03-base-atc-design.md), and nobody reported STUCK
--- Not run yet (2026-11-10): the machine's memory was in use. Run with SANDBOX_NO_TRACE=1.
+--      ... and no turtle waited more than BOOK_WAIT_MAX_S (15 min) to be LET IN to a route (atc.book: its dock, a
+--      holding slot, the sky). Final review, 2026-11-11: run 20261111-053838 passed the edge check (worst 0 s) while
+--      ten turtles waited up to 19,353 s to be let in -- a whole-base deadlock that 'waiting to enter' never sees.
+--      The longest healthy booking wait in run 20261111-045214 was 130 s; a departure behind a pair that waits out its
+--      10-minute SUPPORT_STAGED timeout can wait a little over 10 minutes, so 15 is the bound.
+-- Run with SANDBOX_NO_TRACE=1 (about 17-45 min of wall time at 150 turtles). Runs: see the final-fix report, section I6.
 local Synth = require("world.synth")
 
 local HOUR = 3600000
@@ -29,6 +34,7 @@ local HOURS = tonumber(os.getenv("W3_BT_HOURS") or "4")
 local DRAIN_MIN = tonumber(os.getenv("W3_BT_DRAIN_MIN") or "90")
 local WHITE_Z, RED_Z = -2803, -2801
 local MOVED = { "node_11", "node_12" }
+local BOOK_WAIT_MAX_S = 900
 
 -- The agreed type of the dock cell at p, or nil when p is not a dock cell. By position, not from the code's
 -- waypoints.lua, so the check means the same thing on code from before per-bay types.
@@ -56,15 +62,6 @@ local function workers(sim)
   return out
 end
 
-local function maxSeconds(lines, pattern)
-  local m = 0
-  for _, l in ipairs(lines) do
-    local s = tonumber(l:match("Still waiting (%d+)s"))
-    if s and l:find(pattern, 1, true) and s > m then m = s end
-  end
-  return m
-end
-
 return {
   world = "synthetic",
   seed = 1,
@@ -75,6 +72,27 @@ return {
   end,
   steps = function(sim)
     local edgeWaits = sim:capture_log("ATC: waiting to enter")
+    local bookWaits = sim:capture_log("waiting to be let in")
+    -- READ AS THE RUN GOES, then emptied: a capture keeps only its first 2000 lines, and a deadlocked base fills that in
+    -- under two hours (run 20261111-193503 reported a worst of 6,948 s from lines of 16:27 while the turtles were still
+    -- waiting at 19:54). Edge waits the same way. The reason in a 'Still waiting' line is the FIRST refusal's (atc.book's
+    -- reporter keeps it), so the line names the turtle and how long, not necessarily what holds it now.
+    local book, bookLine, waiters, edge = 0, nil, {}, 0
+    local function readWaits()
+      for _, l in ipairs(bookWaits.lines) do
+        local n = tonumber(l:match("Still waiting (%d+)s"))
+        if n then
+          if n > book then book, bookLine = n, l end
+          if n > BOOK_WAIT_MAX_S then waiters[l:match("%[(node_%d+)%]") or "?"] = true end
+        end
+      end
+      bookWaits.lines = {}
+      for _, l in ipairs(edgeWaits.lines) do
+        local n = tonumber(l:match("Still waiting (%d+)s"))
+        if n and not l:find("no answer from the ATC", 1, true) and n > edge then edge = n end
+      end
+      edgeWaits.lines = {}
+    end
     local stuck = sim:capture_log("STUCK ")
     local moved = sim:capture_log("Dock moved: ")
     local deliveries = sim:capture_log("[DELIVER] -> node_")
@@ -90,7 +108,7 @@ return {
     local function reg(name) return (((sim.sched.standin.state or {}).turtles) or {})[name] end
     sim:storage_set("minecraft:cobblestone", 10000000)
     sim:storage_set("minecraft:chest", 100000)
-    sim:run_for(10 * 60000)          -- boot, register, the two moves, and the moved miners driving to their new docks
+    for _ = 1, 10 do sim:run_for(60000); readWaits() end   -- boot, register, the two moves, the moved miners driving home
 
     -- Hold every miner but eight: the two moved, four docked north of the taxiway, two south.
     local free, north, south = {}, 0, 0
@@ -108,6 +126,7 @@ return {
       end
     end
     sim:run_for(60000)
+    readWaits()
 
     local area = sim.world:meta().areas[1]
     local nextZone, nextDest, ordered = 0, 0, 0
@@ -127,6 +146,7 @@ return {
     -- completed jobs, by id, as the server's /state shows them (a finished job may later be pruned from it)
     local completed = {}
     local function sweepJobs()
+      readWaits()
       for _, j in pairs(sim.sched.standin.state.jobs or {}) do
         if type(j) == "table" and j.status == "COMPLETE" and j.id and not completed[j.id] then
           local t = j.assignedTo and reg(j.assignedTo)
@@ -165,7 +185,7 @@ return {
       end
       return out
     end
-    sim:run_until(function() return #wrong() == 0 and activeMines() == 0 end, DRAIN_MIN * 60000)
+    sim:run_until(function() readWaits(); return #wrong() == 0 and activeMines() == 0 end, DRAIN_MIN * 60000)
     sweepJobs()
 
     -- 1. every turtle on a dock of its own type, and the server agrees which
@@ -239,11 +259,17 @@ return {
     sim:expect(movedMine >= 1, "a moved miner completed a mine job from its new dock (" .. movedMine .. ")")
 
     -- 5. the ATC bound, and nobody stuck
-    local answered = {}
-    for _, l in ipairs(edgeWaits.lines) do if not l:find("no answer from the ATC", 1, true) then answered[#answered + 1] = l end end
-    local edge = maxSeconds(answered, "waiting to enter")
+    readWaits()
     sim.results.max_edge_wait_s = edge
-    sim.results.edge_wait_lines = #edgeWaits.lines
+    sim.results.edge_wait_lines = edgeWaits.count
+    local names = {}
+    for n in pairs(waiters) do names[#names + 1] = n end
+    table.sort(names)
+    sim.results.max_book_wait_s = book
+    sim.results.book_wait_over_bound = #names
+    sim:expect(book <= BOOK_WAIT_MAX_S, string.format("no turtle waited more than %d s to be let in to a route (worst %d s; "
+      .. "%d turtle(s) over: %s%s)", BOOK_WAIT_MAX_S, book, #names, table.concat(names, " "),
+      bookLine and ("; worst: " .. bookLine) or ""))
     sim:expect(edge <= 30, "no turtle waited more than 30 s at a section edge (worst " .. edge .. " s)")
     sim:expect(#stuck.lines == 0, "nobody reported STUCK (" .. #stuck.lines .. ")")
   end,
