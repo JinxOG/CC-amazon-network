@@ -713,6 +713,32 @@ def _role(c, cid):
         return ""
 
 
+def copy_under_docks(c, cells, targets, under, cache=None):
+    """Step 4 of build_world on its own: the ender chest under each dock cell in `targets` (copied with its NBT from bay 1's twin, or
+    the nearest bay-1 dock in the row with a chest; a cell that already holds the right chest is left alone). `under` is the report's
+    "under" dict (copied / same / fallback counters, sources, frequencies), updated in place. Reads bay 1 at call time."""
+    for cell in targets:
+        if cell["bay"] == 1:
+            continue
+        src, spec, nbt, fallback = under_source(c, cells, cell, cache)
+        if not is_chest(spec):
+            raise RuntimeError("under-dock source %s is not a chest" % (under_pos(src),))   # under_source never returns one; belt and braces
+        under["fallback"] += 1 if fallback else 0
+        under["sources"][under_pos(cell)] = under_pos(src)
+        if frequency_of(nbt or ""):
+            under["frequencies"]["%s row %s slot %d" % (src["side"], src["row"], src["slot"])] = frequency_of(nbt)
+        dst = under_pos(cell)
+        if under_matches(c, dst, spec, nbt):
+            under["same"] += 1
+        else:
+            set_block(c, dst, spec, nbt)
+            under["copied"] += 1
+
+
+def new_under_report():
+    return {"copied": 0, "same": 0, "fallback": 0, "sources": {}, "frequencies": {}}
+
+
 def build_world(ctx, cells=None):
     """Builds the shakeout world on a fresh T2 world copy (see the module doc). Returns a report dict; raises UnknownBlock when bay 1
     holds a block it cannot copy faithfully, RuntimeError when the game refuses a change."""
@@ -784,22 +810,7 @@ def build_world(ctx, cells=None):
 
     # 4. The block under each new dock: an ender chest, copied with its NBT from bay 1's twin, or from the nearest bay-1 dock in the
     #    same row with a chest when the twin has none (ruling 2026-11-10). A cell that already holds the right chest is left alone.
-    for cell in cells:
-        if cell["bay"] == 1:
-            continue
-        src, spec, nbt, fallback = under_source(c, cells, cell, cache)
-        if not is_chest(spec):
-            raise RuntimeError("under-dock source %s is not a chest" % (under_pos(src),))   # under_source never returns one; belt and braces
-        report["under"]["fallback"] += 1 if fallback else 0
-        report["under"]["sources"][under_pos(cell)] = under_pos(src)
-        if frequency_of(nbt or ""):
-            report["under"]["frequencies"]["%s row %s slot %d" % (src["side"], src["row"], src["slot"])] = frequency_of(nbt)
-        dst = under_pos(cell)
-        if under_matches(c, dst, spec, nbt):
-            report["under"]["same"] += 1
-        else:
-            set_block(c, dst, spec, nbt)
-            report["under"]["copied"] += 1
+    copy_under_docks(c, cells, [cell for cell in cells if cell["bay"] != 1], report["under"], cache)
 
     # 5. The ATC computer (once).
     comps = {tuple(v["pos"]): k for k, v in c.computers().items()}

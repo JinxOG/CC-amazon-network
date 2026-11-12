@@ -118,6 +118,16 @@ def steps(ctx):
         # air, or a turtle standing there (the move path may already have brought a miner to bay 2 during the pin's settle)
         return any("Test passed" in c.command("execute if block %d 67 %d %s" % (x, z, b))
                    for b in ("air", "computercraft:turtle_advanced", "computercraft:turtle_normal"))
+    # The world copy has bays 2-5's floor and pillars but not the ender chests under the new docks. The server may send the old miners
+    # to ANY free MINER dock, so copy the chest under all of them, from bay 1 (world.py's step 4, on its own; the control wrapper
+    # records each setblock as an intervention). The checks below still fail loudly if this did not happen.
+    from shakeout import world
+    cells = world.dock_cells()
+    miner_docks = [d for d in cells if d["type"] == "MINER"]
+    under = world.new_under_report()
+    world.copy_under_docks(c, cells, miner_docks, under, {})
+    ctx.note("under-dock chests for %d MINER docks: copied %d, already right %d, fallback source %d" % (
+        len(miner_docks), under["copied"], under["same"], under["fallback"]))
     for (x, z) in north_route_cells() + south:
         if not clear(x, z):
             raise RuntimeError("staging: %d,67,%d on a bay-2 route is not clear -- bays 2-5 are not built in this world "

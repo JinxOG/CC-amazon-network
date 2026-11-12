@@ -324,6 +324,21 @@ class UnderDock(unittest.TestCase):
         self.assertEqual(kept, 4, "worker bay 2 row A east: the right chest was already there")
         self.assertEqual((report["under"]["copied"], report["under"]["same"], report["under"]["fallback"]), (124, 4, 32))
 
+    def test_copy_under_docks_alone_copies_only_the_named_cells(self):
+        s = seeded()
+        ctx = FakeCtx(s)
+        miners = [c for c in CELLS if c["type"] == "MINER"]
+        self.assertEqual(len(miners), 128)
+        want = [miners[0], miners[-1]]
+        under = world.new_under_report()
+        world.copy_under_docks(ctx.control, CELLS, want, under)
+        self.assertEqual(under["copied"] + under["same"], 2)
+        for c in want:
+            self.assertEqual(s.at((c["x"], c["y"] - 1, c["z"]))[0], "enderstorage:ender_chest")
+        others = [t for t in s.sent if t.startswith("setblock ") and not any(
+            t.startswith("setblock %d %d %d " % (c["x"], c["y"] - 1, c["z"])) for c in want)]
+        self.assertEqual(others, [], "nothing else is touched")
+
     def test_the_fallback_takes_the_nearest_chest_in_the_same_row(self):
         s, ctx, report = built()
         src = report["under"]["sources"]
