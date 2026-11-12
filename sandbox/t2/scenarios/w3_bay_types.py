@@ -134,8 +134,17 @@ def dock_file_text(pos_by_name, cells, with_bypos):
     return "{ %s }" % ", ".join(parts)
 
 
-def rewrite_dock_file(ctx, sid, text, why):
-    """Server off, its disk's dock_assignments.dat replaced, server on and answering again. Recorded in INTERVENTIONS."""
+def docked_roster(ctx, roster):
+    """{name: entry} once EVERY turtle in roster is registered with a dock, else None."""
+    ts = turtles(ctx)
+    ok = all(n in ts and isinstance(ts[n].get("dockX"), (int, float)) and isinstance(ts[n].get("dockZ"), (int, float)) for n in roster)
+    return ts if ok else None
+
+
+def rewrite_dock_file(ctx, sid, text, why, roster):
+    """Server off, its disk's dock_assignments.dat replaced, server on and answering again. Recorded in INTERVENTIONS.
+    Returns only when every turtle in roster has registered again with a dock: a file built from a half-registered fleet leaves
+    turtles out, and the server hands those fresh docks (run d: node_179 missing from the file, put on 168,-2806)."""
     c = ctx.control
     c.shutdown([sid])
     ctx.wait_game(5)
@@ -148,7 +157,9 @@ def rewrite_dock_file(ctx, sid, text, why):
     c.turn_on([sid])
     ok = ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > online0, 300)
     ctx.expect(bool(ok), "the dispatch computer came back (%s)" % why)
-    ctx.wait_until(lambda: len(turtles(ctx)) >= 14, 300)
+    back = ctx.wait_until(lambda: docked_roster(ctx, roster), 300)
+    ctx.expect(bool(back), "all %d turtles registered again with a dock after the restart (missing: %s)" % (
+        len(roster), sorted(set(roster) - set(n for n, e in turtles(ctx).items() if e.get("dockX") is not None))))
 
 
 def steps(ctx):
@@ -203,7 +214,8 @@ def steps(ctx):
     # dock. The world copy's miners are NOT misplaced (they registered on bay 2 before the server restarted: run b), so this stages
     # one: the dispatch computer is stopped and given an OLD-format file (legacy lists only, no byPos) that puts one miner on a free
     # bay-1 DELIVERY cell; its server then reads the file by side and index and must move that miner.
-    ts = turtles(ctx)
+    roster = sorted(turtles(ctx))
+    ts = ctx.wait_until(lambda: docked_roster(ctx, roster), 300) or turtles(ctx)
     miners = sorted(n for n, e in ts.items() if (e.get("role") or "").upper() == "MINER")
     ctx.expect(bool(miners), "the fleet has miners (%s)" % miners)
     if not miners:
@@ -222,7 +234,7 @@ def steps(ctx):
               if isinstance(e.get("dockX"), (int, float)) and isinstance(e.get("dockZ"), (int, float))}
     assign[stray] = (spot["x"], spot["z"])
     rewrite_dock_file(ctx, sid0, dock_file_text(assign, cells, False),
-                      "OLD format, %s put on bay 1 row %s DELIVERY dock %d,%d" % (stray, spot["row"], spot["x"], spot["z"]))
+                      "OLD format, %s put on bay 1 row %s DELIVERY dock %d,%d" % (stray, spot["row"], spot["x"], spot["z"]), roster)
     moved = ctx.wait_until(lambda: ctx.log_lines("Dock moved: "), 300) or []
     ctx.note("'Dock moved' lines: %s" % moved)
     for m in miners:
@@ -232,11 +244,12 @@ def steps(ctx):
                        "%s was moved from a DELIVERY dock to a MINER dock exactly once (%s)" % (m, mine))
     ctx.expect(bool(moved), "the old file's misplaced miners were moved (%d 'Dock moved' lines; the world copy's miners sit on worker "
                "bay 1): the move path has something to judge" % len(moved))
-    homed = ctx.wait_until(lambda: (lambda ts, pos: all(on_own_dock(ctx, m, ts[m], pos)[0] for m in miners if m in ts) or None)(
+    # every miner, not just the ones registered right now: a miner missing from /state must fail this, not pass it by absence
+    homed = ctx.wait_until(lambda: (lambda ts, pos: all(m in ts and on_own_dock(ctx, m, ts[m], pos)[0] for m in miners) or None)(
         turtles(ctx), _pair.positions(ctx)), 900)
     ts, pos = turtles(ctx), _pair.positions(ctx)
     ctx.expect(bool(homed), "every miner stands on the MINER dock the server has for it (%s)" % "; ".join(
-        on_own_dock(ctx, m, ts[m], pos)[1] for m in miners if m in ts))
+        on_own_dock(ctx, m, ts[m], pos)[1] if m in ts else "%s not registered" % m for m in miners))
 
     # 3. One miner to the north dock: rewrite the dispatch computer's dock file with it there, by position.
     who = miners[0]
@@ -252,7 +265,10 @@ def steps(ctx):
         x, z = (NORTH_DOCK if n == who else (e.get("dockX"), e.get("dockZ")))
         if isinstance(x, (int, float)) and isinstance(z, (int, float)):
             assign[n] = (int(x), int(z))
-    rewrite_dock_file(ctx, sid, dock_file_text(assign, cells, True), "%s on %s, the current saver's format" % (who, NORTH_DOCK))
+    missing = sorted(set(roster) - set(assign))
+    if missing:
+        raise RuntimeError("staging: the dock file would leave out %s (not registered with a dock)" % missing)
+    rewrite_dock_file(ctx, sid, dock_file_text(assign, cells, True), "%s on %s, the current saver's format" % (who, NORTH_DOCK), roster)
     reg = ctx.wait_until(lambda: (lambda e: e if e and (e.get("dockX"), e.get("dockZ")) == NORTH_DOCK else None)(turtles(ctx).get(who)), 300)
     ctx.expect(bool(reg), "the server has %s on the north dock %s after the restart (%s)" % (who, NORTH_DOCK,
                {k: (turtles(ctx).get(who) or {}).get(k) for k in ("dock", "dockX", "dockZ")}))
