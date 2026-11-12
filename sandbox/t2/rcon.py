@@ -40,15 +40,30 @@ class Rcon:
     # Any request type other than 2 (command) and 3 (login) gets ONE "Unknown request" packet under its own id, after every
     # packet of the reply before it: the server answers in order.
     MARKER_KIND = 100
+    CHUNK = 4096        # the server cuts a reply into pieces of this many characters
+
+    def _next_for(self, cid):
+        """The next packet answering request cid; packets with an older id (left over from a reply cut short) are dropped."""
+        while True:
+            r_id, _, body = self._read()
+            if r_id == cid:
+                return body
 
     def command(self, text):
         """The command's WHOLE reply. The server splits a reply longer than 4096 characters over several packets; reading one
-        packet left the rest in the socket, read later as the next command's reply (shakeout-fleet-a, 2026-11-12). So a marker
-        request follows each command, and every packet up to the marker's answer is gathered; packets with an older id (left
-        over from a reply cut short by an error) are dropped."""
+        packet left the rest in the socket, read later as the next command's reply (shakeout-fleet-a, 2026-11-12).
+
+        NEVER two packets in flight: the server's one read takes what has arrived, parses ONE packet and throws the rest away.
+        Writing a marker right behind the command lost the marker; the client waited out its timeout, reconnected and sent the
+        command again, and a repeated setblock answered 'Could not set the block' (shakeout-fleet-b, diag-floor-cell-a). So the
+        marker goes only after the first piece is back (the server has read the command by then), and only when that piece is
+        a full 4096 characters, the one case where more can follow."""
         cid = self._write(2, text)
+        first = self._next_for(cid)
+        if len(first.encode("utf8")) < self.CHUNK:
+            return first
+        parts = [first]
         mid = self._write(self.MARKER_KIND, "")
-        parts = []
         while True:
             r_id, _, body = self._read()
             if r_id == mid:

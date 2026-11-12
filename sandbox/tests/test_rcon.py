@@ -24,14 +24,22 @@ class FakeServer:
         self.replies = dict(replies)
         self.inbox = b""
         self.outbox = b""
+        self.unanswered = False    # a packet arrived whose reply the client has not started reading yet
+        self.dropped = 0
 
     def sendall(self, data):
+        # Like vanilla RconClient: ONE read takes what has arrived, ONE packet is parsed from it, and the rest of that read is
+        # thrown away. A client that writes a second packet before the first is answered loses it (diag-floor-cell-a, 2026-11-12).
+        if self.unanswered:
+            self.dropped += 1
+            return
+        self.unanswered = True
         self.inbox += data
         while len(self.inbox) >= 4:
             n = struct.unpack("<i", self.inbox[:4])[0]
             if len(self.inbox) < 4 + n:
                 break
-            body, self.inbox = self.inbox[4:4 + n], self.inbox[4 + n:]
+            body, self.inbox = self.inbox[4:4 + n], b""
             rid, kind = struct.unpack("<ii", body[:8])
             text = body[8:-2].decode("utf8")
             if kind == 3:
@@ -45,6 +53,7 @@ class FakeServer:
                 self.outbox += packet(rid, 0, "Unknown request %x" % kind)
 
     def recv(self, n):
+        self.unanswered = False
         n = min(n, 700)
         out, self.outbox = self.outbox[:n], self.outbox[n:]
         return out
@@ -83,6 +92,12 @@ class WholeReply(unittest.TestCase):
         r = client({"list": "There are 0 players", "save-all": ""})
         self.assertEqual(r.command("list"), "There are 0 players")
         self.assertEqual(r.command("save-all"), "")
+
+    def test_no_packet_is_written_while_the_last_is_unanswered(self):
+        r = client({"list": "There are 0 players", "big": "z" * 5000})
+        self.assertEqual(r.command("list"), "There are 0 players")
+        self.assertEqual(r.command("big"), "z" * 5000)
+        self.assertEqual(r.sock.dropped, 0)
 
     def test_a_reply_of_exactly_4096_characters(self):
         r = client({"a": "y" * 4096, "b": "ok"})
