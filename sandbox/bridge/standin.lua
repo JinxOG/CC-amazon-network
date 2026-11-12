@@ -303,12 +303,14 @@ function Standin:update(body)
 
   if turtles then
     local new = OBJ()
+    -- AS SENT, like server.js mergeTurtleSnapshot (since 2026-10-02): the server rebuilds every turtle on each push
+    -- and writes `x or nil`, so a cleared field is an absent key. Merging with the last push kept such fields for ever:
+    -- NEEDS HANDS stayed in /state on turtles the log had cleared (W3, 2026-11-12). lastSeen is the bridge's own.
     for id, data in pairs(turtles) do
-      local merged = OBJ()
-      for k, v in pairs(st.turtles[id] or {}) do merged[k] = v end
-      for k, v in pairs(data) do merged[k] = v end
-      merged.lastSeen = now
-      new[id] = merged
+      local snap = OBJ()
+      for k, v in pairs(data) do snap[k] = v end
+      snap.lastSeen = now
+      new[id] = snap
     end
     st.turtles = new
   end

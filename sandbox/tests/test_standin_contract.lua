@@ -138,6 +138,26 @@ return {
     t.ok(next(st.turtles) == nil, "a gap over 20s should clear turtles")
   end,
 
+  -- server.js mergeTurtleSnapshot (since 2026-10-02) takes each turtle's data AS SENT: central_server writes
+  -- `t.needsHands or nil`, so a cleared field is an absent key, and a merge kept it for ever. The stand-in still
+  -- merged: in two passing 150-turtle ATC sims /state showed NEEDS HANDS on turtles the log had cleared (W3,
+  -- card "Healthy docked turtles end with NEEDS HANDS 'facing unknown' set", 2026-11-12).
+  ["a field the server stops sending for a turtle is gone from /state, as on the real bridge"] = function(t)
+    local s, sched = new_standin()
+    local p1 = {}
+    for k, v in pairs(PUSH) do p1[k] = v end
+    p1.turtles = { node_2 = { status = "IDLE", needsHands = "stuck_no_fix: facing unknown at 1,2,3" } }
+    post(s, "/update", p1)
+    local p2 = {}
+    for k, v in pairs(PUSH) do p2[k] = v end
+    p2.turtles = { node_2 = { status = "IDLE" } }
+    sched.clock:set(START + 3000)
+    post(s, "/update", p2)
+    local st = decode(select(3, s:handle("GET", "/state")))
+    t.eq(st.turtles.node_2.needsHands, nil, "the cleared flag must not linger")
+    t.ok(st.turtles.node_2.lastSeen ~= nil, "lastSeen is the bridge's own field")
+  end,
+
   ["commands queue and are handed to the next update"] = function(t)
     local s = new_standin()
     t.ok(s:dispatch({ type = "ORDER_MINE", params = { zone = "Z1" } }))

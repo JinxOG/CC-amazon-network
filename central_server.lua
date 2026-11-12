@@ -3924,6 +3924,15 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
         registry.beginRecovery(msg.from)
     elseif type(p.detail) == "string" and p.detail:find("^docked") then
         registry.endRecovery(msg.from)
+        -- Home and docked: it measured, so a "facing unknown" stuck flag is over.
+        -- Only a passing HARDWARE check cleared it before, and only miners run one:
+        -- delivery and support turtles kept NEEDS HANDS for good (146 of 150 in
+        -- passing 150-turtle ATC sims, 2026-11-12). A hardware fault stays.
+        if state.registry[msg.from] and type(state.registry[msg.from].needsHands) == "string"
+           and state.registry[msg.from].needsHands:find("^stuck_no_fix") then
+            logInfo(string.format("%s docked -- %s cleared", msg.from, state.registry[msg.from].needsHands))
+            state.registry[msg.from].needsHands = nil
+        end
     end
     -- A ledger recovery that could not finish (recovery layer release 2).
     if type(p.detail) == "string" and p.detail:find("^needs_hands") then

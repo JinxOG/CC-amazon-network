@@ -1168,6 +1168,41 @@ return {
         assert_eq(afterNext, 2, "the next ping at 15 s")
     end,
 
+    -- Card "Healthy docked turtles end with NEEDS HANDS 'facing unknown' set (146 of 150 in passing ATC sims)",
+    -- 2026-11-12. A stuck_no_fix flag was cleared only by a passing HARDWARE CHECK (registry.applyHardware), which only
+    -- miners run: on a delivery or support turtle nothing ever cleared it, though the turtle measured, went home and
+    -- worked on. The turtle's own "docked" report ends the stuck state for every role.
+    ["a 'facing unknown' flag clears when the turtle reports itself docked, for every role"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local saw = {}
+        for _, role in ipairs({ proto.ROLE.DELIVERY, proto.ROLE.SUPPORT, proto.ROLE.MINER }) do
+            local id = "node_" .. role
+            T.state.registry[id] = { id = id, role = role, status = proto.STATUS.IDLE, online = true, lastSeen = 0,
+                position = { x = 158, y = 67, z = -2806 } }
+            T.registry.flagStuck(id, "stuck_no_fix: facing unknown at 158,67,-2806 (boot: choosing a route home)")
+            local flagged = T.state.registry[id].needsHands
+            T.handlers[proto.MSG.STATUS_UPDATE]({ from = id, payload = { status = proto.STATUS.IDLE, detail = "docked",
+                position = { x = 158, y = 67, z = -2806 } } })
+            saw[#saw + 1] = { role = role, flagged = flagged, after = T.state.registry[id].needsHands }
+        end
+        restore()
+        for _, s in ipairs(saw) do
+            assert_eq(s.flagged ~= nil, true, s.role .. ": the flag was raised (the case under test)")
+            assert_eq(s.after, nil, s.role .. ": docked clears it")
+        end
+    end,
+
+    ["a hardware fault is not cleared by docking"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.state.registry["node_118"].needsHands = "slot_16_must_hold_the_ore_ender_chest"
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = "node_118", payload = { status = proto.STATUS.IDLE, detail = "docked" } })
+        local after = T.state.registry["node_118"].needsHands
+        restore()
+        assert_eq(after, "slot_16_must_hold_the_ore_ender_chest", "only its own hardware check clears that")
+    end,
+
     -- Live 10-29..11-02 (the watcher's GPS 2 FAILED, SPEC-OWNER's reading): one
     -- ~91 h outage read as seven, because every server restart forgot it was
     -- down -- 'GPS CHECK FAILED' again about 10 s after each boot, and the one
