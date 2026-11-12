@@ -274,6 +274,9 @@ def steps(ctx):
     docked0 = len(ctx.log_lines("Docked at bay"))
     failed0 = len(ctx.log_lines("Return home failed"))
     waits0 = len(ctx.log_lines("ATC: waiting to enter"))
+    # Counted BEFORE the order: the departure admission lands about 0.6 s after the dispatch (run c), before this script
+    # would get round to counting.
+    adm0 = len(ctx.log_lines("admitted %s:" % who))
     ctx.dispatch("ORDER_MINE", {"x1": 1920, "z1": -2624, "x2": 1920, "z2": -2624, "minerCount": 1})
     dx, dy, dz = c.free_spot()
     if (dx, dy, dz) == (ax, ay, az):
@@ -285,30 +288,33 @@ def steps(ctx):
     deliv = next((l for l in went if "[DELIVER]" in l), None)
     ctx.expect(mine is not None and who in mine, "the mine job went to %s, the north-docked miner (%s)" % (who, mine))
     ctx.expect(deliv is not None, "the delivery was dispatched (%s)" % deliv)
-    mjob = re.search(r"Dispatched (job_\d+)", mine).group(1) if mine else None
     dm = re.search(r"Dispatched (job_\d+) \[DELIVER\] -> (node_\d+)\s+support job_\d+ -> (node_\d+)", deliv or "")
     if mine:
-        adm0 = len(ctx.log_lines("admitted %s:" % who))
         admitted = ctx.wait_until(lambda: ctx.log_lines("admitted %s:" % who)[adm0:], 300)
         ctx.expect(bool(admitted), "the ATC admitted %s's departure from the north side (%s)" % (who, admitted[:1] if admitted else "nothing"))
         out = ctx.wait_until(lambda: (lambda p: p if p and not _pair.in_base(p) and not _pair.at_dock(p) and p[1] > 80 else None)(
             _pair.positions(ctx).get(who)), 900)
         ctx.expect(bool(out), "%s left the base (%s)" % (who, out))
-        adm_out = len(ctx.log_lines("admitted %s:" % who))
-        done = ctx.wait_until(lambda: ctx.log_lines("Job complete: %s" % mjob), 3600)
-        ctx.expect(bool(done), "%s's mine job %s completed" % (who, mjob))
-        home = ctx.wait_until(lambda: [l for l in ctx.log_lines("Docked at bay")[docked0:] if who in l], 900)
-        ctx.expect(bool(home), "%s docked again (%s)" % (who, home[-1:] if home else "nothing"))
-        p = _pair.positions(ctx).get(who)
-        ctx.expect(bool(p) and (p[0], p[2]) == NORTH_DOCK and p[1] == 67, "%s is back on its north dock %s (%s)" % (who, NORTH_DOCK, p))
-        back_in = ctx.log_lines("admitted %s:" % who)[adm_out:]
-        ctx.expect(bool(back_in), "it came home through the ATC: %d 'admitted %s:' line(s) after it left the base (%s)" % (
-            len(back_in), who, back_in[-1:]))
+        mining = ctx.wait_until(lambda: ctx.log_lines("%s phase: MINING" % who), 3600)
+        ctx.expect(bool(mining), "%s started mining its sector (%s)" % (who, mining[:1] if mining else "nothing"))
     if dm:
         djob, dname, sname = dm.group(1), dm.group(2), dm.group(3)
         ctx.expect(bool(ctx.wait_until(lambda: ctx.log_lines("Job complete: %s" % djob), 2400)), "the delivery %s completed" % djob)
         docked = {n: bool(ctx.wait_until(lambda n=n: [l for l in ctx.log_lines("Docked at bay")[docked0:] if n in l], 900)) for n in (dname, sname)}
         ctx.expect(all(docked.values()), "the delivery pair both docked (%s)" % docked)
+    if mine:
+        # The trip home is driven by a recall, not by the job finishing: this sector held 2013 ores at its first level
+        # and node_179 was still mining it 80 minutes in (run c). This test is about docks and the ATC, not a sector.
+        adm_out = len(ctx.log_lines("admitted %s:" % who))
+        dock_r = len(ctx.log_lines("Docked at bay"))
+        ctx.dispatch("RECALL_ALL", {"reason": "w3_bay_types: bring %s home through the ATC" % who})
+        home = ctx.wait_until(lambda: [l for l in ctx.log_lines("Docked at bay")[dock_r:] if who in l], 1800)
+        ctx.expect(bool(home), "%s docked again after the recall (%s)" % (who, home[-1:] if home else "nothing"))
+        p = _pair.positions(ctx).get(who)
+        ctx.expect(bool(p) and (p[0], p[2]) == NORTH_DOCK and p[1] == 67, "%s is back on its north dock %s (%s)" % (who, NORTH_DOCK, p))
+        back_in = ctx.log_lines("admitted %s:" % who)[adm_out:]
+        ctx.expect(bool(back_in), "it came home through the ATC: %d 'admitted %s:' line(s) after the recall (%s)" % (
+            len(back_in), who, back_in[-1:]))
 
     # 5. The end state.
     ctx.wait_game(60)
