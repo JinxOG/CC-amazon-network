@@ -1,15 +1,16 @@
-"""Shakeout Task 3 proof (NOT RUN YET, 2026-11-10: the test server was in use): Control.set_slot(..., tag=...) gives a turtle an
+"""Shakeout Task 3 proof: Control.set_slot(..., tag=...) gives a turtle an
 ender chest tuned to bay 1's frequency.
 
 Slot numbering: NBT slot 0 = Lua slot 1 (set_slot/get_slot take NBT numbers, the Lua probes use Lua numbers).
 
-  1. FIND the frequency. The world copy's bay 1 has an ender chest under a dock; its block data is read with block_data
-     (a scan of bay 1's dock cells at y 66 and 65 for a block whose data has "Frequency"). Whatever is found is noted
+  1. FIND the frequency. Bay 1 has ender chests at y 66 directly under its dock cells (y 67); the block under every dock cell
+     (world.dock_cells(), bay 1 first) is read with block_data and the first with "Frequency" is used. Whatever is found is noted
      verbatim: the exact SNBT is not recorded anywhere in this repo, and the block-entity layout of Frequency may differ from
      the item-stack tag layout (it may need BlockEntityTag). The read-back check in step 3 catches a mismatch.
-  2. READER: a turtle is spawned on an air cell beside bay 1's chest. Its Lua (written to the run folder, installed as its
-     startup) lists every "inventory" peripheral it touches every 2 s and writes the diamond count to reader.json. If no air
-     cell touches the chest the run fails loudly (nothing is measured).
+  2. READER: the chests are boxed in by floor, so the reader stands IN an air dock cell (never one a fleet turtle holds) with a
+     chest of the same Frequency below it, as real turtles do. Its Lua (the run folder, its startup) wraps peripheral
+     "bottom" and lists it every 2 s (nothing is moved), writing the diamond count to reader.json. If no such cell
+     exists the run fails loudly with the chests found.
   3. GIVE: a placer turtle is spawned (it starts once, with no chest, and its stale ender_probe.json is deleted), shut down,
      given an ender chest (NBT slot 0) with that tag via set_slot and a diamond (NBT slot 1); get_slot must read the same tag.
   4. PLACE: it is turned on; it places the chest, selects Lua slot 2 and drops the diamond. The reader's diamond count must go
@@ -17,7 +18,7 @@ Slot numbering: NBT slot 0 = Lua slot 1 (set_slot/get_slot take NBT numbers, the
      results (placed, drop, failure reason) and the count change are asserted, so each step can fail.
 
 Side effects: the run leaves one diamond in bay 1's chest and the reader and placer turtles (and the placed chest) standing in the
-world, so use a throwaway world copy. Reader candidates that see no inventory are removed again.
+world, so use a throwaway world copy.
 
 Run through sandbox/t2/scenario.py like the other scenarios, on a world copy with bay 1 built."""
 import json
@@ -25,35 +26,54 @@ import os
 import re
 import time
 
+from shakeout import world as shakeout_world   # dock_cells() reads waypoints.lua (sandbox/t2 is on the path: the runner put it there)
+
 NAME = "shakeout_ender_tag"
-BAY1_X = 157
-DOCK_DX = range(-4, 5)
-DOCK_ZS = (-2806, -2810, -2797, -2793)
 ENDER_ITEM = "enderstorage:ender_chest"
 
 PLACER_LUA = '''
-local r = {}
+local r = {tries = {}}
 r.chest = turtle.getItemDetail(1)
 turtle.select(1)
-local ok, why = turtle.place()
-r.placed = ok
-r.place_why = why
-turtle.select(2)
-local dok, dwhy = turtle.drop(1)
-r.drop = dok
-r.drop_why = dwhy
+-- the first cell that takes the chest wins; every refusal is recorded so a failure names why
+local dirs = {
+  {"front", turtle.place, turtle.drop, turtle.detect, turtle.inspect},
+  {"down", turtle.placeDown, turtle.dropDown, turtle.detectDown, turtle.inspectDown},
+  {"up", turtle.placeUp, turtle.dropUp, turtle.detectUp, turtle.inspectUp},
+}
+for turn = 0, 3 do
+  if turn > 0 then turtle.turnRight() end
+  for i, d in ipairs(dirs) do
+    if turn == 0 or i == 1 then
+      if not r.placed then
+        turtle.select(1)
+        local ok, why = d[2]()
+        local _, info = d[5]()
+        r.tries[#r.tries + 1] = {d[1], turn, ok, why, d[4](), info and info.name}
+        if ok then
+          r.placed = true
+          r.place_dir = d[1]
+          turtle.select(2)
+          local dok, dwhy = d[3](1)
+          r.drop = dok
+          r.drop_why = dwhy
+        end
+      end
+    end
+  end
+end
+if not r.placed then r.placed = false end
 local f = fs.open("ender_probe.json", "w"); f.write(textutils.serialiseJSON(r)); f.close()
 '''
 
 READER_LUA = '''
 while true do
   local n, seen = 0, 0
-  for _, name in ipairs(peripheral.getNames()) do
-    if peripheral.hasType(name, "inventory") then
-      seen = seen + 1
-      for _, st in pairs(peripheral.call(name, "list")) do
-        if st.name == "minecraft:diamond" then n = n + st.count end
-      end
+  local inv = peripheral.wrap("bottom")
+  if inv and peripheral.hasType("bottom", "inventory") then
+    seen = 1
+    for _, st in pairs(inv.list()) do
+      if st.name == "minecraft:diamond" then n = n + st.count end
     end
   end
   local f = fs.open("reader.json", "w"); f.write(textutils.serialiseJSON({diamonds = n, inventories = seen, t = os.epoch("utc")})); f.close()
@@ -81,42 +101,44 @@ def frequency_of(text):
     return None
 
 
-def find_bay1_chest(c):
-    """(pos, data) of the first block with a Frequency under bay 1's docks, or (None, notes)."""
-    seen = []
-    for dz in DOCK_ZS:
-        for dx in DOCK_DX:
-            for y in (66, 65):
-                pos = (BAY1_X + dx, y, dz)
-                out = c.block_data(pos)
-                if "Frequency" in out:
-                    return pos, out
-                if "Found no" not in out and "has no" not in out:
-                    seen.append((pos, out[:80]))
-    return None, seen
-
-
 FACING = {(1, 0): "east", (-1, 0): "west", (0, 1): "south", (0, -1): "north"}
 
 
-def in_dock_area(p):
-    """True for a cell of the bay 1 dock rows or the aisles and return lanes around them (y 67, bay 1's x range, z from the
-    outermost dock rows plus 4 cells each way for the aisles/return lanes): the reader must not park there."""
-    x, y, z = p
-    return y == 67 and BAY1_X - 5 <= x <= BAY1_X + 5 and min(DOCK_ZS) - 4 <= z <= max(DOCK_ZS) + 4
+def frequency_pairs(text):
+    """{'middle': 0, 'left': 0, 'right': 0} from any text holding a Frequency compound (the key order differs between the block
+    data, the item tag and get_slot, so strings are never compared)."""
+    f = frequency_of(re.sub(r"(?<=\d)[bBsSlLfFdD]", "", text)) or ""
+    return {k: int(v) for k, v in re.findall(r"(\w+):(-?\d+)", f.replace("Frequency:", "", 1))}
 
 
-def reader_candidates(raw, pos):
-    """[(cell, facing)] of air cells touching pos, never in the dock area. The facing points at the chest when it is to the side, so
-    the chest is in FRONT of the turtle (its modem is on the left, and a chest on the left is not wrapped as an inventory)."""
-    x, y, z = pos
+def ordered_docks(cells):
+    """Dock cells (from waypoints.lua via world.dock_cells, never re-typed), bay 1 first, then the other bays."""
+    return sorted(cells, key=lambda d: (d["bay"] != 1, d["bay"], d["side"], d["z"], d["x"]))
+
+
+def chests_under_docks(c, cells, seen):
+    """[(dock cell, chest pos, block data)] for every dock cell with a Frequency block directly below it (y-1), in
+    ordered_docks order. Whatever else is seen under a dock is appended to `seen` as (pos, text)."""
     out = []
-    for dx, dy, dz in ((1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0), (0, 1, 0)):
-        p = (x + dx, y + dy, z + dz)
-        if in_dock_area(p) or "Test passed" not in raw.command("execute if block %d %d %d air" % p):
-            continue
-        out.append((p, FACING.get((-dx, -dz), "north")))   # the chest lies at (-dx, -dz) from the candidate
+    for d in ordered_docks(cells):
+        pos = (d["x"], d["y"] - 1, d["z"])
+        data = c.block_data(pos)
+        if "Frequency" in data:
+            out.append((d, pos, data))
+        elif "Found no" not in data and "has no" not in data:
+            seen.append((pos, data[:80]))
     return out
+
+
+def pick_reader_dock(raw, chests, freq):
+    """(dock cell, chest pos) of the first dock cell that is AIR right now (a parked turtle is never removed or moved) and has
+    under it a chest whose Frequency equals `freq`, or None. `chests` is chests_under_docks' output."""
+    for d, pos, data in chests:
+        if frequency_of(data) != freq:
+            continue
+        if "Test passed" in raw.command("execute if block %d %d %d air" % (d["x"], d["y"], d["z"])):
+            return d, pos
+    return None
 
 
 def write_probe(ctx, path, text):
@@ -138,35 +160,38 @@ def disk_json(c, cid, name):
 def steps(ctx):
     c = ctx.control
     raw = ctx._raw
-    pos, data = find_bay1_chest(c)
-    if pos is None:
-        ctx.note("no block with a Frequency under bay 1; blocks with data seen: %s" % (data[:10],))
-        ctx.expect(False, "found bay 1's ender chest (a block with Frequency under a bay 1 dock cell)")
+    cells = shakeout_world.dock_cells()
+    seen = []
+    chests = chests_under_docks(c, cells, seen)
+    if not chests:
+        ctx.note("no block with a Frequency under any dock cell; blocks with data seen: %s" % (seen[:10],))
+        ctx.expect(False, "found an ender chest (a block with Frequency) under a dock cell")
         return
-    ctx.note("bay 1 chest at %s, block data: %s" % (pos, data))
+    d0, pos, data = chests[0]
+    ctx.note("first chest at %s (bay %s, under dock %s), block data: %s" % (pos, d0["bay"], (d0["x"], d0["y"], d0["z"]), data))
+    ctx.note("all chests under docks: %s" % ([(p, frequency_of(t), dd["bay"]) for dd, p, t in chests],))
     freq = frequency_of(data)
     ctx.expect(freq is not None, "could parse a Frequency from the block data: %s" % freq)
     if not freq:
         return
     tag = "{%s}" % freq
 
-    # ---- the reader, beside bay 1's chest ----
-    cands = reader_candidates(raw, pos)
-    ctx.note("reader candidate cells (not in the dock area): %s" % (cands,))
-    ctx.expect(bool(cands), "an air cell outside the dock area touches bay 1's chest at %s, for the reader turtle" % (pos,))
+    # ---- the reader: IN an air dock cell, reading the chest below it ----
+    picked = pick_reader_dock(raw, chests, freq)
+    ctx.expect(picked is not None, "an air dock cell has under it an ender chest on frequency %s (chests found: %d), for the reader turtle"
+               % (freq, len(chests)))
+    if picked is None:
+        return
+    dock, cpos = picked
+    spot = (dock["x"], dock["y"], dock["z"])
+    ctx.note("reader dock cell %s (bay %s), chest below at %s" % (spot, dock["bay"], cpos))
     reader_lua = os.path.join(ctx.run, "ender_reader.lua")
     write_probe(ctx, reader_lua, READER_LUA)
-    reader, r0 = None, {}
-    for spot, facing in cands:
-        reader = c.spawn_turtle(spot[0], spot[1], spot[2], "SUPPORT", startup=reader_lua, fuel=100, facing=facing)
-        ctx.wait_until(lambda: "diamonds" in disk_json(c, reader, "reader.json"), 120, poll=3)
-        r0 = disk_json(c, reader, "reader.json")
-        ctx.note("reader #%d at %s facing %s, first reading: %s" % (reader, spot, facing, r0))
-        if r0.get("inventories", 0) >= 1:
-            break
-        c.shutdown([reader])
-        raw.command("setblock %d %d %d minecraft:air" % spot)      # not wrapping the chest: take it away, try the next cell
-    ctx.expect(r0.get("inventories", 0) >= 1, "the reader sees an inventory peripheral (bay 1's chest) -- else the count proves nothing")
+    reader = c.spawn_turtle(spot[0], spot[1], spot[2], "SUPPORT", startup=reader_lua, fuel=100, facing="north")
+    ctx.wait_until(lambda: "diamonds" in disk_json(c, reader, "reader.json"), 120, poll=3)
+    r0 = disk_json(c, reader, "reader.json")
+    ctx.note("reader #%d at %s, first reading: %s" % (reader, spot, r0))
+    ctx.expect(r0.get("inventories", 0) >= 1, "the reader sees the chest below it as an inventory peripheral -- else the count proves nothing")
     if not r0.get("inventories"):
         return
     n_before = r0["diamonds"]
@@ -174,8 +199,9 @@ def steps(ctx):
     # ---- the placer: start once with no chest, then clean up the stale result before the real run ----
     x, y, z = c.free_spot()
     facing = next((f for (dx, dz), f in FACING.items()
-                   if "Test passed" in raw.command("execute if block %d %d %d air" % (x + dx, y, z + dz))), None)
-    ctx.expect(facing is not None, "the placer's spot %s has an air cell beside it to place the chest into" % ((x, y, z),))
+                   if "Test passed" in raw.command("execute if block %d %d %d air" % (x + dx, y, z + dz))
+                   and "Test passed" in raw.command("execute unless block %d %d %d air" % (x + dx, y - 1, z + dz))), None)
+    ctx.expect(facing is not None, "the placer's spot %s has an air cell beside it with a solid block under it to place the chest into" % ((x, y, z),))
     if facing is None:
         return
     placer_lua = os.path.join(ctx.run, "ender_placer.lua")
@@ -190,7 +216,8 @@ def steps(ctx):
     got = c.set_slot(new, 0, ENDER_ITEM, 1, tag=tag)          # NBT 0 = Lua 1
     c.set_slot(new, 1, "minecraft:diamond", 1)                # NBT 1 = Lua 2
     ctx.note("read back from get_slot: %s" % got)
-    ctx.expect(freq in re.sub(r"\s+", "", str(got)), "the ender chest reads back with the same tag (%s)" % freq)
+    ctx.expect(bool(frequency_pairs(freq)) and frequency_pairs(freq) == frequency_pairs(str(got)),
+               "the ender chest reads back with the same tag (%s vs %s)" % (frequency_pairs(freq), frequency_pairs(str(got))))
 
     c.turn_on([new])
     done = ctx.wait_until(lambda: "placed" in disk_json(c, new, "ender_probe.json"), 120, poll=3)
