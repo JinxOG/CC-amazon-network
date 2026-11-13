@@ -481,7 +481,7 @@ class BridgeWorld:
         schedule._bridge_alive = lambda ctx: "bridge" in self.ports.values()
         test.addCleanup(lambda: [setattr(schedule, n, f) for n, f in self.saved.items()])
 
-    def stop(self, ctx, e):
+    def stop(self, ctx, e, port=None):
         self.calls.append(("stop",))
         if self.ports.get(self.bridge_port) == "bridge":
             del self.ports[self.bridge_port]

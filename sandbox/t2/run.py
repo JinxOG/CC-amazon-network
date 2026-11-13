@@ -147,7 +147,7 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
             # this loop had timed out, seized 3000 unattended and looked for all
             # the world like a busy port. A bridge we have stopped waiting for
             # must not go on to take the port.
-            subprocess.run(["taskkill", "/F", "/PID", str(pids["bridge"])], capture_output=True)
+            kill(pids["bridge"])
             raise SystemExit(
                 "the bridge did not come up within 60s and has been stopped; see "
                 + os.path.join(run, "bridge", "bridge.out")
@@ -158,6 +158,7 @@ def launch(run, with_bridge=True, tickrate=None, append=False):
                   "number -- it would only delay the failure you want to see.")
     console = os.path.join(run, "console.log")
     since = os.path.getsize(console) if (append and os.path.exists(console)) else 0
+    world_free(run)                    # never a second server on a world the first still holds
     proc, log = phase0.start(run, append=append)
     pids["server"] = proc.pid
     pids["started"] = time.time()
@@ -232,12 +233,15 @@ def stop(run_id):
     except Exception as e:
         print("rcon stop failed:", e)
     for _ in range(90):
-        if not alive(pids["server"]):
-            break
+        try:
+            if not alive(pids["server"]):
+                break
+        except RuntimeError:
+            pass
         time.sleep(2)
     else:
-        subprocess.run(["taskkill", "/F", "/PID", str(pids["server"])], capture_output=True)
-    subprocess.run(["taskkill", "/F", "/PID", str(pids["bridge"])], capture_output=True)
+        kill(pids["server"])
+    kill(pids["bridge"])
     pids["stopped"] = time.time()
     json.dump(pids, open(pids_path(run), "w"))
 
@@ -290,8 +294,61 @@ def pin(run_id, sha, wait_s=900):
 
 
 def alive(pid):
-    out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True, text=True).stdout
-    return str(pid) in out
+    """True / False only when tasklist SAID so: a row for exactly this pid, or its "No tasks" line. Anything else raises.
+    It used to be `str(pid) in stdout`: an empty or failed answer read as dead (shakeout-faults-b relaunched over a live
+    server), and pid 2332 matched a row for 23320."""
+    r = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True, text=True)
+    out = r.stdout or ""
+    if re.search(r"(?m)^\S.*?\s%d\s" % pid, out):
+        return True
+    if "No tasks" in out:
+        return False
+    raise RuntimeError("tasklist gave no readable answer for pid %d (rc %s): %r %r" % (pid, r.returncode, out[:200],
+                                                                                      (r.stderr or "")[:200]))
+
+
+def kill(pid, seconds=30):
+    """taskkill /F, then WAIT until the process is gone; returns taskkill's answer. Raises RuntimeError, with that answer,
+    when it is still alive after `seconds`. TerminateProcess is asynchronous, and a taskkill whose answer nobody read left a
+    bridge, a proxy and a server alive in shakeout-faults-b while the harness carried on as if they were gone."""
+    if not pid:
+        return ""
+    r = subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, text=True)
+    said = ((r.stdout or "") + (r.stderr or "")).strip()
+    t0 = time.time()
+    while True:
+        try:
+            if not alive(pid):
+                return said
+        except RuntimeError:
+            pass                                       # unknown is not gone: keep looking
+        if time.time() - t0 >= seconds:
+            raise RuntimeError("pid %s is still alive %.0f s after taskkill (rc %s: %s)" % (pid, seconds, r.returncode, said))
+        time.sleep(0.5)
+
+
+def world_in_use(run):
+    """Whether a server process still holds <run>/world/session.lock. The game locks that file while it has the world open,
+    and a read of a locked region fails. A relaunch while it is held starts a second server that exits at start-up
+    (shakeout-faults-b: the old one was 17 minutes into a hung shutdown)."""
+    path = os.path.join(run, "world", "session.lock")
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "rb") as f:
+            f.read(1)
+    except OSError:
+        return True
+    return False
+
+
+def world_free(run, seconds=240):
+    t0 = time.time()
+    while world_in_use(run):
+        if time.time() - t0 >= seconds:
+            raise SystemExit("the world is still held by a server process after %d s (%s); not starting a second one"
+                             % (seconds, os.path.join(run, "world", "session.lock")))
+        time.sleep(2)
 
 
 def main():

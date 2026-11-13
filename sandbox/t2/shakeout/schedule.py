@@ -119,6 +119,7 @@ RETRY_MS = 10 * MIN                 # a begin that keeps failing is retried this
 DISK_CAPACITY = 1000000             # CC's default computer disk (computer_space_limit); used only when /state has no diskFree
 FILLER_PREFIX = "shakeout_filler_"
 BRIDGE_PORT, SLOW_BRIDGE_PORT = 3000, 3001
+BRIDGE_QUIET_S = 15           # after the bridge process is seen gone, how long its port may take to stop answering
 EXCLUSIVE = (("bridge_down", "bridge_slow"), ("disk_full",))   # windows of one group never overlap
 FORMAT = "shakeout-schedule/1"
 
@@ -435,8 +436,19 @@ class _Recorder:
 
 
 def _intervention(ctx, fault_id, verb, *args, **kwargs):
-    ctx.interventions.append({"verb": verb, "args": [repr(a) for a in args], "kwargs": {k: repr(v) for k, v in kwargs.items()},
-                              "game_seconds": _game_estimate(ctx), "fault": fault_id})
+    """Into ctx.interventions (the report's list) AND onto disk at once, in <run>/shakeout/interventions.jsonl: a runner that
+    dies or is stopped takes the in-memory list with it (shakeout-faults-b: which pids the harness killed was lost). The disk
+    write never raises."""
+    rec = {"verb": verb, "args": [repr(a) for a in args], "kwargs": {k: repr(v) for k, v in kwargs.items()},
+           "game_seconds": _game_estimate(ctx), "fault": fault_id}
+    ctx.interventions.append(rec)
+    try:
+        d = os.path.join(ctx.run, "shakeout")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "interventions.jsonl"), "a", encoding="utf8") as f:
+            f.write(json.dumps(dict(rec, time=time.strftime("%Y-%m-%dT%H:%M:%S")), default=repr) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def state_of(ctx):
@@ -1025,12 +1037,36 @@ def _bridge_alive(ctx):
         return None
 
 
-def _bridge_stop(ctx, e):
-    pids = _read_pids(ctx)
-    pid = pids.get("bridge")
-    if pid:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
-    _intervention(ctx, e["id"] if e else None, "bridge_stop", pid)
+def _listeners(port):
+    """The pids that LISTEN on TCP <port> (any address), from netstat: the evidence when a port will not go quiet."""
+    out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True).stdout or ""
+    found = []
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[3].upper() == "LISTENING" and f[1].rsplit(":", 1)[-1] == str(port):
+            try:
+                pid = int(f[4])
+            except ValueError:
+                continue
+            if pid not in found:
+                found.append(pid)
+    return found
+
+
+def _bridge_stop(ctx, e, port=None):
+    """The recorded bridge killed (and SEEN gone: run.kill), then its port must stop answering within BRIDGE_QUIET_S. A port
+    that still answers raises with who listens there: shakeout-faults-b's bridge_down 'stopped' a bridge that went on
+    answering on 3000, and bridge_slow then bound its proxy to 127.0.0.1:3000 beside it."""
+    port = BRIDGE_PORT if port is None else port
+    pid = _read_pids(ctx).get("bridge")
+    said = runmod.kill(pid) if pid else ""
+    _intervention(ctx, e["id"] if e else None, "bridge_stop", pid, port, said[:200])
+    t0 = time.time()
+    while _bridge_ping(port, 3) is not None:
+        if time.time() - t0 >= BRIDGE_QUIET_S:
+            raise RuntimeError("bridge pid %s is gone but 127.0.0.1:%d still answers; listening there: %s"
+                               % (pid, port, _listeners(port)))
+        time.sleep(1)
 
 
 def _bridge_start(ctx, e, port):
@@ -1066,7 +1102,7 @@ def _proxy_start(ctx, e, listen, target, ms, st=None):
 
 def _proxy_stop(ctx, e, pid):
     if pid:
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        runmod.kill(pid)
     path = os.path.join(ctx.run, "shakeout", "proxy.pid")
     if os.path.exists(path):
         os.remove(path)
@@ -1085,7 +1121,7 @@ def _bridge_restore(ctx, e, st):
         _proxy_stop(ctx, e, st["proxy"])
         st["proxy"] = None
     if st.get("bridge_port", BRIDGE_PORT) != BRIDGE_PORT:
-        _bridge_stop(ctx, e)
+        _bridge_stop(ctx, e, port=st["bridge_port"])
         _bridge_start(ctx, e, BRIDGE_PORT)
         st["bridge_port"] = BRIDGE_PORT
         return

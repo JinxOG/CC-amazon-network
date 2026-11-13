@@ -57,6 +57,15 @@ class Control:
             self._rcon = Rcon(host, int(port), pw, timeout=120)
         return self._rcon
 
+    def _drop_rcon(self):
+        """CLOSE the connection, not just forget it: an open one leaves the server a client thread to wait on as it stops."""
+        rc, self._rcon = self._rcon, None
+        if rc is not None:
+            try:
+                rc.close()
+            except Exception:  # noqa: BLE001
+                pass
+
     def command(self, text):
         try:
             return self.rcon().command(text)
@@ -377,17 +386,26 @@ class Control:
         time.sleep(seconds)
         self.tick_rate(20)
 
-    def _wait_dead(self):
+    def _wait_dead(self, seconds=180):
+        """Until the server process is gone: up to `seconds` for it to stop by itself, then a kill that is SEEN to work.
+        An unreadable tasklist answer counts as alive, never as gone, and the world lock must be released too: a 'stop'
+        can hang for good after saving (shakeout-faults-b: an RCON client thread that never exited, 17 minutes)."""
         pid = self._pids()["server"]
-        for _ in range(90):
-            if not runmod.alive(pid):
-                return
+        t0 = time.time()
+        while time.time() - t0 < seconds:
+            try:
+                if not runmod.alive(pid):
+                    break
+            except RuntimeError:
+                pass
             time.sleep(2)
-        subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        else:
+            runmod.kill(pid)
+        runmod.world_free(self.run, 60)
 
     def server_crash(self):
         """Kills the Minecraft process (no save). The bridge keeps running. Follow with restart_after_crash()."""
-        subprocess.run(["taskkill", "/F", "/PID", str(self._pids()["server"])], capture_output=True)
+        runmod.kill(self._pids()["server"])
         self._wait_dead()
         self._rcon = None
 
@@ -401,7 +419,7 @@ class Control:
             self.command("stop")
         except Exception:
             pass
-        self._rcon = None
+        self._drop_rcon()
         self._wait_dead()
         return runmod.relaunch(self.run_id)
 
@@ -429,7 +447,7 @@ class Control:
             self.command("stop")
         except Exception:
             pass
-        self._rcon = None
+        self._drop_rcon()
         self._wait_dead()
         shutil.rmtree(self.world)
         shutil.copytree(src, self.world)
