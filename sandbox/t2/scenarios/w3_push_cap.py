@@ -14,11 +14,17 @@ CHECKS (each with its evidence count):
     120 s, and no rollup with pushes=0 after that until the next bridge start or the end -- measured from the bridge's
     rollups, never from the server's say-so;
   * the server's own lines reach the log after the last fault (the symptom in faults-a: none after 04:31:12).
+FIX 3 rides along (the duplicate key, SPEC-OWNER's ruling fix 3), right after the fleet is built, as shakeout-fleet-d met it:
+HOLD_TURTLE for every placed turtle posted back to back with NO spacing (straight to /command, not ctx.dispatch, which spaces
+its posts 3 ms apart since 2026-11-12). Every one must be held and none dropped as a duplicate; then all are released.
 Pin the commit under test. 1x. About 2.5 real hours."""
 import datetime
 import importlib.util
 import os
 import re
+import time
+
+import run as runmod  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
 
 from shakeout import schedule  # noqa: E402  (sandbox/t2 is on the path: the runner put it there)
 
@@ -52,8 +58,28 @@ def the_schedule():
     return [down, slow]
 
 
+def unspaced_holds(ctx, names):
+    """Fix 3: HOLD_TURTLE for each of `names`, back to back, no gap; every one held, none dropped as a duplicate."""
+    t0 = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+    started = time.monotonic()
+    for n in names:
+        runmod.bridge_post("/command", {"type": "HOLD_TURTLE", "params": {"turtleId": n, "reason": "w3_push_cap unspaced"}})
+    took_ms = (time.monotonic() - started) * 1000
+    ctx.note("posted %d HOLD_TURTLE back to back in %.0f ms (%.2f ms apart; shakeout-fleet-d lost 29 of 126 that way)"
+             % (len(names), took_ms, took_ms / max(1, len(names))))
+    ctx.wait_game(60)
+    held = {n for n in names for l in ctx.log_lines("HOLD: %s is not offered work" % n) if l[:19] >= t0}
+    dups = [l for l in ctx.log_lines("duplicate ignored (HOLD_TURTLE)") if l[:19] >= t0]
+    ctx.expect(len(held) == len(names) and not dups, "unspaced holds: %d of %d turtles held, %d dropped as duplicates"
+               % (len(held), len(names), len(dups)))
+    for n in names:
+        ctx.dispatch("RELEASE_TURTLE", {"turtleId": n})
+    ctx.wait_game(30)
+
+
 def steps(ctx):
-    drv.setup(ctx)
+    placed = drv.setup(ctx)
+    unspaced_holds(ctx, sorted(placed))
     t_built = datetime.datetime.utcnow()
     ctx.dispatch("ORDER_MINE", {"x1": 1920, "z1": -2624, "x2": 1984, "z2": -2624, "minerCount": 2})
     sched = the_schedule()
