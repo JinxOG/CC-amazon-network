@@ -4793,6 +4793,93 @@ end
 -- `local` here creates a second variable and silently restores the crash.
 server = {}
 
+-- ─── The bridge update's size ceiling ────────────────────────────────────────
+--
+-- LOG_PUSH_MAX caps ONE source. Nothing capped the update as a whole, and T2 run
+-- shakeout-faults-a (2026-11-12) found the cost: the bridge restarted, the
+-- server cleared every ack (noteBridgeBoot) and replayed every ring at 40 lines
+-- each -- with 160 turtles, an update over the bridge's 1 MB express.json limit.
+-- The bridge refused it (413, 1,032 times). A refused update is never
+-- acknowledged, so the next was the same size: the server's updates, and its own
+-- log, which rides in them, never reached the bridge again.
+--
+-- So the log lines are fitted into what is left of PUSH_CAP once everything else
+-- is built: the server's own lines first, then the turtles, starting each update
+-- where the last one ran out so every source drains. Lines left out go on a later
+-- update, in order: a source is cut at a line, never skipped past it, and the ack
+-- only ever covers what was sent. PUSH_CAP is half the bridge's limit, so a fleet
+-- that grows does not walk back to the edge (SPEC-OWNER, 2026-11-12). A refused
+-- update halves the share (noteBridgeRefused); each accepted one doubles it back.
+-- No locals here: server.run has 5 to spare (tests/test_cc_local_limit.lua).
+server.PUSH_CAP   = 512 * 1024
+server._pushScale = 1
+
+function server.noteBridgeRefused()
+    server._pushScale = math.max(1 / 64, server._pushScale / 2)
+end
+
+function server.noteBridgeAccepted()
+    server._pushScale = math.min(1, server._pushScale * 2)
+end
+
+-- Returns the serverLog and turtleLogs JSON for one update whose other fields
+-- already take `restBytes`.
+function server.bridgeLogs(restBytes)
+    local budget = math.floor(server.PUSH_CAP * server._pushScale) - (restBytes or 0) - 64
+    local used = 0
+    local function enc(e)
+        local ok, r = pcall(textutils.serialiseJSON, e)
+        if ok then return r end
+        ok, r = pcall(textutils.serialiseJSON, { ts = e.ts, level = e.level, msg = tostring(e.msg),
+                                                 seq = e.seq, bootId = e.bootId })
+        return ok and r or nil
+    end
+
+    local sParts = {}
+    for _, e in ipairs(logSelect(state.log, "server", 100)) do
+        local j = enc(e)
+        if j then
+            if used + #j + 1 > budget then break end
+            sParts[#sParts + 1] = j
+            used = used + #j + 1
+        end
+    end
+
+    local ids = {}
+    for id in pairs(state.turtleLogs) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local n, tParts = #ids, {}
+    local start = (state.logFitCursor or 0) % math.max(1, n)
+    for i = 0, n - 1 do
+        local id = ids[(start + i) % n + 1]
+        local out = logSelect(state.turtleLogs[id], id, TURTLE_LOG_PUSH_WINDOW)
+        local full = false
+        if #out > 0 then
+            local key = textutils.serialiseJSON(tostring(id))
+            local parts, cost = {}, #key + 4
+            for _, e in ipairs(out) do
+                local j = enc(e)
+                if j then
+                    if used + cost + #j + 1 > budget then full = true; break end
+                    parts[#parts + 1] = j
+                    cost = cost + #j + 1
+                end
+            end
+            if #parts > 0 then
+                tParts[#tParts + 1] = key .. ":[" .. table.concat(parts, ",") .. "]"
+                used = used + cost
+            end
+        end
+        if full then
+            -- The next update starts with the source that ran out.
+            state.logFitCursor = (start + i) % n
+            break
+        end
+    end
+    return "[" .. table.concat(sParts, ",") .. "]", "{" .. table.concat(tParts, ",") .. "}"
+end
+
+
 -- Registered here so server.submitJob is in scope
 handlers[proto.MSG.JOB_REQUEST] = function(msg)
     local p    = msg.payload
@@ -6318,36 +6405,12 @@ function server.run()
         end
 
         local js = bridgeJson
-        -- Include last 100 log lines so the bridge can expose them for monitoring.
-        local logSlice = {}
-        -- Only what the bridge has not confirmed writing, capped. Was the last
-        -- 100 entries every push regardless: the same lines re-serialised every
-        -- 3 seconds to deliver nothing, which is time the server spends deaf.
-        logSlice = logSelect(state.log, "server", 100)
-        -- Ship only a recent window of each turtle's log, not its whole buffer.
-        --
-        -- state.turtleLogs holds 60 entries per node and every one of them was
-        -- serialised into every push. Measured 2026-08-30: 96 KB of a 190 KB
-        -- payload, and byte-identical across a 110-second sample -- the same
-        -- history retransmitted every 3 s to deliver nothing.
-        --
-        -- That cost is not the bytes on the wire, it is the time. This function
-        -- is synchronous, so the server is deaf to the radio for its whole
-        -- duration, and CC's event queue drops what arrives while it runs. That
-        -- is what silently loses heartbeats, empties the registry, and leaves
-        -- turtles unregistered while both sides look healthy. The failure rate
-        -- rising with each release tracked the payload growing, not one bad
-        -- commit.
-        --
-        -- The full buffer is deliberately kept server-side: it costs nothing to
-        -- retain and it is what a live diagnosis reads.
-        local logsOut = {}
-        for id, buf in pairs(state.turtleLogs) do
-            local out = logSelect(buf, id, TURTLE_LOG_PUSH_WINDOW)
-            -- An acknowledged source contributes nothing rather than an empty
-            -- list, so an idle fleet costs no payload at all.
-            if #out > 0 then logsOut[id] = out end
-        end
+        -- The log lines (the server's own, then each turtle's unacknowledged
+        -- ones) are fitted in at the end by server.bridgeLogs, into what is left
+        -- of PUSH_CAP. Each source still sends only what the bridge has not
+        -- confirmed (logSelect): the old fixed windows re-serialised the same
+        -- lines every 3 s, and that time is time the server is deaf to the radio.
+        -- The full buffer stays server-side for live diagnosis.
 
         -- Can we still hear the fleet? P7: a deaf server otherwise reports
         -- itself perfectly healthy — dashboard fresh, storage polling, disk
@@ -6411,9 +6474,9 @@ function server.run()
                         ',"diskFree":'     .. tostring(diskFree or -1) ..
                         -- free space, file count and total, and the five largest files (disk.report)
                         ',"disk":'         .. js(disk.report(), "null", "disk") ..
-                        ',"modemOpen":'    .. tostring(modemOpen) ..
-                        ',"serverLog":'    .. js(logSlice,             "[]",  "serverLog") ..
-                        ',"turtleLogs":'   .. js(logsOut,              "{}",  "turtleLogs") .. '}'
+                        ',"modemOpen":'    .. tostring(modemOpen)
+        local serverLog, turtleLogs = server.bridgeLogs(#payload + 30)
+        payload = payload .. ',"serverLog":' .. serverLog .. ',"turtleLogs":' .. turtleLogs .. '}'
         lastBuildMs = os.epoch("utc") - buildStartMs
         return payload
     end
@@ -6757,8 +6820,10 @@ function server.run()
                 end)
                 if ok_r then
                     if code ~= 200 then
+                        server.noteBridgeRefused()
                         logWarn("Bridge HTTP " .. tostring(code) .. ": " .. (body or ""):sub(1, 60))
                     else
+                        server.noteBridgeAccepted()
                         local ok2, data = pcall(textutils.unserialiseJSON, body)
                         if ok2 and type(data) == "table" then
                             if type(data.commands) == "table" then
@@ -6844,7 +6909,11 @@ function server.run()
                 bridgePending = false
                 pushWitness.stop()
                 if bridgeTimeoutId then os.cancelTimer(bridgeTimeoutId); bridgeTimeoutId = nil end
-                logWarn("Bridge push failed: " .. tostring(p2))
+                -- A 413 lands here too (CC fires http_failure for any non-2xx), so
+                -- the next update is smaller, never the same refused one again.
+                server.noteBridgeRefused()
+                logWarn(string.format("Bridge push failed: %s (next update's log share %d%%)",
+                    tostring(p2), math.floor(server._pushScale * 100)))
             end
 
         elseif event == "timer" then
