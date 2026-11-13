@@ -416,7 +416,7 @@ function M.install(opts)
     end
 
     textutils = {
-        serialise = function(t) return M._serialise(t) end,
+        serialise = function(t, opts) return M._serialise(t, opts) end,
         unserialise = function(s) return M._unserialise(s) end,
         -- serialiseJSON was missing entirely, which meant every js() call in the
         -- bridge payload raised in tests -- so /state, the thing every dashboard
@@ -709,12 +709,28 @@ end
 -- job shared one destination table, so saveJobs failed live on every
 -- delivery while every test passed. Mirrors CC's tracking: true while a
 -- table is being written (a cycle), false once written (a repeat).
-function M._serialise(t, tracking)
+-- Twelfth fidelity gap (2026-11-13): the layout. This wrote "{a = 1, b = 2}" on
+-- one line, which is neither of CC's layouts, so no test could measure what a
+-- save costs on the server's disk -- and the disk running out under shakeout
+-- load (T2 shakeout-faults-a) was exactly that cost. Now CC:Tweaked 1.120's
+-- serialize_impl: the readable layout by default (two-space indent, "[ k ] = ",
+-- a ",<newline>" after every entry), and { compact = true } as CC writes it.
+function M._serialise(t, opts, tracking, indent)
+    if type(opts) ~= "table" then opts = {} end
     tracking = tracking or {}
+    indent = indent or ""
     local ty = type(t)
     if ty == "string" then return string.format("%q", t) end
-    if ty == "number" or ty == "boolean" then return tostring(t) end
-    if ty == "nil" then return "nil" end
+    if ty == "number" then
+        if t ~= t then return "0/0" end
+        if t == math.huge then return "1/0" end
+        if t == -math.huge then return "-1/0" end
+        if math.type and math.type(t) == "float" and t == math.floor(t) and math.abs(t) < 2^53 then
+            return string.format("%d", t)   -- Cobalt prints 5.0 as 5
+        end
+        return tostring(t)
+    end
+    if ty == "boolean" or ty == "nil" then return tostring(t) end
     if ty == "table" then
         if tracking[t] ~= nil then
             if tracking[t] == false then
@@ -723,22 +739,42 @@ function M._serialise(t, tracking)
             error("Cannot serialize table with recursive entries", 0)
         end
         tracking[t] = true
-        local parts = {}
-        for k, v in pairs(t) do
-            local key
-            if type(k) == "number" then
-                key = "[" .. k .. "]"
-            elseif type(k) == "string" and k:match("^[%a_][%w_]*$") then
-                key = k
-            else
-                key = "[" .. M._serialise(k, tracking) .. "]"
+        local result
+        if next(t) == nil then
+            result = "{}"
+        else
+            local open, sub, okey, ckey, eq, comma = "{\n", indent .. "  ", "[ ", " ] = ", " = ", ",\n"
+            if opts.compact then open, sub, okey, ckey, eq, comma = "{", "", "[", "]=", "=", "," end
+            local parts, seen = { open }, {}
+            for k, v in ipairs(t) do
+                seen[k] = true
+                parts[#parts + 1] = sub .. M._serialise(v, opts, tracking, sub) .. comma
             end
-            table.insert(parts, key .. " = " .. M._serialise(v, tracking))
+            for k, v in pairs(t) do
+                if not seen[k] then
+                    local entry
+                    if type(k) == "string" and not M._keywords[k] and k:match("^[%a_][%a%d_]*$") then
+                        entry = k .. eq .. M._serialise(v, opts, tracking, sub) .. comma
+                    else
+                        entry = okey .. M._serialise(k, opts, tracking, sub) .. ckey
+                            .. M._serialise(v, opts, tracking, sub) .. comma
+                    end
+                    parts[#parts + 1] = sub .. entry
+                end
+            end
+            parts[#parts + 1] = (opts.compact and "" or indent) .. "}"
+            result = table.concat(parts)
         end
         tracking[t] = false
-        return "{" .. table.concat(parts, ", ") .. "}"
+        return result
     end
     error("Cannot serialise type " .. ty, 0)
+end
+
+M._keywords = {}
+for _, k in ipairs({ "and", "break", "do", "else", "elseif", "end", "false", "for", "function", "goto", "if",
+                     "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while" }) do
+    M._keywords[k] = true
 end
 
 -- Matches real CC:Tweaked's implementation exactly, including the empty

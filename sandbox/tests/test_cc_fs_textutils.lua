@@ -97,6 +97,24 @@ return {
     t.eq(comp2.output[1].text, "{}")
   end,
 
+  -- The server saves compact since 2026-11-13 (W3, the shakeout disk); before then this raised.
+  ["serialise { compact = true } matches the format CC writes, and round-trips"] = function(t)
+    local comp = rig([[
+      local v = { "a", "b", sector = { cz = -176 }, ["mc:ore"] = 10, list = { { x = 1 } } }
+      local s = textutils.serialise(v, { compact = true })
+      local back = textutils.unserialise(s)
+      print(s)
+      print(back.sector.cz, back["mc:ore"], back[2], back.list[1].x)
+    ]])
+    local text = comp.output[1].text
+    t.ok(text:find('^{"a","b",'), text)
+    t.ok(text:find('sector={cz=%-176,},'), text)
+    t.ok(text:find('%["mc:ore"%]=10,'), text)
+    t.ok(text:find('list={{x=1,},},'), text)
+    t.ok(text:find('}$') and not text:find('\n', 1, true) and not text:find(' ', 1, true), text)
+    t.eq(comp.output[2].text, "-176\t10\tb\t1")
+  end,
+
   ["serialise refuses functions and recursion"] = function(t)
     local comp = rig([[
       print(pcall(textutils.serialise, { f = print }))

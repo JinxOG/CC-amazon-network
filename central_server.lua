@@ -1076,6 +1076,113 @@ function disk.tidy()
     return freed
 end
 
+-- ─── Ore maps on disk ────────────────────────────────────────────────────────
+--
+-- T2 run shakeout-faults-a (2026-11-12): the dispatch computer's 1,000,000-byte
+-- disk ran out 75 minutes in. One 36-sector zone's survey readings were 202,663
+-- bytes of active_zones.dat -- 105 depth readings, each a map of ore id to count,
+-- every id written out in full ("immersiveengineering:deepslate_ore_silver")
+-- every time, in the readable layout -- and every save needs room for a full
+-- temporary copy of its file. The shakeout keeps three such zones open.
+--
+-- So an ore map is written as "i:n,i:n" against one list of the ids it uses,
+-- and every file is written compact. On disk only: in memory nothing changes,
+-- and a file in the old layout still loads (unpackScans passes a table through).
+-- No locals: server.run has 5 to spare and the main chunk's count is its count.
+disk.COMPACT = { compact = true }
+disk.JOB_HISTORY_ON_DISK = 3   -- of the 40 kept in memory; nothing reads it back
+-- Each zone in a file of its own (ZONE_FILE_PREFIX .. jobId .. ".dat"), and
+-- active_zones.dat only an index of them. Every save needs room for a full
+-- temporary copy of what it writes, so one file holding three zones needed three
+-- zones' room on top of the three zones.
+disk.ZONE_FILE_PREFIX = "az_"
+
+-- The save every persistent file uses: a temporary copy, the old file kept as
+-- .bak until the new one is verified on disk. A rename needs no room.
+function disk.writeAtomic(path, data)
+    local tmp = path .. ".tmp"
+    local f = fs.open(tmp, "w")
+    if not f then error("could not open " .. tmp .. " for writing") end
+    f.write(data); f.close()
+    if fs.exists(path) then
+        if fs.exists(path .. ".bak") then fs.delete(path .. ".bak") end
+        fs.move(path, path .. ".bak")
+    end
+    fs.move(tmp, path)
+    dropBackupAfterVerify(path)
+end
+
+-- A file's contents, or its backup's when the file is missing; nil for neither.
+function disk.readSaved(path)
+    for _, p in ipairs({ path, path .. ".bak" }) do
+        if fs.exists(p) then
+            local f = fs.open(p, "r")
+            if f then
+                local s = f.readAll(); f.close()
+                if s and s ~= "" then return s end
+            end
+        end
+    end
+    return nil
+end
+
+function disk.packOre(m, names, idx)
+    local parts = {}
+    for name, n in pairs(m or {}) do
+        local i = idx[name]
+        if not i then i = #names + 1; names[i] = name; idx[name] = i end
+        parts[#parts + 1] = i .. ":" .. tostring(n)
+    end
+    table.sort(parts)
+    return table.concat(parts, ",")
+end
+
+function disk.unpackOre(v, names)
+    if type(v) ~= "string" then return v end
+    local m = {}
+    for i, n in v:gmatch("(%d+):([^,]+)") do
+        local name = names and names[tonumber(i)]
+        if name then m[name] = tonumber(n) end
+    end
+    return m
+end
+
+-- key -> ore map, both ways.
+function disk.packScans(scans, names, idx)
+    local out = {}
+    for k, m in pairs(scans or {}) do out[k] = disk.packOre(m, names, idx) end
+    return out
+end
+
+function disk.unpackScans(p, names)
+    if type(p) ~= "table" then return p end
+    local out = {}
+    for k, v in pairs(p) do out[k] = disk.unpackOre(v, names) end
+    return out
+end
+
+-- A copy of a zone for the zones file: its four ore maps packed.
+function disk.packZone(zone)
+    local z, names, idx = {}, {}, {}
+    for k, v in pairs(zone) do z[k] = v end
+    z.sectorSeen  = disk.packScans(zone.sectorSeen, names, idx)
+    z.sectorMined = disk.packScans(zone.sectorMined, names, idx)
+    z.oreFound    = disk.packOre(zone.oreFound, names, idx)
+    z.oreMined    = disk.packOre(zone.oreMined, names, idx)
+    z.oreNames    = names
+    return z
+end
+
+function disk.unpackZone(z)
+    if type(z) ~= "table" or type(z.oreNames) ~= "table" then return z end
+    z.sectorSeen  = disk.unpackScans(z.sectorSeen, z.oreNames)
+    z.sectorMined = disk.unpackScans(z.sectorMined, z.oreNames)
+    z.oreFound    = disk.unpackOre(z.oreFound, z.oreNames)
+    z.oreMined    = disk.unpackOre(z.oreMined, z.oreNames)
+    z.oreNames    = nil
+    return z
+end
+
 local DISK_WARN_BYTES  = 350000
 local DISK_FLOOR_BYTES = 300000
 local DISK_WARN_EVERY  = 300000   -- 5 min; a line per save would bury the log
@@ -1110,14 +1217,25 @@ local function saveJobs()
                     or job.status == "ASSIGNED"
                     or job.status == "IN_PROGRESS"
         if active then
-            toSave[id] = job
+            -- A copy whose history is only the newest few: nothing reads it back
+            -- after a restart, and at the in-memory 40 a job, 150 live jobs would
+            -- be about 500 KB of the 1 MB disk (shakeout-faults-a's rate).
+            local h = job.history
+            if type(h) == "table" and #h > disk.JOB_HISTORY_ON_DISK then
+                local c = {}
+                for k, v in pairs(job) do c[k] = v end
+                c.history = { table.unpack(h, #h - disk.JOB_HISTORY_ON_DISK + 1, #h) }
+                toSave[id] = c
+            else
+                toSave[id] = job
+            end
         end
     end
     local ok, err = pcall(function()
         local data = textutils.serialise({
             jobs       = toSave,
             jobCounter = state.jobCounter,
-        })
+        }, disk.COMPACT)
         local f = fs.open("jobs.tmp", "w")
         if not f then error("could not open jobs.tmp for writing") end
         f.write(data)
@@ -1268,7 +1386,7 @@ local function savePersistentZones(changedKey)
 
     -- Disk fallback: unchanged behaviour for a server with no KV attached.
     local ok, err = pcall(function()
-        local data = textutils.serialise(state.persistentZones)
+        local data = textutils.serialise(state.persistentZones, disk.COMPACT)
         local f = fs.open("zones.tmp", "w")
         if not f then error("could not open zones.tmp for writing") end
         f.write(data); f.close()
@@ -1497,13 +1615,13 @@ local function saveSectorProgress()
             zone.progressDirty = nil
             local held = {}
             for _, la in pairs(zone.lastAssignments or {}) do held[la.x .. "," .. la.z] = true end
-            local e = { zone = zone.persistentKey, seen = {}, mined = {} }
-            local any = false
+            local e = { zone = zone.persistentKey, seen = {}, mined = {}, names = {} }
+            local idx, any = {}, false
             for k, v in pairs(zone.sectorSeen or {}) do
-                if held[sectorOfScanKey(k) or ""] then e.seen[k] = v; any = true end
+                if held[sectorOfScanKey(k) or ""] then e.seen[k] = disk.packOre(v, e.names, idx); any = true end
             end
             for k, v in pairs(zone.sectorMined or {}) do
-                if held[sectorOfScanKey(k) or ""] then e.mined[k] = v; any = true end
+                if held[sectorOfScanKey(k) or ""] then e.mined[k] = disk.packOre(v, e.names, idx); any = true end
             end
             if any and zone.persistentKey then out[#out + 1] = e end
         end
@@ -1511,7 +1629,7 @@ local function saveSectorProgress()
     local tmp = CFG.SECTOR_PROGRESS_FILE .. ".tmp"
     local f = fs.open(tmp, "w")
     if not f then error("could not open " .. tmp) end
-    f.write(textutils.serialise(out)); f.close()
+    f.write(textutils.serialise(out, disk.COMPACT)); f.close()
     if fs.exists(CFG.SECTOR_PROGRESS_FILE) then fs.delete(CFG.SECTOR_PROGRESS_FILE) end
     fs.move(tmp, CFG.SECTOR_PROGRESS_FILE)
     return true
@@ -1535,6 +1653,8 @@ local function overlaySectorProgress(zones)
     for _, e in ipairs(data) do
         local zone = type(e) == "table" and byKey[e.zone]
         if zone then
+            e.seen  = disk.unpackScans(e.seen, e.names)
+            e.mined = disk.unpackScans(e.mined, e.names)
             local pz = state.persistentZones[zone.persistentKey]
             local done = {}
             for k in pairs(zone.doneKeys or {}) do
@@ -1573,17 +1693,27 @@ local function saveMiningZones()
         -- deduplicate: secondary entries become {sharedWith=primaryJobId}.
         -- loadMiningZones re-links them after deserialisation.
         local seen = {}   -- tostring(zone) → first jobId that claimed it
-        local toSave = {}
+        local toSave, kept = {}, {}
         for jobId, zone in pairs(state.miningZones) do
             local addr = tostring(zone)
             if seen[addr] then
                 toSave[jobId] = { sharedWith = seen[addr] }
             else
                 seen[addr] = jobId
-                toSave[jobId] = zone
+                local file = disk.ZONE_FILE_PREFIX .. jobId .. ".dat"
+                disk.writeAtomic(file, textutils.serialise(disk.packZone(zone), disk.COMPACT))
+                toSave[jobId] = { file = file }
+                kept[file] = true
             end
         end
-        local data = textutils.serialise(toSave)
+        -- A zone that has ended leaves its file behind; the index no longer names it.
+        for _, name in ipairs(fs.list("") or {}) do
+            if name:sub(1, #disk.ZONE_FILE_PREFIX) == disk.ZONE_FILE_PREFIX and name:match("%.dat$")
+               and not kept[name] then
+                pcall(fs.delete, name)
+            end
+        end
+        local data = textutils.serialise(toSave, disk.COMPACT)
         local f = fs.open("active_zones.tmp", "w")
         if not f then error("could not open active_zones.tmp for writing") end
         f.write(data); f.close()
@@ -1637,8 +1767,18 @@ local function loadMiningZones()
 
     local n = 0
     for jobId, zone in pairs(data) do
-        if state.jobs[jobId] then
-            state.miningZones[jobId] = zone
+        if state.jobs[jobId] and type(zone) == "table" and zone.file then
+            -- The index names the zone's own file (since the 2026-11-13 split).
+            local s = disk.readSaved(zone.file)
+            local z = s and textutils.unserialise(s)
+            if type(z) == "table" then
+                state.miningZones[jobId] = disk.unpackZone(z)
+                n = n + 1
+            else
+                logWarn(string.format("loadMiningZones: %s's zone file %s is missing or unreadable", jobId, zone.file))
+            end
+        elseif state.jobs[jobId] then
+            state.miningZones[jobId] = disk.unpackZone(zone)
             n = n + 1
         end
     end
@@ -4814,6 +4954,26 @@ server = {}
 server.PUSH_CAP   = 512 * 1024
 server._pushScale = 1
 
+-- The duplicate key of a bridge command: its time, type and parameters. Keyed
+-- on time and type alone, two DIFFERENT commands of one type queued in the same
+-- millisecond shared a key and the second was dropped: T2 shakeout-fleet-d
+-- posted 126 HOLD_TURTLE back to back and 29 were lost (2026-11-12). Only a true
+-- copy -- same time, same type, same parameters -- is a duplicate now. Keys in
+-- sorted order: a copy decoded from JSON is a new table with its own pairs order.
+function server.cmdKey(cmd)
+    local function enc(v, depth)
+        if type(v) ~= "table" then return type(v):sub(1, 1) .. tostring(v) end
+        if depth > 4 then return "{...}" end
+        local keys = {}
+        for k in pairs(v) do keys[#keys + 1] = k end
+        table.sort(keys, function(x, y) return tostring(x) < tostring(y) end)
+        local parts = {}
+        for _, k in ipairs(keys) do parts[#parts + 1] = tostring(k) .. "=" .. enc(v[k], depth + 1) end
+        return "{" .. table.concat(parts, ";") .. "}"
+    end
+    return tostring(cmd.ts or 0) .. ":" .. tostring(cmd.type or "") .. ":" .. enc(cmd.params or {}, 0)
+end
+
 function server.noteBridgeRefused()
     server._pushScale = math.max(1 / 64, server._pushScale / 2)
 end
@@ -4835,11 +4995,11 @@ function server.bridgeLogs(restBytes)
         return ok and r or nil
     end
 
-    local sParts = {}
+    local sParts, held = {}, false
     for _, e in ipairs(logSelect(state.log, "server", 100)) do
         local j = enc(e)
         if j then
-            if used + #j + 1 > budget then break end
+            if used + #j + 1 > budget then held = true; break end
             sParts[#sParts + 1] = j
             used = used + #j + 1
         end
@@ -4873,8 +5033,18 @@ function server.bridgeLogs(restBytes)
         if full then
             -- The next update starts with the source that ran out.
             state.logFitCursor = (start + i) % n
+            held = true
             break
         end
+    end
+    -- Said once a backlog, so a replay that drains over several updates is
+    -- visible in the log (and a test of it has something to judge).
+    if held and not state.logCapNoted then
+        state.logCapNoted = true
+        logInfo(string.format("Bridge update at its %d KB cap: the rest of the log backlog goes in the "
+            .. "next updates (share %d%%)", math.floor(server.PUSH_CAP / 1024), math.floor(server._pushScale * 100)))
+    elseif not held then
+        state.logCapNoted = nil
     end
     return "[" .. table.concat(sParts, ",") .. "]", "{" .. table.concat(tParts, ",") .. "}"
 end
@@ -5723,7 +5893,7 @@ function server.run()
 
     local recentCmds = {}
     local function isDuplicate(cmd)
-        local key = (cmd.ts or 0) .. ":" .. (cmd.type or "")
+        local key = server.cmdKey(cmd)
         if recentCmds[key] then return true end
         recentCmds[key] = true
         -- Prune entries older than 60s (cmd.ts is a Unix ms timestamp from server.js).
@@ -7291,6 +7461,7 @@ if _G.__CC_SERVER_TEST then
         ensureMineZone   = ensureMineZone,
         loadMiningZones  = loadMiningZones,
         saveSectorProgress = saveSectorProgress,
+        overlaySectorProgress = overlaySectorProgress,
         recomputeZoneOre = recomputeZoneOre,
         -- The dock load exactly as server.run does it, loggers included.
         loadDocks = function() W.loadDockAssignments(logInfo, logWarn) end,

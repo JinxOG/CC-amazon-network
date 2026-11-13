@@ -36,6 +36,8 @@ local files = {
     "tests.test_server_zones",
     "tests.test_bridge_push_order",
     "tests.test_bridge_push_cap",
+    "tests.test_server_disk_budget",
+    "tests.test_bridge_commands",
     "tests.test_silent_waits",
     "tests.test_zone_phase",
     "tests.test_zone_ore",

@@ -23,19 +23,22 @@ local function serialise_value(v, opts, indent, seen)
     if seen[v] == "closed" then error("Cannot serialize table with repeated entries", 0) end
     if next(v) == nil then return "{}" end
     seen[v] = "open"
-    local inner = indent .. "  "
-    local out, done = { "{\n" }, {}
+    -- { compact = true }: CC:Tweaked's serialize_impl swaps its layout strings for "{", "", "[", "]", "=", ","
+    -- and walks the same way (the server writes its saves compact since 2026-11-13, W3).
+    local open, inner, okey, ckey, eq, comma = "{\n", indent .. "  ", "[ ", " ]", " = ", ",\n"
+    if opts.compact then open, inner, okey, ckey, eq, comma = "{", "", "[", "]", "=", "," end
+    local out, done = { open }, {}
     for i, item in ipairs(v) do
       done[i] = true
-      out[#out + 1] = inner .. serialise_value(item, opts, inner, seen) .. ",\n"
+      out[#out + 1] = inner .. serialise_value(item, opts, inner, seen) .. comma
     end
     for k, item in pairs(v) do
       if not done[k] then
-        local key = is_ident(k) and k or ("[ " .. serialise_value(k, opts, inner, seen) .. " ]")
-        out[#out + 1] = inner .. key .. " = " .. serialise_value(item, opts, inner, seen) .. ",\n"
+        local key = is_ident(k) and k or (okey .. serialise_value(k, opts, inner, seen) .. ckey)
+        out[#out + 1] = inner .. key .. eq .. serialise_value(item, opts, inner, seen) .. comma
       end
     end
-    out[#out + 1] = indent .. "}"
+    out[#out + 1] = (opts.compact and "" or indent) .. "}"
     seen[v] = (opts.allow_repetitions == true) and nil or "closed"
     return table.concat(out)
   elseif t == "string" then return quote(v)
@@ -56,9 +59,6 @@ function M.install(comp, E)
       error("bad argument #2 to 'serialise' (table expected)", 2)
     end
     opts = opts or {}
-    if opts.compact then
-      error("sandbox: textutils.serialise compact is not implemented (computer " .. comp.id .. ")", 2)
-    end
     return serialise_value(v, opts, "", {})
   end
   T.serialize = T.serialise

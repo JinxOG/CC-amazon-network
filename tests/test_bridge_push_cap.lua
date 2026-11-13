@@ -117,6 +117,36 @@ return {
         assert_eq(outOfOrder, 0, "each source's lines arrive in order")
     end,
 
+    ["a backlog over the cap is said once, and again only after it has drained"] = function(assert_eq)
+        local server, T, restore = freshServer()
+        fillRings(T, 200, 40)
+        local function said()
+            local n = 0
+            for _, e in ipairs(T.state.log) do if tostring(e.msg):find("at its 512 KB cap", 1, true) then n = n + 1 end end
+            return n
+        end
+        local seen, order = {}, {}
+        local s, t = update(server, 200 * 1024)
+        ack(T, s, t, seen, order)
+        local once = said()
+        s, t = update(server, 200 * 1024)
+        ack(T, s, t, seen, order)
+        local stillOnce = said()
+        for _ = 1, 50 do
+            s, t = update(server, 200 * 1024)
+            if s == "[]" and t == "{}" then break end
+            ack(T, s, t, seen, order)
+        end
+        fillRings(T, 200, 40)
+        update(server, 200 * 1024)
+        local again = said()
+        restore()
+        assert_eq(once, 1, "the first update at the cap says so")
+        assert_eq(stillOnce, 1, "the next one, still at the cap, does not say it again")
+        assert_eq(again, 1, "a fresh backlog after a drained one says it once more (the ring was refilled, so the "
+            .. "earlier line is gone from it; one line now)")
+    end,
+
     ["the cap holds however many sources there are"] = function(assert_eq)
         local server, T, restore = freshServer()
         fillRings(T, 600, 40)
