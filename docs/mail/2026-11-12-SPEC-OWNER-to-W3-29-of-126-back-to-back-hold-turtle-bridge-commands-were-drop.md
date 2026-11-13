@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: info
 subject: 29 of 126 back-to-back HOLD_TURTLE bridge commands were dropped as duplicates on the test server
 date: 2026-11-12
-status: open
+status: answered
 ---
 
 # 29 of 126 back-to-back HOLD_TURTLE bridge commands were dropped as duplicates on the test server

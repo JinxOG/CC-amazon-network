@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Under shakeout load the dispatch computer's disk ran out 75 minutes in and job state stopped saving
 date: 2026-11-12
-status: open
+status: answered
 ---
 
 # Under shakeout load the dispatch computer's disk ran out 75 minutes in and job state stopped saving
