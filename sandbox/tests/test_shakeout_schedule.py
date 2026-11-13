@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +30,10 @@ HOUR = 3600000
 schedule.DISK_SETTLE_S = 0
 schedule.DISK_POLL_S = 0
 schedule.DISK_WAIT_S = 1
+schedule.OBSERVE_S = 0.2
+schedule.OBSERVE_POLL_S = 0
+schedule.END_PUSH_S = 0.2
+schedule.END_PUSH_POLL_S = 0
 REAL_PING = schedule._bridge_ping
 schedule._bridge_ping = lambda port, timeout=10: None
 
@@ -52,6 +57,8 @@ class FakeControl:
         self.facing = {201: "south", 202: "south", 203: "south"}
         self.rate = 20
         self.on = {i: True for i in self.comps}
+        self.lag_reads = 0           # a shutdown lands on the computer's next tick: computers() still reads it on this many times
+        self._lagging = {}
         self.fail_next = []          # verbs that raise once (a dropped connection, say)
         self.always_fail = []        # verbs that raise every time
         self.noop = []               # verbs that "work" but change nothing (the no-op a proof must not pass)
@@ -78,7 +85,14 @@ class FakeControl:
             self.measured = self.capacity - sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d))
 
     def computers(self):
-        return {i: {"on": self.on[i], "pos": p} for i, p in self.comps.items()}
+        out = {i: {"on": self.on[i], "pos": p} for i, p in self.comps.items()}
+        for i in list(self._lagging):
+            if i in out:
+                out[i]["on"] = True
+            self._lagging[i] -= 1
+            if self._lagging[i] <= 0:
+                del self._lagging[i]
+        return out
 
     def role_of(self, i):
         return self.roles.get(i)
@@ -90,6 +104,8 @@ class FakeControl:
         if self._rec("shutdown", list(ids)):
             for i in ids:
                 self.on[i] = False
+                if self.lag_reads:
+                    self._lagging[i] = self.lag_reads
 
     def turn_on(self, ids):
         if self._rec("turn_on", list(ids)):
@@ -189,8 +205,11 @@ class FakeCtx:
     def sample(self):
         raise OSError("no server in a unit test")
 
+    pushing = True                   # the dispatch computer's pushes reach the bridge (updatedAt moves on)
+
     def state(self):
-        return {"diskFree": getattr(self.control, "measured", 600000)}
+        return {"diskFree": getattr(self.control, "measured", 600000),
+                "updatedAt": time.time() * 1000 + 1000 if self.pushing else None}
 
     def log_lines(self, substr=""):
         line = "INFO   Central server online (v1) ID: node_95"
@@ -774,6 +793,61 @@ class EveryFaultIsSeenToTakeEffect(unittest.TestCase):
         self.assertEqual(bad, ["atc_crash", "low_fuel", "server_crash", "tps_drop", "turtle_reboot", "warehouse_crash"])
 
 
+class EndsAreMeasuredToo(unittest.TestCase):
+    """shakeout-faults-a, 2026-11-13: atc_crash and warehouse_crash read their computer ON straight after the shutdown (it lands
+    on the computer's next tick), and every end line copied the begin's read: bridge_down's end said ping None, ok True, while
+    the dispatch computer's pushes were being refused for the rest of the run. A begin reads until its effect shows; every end
+    with an effect to undo measures that it was undone (end_observed)."""
+
+    def test_a_shutdown_that_lands_a_few_reads_late_is_still_seen(self):
+        ctx = FakeCtx()
+        ctx.control.lag_reads = 3
+        schedule.run_due(ctx, [entry(1, 0, "atc_crash", {"down_ms": 1000})], 0)
+        d = schedule.state_of(ctx)["status"]["f001"]["detail"]
+        self.assertEqual(d["observed"], {"on": False, "ok": True})
+
+    def test_every_end_measures_itself(self):
+        ctx, sched, _ = EveryFaultIsSeenToTakeEffect.run_all(self)
+        st = schedule.state_of(ctx)["status"]
+        ends = {e["fault"]: (st[e["id"]].get("detail") or {}).get("end_observed") for e in sched if schedule.APPLY[e["fault"]].end}
+        self.assertEqual(sorted(ends), ["atc_crash", "bridge_down", "bridge_slow", "disk_full", "gps_down", "server_crash",
+                                        "tps_drop", "warehouse_crash"])
+        self.assertEqual({f: v for f, v in ends.items() if not (v or {}).get("ok")}, {})
+
+    def test_an_end_that_undoes_nothing_is_seen(self):
+        ctx, sched, _ = EveryFaultIsSeenToTakeEffect.run_all(self, lambda c: c.noop.extend(["turn_on"]))
+        st = schedule.state_of(ctx)["status"]
+        bad = sorted(e["fault"] for e in sched if schedule.APPLY[e["fault"]].end
+                     and not ((st[e["id"]].get("detail") or {}).get("end_observed") or {}).get("ok"))
+        self.assertEqual(bad, ["atc_crash", "gps_down", "server_crash", "warehouse_crash"])
+
+    def test_a_bridge_back_on_3000_that_the_fleet_never_reaches_is_seen(self):
+        BridgeWorld(self)
+        ctx = FakeCtx()
+        ctx.pushing = False
+        s = [entry(1, 0, "bridge_down", {"dur_ms": 1000})]
+        schedule.run_due(ctx, s, 0)
+        schedule.run_due(ctx, s, 2000)
+        end = schedule.state_of(ctx)["status"]["f001"]["detail"]["end_observed"]
+        self.assertIs(end["ok"], False, end)
+        self.assertIsNotNone(end["ping_ms"], "the bridge itself answers: it is the pushes that never came")
+
+    def test_a_tick_rate_left_wrong_at_the_end_is_seen(self):
+        ctx = FakeCtx()
+        s = [entry(1, 0, "tps_drop", {"dur_ms": 1000, "tps": 10})]
+        schedule.run_due(ctx, s, 0)
+        ctx.control.noop.append("tick_rate")
+        schedule.run_due(ctx, s, 2000)
+        self.assertIs(schedule.state_of(ctx)["status"]["f001"]["detail"]["end_observed"]["ok"], False)
+
+    def test_a_turtle_whose_computer_is_not_loaded_is_never_picked(self):
+        ctx = FakeCtx()
+        del ctx.control.comps[203]                          # node_203 is out in an unloaded chunk (faults-a: #345)
+        s = [entry(1, 0, "remove_item", {"target": {"role": "MINER", "index": 1}, "slot": 2, "what": "loader"})]
+        self.assertEqual(schedule.run_due(ctx, s, 0), [("f001", "begin")])
+        self.assertEqual(calls_of(ctx.control, "clear_slot")[0][1], (202, 1))
+
+
 class ChunkUnloadSparesTheBase(unittest.TestCase):
     def test_a_docked_turtle_in_the_base_is_not_a_target(self):
         ctx = FakeCtx()
@@ -1016,6 +1090,21 @@ class TheDriverLoop(unittest.TestCase):
         drv.run_loop(ctx, s, 0.1, poll=0.01)
         once.check_each(ctx, s)
         self.assertEqual([c["ok"] for c in ctx.checks if "f001" in c["message"]], [False])
+
+    def test_an_end_that_measured_nothing_fails_the_check(self):
+        drv, once = self.load("shakeout"), self.load("shakeout_faults_once")
+        ctx = FakeCtx()
+        s = [entry(1, 0, "tps_drop", {"dur_ms": 20, "tps": 10})]
+        saved = schedule.APPLY["tps_drop"]
+        schedule.APPLY["tps_drop"] = schedule.Fault(saved.begin, lambda ctx, c, st, e, d: c.tick_rate(20))   # the old end: no read
+        try:
+            drv.run_loop(ctx, s, 0.1, poll=0.01)
+        finally:
+            schedule.APPLY["tps_drop"] = saved
+        once.check_each(ctx, s)
+        mine = [c for c in ctx.checks if "f001" in c["message"]]
+        self.assertEqual([c["ok"] for c in mine], [False], mine)
+        self.assertIn("the end measured nothing", mine[0]["message"])
 
     def test_the_per_fault_check_can_fail(self):
         drv, once = self.load("shakeout"), self.load("shakeout_faults_once")

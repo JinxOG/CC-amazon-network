@@ -42,8 +42,9 @@ def check_each(ctx, sched):
     """One check per fault. A begin line and an intervention are not enough on their own (a verb whose reply nobody reads can
     do nothing and still log both): the begin's detail must carry observed.ok, the cheap read schedule.py makes right after
     the verb (the computer is off, the hosts are off, the tick rate reads back, the control mod said ok, diskFree fell to
-    leave_bytes, the slot is empty, the fuel reads back ...); a window's end must be logged too, and disk_full's end must see
-    diskFree back up (end_observed)."""
+    leave_bytes, the slot is empty, the fuel reads back ...); a window's end must be logged too, with its own end_observed:
+    the computer back on, the hosts back on, the tick rate back, the bridge answering AND the fleet's pushes reaching it,
+    diskFree back up."""
     log = fault_log(ctx)
     for e in sched:
         mine = [l for l in log if l.get("id") == e["id"]]
@@ -53,7 +54,10 @@ def check_each(ctx, sched):
         begin = next((l for l in mine if l["phase"] == "begin"), {})
         observed = (begin.get("detail") or {}).get("observed") or {}
         end = next((l for l in mine if l["phase"] == "end"), {})
-        end_seen = ((end.get("detail") or {}).get("end_observed") or {"ok": True}) if end else {"ok": not has_end}
+        # An end that measured nothing FAILS: until 2026-11-13 a missing end_observed read as ok, and bridge_down passed while the
+        # dispatch computer's pushes were refused for the rest of the run (shakeout-faults-a).
+        end_seen = (((end.get("detail") or {}).get("end_observed") or {"ok": False, "why": "the end measured nothing"})
+                    if end else {"ok": not has_end})
         ok = bool(begin) and observed.get("ok") is True and (not has_end or bool(end)) and end_seen.get("ok") is True and bool(marks)
         ctx.expect(ok, "%s %s fired once and was seen to take effect: phases %s, observed %s%s, %d intervention(s)%s" % (
             e["id"], e["fault"], phases, observed, (", at the end %s" % end_seen) if end else "", len(marks),

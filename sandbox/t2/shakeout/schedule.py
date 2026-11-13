@@ -517,7 +517,12 @@ def _pick_turtle(c, ctx, sel, accept=None):
     nodes = sorted((n for n, cell in placed.items() if cell["type"] == role), key=lambda n: (placed[n]["x"], placed[n]["z"]))
     if not nodes:
         raise RuntimeError("no %s turtle in the placed fleet" % role)
-    comps = c.computers() if (accept or sel.get("prefer") == "working") else {}
+    comps = c.computers()
+    # Only a turtle whose computer is loaded: a verb on one out in an unloaded chunk can only fail (shakeout-faults-a: remove_item
+    # retried #345 for its whole 10 minutes).
+    nodes = [n for n in nodes if _cid(n) in comps]
+    if not nodes:
+        raise RuntimeError("no %s turtle with a loaded computer" % role)
     if accept:
         nodes = [n for n in nodes if _cid(n) in comps and accept(_cid(n), tuple(comps[_cid(n)]["pos"]))]
         if not nodes:
@@ -553,8 +558,36 @@ def _observe(d, fn):
     return d
 
 
+OBSERVE_S = 15          # a read is repeated this long for the effect to show: a shutdown lands on the computer's next tick
+OBSERVE_POLL_S = 1      # (shakeout-faults-a, 2026-11-13: atc_crash and warehouse_crash read their computer ON straight after)
+END_PUSH_S = 180        # after a bridge fault, the dispatch computer's pushes must reach the bridge again within this
+END_PUSH_POLL_S = 5
+
+
+def _observe_until(d, fn, seconds=None, key="observed"):
+    """d[key] = fn(), read again every OBSERVE_POLL_S until its ok is True or `seconds` (OBSERVE_S) have passed. A read that
+    fails is ok False. Evidence only: it never raises."""
+    seconds = OBSERVE_S if seconds is None else seconds
+    until = time.monotonic() + seconds
+    while True:
+        try:
+            v = fn()
+        except Exception as ex:  # noqa: BLE001
+            v = {"ok": False, "error": "%s: %s" % (type(ex).__name__, ex)}
+        if v.get("ok") is True or time.monotonic() >= until:
+            d[key] = v
+            return d
+        time.sleep(END_PUSH_POLL_S if seconds == END_PUSH_S else OBSERVE_POLL_S)
+
+
 def _on(c, cid):
     return (c.computers().get(cid) or {}).get("on")
+
+
+def _all_on(c, ids):
+    comps = c.computers()
+    off = [i for i in ids if not (comps.get(i) or {}).get("on")]
+    return {"off": off, "ok": not off}
 
 
 def _reply_ok(reply):
@@ -684,12 +717,15 @@ def _crash_computer(find):
         cid = d["computer"] = find(ctx, c)
         c.shutdown([cid])
         _hold(st, cid, e["id"])                        # only once it is off
-        return _observe(d, lambda: {"on": _on(c, cid), "ok": _on(c, cid) is False})
+        return _observe_until(d, lambda: (lambda on: {"on": on, "ok": on is False})(_on(c, cid)))
 
     def end(ctx, c, st, e, detail):
         cid = detail.get("computer")
         if cid is not None and _release(st, cid, e["id"]):
             _turn_on(ctx, c, st, [cid])
+            _observe_until(detail, lambda: (lambda on: {"on": on, "ok": on is True})(_on(c, cid)), key="end_observed")
+        else:     # another window still holds it off: that window's end turns it on and measures it
+            detail["end_observed"] = {"still_held": True, "ok": True}
     return begin, end
 
 
@@ -739,6 +775,7 @@ def _gps_end(ctx, c, st, e, detail):
     back = [h for h in detail.get("hosts", []) if _release(st, h, e["id"])]
     if back:
         _turn_on(ctx, c, st, back)
+    _observe_until(detail, lambda: dict(_all_on(c, back), back=back), key="end_observed")
 
 
 def _tick_seen(c, want):
@@ -756,7 +793,9 @@ def _tps_begin(ctx, c, st, e):
 
 
 def _tps_end(ctx, c, st, e, detail):
-    c.tick_rate(getattr(ctx, "rate", 20))
+    rate = getattr(ctx, "rate", 20)
+    c.tick_rate(rate)
+    _observe_until(detail, lambda: _tick_seen(c, rate), key="end_observed")
 
 
 BASE_CHUNKS = world.area_chunks(world.BASE_AREAS)
@@ -1066,8 +1105,27 @@ def _bridge_down(ctx, c, st, e):
     return _observe(d, lambda: (lambda ms: {"ping_ms": ms, "ok": ms is None})(_bridge_ping(BRIDGE_PORT, 3)))
 
 
-def _bridge_up(ctx, c, st, e, detail):
+def _pushes_back(ctx, since_ms):
+    """The bridge answers on 3000 AND the dispatch computer's pushes reach it again: /state updatedAt (set by the bridge on each
+    push it accepts) is newer than since_ms. A bridge that answers while it refuses every push (shakeout-faults-a: 413 for the
+    rest of the run) is not back."""
+    ping = _bridge_ping(BRIDGE_PORT, 5)
+    try:
+        at = (ctx.state() or {}).get("updatedAt")
+    except Exception:  # noqa: BLE001
+        at = None
+    return {"ping_ms": ping, "updatedAt": at, "since_ms": since_ms,
+            "ok": ping is not None and isinstance(at, (int, float)) and at > since_ms}
+
+
+def _bridge_back(ctx, st, e, detail):
+    since = time.time() * 1000
     _bridge_restore(ctx, e, st)
+    _observe_until(detail, lambda: _pushes_back(ctx, since), seconds=END_PUSH_S, key="end_observed")
+
+
+def _bridge_up(ctx, c, st, e, detail):
+    _bridge_back(ctx, st, e, detail)
 
 
 def _slow_begin(ctx, c, st, e):
@@ -1093,7 +1151,7 @@ def _slow_begin(ctx, c, st, e):
 
 
 def _slow_end(ctx, c, st, e, detail):
-    _bridge_restore(ctx, e, st)
+    _bridge_back(ctx, st, e, detail)
 
 
 class DelayProxy(http.server.ThreadingHTTPServer):
