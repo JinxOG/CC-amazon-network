@@ -92,9 +92,20 @@ def steps(ctx):
     ups = sorted(t for t in (when(l) for l in ctx.log_lines("bridge up")) if t and t > t_built)
     rollups = sorted((when(l), int(ROLLUP.search(l).group(1))) for l in ctx.log_lines("busy rollup: pushes=")
                      if when(l) and ROLLUP.search(l))
-    capped = [l for l in ctx.log_lines("Bridge update at its") if when(l) and ups and when(l) > ups[0]]
-    ctx.expect(bool(capped), "the replay after a bridge restart was bigger than one update, so the checks below have "
-               "something to judge (%d 'at its cap' line(s)%s)" % (len(capped), (": " + capped[0][:160]) if capped else ""))
+    # The cap line is said once a backlog: in run w3-push-cap-a it came at the first failed push of bridge_down's outage
+    # (the share halves on a failure), BEFORE the restart, and the replay that followed did not say it again. So it is
+    # looked for from shortly before the first fault, and the replay's size is read from the bridge's own rollups:
+    # write_kb in the first rollup after each start (940 KB there; the old code sent that as one update).
+    t_fault = t_built + datetime.timedelta(seconds=WARM_S - 120)
+    capped = [l for l in ctx.log_lines("Bridge update at its") if when(l) and when(l) > t_fault]
+    first_kb = []
+    for up in ups:
+        after = sorted((when(l), l) for l in ctx.log_lines("busy rollup: pushes=") if when(l) and when(l) > up)
+        m = after and re.search(r"write_kb=([\d.]+)", after[0][1])
+        first_kb.append(float(m.group(1)) if m else 0.0)
+    ctx.expect(bool(capped) and max(first_kb or [0]) > 512, "the replay after a bridge restart was bigger than one update, "
+               "so the checks below have something to judge (%d 'at its cap' line(s); KB written in the first minute after "
+               "each bridge start: %s)" % (len(capped), first_kb))
     ctx.expect(len(ups) >= 3, "the bridge started at least 3 times after the fleet was built (bridge_down's restart, "
                "bridge_slow's move to 3001 and back): %d" % len(ups))
     end = rollups[-1][0] if rollups else None
