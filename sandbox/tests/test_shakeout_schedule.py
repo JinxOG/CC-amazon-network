@@ -116,6 +116,8 @@ class FakeControl:
         if self._rec("gps_down", list(hosts)):
             for i in hosts:
                 self.on[i] = False
+                if self.lag_reads:
+                    self._lagging[i] = self.lag_reads
         return hosts
 
     def world_restart(self):
@@ -806,6 +808,14 @@ class EndsAreMeasuredToo(unittest.TestCase):
         d = schedule.state_of(ctx)["status"]["f001"]["detail"]
         self.assertEqual(d["observed"], {"on": False, "ok": True})
 
+    def test_a_gps_host_that_goes_off_a_few_reads_late_is_still_seen(self):
+        # shakeout-faults-d f005: gps_down read its host once, straight after the shutdown, and failed with still_on [50]
+        ctx = FakeCtx()
+        ctx.control.lag_reads = 3
+        schedule.run_due(ctx, [entry(1, 0, "gps_down", {"dur_ms": 1000})], 0)
+        d = schedule.state_of(ctx)["status"]["f001"]["detail"]
+        self.assertEqual(d["observed"], {"still_on": [], "ok": True})
+
     def test_every_end_measures_itself(self):
         ctx, sched, _ = EveryFaultIsSeenToTakeEffect.run_all(self)
         st = schedule.state_of(ctx)["status"]
@@ -1081,6 +1091,19 @@ class TheDriverLoop(unittest.TestCase):
         once.check_each(ctx, s)
         self.assertTrue(all(c["ok"] for c in ctx.checks), [c["message"] for c in ctx.checks if not c["ok"]])
         self.assertTrue(any("no filler file left" in c["message"] for c in ctx.checks))
+
+    def test_setup_requires_the_dispatch_computer_still_pushing_after_the_save_point(self):
+        # shakeout-faults-d: the save point's copy stalled the disk, the dispatch computer was terminated mid-write 10 s after
+        # its last push and stayed wedged, and the schedule ran 4 hours on it. A fresh push some time AFTER the save point.
+        drv = self.load("shakeout")
+        drv.READY_SETTLE_S, drv.READY_S, drv.READY_POLL_S = 0, 0.2, 0
+        ctx = FakeCtx()
+        got = drv.dispatch_settled(ctx)
+        self.assertTrue(got["ok"], got)
+        ctx.pushing = False
+        got = drv.dispatch_settled(ctx)
+        self.assertFalse(got["ok"], got)
+        self.assertIn("updatedAt", got)
 
     def test_the_per_fault_check_fails_a_fault_that_did_nothing(self):
         drv, once = self.load("shakeout"), self.load("shakeout_faults_once")

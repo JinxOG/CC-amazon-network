@@ -173,7 +173,42 @@ def setup(ctx):
     # 7. a checkpoint
     dest = world.save_point(ctx, "shakeout-fleet")
     ctx.expect(os.path.exists(os.path.join(dest, "level.dat")), "save point written (%s)" % dest)
+
+    # 8. the dispatch computer still WORKING once the copy has settled, before anything is measured
+    ready = dispatch_settled(ctx)
+    ctx.expect(ready["ok"], "the dispatch computer is still pushing %d s after the save point (%s)" % (READY_SETTLE_S, ready))
+    if not ready["ok"]:
+        raise RuntimeError("the dispatch computer stopped pushing after the save point: nothing after it would measure the "
+                           "fleet (%s)" % ready)
     return placed
+
+
+READY_SETTLE_S = 90      # the save point's copy keeps the disk busy after it returns (shakeout-faults-d: the wedge came 14 s on)
+READY_FRESH_S = 30       # a push this recent counts as pushing
+READY_S = 300
+READY_POLL_S = 5
+
+
+def dispatch_settled(ctx):
+    """READY_SETTLE_S after the save point, a push no older than READY_FRESH_S must come within READY_S. shakeout-faults-d: the
+    copy stalled the disk, CC terminated the dispatch computer inside a storage-block write 10 s after its last push, the
+    termination itself failed (InterruptedException in ComputerExecutor.shutdown), and it sat 'on' and silent for 17 minutes
+    while the schedule ran on it."""
+    time.sleep(READY_SETTLE_S)
+    t0 = time.time()
+    at = None
+    while True:
+        try:
+            at = (ctx.state() or {}).get("updatedAt")
+        except Exception:  # noqa: BLE001 - an unreadable state is not a push
+            at = None
+        now_ms = time.time() * 1000
+        if isinstance(at, (int, float)) and at >= now_ms - READY_FRESH_S * 1000:
+            return {"updatedAt": at, "age_s": round((now_ms - at) / 1000.0, 1), "ok": True}
+        if time.time() - t0 >= READY_S:
+            return {"updatedAt": at, "age_s": None if not isinstance(at, (int, float)) else round((now_ms - at) / 1000.0, 1),
+                    "waited_s": READY_S, "ok": False}
+        time.sleep(READY_POLL_S)
 
 
 def _feeder(ctx):

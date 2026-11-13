@@ -780,7 +780,7 @@ def _gps_begin(ctx, c, st, e):
         comps = c.computers()
         still = [h for h in chosen if (comps.get(h) or {}).get("on")]
         return {"still_on": still, "ok": not still}
-    return _observe(d, seen)
+    return _observe_until(d, seen)     # a shutdown lands on the host's next tick (shakeout-faults-d f005 read it once: still on)
 
 
 def _gps_end(ctx, c, st, e, detail):

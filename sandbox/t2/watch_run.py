@@ -186,12 +186,15 @@ def quiet_windows(run, schedule_path, now=None):
     return out
 
 
-def quiet_reference(last_growth, windows, now):
+def quiet_reference(last_growth, windows, now, slack_s=180):
     """The moment silence is counted from: the last fleet growth, or the end of a quiet window that has begun (capped at now,
-    so a window in progress holds the count at zero)."""
+    so a window in progress holds the count at zero) -- but only a window the fleet was still TALKING into: its last growth no
+    more than slack_s (a poll and a minute) before the window opened. A silence older than the window is not the fault's
+    (shakeout-faults-d: the dispatch computer was wedged 5 minutes before f001 opened, and the window reset the count, so 17
+    silent minutes never tripped the watchdog)."""
     ref = last_growth
     for w in windows:
-        if w["start"] <= now:
+        if w["start"] <= now and last_growth >= w["start"] - slack_s:
             ref = max(ref, min(now, w["end"]))
     return ref
 
@@ -237,7 +240,7 @@ def main(argv=None):
             last_fleet, last_growth = fleet, now
         elif lines > last_lines:
             last_lines = lines
-        idle = (now - (quiet_reference(last_growth, windows, now) if windows else last_growth)) / 60.0
+        idle = (now - (quiet_reference(last_growth, windows, now, a.poll + 60) if windows else last_growth)) / 60.0
         print("%s  +%5.1f min  %6d fleet lines (%d total)  quiet %4.1f min"
               % (time.strftime("%H:%M:%S"), (now - t0) / 60.0, fleet, lines, idle), flush=True)
 
