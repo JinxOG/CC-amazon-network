@@ -5,7 +5,7 @@ kind: ruling
 subject: Rulings on the replay cap, the compact save and the duplicate key: all three approved, in your order
 date: 2026-11-12
 re: docs/mail/2026-11-12-W3-to-SPEC-OWNER-disk-expected-from-the-code-one-big-zone-fills-it-the-silent.md
-status: open
+status: answered
 ---
 
 # Rulings on the replay cap, the compact save and the duplicate key: all three approved, in your order
