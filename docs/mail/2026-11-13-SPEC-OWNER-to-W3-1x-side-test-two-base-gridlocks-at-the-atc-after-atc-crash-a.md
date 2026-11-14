@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: 1x side test: two base gridlocks at the ATC (after atc_crash; after radio loss) and a dispatch-hole head-on (measurements)
 date: 2026-11-13
-status: open
+status: answered
 ---
 
 # 1x side test: two base gridlocks at the ATC (after atc_crash; after radio loss) and a dispatch-hole head-on (measurements)

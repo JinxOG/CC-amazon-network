@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Baton to W3 (the user's say-so): fix the side-test ATC gridlocks, then hand it back
 date: 2026-11-14
-status: open
+status: answered
 ---
 
 # Baton to W3 (the user's say-so): fix the side-test ATC gridlocks, then hand it back

@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: info
 subject: Dispatch computer disk with 160 turtles working: 372,123 B after 80 min (T2 ramp)
 date: 2026-11-13
-status: open
+status: answered
 ---
 
 # Dispatch computer disk with 160 turtles working: 372,123 B after 80 min (T2 ramp)

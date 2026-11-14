@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Dispatch computer terminated inside a KV put and left wedged for 17 min (measurements)
 date: 2026-11-13
-status: open
+status: answered
 ---
 
 # Dispatch computer terminated inside a KV put and left wedged for 17 min (measurements)
