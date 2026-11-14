@@ -120,8 +120,9 @@ def restart_and_wait_online(ctx, seconds=600):
     return ok
 
 
-def setup(ctx):
-    """Builds the shakeout world and fleet (module doc, steps 1-7). Returns {node_id: dock cell}."""
+def setup(ctx, only=None):
+    """Builds the shakeout world and fleet (module doc, steps 1-7). Returns {node_id: dock cell}. `only` (a predicate on a dock
+    cell) places part of the fleet: the 1x side test's bay 1 (fleet.place_fleet)."""
     c = ctx.control
     ctx.wait_registered(14, 300)
 
@@ -162,7 +163,7 @@ def setup(ctx):
     keep = [i for i in (sid,) if i is not None]
     fleet.retire_strays(ctx, keep=keep)
     online0 = len(ctx.log_lines("Central server online"))
-    placed = fleet.place_fleet(ctx, donors=donors, server_id=sid, loader_donor=ldonor)
+    placed = fleet.place_fleet(ctx, donors=donors, server_id=sid, loader_donor=ldonor, only=only)
     ctx.expect(bool(ctx.wait_until(lambda: len(ctx.log_lines("Central server online")) > online0, 600)),
                "the dispatch computer came back after the seeding")
 
@@ -211,13 +212,13 @@ def dispatch_settled(ctx):
         time.sleep(READY_POLL_S)
 
 
-def _feeder(ctx):
+def _feeder(ctx, **kw):
     try:
         mod = importlib.import_module("shakeout.feeder")
     except ImportError:
         ctx.note("no shakeout.feeder module (Task 6): the fleet gets no orders from the driver")
         return None, None
-    return mod.Feeder(ctx), getattr(mod, "housekeep", None)
+    return mod.Feeder(ctx, **kw), getattr(mod, "housekeep", None)
 
 
 NOTE_CAP = 20      # notes per error source (scheduler, feeder, housekeeping, state recorder) outside scheduled outages
@@ -248,14 +249,15 @@ class _Errors:
         return ", ".join("%s %d (+%d during scheduled outages)" % (s, self.n.get(s, 0), self.quiet.get(s, 0)) for s in srcs) or "none"
 
 
-def run_loop(ctx, sched, seconds, poll=None):
+def run_loop(ctx, sched, seconds, poll=None, feeder=None):
     """Fires the schedule by wall clock for `seconds` real seconds; the feeder and housekeeping ride along when they exist.
     Always ends with schedule.teardown, the no-filler-left check and the end-of-run probe, whatever stopped the loop. NOTHING
     stops the loop but the clock ("24 h no matter what"): an error from the scheduler itself (a log the full drive will not take,
     say), the feeder, housekeeping or the state recorder is noted (per source, capped: _Errors) and the run goes on. The shakeout
-    report is NOT written here: after_stop writes it once the game server is stopped."""
+    report is NOT written here: after_stop writes it once the game server is stopped. `feeder`: the Feeder's keyword arguments
+    (min_jobs, sites ...) for a fleet smaller than the 160."""
     poll = poll or env_int("SHAKEOUT_POLL_S", 15)
-    feed, housekeep = _feeder(ctx)
+    feed, housekeep = _feeder(ctx, **(feeder or {}))
     ctx.shakeout_entries = sched          # housekeeping tags a storage reading taken inside a scheduled storage fault as expected
     t0 = time.time()
     err = _Errors(ctx, sched)

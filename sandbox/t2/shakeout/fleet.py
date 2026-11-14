@@ -269,25 +269,29 @@ def _write_seed(ctx, c, sid, placed, layout, partial=False):
         ctx.note("shakeout fleet: placement stopped part-way; %s seeded with the %d turtles placed so far" % (DOCK_FILE, len(placed)))
 
 
-def place_fleet(ctx, layout=None, kit=None, donors=None, server_id=None, loader_donor=None, staging=None):
+def place_fleet(ctx, layout=None, kit=None, donors=None, server_id=None, loader_donor=None, staging=None, only=None):
     """Places the fleet (see the module doc). Returns {node_id: dock cell}; ctx.shakeout_fleet keeps the server id, the
-    placement and each miner's loader id for the fault scheduler and the checks."""
+    placement and each miner's loader id for the fault scheduler and the checks. `only` (a predicate on a cell) places a
+    part of the layout (the 1x side test's bay 1); the seed is still numbered against the WHOLE layout, because its legacy
+    DELIVERY/SUPPORT lists are each dock's index in waypoints' generation order, and a subset passed as `layout` would
+    renumber them and make the real loadDockAssignments distrust byPos."""
     c = ctx.control
     layout = layout or world.dock_cells()
+    cells = [cl for cl in layout if only is None or only(cl)]
     kit = kit or ROLE_KIT
     sid = server_id or server_computer(ctx)
     if sid is None:
         raise RuntimeError("place_fleet: no running dispatch computer found ('Central server online' never logged)")
     donors = donors or find_donors(ctx)
-    missing = [t for t in sorted({cell["type"] for cell in layout}) if t not in donors]
+    missing = [t for t in sorted({cell["type"] for cell in cells}) if t not in donors]
     if missing:
         raise RuntimeError("place_fleet: no donor computer for %s" % missing)
     loader_donor = loader_donor or LOADER_SOURCE
-    occupied = [cell for cell in layout if not world.is_air(c, (cell["x"], cell["y"], cell["z"]))]
+    occupied = [cell for cell in cells if not world.is_air(c, (cell["x"], cell["y"], cell["z"]))]
     if occupied:
         raise RuntimeError("place_fleet needs every dock cell empty (world.build_world empties them); occupied: %s"
                            % ", ".join("%d,%d,%d" % (cl["x"], cl["y"], cl["z"]) for cl in occupied[:20]))
-    needs_loader = any("loader_slot" in kit[cell["type"]] for cell in layout)
+    needs_loader = any("loader_slot" in kit[cell["type"]] for cell in cells)
     spot = staging or next((p for p in LOADER_STAGING if world.is_air(c, p)), None)
     if needs_loader and spot is None:
         raise RuntimeError("place_fleet: no free loader staging cell among %s" % (LOADER_STAGING,))
@@ -297,7 +301,7 @@ def place_fleet(ctx, layout=None, kit=None, donors=None, server_id=None, loader_
     placed, loaders = {}, {}
     seeded = False
     try:
-        for cell in layout:
+        for cell in cells:
             role = cell["type"]
             k = kit[role]
             items = dict(k["items"])

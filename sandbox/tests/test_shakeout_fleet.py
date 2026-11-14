@@ -411,6 +411,43 @@ class PlacementRobustness(unittest.TestCase):
         self.assertEqual(mismatches(placed, docks), [], "the four placed turtles are seeded where they stand")
 
 
+def side_cell(cl):
+    """The 1x side test's bay 1: delivery and support row A, and four miners of worker bay 2 row A."""
+    if cl["bay"] == 1 and cl["row"] == "A":
+        return True
+    return cl["type"] == "MINER" and cl["side"] == "WORKER" and cl["bay"] == 2 and cl["row"] == "A" and cl["slot"] < 0
+
+
+class PartOfTheFleet(unittest.TestCase):
+    def place_part(self, **kw):
+        ctx = FakeCtx()
+        real_sleep = control.time.sleep
+        control.time.sleep = lambda s: None
+        try:
+            return ctx, fleet.place_fleet(ctx, donors=DONORS, loader_donor=195, **kw)
+        finally:
+            control.time.sleep = real_sleep
+
+    def test_only_places_that_part_and_seeds_it_by_position(self):
+        ctx, placed = self.place_part(layout=CELLS, only=side_cell)
+        want = [cl for cl in CELLS if side_cell(cl)]
+        self.assertEqual(len(placed), len(want))
+        self.assertEqual(sorted((c["type"]) for c in placed.values()).count("MINER"), 4)
+        self.assertEqual(sorted((c["x"], c["z"]) for c in placed.values()), sorted((c["x"], c["z"]) for c in want))
+        infos = []
+        docks, warns = dock_of_each(os.path.join(ctx.control.disks, "95", "dock_assignments.dat"), sorted(placed), infos)
+        self.assertEqual(warns, [])
+        self.assertEqual(mismatches(placed, docks), [], "every turtle of the part is seeded where it stands")
+        self.assertEqual(infos, [], "the part's seed is read by position, silently")
+
+    def test_the_part_passed_as_the_layout_instead_is_numbered_wrong(self):
+        # why `only` exists: the same part given AS the layout renumbers the legacy lists, and the real loader then says so
+        ctx, placed = self.place_part(layout=[cl for cl in CELLS if side_cell(cl)])
+        infos = []
+        docks, warns = dock_of_each(os.path.join(ctx.control.disks, "95", "dock_assignments.dat"), sorted(placed), infos)
+        self.assertTrue(infos or warns or mismatches(placed, docks), "a renumbered seed is noticed by waypoints.lua")
+
+
 class Strays(unittest.TestCase):
     def test_a_fleet_turtle_outside_the_docks_is_retired_and_a_roleless_body_is_not(self):
         ctx = FakeCtx()

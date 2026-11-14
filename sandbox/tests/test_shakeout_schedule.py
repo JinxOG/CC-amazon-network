@@ -1530,5 +1530,39 @@ class TheReportIsWrittenAfterTheServerStops(unittest.TestCase):
         self.assertIn("never ran", drv.after_stop(FakeCtx()))
 
 
+
+class SideTest(unittest.TestCase):
+    ONE_OFFS = ("server_crash", "atc_crash", "world_restart")
+
+    def one_offs(self, sched):
+        return [e for e in sched if e["fault"] in self.ONE_OFFS or (e["fault"] == "radio_loss" and e["args"]["rate"] == 1.0)]
+
+    def test_side_test_has_the_four_one_offs_40_minutes_apart(self):
+        sched = schedule.side_test(1)
+        ones = self.one_offs(sched)
+        self.assertEqual(sorted(e["fault"] for e in ones), sorted(self.ONE_OFFS + ("radio_loss",)))
+        gaps = [b["t_ms"] - a["t_ms"] for a, b in zip(ones, ones[1:])]
+        self.assertEqual(gaps, [40 * schedule.MIN] * 3)
+        self.assertEqual(len([e for e in sched if e not in ones]), 4, "a radio burst between each pair, and one after")
+        self.assertEqual({e["fault"] for e in sched if e not in ones}, {"radio_loss", "radio_latency"})
+
+    def test_side_test_windows_close_before_the_next_entry_and_before_the_end(self):
+        for seed in range(1, 30):
+            sched = schedule.side_test(seed)
+            for a, b in zip(sched, sched[1:]):
+                self.assertLessEqual(a["t_ms"] + schedule.window_ms(a) + a["quiet_ms"], b["t_ms"], (seed, a["id"]))
+            last = sched[-1]
+            self.assertLessEqual(last["t_ms"] + schedule.window_ms(last) + last["quiet_ms"],
+                                 schedule.SIDE_HOURS * schedule.HOUR - 10 * schedule.MIN, seed)
+            self.assertGreaterEqual(sched[0]["t_ms"], 15 * schedule.MIN, "the fleet settles first")
+
+    def test_side_test_names_only_faults_the_runner_has(self):
+        for e in schedule.side_test(1):
+            self.assertIn(e["fault"], schedule.APPLY)
+
+    def test_side_test_is_the_same_for_a_seed(self):
+        self.assertEqual(schedule.side_test(7), schedule.side_test(7))
+        self.assertEqual(len({e["id"] for e in schedule.side_test(1)}), 8)
+
 if __name__ == "__main__":
     unittest.main()

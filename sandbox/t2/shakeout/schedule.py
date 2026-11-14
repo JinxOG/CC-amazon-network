@@ -381,6 +381,35 @@ def one_of_each(seed=1, start_ms=5 * MIN, gap_ms=5 * MIN):
     return out
 
 
+SIDE_ONE_OFFS = (("server_crash", 20), ("atc_crash", 60), ("world_restart", 100), ("radio_loss", 140))   # (fault, real minute)
+SIDE_BURSTS = (("radio_loss", 40), ("radio_latency", 80), ("radio_loss", 120), ("radio_latency", 160))
+SIDE_HOURS = 3.0
+
+
+def side_test(seed=1):
+    """The 1x side test's schedule (spec section 2, "The 1x side test"; 3 real hours, the user's call 2026-11-12): four one-off
+    faults about 40 minutes apart, so each one's recovery is read on its own -- a central-server crash, an ATC crash, one world
+    restart (clean, GPS on time) and one total radio blackout -- with a short radio loss or latency burst between each pair.
+    Every window closes, and its quiet time passes, before the next entry starts (test_side_test_*)."""
+    rng = _Rng(seed)
+    out = []
+    for fault, minute in sorted(SIDE_ONE_OFFS + SIDE_BURSTS, key=lambda fm: fm[1]):
+        one_off = (fault, minute) in SIDE_ONE_OFFS
+        if fault == "world_restart":
+            args = {"kind": "clean", "gps_delay_ms": 0}
+        elif fault == "radio_loss" and one_off:
+            args = {"dur_ms": 5 * MIN, "rate": 1.0}
+        elif fault == "radio_loss":
+            args = {"dur_ms": int(rng.u(2, 4) * MIN), "rate": rng.pick((0.2, 0.5))}
+        elif fault == "radio_latency":
+            args = {"dur_ms": int(rng.u(2, 4) * MIN), "ms": rng.pick((1000, 3000))}
+        else:      # a crash: down 1-5 min, so down + its quiet (down + 3 min) closes inside the 40-minute gap
+            args = {"down_ms": int(rng.u(1, 5) * MIN)}
+        out.append({"id": "s%03d" % (len(out) + 1), "t_ms": minute * MIN, "fault": fault, "args": args,
+                    "quiet_ms": quiet_of(fault, args)})
+    return out
+
+
 def write_schedule(path, schedule, **meta):
     """schedule.json: {format, time_base, the meta given (seed, hours, rates ...), entries}."""
     doc = {"format": FORMAT, "time_base": "t_ms and durations: real ms on T2, simulated ms in the simulator"}
