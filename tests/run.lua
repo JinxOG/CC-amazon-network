@@ -38,6 +38,7 @@ local files = {
     "tests.test_bridge_push_cap",
     "tests.test_server_disk_budget",
     "tests.test_bridge_commands",
+    "tests.test_gps_tick",
     "tests.test_silent_waits",
     "tests.test_zone_phase",
     "tests.test_zone_ore",

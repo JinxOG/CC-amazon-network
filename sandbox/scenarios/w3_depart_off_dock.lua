@@ -21,6 +21,7 @@ return {
     local waiting = sim:capture_log("[WH] Waiting for warehouse")
     local timeout = sim:capture_log("warehouse_chest_timeout")
     local homeFirst = sim:capture_log("going home first")
+    local homeAfter = sim:capture_log("away from my dock")   -- either way home: after the failed job, or before departing
     local docked = sim:capture_log("Docked at bay")
     local blocked = sim:capture_log("a turtle is blocking")
     local stuck = sim:capture_log("STUCK ")
@@ -68,8 +69,8 @@ return {
     sim:run_until(function() return #done.lines >= 1 end, 3 * 3600000)
     sim:run_for(10 * 60000)
 
-    sim:expect(#mine(homeFirst.lines) >= 1, dname .. " went home before departing again ("
-      .. tostring((mine(homeFirst.lines)[1] or "nothing"):sub(1, 140)) .. ")")
+    sim:expect(#mine(homeAfter.lines) >= 1, dname .. " went home before departing again (when its job failed, or when it "
+      .. "was given it back: " .. tostring((mine(homeAfter.lines)[1] or "nothing"):sub(1, 140)) .. ")")
     sim:expect(#mine(docked.lines, dockedBefore + 1) >= 1, "and docked on the way (" .. #mine(docked.lines, dockedBefore + 1) .. ")")
     local b = mine(blocked.lines, blockedBefore + 1)
     sim:expect(#b == 0, dname .. " was never held up by a turtle after the job came back (" .. #b .. "; "

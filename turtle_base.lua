@@ -4582,6 +4582,30 @@ function base.run(jobHandler)
                 logError("Job handler crashed: " .. tostring(err))
                 base.sendFailed(tostring(err), true)
             end
+
+            -- A JOB THAT ENDS AWAY FROM THE DOCK GOES HOME (2026-11-14). A failed
+            -- job ends where it failed, and nothing brought the turtle back: the
+            -- server sends no recall on JOB_FAILED, and refuses one from a turtle
+            -- whose job went to another. In the side-test sim (w3_side_atc) 6 of 14
+            -- turtles ended IDLE at destinations and in the tunnel -- deliveries
+            -- whose warehouse wait timed out after a blackout, supports that stood
+            -- down -- and a turtle given work from there drove through the base
+            -- (see departImpl). Busy while it goes, so a RECALL meanwhile does not
+            -- start a second trip home from the control loop, nor a job.
+            if _self.dock and not pendingJob then
+                pcall(gpsSync)
+                local p = _self.pos
+                if p.x ~= _self.dock.x or p.z ~= _self.dock.z or p.y ~= CFG.FLOOR_Y then
+                    logWarn(string.format("Job over at %d,%d,%d, away from my dock %d,%d -- going home",
+                        p.x, p.y, p.z, _self.dock.x, _self.dock.z))
+                    _self.busy = true
+                    local hok, herr = pcall(base.returnToDock)
+                    _self.busy = false
+                    _self.recalled = false
+                    _self.status = proto.STATUS.IDLE
+                    if not hok then logWarn("Going home after the job: " .. tostring(herr)) end
+                end
+            end
         end
     end
 

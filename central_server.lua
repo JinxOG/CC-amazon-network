@@ -3715,6 +3715,23 @@ end
 -- sandbox a job ordered 30 s into an outage went out before it was seen.
 dispatcher.GPS_PING_EVERY_MS  = 15000
 dispatcher.GPS_JUDGE_AFTER_MS = 3000
+-- What the loop runs, from its 5 s timer AND from the wall-clock block: the time
+-- of the last run noted, and a failure said once. The check is the gate on every
+-- dispatch, and it ran only when its own timer event arrived: once that event was
+-- lost, the last judgement stood for good. After the total radio blackout in the
+-- side-test sim (w3_side_atc, 2026-11-14) it stood at "0 of 4 GPS hosts answered"
+-- for the rest of the run, and no job went out again (213 "Dispatch hold" lines)
+-- while the hosts answered turtles as before. Every other periodic task already
+-- had this fallback; this one did not. And a tick that threw was thrown away.
+function dispatcher.gpsTickSafe()
+    state.lastGpsWC = os.epoch("utc")
+    local ok, err = pcall(dispatcher.gpsTick)
+    if not ok and tostring(err) ~= dispatcher._gpsTickErr then
+        logError("GPS check tick failed: " .. tostring(err))
+    end
+    dispatcher._gpsTickErr = (not ok) and tostring(err) or nil
+end
+
 function dispatcher.gpsTick()
     local now = os.epoch("utc")
     local w = state.gpsWindow
@@ -7196,7 +7213,7 @@ function server.run()
                 craftableTimer = os.startTimer(CFG.CRAFTABLE_INTERVAL)
 
             elseif p1 == gpsTimer then
-                timed("gpsTick", dispatcher.gpsTick)
+                timed("gpsTick", dispatcher.gpsTickSafe)
                 gpsTimer = os.startTimer(5)
 
             end
@@ -7276,6 +7293,9 @@ function server.run()
             end
             -- Same single-point-of-failure shape, same fix. Neither is as
             -- visible as storage going stale, which is why both went unnoticed.
+            -- The GPS check gates every dispatch: it must not depend on its timer
+            -- surviving either (dispatcher.gpsTickSafe).
+            if isDue(wc, state.lastGpsWC or 0, 15) then timed("gpsTick", dispatcher.gpsTickSafe) end
             if isDue(wc, lastStaleWC, 30) then
                 local ok_ss, err_ss = timed("staleSupports", checkStaleSupports)
                 if not ok_ss then logError("Stale support WC: " .. tostring(err_ss)) end
