@@ -9,13 +9,13 @@ status: open
 
 # 1x side test: two base gridlocks at the ATC (after atc_crash; after radio loss) and a dispatch-hole head-on (measurements)
 
-Measurements only, from T2 run `shakeout-side-a`: pin 903f354, 1x, 3 real hours. Fleet: 8 delivery and 8 support in bay 1 row A, 4 miners in worker bay 2 row A, plus the ATC computer. Schedule: s001 server_crash at minute 20, s002 radio_loss at 40, s003 atc_crash at 60 (down 2 min), s004 radio_latency at 80, s005 world_restart at 100, s006 radio_loss at 120, s007 radio_loss rate 1.0 (5 min) at 140, s008 radio_latency at 160. Run start 02:54:55 UTC (s001 at 03:14:52). Report: `G:/TurtleOS-Sandbox/testserver/runs/shakeout-side-a/shakeout/report.md`. No cause offered.
+Measurements only, from T2 run `shakeout-side-a`: pin 903f354, 1x, 3 real hours. Fleet: 8 delivery and 8 support in bay 1 row A, 4 miners in worker bay 2 row A, plus the ATC computer. Schedule: s001 server_crash at minute 20, s002 radio_loss at 40, s003 atc_crash at 60 (down 2 min), s004 radio_latency at 80, s005 world_restart at 100, s006 radio_loss at 120, s007 radio_loss rate 1.0 (5 min) at 140, s008 radio_latency at 160. Run start 01:54:52 UTC (s001 logged at 02:14:52 UTC; run minute N is 01:54:52 + N). Report: `G:/TurtleOS-Sandbox/testserver/runs/shakeout-side-a/shakeout/report.md`. No cause offered.
 
 Verdicts at the end: 10 of 20 turtles stuck, 1 jam in the base never cleared, 0 lost.
 
 ## 1. A base gridlock after the ATC crash, cleared only by the world restart
 
-The ATC was down 03:54:56-03:56:56 UTC, and both its shutdown and its turn-on were confirmed. From about 03:56 to 03:36+1h (stuck episodes from run 0:56 to 1:42, the restart being at 1:40), these turtles made no progress. `Still waiting` reasons, 03:00-03:36 UTC:
+The ATC was down 02:54:56-02:56:56 UTC, and both its shutdown and its turn-on were confirmed. From about 02:56 to 03:37 UTC (stuck episodes from run 0:56 to 1:42; the world restart began at 03:37:00, run 1:42), these turtles made no progress. `Still waiting` reasons, 03:00-03:36 UTC:
 
 | count | reason | turtles |
 |---|---|---|
