@@ -120,6 +120,42 @@ class FixRound1(unittest.TestCase):
         self.assertEqual(report.windows_from([e], late, 60 * MIN)[0]["end"], 20 * MIN)
         self.assertEqual(report.windows_from([e])[0]["end"], 8 * MIN, "planned: t_ms + max(dur, quiet_ms)")
 
+    def test_a_self_ending_fault_closes_at_its_duration_not_at_the_run_end(self):
+        # shakeout-side-a: radio_loss logs start and begin, never end (the control mod ends it by itself); its window ran to the
+        # run's end, and from minute 40 of 180 nothing any turtle did was judged
+        e = {"id": "s002", "t_ms": 40 * MIN, "fault": "radio_loss", "args": {"dur_ms": 4 * MIN, "rate": 0.5}, "quiet_ms": 0}
+        lines = [{"wall_ms": 40 * MIN, "id": "s002", "fault": "radio_loss", "phase": "start"},
+                 {"wall_ms": 40 * MIN + 500, "id": "s002", "fault": "radio_loss", "phase": "begin", "detail": {}}]
+        w = report.windows_from([e], lines, 180 * MIN)[0]
+        self.assertEqual((w["begin"], w["end"]), (40 * MIN, 44 * MIN))
+        # a fault with an end verb that never logged its end still holds its window to the run's end (it may be still on)
+        g = {"id": "s003", "t_ms": 0, "fault": "gps_down", "args": {"dur_ms": 4 * MIN, "count": 1, "pick": 0}, "quiet_ms": 0}
+        gl = [dict(l, id="s003", fault="gps_down", wall_ms=l["wall_ms"] - 40 * MIN) for l in lines]
+        self.assertEqual(report.windows_from([g], gl, 180 * MIN)[0]["end"], 180 * MIN)
+
+    def test_self_ending_is_exactly_the_faults_with_a_duration_and_no_end_verb(self):
+        from shakeout import schedule
+        rng = schedule._Rng(1)
+        want = {f for f, fa in schedule.APPLY.items() if fa.end is None and f not in ("restart_burst5",)
+                and int((schedule._args(f, rng) or {}).get("dur_ms") or 0) > 0}
+        self.assertEqual(set(report.SELF_ENDING), want)
+
+    def test_a_turtle_stuck_after_a_radio_burst_is_still_judged(self):
+        t = timeline(sitting(60 * MIN, 180 * MIN))
+        e = {"id": "s002", "t_ms": 40 * MIN, "fault": "radio_loss", "args": {"dur_ms": 4 * MIN, "rate": 0.5}, "quiet_ms": 0}
+        lines = [{"wall_ms": 40 * MIN, "id": "s002", "fault": "radio_loss", "phase": "start"},
+                 {"wall_ms": 40 * MIN, "id": "s002", "fault": "radio_loss", "phase": "begin", "detail": {}}]
+        a = report.analyse(t, report.windows_from([e], lines, 180 * MIN), end_ms=180 * MIN)
+        self.assertEqual(a["verdict"], "decommissioned", a["reasons"])
+
+    def test_a_hovering_loader_is_listed_not_judged(self):
+        tls = {"loader_224": dict(timeline(sitting(0, 120 * MIN, pos=(552, 185, -2359)), tid="loader_224"), role="LOADER"),
+               "node_5": timeline(sitting(0, 120 * MIN))}
+        fd = report.findings(tls, [], 120 * MIN)
+        self.assertEqual(sorted(fd["all"]), ["node_5"])
+        self.assertEqual(fd["loaders"], ["loader_224"])
+        self.assertEqual(fd["all"]["node_5"]["verdict"], "decommissioned", "the same stillness in a turtle is still judged")
+
     def test_excused_share_of_a_day_stays_under_37_percent(self):
         from shakeout import schedule
         for seed in (1, 2, 3):

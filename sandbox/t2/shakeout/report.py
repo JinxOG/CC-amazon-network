@@ -87,6 +87,10 @@ DRIFT_TOLERANCE = {             # (absolute, share of the first-6-h level): grow
     "recovery_ms": (60000, 0.25),
 }
 ONE_TURTLE_FAULTS = ("turtle_reboot", "remove_item", "put_back_turned", "low_fuel", "full_inventory")
+# Faults with a duration that END BY THEMSELVES (a control-mod verb given its duration; schedule.APPLY has no end verb for them),
+# so faults.jsonl never has an end line: the window is start + dur_ms. Until 2026-11-14 such a window ran to the run's end, and
+# in shakeout-side-a the first radio burst (minute 40 of 180) excused every turtle's stuck time for the rest of the run.
+SELF_ENDING = ("radio_loss", "radio_latency", "rs_stall", "rs_offline", "chunk_unload")
 VERDICTS = ("ok", "stuck_recovered", "decommissioned", "lost", "expected_hands")
 SECTIONS = ["Pass bar", "Stuck or failed turtles", "Jams", "Jobs completed by type", "Faults fired by type",
             "Decommissioned turtles and why", "Expected hands", "First 6 h against last 6 h", "Housekeeping",
@@ -285,7 +289,8 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
     """Fault windows {id, fault, begin, end, targets (None: everyone, or a set of node ids), area, planned}. `schedule` is either
     windows already (each with "begin") or schedule.json entries. Without fault_lines the windows are the PLANNED ones (t_ms to
     t_ms + max(dur, quiet_ms), a one-turtle fault aimed at nobody known); with them, measured: the "start" line to the later of
-    the "end" line (or the run's end when it never ended, or its begin line for a one-shot) and start + quiet_ms (quiet_ms is
+    the "end" line (start + dur_ms for a SELF_ENDING fault, which never logs one; the run's end for any other that never
+    ended; its begin line for a one-shot) and start + quiet_ms (quiet_ms is
     measured from the start and already holds the duration). A fault that never began is no window."""
     if schedule and all("begin" in w for w in schedule):
         return sorted([dict(w, targets=set(w["targets"]) if w.get("targets") is not None else None) for w in schedule],
@@ -310,6 +315,8 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
         end = next((r for r in ls if r.get("phase") == "end"), None)
         if end is not None:
             stop = int(end["wall_ms"])
+        elif f in SELF_ENDING:
+            stop = int(start["wall_ms"]) + _window_ms(e)
         elif _window_ms(e) > 0:
             stop = int(end_ms if end_ms is not None else begin["wall_ms"])
         else:
@@ -530,16 +537,24 @@ def _node_key(tid):
     return (int(m.group(1)) if m else 0, tid or "")
 
 
+def is_loader(tid, tl):
+    """A miner's chunk loader: it hovers over the sector, by design, for as long as its miner digs (76 min in shakeout-side-a),
+    so the off-dock-no-progress rule would call every one stuck. Loaders are listed, not judged; their miner is."""
+    return str(tid).startswith("loader_") or (tl or {}).get("role") == "LOADER"
+
+
 def findings(timelines, windows, end_ms):
     """Every turtle analysed: {"all": {id: analysis}, "turtles": [the ones not ok], "counts": {verdict: n}, "jams", "jam_evidence",
     "stuck_ever"}."""
     windows = windows_from(windows) if windows else []
-    al = {tid: analyse(tl, windows, end_ms) for tid, tl in timelines.items()}
+    al = {tid: analyse(tl, windows, end_ms) for tid, tl in timelines.items() if not is_loader(tid, tl)}
+    loaders = sorted((tid for tid, tl in timelines.items() if is_loader(tid, tl)), key=_node_key)
     counts = {v: 0 for v in VERDICTS}
     for a in al.values():
         counts[a["verdict"]] += 1
     jams, n = find_jams(al, end_ms)
-    return {"all": al, "turtles": [al[t] for t in sorted(al, key=_node_key) if al[t]["verdict"] != "ok"], "counts": counts,
+    return {"all": al, "loaders": loaders,
+            "turtles": [al[t] for t in sorted(al, key=_node_key) if al[t]["verdict"] != "ok"], "counts": counts,
             "jams": jams, "jam_evidence": n, "stuck_ever": sum(1 for a in al.values() if a["episodes"])}
 
 
@@ -1144,7 +1159,7 @@ def build_report(run_dir, expected=None):
         "log_gaps": [{"from": a, "to": b} for a, b in log_gaps], "snap_gaps": [{"from": a, "to": b} for a, b in snap_gaps],
         "cards": cards, "expected": exp,
         "evidence": {"log_lines": len(R["lines"]), "unparsed_lines": R["unparsed"], "snapshots": len(R["snapshots"]),
-                     "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "fault_lines": fevidence,
+                     "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "loaders": fd["loaders"], "fault_lines": fevidence,
                      "windows": len(W)},
     }
 
@@ -1167,6 +1182,9 @@ def _render(rep):
          "- Evidence: %d fleet log lines (%d unparsed), %d fresh /state snapshots (%d stale), %d fault-log lines, %d fault windows, "
          "%d turtles judged" % (ev["log_lines"], ev["unparsed_lines"], ev["snapshots"], ev["stale_snapshots"], ev["fault_lines"],
                                 ev["windows"], ev["turtles"]), ""]
+    if ev.get("loaders"):
+        o.append("- Not judged: %d chunk loader(s), which hover over their miner's sector by design: %s"
+                 % (len(ev["loaders"]), ", ".join(ev["loaders"])))
     for n in rep["notes"]:
         o.append("- TRUNCATED: " + n)
     judged = ev["turtles"]
