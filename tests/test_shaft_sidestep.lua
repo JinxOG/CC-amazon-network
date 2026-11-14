@@ -687,6 +687,8 @@ return {
         assert_eq(ok, true, tostring(why))
         assert_eq(r.said("stuck_no_fix"), true, "it did report itself stuck first (the case under test)")
         assert_eq(r.said("docked"), true, "and then that it is docked, which releases the server's hold")
+        -- T2 shakeout-side-a: one that measured and went straight to work never said docked, and kept NEEDS HANDS.
+        assert_eq(r.said("measured:"), true, "and, as soon as it could, that it had measured (clears the flag, docked or not)")
     end,
 
     -- Supports whose delivery never called them went "home" from their docks the underground way: down through

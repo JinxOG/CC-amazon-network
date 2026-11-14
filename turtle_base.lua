@@ -1111,6 +1111,15 @@ function base.waitForPositionFix(why, positionOnly)
     end
     logInfo(string.format("Position and facing measured after %d retries: %d,%d,%d -- %s can go ahead",
         tries, _self.pos.x, _self.pos.y, _self.pos.z, tostring(why)))
+    -- IT SAID IT WAS STUCK, SO IT SAYS IT MEASURED. Only "docked" cleared the
+    -- server's flag, and a turtle that measured and went straight to work never
+    -- said that: node_227 kept NEEDS HANDS 75 minutes (T2 shakeout-side-a).
+    -- saidStuckNoFix stays set: a turtle that is on its dock still says "docked",
+    -- which also ends the server's recovery hold.
+    if tries > 0 and _self.saidStuckNoFix then
+        pcall(base.sendProgress, string.format("measured: %d,%d,%d -- %s",
+            _self.pos.x, _self.pos.y, _self.pos.z, tostring(why)))
+    end
     return true
 end
 
@@ -2127,6 +2136,30 @@ end
 
 function departImpl(noDescend)
     if not _self.dock then logWarn("No dock assigned, departing from current pos.") return true end
+
+    -- AWAY FROM ITS DOCK, GO HOME FIRST (2026-11-14, T2 shakeout-side-a). Every
+    -- departure route below starts at the dock. A job given back to a turtle that
+    -- was somewhere else began this departure where it stood: node_208 timed out
+    -- waiting for the warehouse at its destination (196,67,-2761), got the job
+    -- again, drove straight north through the support rows into node_216 parked on
+    -- its dock, and held the whole outbound route for 50 minutes with every
+    -- departure in the base behind it. node_210, given its job back inside the
+    -- dispatch shaft, drove up the shaft into its own support coming down.
+    -- So home first, the way any returning turtle comes (the inside way from the
+    -- floor, else down, the holding line and the arrivals hole), then out as usual.
+    -- Its partner is waiting on its own dock for HOLE_READY: the trip home must not
+    -- signal it (home.dock tells a partner it is ascending), so it is set aside.
+    gpsSync()
+    if _self.pos.x ~= _self.dock.x or _self.pos.z ~= _self.dock.z or _self.pos.y ~= CFG.FLOOR_Y then
+        logWarn(string.format("Asked to depart at %d,%d,%d, away from my dock %d,%d -- going home first",
+            _self.pos.x, _self.pos.y, _self.pos.z, _self.dock.x, _self.dock.z))
+        local partner = _self.partnerId
+        _self.partnerId = nil
+        local okHome, homeErr = base.returnToDock()
+        _self.partnerId = partner
+        atc.finish()
+        if not okHome then return false, "could not get home to depart: " .. tostring(homeErr) end
+    end
 
     -- Pre-departure fuel reserve check. A flat critical threshold isn't enough for a
     -- full warehouse run, so require a conservative reserve before leaving the dock.

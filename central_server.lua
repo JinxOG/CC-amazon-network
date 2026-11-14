@@ -4073,6 +4073,16 @@ handlers[proto.MSG.STATUS_UPDATE] = function(msg)
             logInfo(string.format("%s docked -- %s cleared", msg.from, state.registry[msg.from].needsHands))
             state.registry[msg.from].needsHands = nil
         end
+    elseif type(p.detail) == "string" and p.detail:find("^measured:") then
+        -- It measured where it said it could not: the stuck flag is over whether or
+        -- not it docks next. node_227 measured after a world restart and went
+        -- straight to work; /state kept NEEDS HANDS 75 minutes (T2 shakeout-side-a,
+        -- 2026-11-14). A hardware fault stays, as on docking.
+        local t = state.registry[msg.from]
+        if t and type(t.needsHands) == "string" and t.needsHands:find("^stuck_no_fix") then
+            logInfo(string.format("%s %s -- %s cleared", msg.from, p.detail, t.needsHands))
+            t.needsHands = nil
+        end
     end
     -- A ledger recovery that could not finish (recovery layer release 2).
     if type(p.detail) == "string" and p.detail:find("^needs_hands") then

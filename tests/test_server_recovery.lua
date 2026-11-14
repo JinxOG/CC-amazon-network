@@ -1193,6 +1193,33 @@ return {
         end
     end,
 
+    -- T2 shakeout-side-a (2026-11-14): node_227 raised "facing unknown" after a world restart, measured two minutes
+    -- later and went straight to work without docking; /state still had the flag 75 minutes on.
+    ["a 'facing unknown' flag clears when the turtle reports it has measured, docked or not, for every role"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local saw = {}
+        for _, role in ipairs({ proto.ROLE.DELIVERY, proto.ROLE.SUPPORT, proto.ROLE.MINER }) do
+            local id = "node_m" .. role
+            T.state.registry[id] = { id = id, role = role, status = proto.STATUS.IDLE, online = true, lastSeen = 0,
+                position = { x = 168, y = 67, z = -2806 } }
+            T.registry.flagStuck(id, "stuck_no_fix: facing unknown at 168,67,-2806 (boot: choosing a route home)")
+            local flagged = T.state.registry[id].needsHands
+            T.handlers[proto.MSG.STATUS_UPDATE]({ from = id, payload = { status = proto.STATUS.IDLE,
+                detail = "measured: 168,67,-2806 -- boot: choosing a route home", position = { x = 168, y = 67, z = -2806 } } })
+            saw[#saw + 1] = { role = role, flagged = flagged, after = T.state.registry[id].needsHands }
+        end
+        T.state.registry["node_118"].needsHands = "slot_16_must_hold_the_ore_ender_chest"
+        T.handlers[proto.MSG.STATUS_UPDATE]({ from = "node_118", payload = { status = proto.STATUS.IDLE, detail = "measured: 1,2,3 -- x" } })
+        local hardware = T.state.registry["node_118"].needsHands
+        restore()
+        for _, s in ipairs(saw) do
+            assert_eq(s.flagged ~= nil, true, s.role .. ": the flag was raised (the case under test)")
+            assert_eq(s.after, nil, s.role .. ": measuring clears it")
+        end
+        assert_eq(hardware, "slot_16_must_hold_the_ore_ender_chest", "a hardware fault is not cleared by measuring")
+    end,
+
     ["a hardware fault is not cleared by docking"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()
