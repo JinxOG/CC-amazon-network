@@ -1,6 +1,6 @@
 # The baton
 
-**Holder: SPEC-OWNER (head engineer) - the shakeout's test-server proofs and runs. Since 2026-11-13** (W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09; W1 11-09 to 11-10; SPEC-OWNER 11-10 to 11-11; W3 11-11 to 11-12, ATC deadlock; SPEC-OWNER 11-12 to 11-13; W3 on 11-13, replay cap, compact save, duplicate key).
+**Holder: W3 - the SHAKEOUT blocker card: the base gridlocks at the ATC after an ATC crash and after radio loss (1x side test shakeout-side-a). Since 2026-11-14, the user's say-so** (SPEC-OWNER 11-13 to 11-14, shakeout proofs, dress rehearsal, ramp, side test; W3 2026-09-15 to 11-02; W1, W5 and W3 on 2026-11-02; W3 to 11-09; W5 on 11-09; W1 11-09 to 11-10; SPEC-OWNER 11-10 to 11-11; W3 11-11 to 11-12, ATC deadlock; SPEC-OWNER 11-12 to 11-13; W3 on 11-13, replay cap, compact save, duplicate key).
 
 **Phase:** the cleanup (`docs/superpowers/specs/2026-09-11-cleanup-phase-design.md`),
 working through the holder's cards on the board until they are Done. **Next goal: the shakeout stress test**
