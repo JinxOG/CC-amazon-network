@@ -165,6 +165,43 @@ return {
             "a stranger is still held behind the older waiter")
     end,
 
+    -- The same circle, any turtle (2026-11-14): a support that cannot dig came back up the dispatch shaft by the way it
+    -- went (home.retrace) and stood in DH asking for its way home; the departures queued for DH were older, so it was
+    -- held "after an older request" -- in DH, which they were waiting for (sim w3_side_atc, DH held to the end).
+    ["a turtle standing in a section an older waiter needs is not kept behind that waiter"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "back", { op = "request", route = { "DH" } }, t).ok, true)
+        core.handle(st, "back", { op = "enter", sec = "DH" }, t)
+        local OLD = { "S1", "J1", "W1", "DH" }
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, t).ok, false, "DH is back's")
+        local later = t + core.CFG.FAIR_MS + 1
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, later).ok, false, "still waiting, past FAIR_MS")
+        local r = core.handle(st, "back", { op = "request", cur = "DH", route = { "DH", "W1", "J1", "N1" } }, later)
+        assert_eq(r.ok, true, "the older waiter cannot move until this one leaves DH (" .. tostring(r.why) .. ")")
+        assert_eq(core.handle(st, "other", { op = "request", route = { "S1", "J1" } }, later).ok, false,
+            "a turtle that holds nothing the older waiter needs is still held behind it")
+    end,
+
+    -- The circle through a chain (sim w3_side_atc, 2026-11-14): node_56 stood in DH asking for its way home; the
+    -- returns on the holding line were older and overlapped it, and they were held behind node_52's older request,
+    -- which waited for DH. Fairness kept the one turtle that could move from moving. A turtle standing in a section
+    -- is in the way of others whatever it waits for, so fairness never holds it back; occupancy still does.
+    ["a turtle standing in a section is not held back by fairness, only by what is occupied"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "here", { op = "request", route = { "DH" } }, t).ok, true)
+        core.handle(st, "here", { op = "enter", sec = "DH" }, t)
+        assert_eq(core.handle(st, "blocker", { op = "request", route = { "R1" } }, t).ok, true)
+        core.handle(st, "blocker", { op = "enter", sec = "R1" }, t)
+        local OLD = { "R1", "J1", "S1" }                     -- waits for R1, needs nothing "here" holds
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, t).ok, false, "R1 is blocker's")
+        local later = t + core.CFG.FAIR_MS + 1
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, later).ok, false, "still waiting, past FAIR_MS")
+        local r = core.handle(st, "here", { op = "request", cur = "DH", route = { "DH", "W1", "J1", "N1" } }, later)
+        assert_eq(r.ok, true, "standing in DH, it is let go (" .. tostring(r.why) .. ")")
+        assert_eq(core.handle(st, "dock", { op = "request", route = { "N2", "J1" } }, later).ok, false,
+            "a turtle not in any section still waits its turn behind the older request")
+    end,
+
     ["a request kept waiting holds off later ones that overlap it"] = function(assert_eq)
         local core, st, t = live()
         -- b sits in W2 (part of long's route) for longer than FAIR_MS
@@ -325,11 +362,36 @@ return {
         assert_eq(core.handle(st, "other", { op = "enter", sec = "R3" }, t).ok, true)
         assert_eq(core.handle(st, "other", { op = "enter", sec = "J2" }, t).ok, false, "dead's booking is ahead in J2")
         local later = t + core.CFG.STALE_MS + 1
-        core.handle(st, "other", { op = "report" }, later)        -- other is alive
+        -- other is alive and talking all the while, as a waiting turtle does (it asks every second or two): silence
+        -- counts only while others are heard (2026-11-14, the blackout rule below)
+        for at = t + 5000, later, 5000 do core.handle(st, "other", { op = "report" }, at) end
+        core.handle(st, "other", { op = "report" }, later)
         assert_eq(core.sweep(st, later) >= 1, true, "the silent booking is dropped")
         assert_eq(core.handle(st, "other", { op = "enter", sec = "J2" }, later).ok, true, "J2 is free now")
         assert_eq(core.handle(st, "third", { op = "enter", sec = "J3" }, later).ok, true,
             "and J3, which it had entered, is free too")
+    end,
+
+    -- A total radio blackout (sim w3_side_atc, 5 minutes): the ATC hears nobody, so nobody is silent. Swept after 3
+    -- minutes, node_35 lost R5 while standing in it, node_36 was granted R5 and J5, and each held what the other needed.
+    ["a total blackout is no one's silence: nothing is swept, and a dead turtle still is once others talk"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "a", { op = "request", route = { "R5", "J5" } }, t)
+        core.handle(st, "a", { op = "enter", sec = "R5" }, t)
+        local after = t + 5 * 60000                                  -- five minutes in which the ATC hears no one
+        local swept = core.sweep(st, after)
+        assert_eq(swept, 0, "nothing swept: the ATC heard no one, so a was not silent")
+        assert_eq(core.handle(st, "b", { op = "request", route = { "R5", "J5" } }, after).ok, false,
+            "R5 is still a's, whom the blackout kept quiet")
+        -- b now waits, asking every few seconds: a's silence counts again from here.
+        local at = after
+        while at < after + core.CFG.STALE_MS + 5000 do
+            at = at + 5000
+            core.handle(st, "b", { op = "request", route = { "R5", "J5" } }, at)
+            core.sweep(st, at)
+        end
+        assert_eq(core.handle(st, "b", { op = "request", route = { "R5", "J5" } }, at).ok, true,
+            "a turtle that stays silent while others are heard is swept as before: b gets R5")
     end,
 
     ["a turtle that keeps asking keeps what it holds, its one-step entries included"] = function(assert_eq)

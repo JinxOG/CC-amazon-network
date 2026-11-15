@@ -100,6 +100,13 @@ return {
         if not (tt.x == tt.dockX and tt.z == tt.dockZ) then off = off + 1; offNames[#offNames + 1] = name end
       end
     end
+    local stranded = {}
+    for name, tt in pairs(((sim.sched.standin.state or {}).turtles) or {}) do
+      if tt.role == "SUPPORT" and tt.dockX and not (tt.x == tt.dockX and tt.z == tt.dockZ) and (tt.y or 67) < 67 then
+        stranded[#stranded + 1] = string.format("%s@%s,%s,%s", name, tt.x, tt.y, tt.z)
+      end
+    end
+    sim:expect(#stranded == 0, "no support is left in the tunnel (" .. #stranded .. ": " .. table.concat(stranded, " ") .. ")")
     sim:expect(seen > 0 and off == 0, "every turtle ends on its dock (" .. off .. " of " .. seen .. " not: "
       .. table.concat(offNames, " ") .. ")")
     sim:expect(true, string.format("NOTE: %d order(s), %d dispatch line(s), %d 'going home first' line(s), %d ms",

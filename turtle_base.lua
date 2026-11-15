@@ -1123,6 +1123,45 @@ function base.waitForPositionFix(why, positionOnly)
     return true
 end
 
+-- ─── The way it came ─────────────────────────────────────────────────────────
+-- Every cell it has stood in since it last left the building's floor, a simple
+-- path (a step back onto an earlier cell cuts the loop off). For a turtle that
+-- cannot dig, it is the one way home it knows is open: a support follows its
+-- delivery's tunnel out, and the holding line's columns home were dug only if
+-- its delivery went home the same way. Alone -- its delivery's job failed, or
+-- a lost answer told it its delivery was offline -- 6 of 8 supports met rock
+-- (sim w3_side_atc) and node_141 did on the real game (T2 w3-depart-off-dock-b,
+-- 2026-11-14). home.retrace walks it back. In memory only: a reboot forgets it.
+local trail = { MAX = 20000, cells = {}, at = {} }
+local function trailKey(p) return p.x .. "," .. p.y .. "," .. p.z end
+function trail.note(prev)
+    local p = _self.pos
+    -- An empty trail starts where the turtle stood before this step: the floor
+    -- cell it left, normally, or where it booted.
+    if #trail.cells == 0 and prev then
+        trail.cells[1] = { x = prev.x, y = prev.y, z = prev.z }
+        trail.at[trailKey(prev)] = 1
+    end
+    if p.y == CFG.FLOOR_Y and base.isInsideBuilding(p) then
+        trail.cells = { { x = p.x, y = p.y, z = p.z } }
+        trail.at = { [trailKey(p)] = 1 }
+        return
+    end
+    local k = trailKey(p)
+    local i = trail.at[k]
+    if i then
+        for j = #trail.cells, i + 1, -1 do
+            trail.at[trailKey(trail.cells[j])] = nil
+            trail.cells[j] = nil
+        end
+        return
+    end
+    if #trail.cells >= trail.MAX then return end
+    trail.cells[#trail.cells + 1] = { x = p.x, y = p.y, z = p.z }
+    trail.at[k] = #trail.cells
+end
+function base.trailForTest() return trail.cells end
+
 local function applyMove(dir)
     -- Save previous position before updating
     local prevX, prevY, prevZ = _self.pos.x, _self.pos.y, _self.pos.z
@@ -1156,6 +1195,7 @@ local function applyMove(dir)
         })
         proto.send(_self.modem, proto.CH_LOCAL, sig)
     end
+    trail.note({ x = prevX, y = prevY, z = prevZ })
     writeJournal(nil)
 end
 
@@ -2039,8 +2079,12 @@ function move.followRoute(waypoints)
 end
 
 -- A holding slot from the ATC; waits (outside the base) until it gives one.
-function atc.holdSlot(line, prefer)
+-- maxS: give up after this long (nil: wait for ever), returning nil. A turtle that
+-- cannot dig takes only the slot it stands under (strict); kept from it, it goes
+-- back the way it came instead (home.retrace).
+function atc.holdSlot(line, prefer, maxS)
     local report, last
+    local since = os.clock()
     -- A turtle that cannot dig (support) takes the slot it stands under or none.
     local strict = prefer ~= nil and not _self.canDig
     while true do
@@ -2048,6 +2092,7 @@ function atc.holdSlot(line, prefer)
         last = r
         if r and r.ok and r.slot then return r.slot end
         local now = os.clock()
+        if maxS and now - since >= maxS then return nil end
         report = report or waitReporter(function()
             return string.format("ATC: no %s holding slot yet (%s) at %d,%d,%d", line,
                 last and tostring(last.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
@@ -2223,7 +2268,11 @@ function departImpl(noDescend)
                     logInfo("Support staged — descending together.")
                     staged = true
                     break
-                elseif msg.type == proto.MSG.JOB_ABORT and msg.from == _self.partnerId then
+                elseif msg.type == proto.MSG.JOB_ABORT and msg.from == _self.partnerId
+                       and (tonumber(msg.ts) or 0) >= (_self.jobSince or 0) then
+                    -- From THIS job only: a JOB_ABORT left in the inbox from the pair's
+                    -- last job sent node_32 down alone the moment it reached the hole
+                    -- (sim w3_side_atc, "Support node_55 gave up (recalled)").
                     -- The support has given up on this job (it waits only 180 s for
                     -- HOLE_READY, and under the ATC a departure can take longer to be
                     -- let in). Waiting out STAGE_WAIT_S for it held the dispatch hole
@@ -2403,10 +2452,22 @@ function home.dock()
         -- free.
         -- Which slot to ask for: base.atc.preferSlot (the column it stands in, or
         -- its delivery's slot for a support that lagged behind on the way).
-        local k = base.atc.holdSlot("tunnel", base.atc.preferSlot(_self.pos))
+        -- A turtle that cannot dig, in the dispatch shaft or at its foot, goes back up
+        -- it: the way in is overhead, and it stands in DH. Asking for a holding slot
+        -- from there held DH while it waited for its delivery's slot, which its
+        -- delivery sat in waiting for sections held by departures waiting for DH
+        -- (sim w3_side_atc, node_55 at 143,60,-2813 to the end of the run).
+        if not _self.canDig and atc.here() == "DH" then
+            return home.retrace("in the dispatch shaft")
+        end
+        local k = base.atc.holdSlot("tunnel", base.atc.preferSlot(_self.pos), (not _self.canDig) and 120 or nil)
+        if not k then return home.retrace("no holding slot of mine in 120 s") end
         _self.partnerSlot = nil
         logInfo("Navigating underground to holding slot " .. k .. "...")
         ok, err = move.followRoute(W.holdingApproach(_self.pos, k, UNDERGROUND_Y))
+        if not ok and not _self.canDig then
+            return home.retrace("could not reach holding slot " .. k .. ": " .. (err or "?"))
+        end
         if not ok then return false, "could not reach holding slot " .. k .. ": " .. (err or "?") end
         holdSupport(k)
         local exit, home = W.holdingExitRoute(k), W.returnRoute(_self.dock)
@@ -2422,6 +2483,9 @@ function home.dock()
         -- Support is following via position broadcasts so it arrives right behind us
         logInfo("Navigating underground to arrivals hole...")
         ok, err = move.to(W.ARRIVALS_HOLE.x, UNDERGROUND_Y, W.ARRIVALS_HOLE.z)
+        if not ok and not _self.canDig then
+            return home.retrace("could not reach arrivals hole: " .. (err or "?"))
+        end
         if not ok then return false, "could not reach arrivals hole: " .. (err or "?") end
         holdSupport()
 
@@ -2541,6 +2605,53 @@ end
 -- Navigate from anywhere inside the building back to dock.
 -- Uses an aisle route that moves Z first so the turtle never cuts
 -- through occupied dock rows.  Safe to call from any floor position.
+-- BACK THE WAY IT CAME, for a turtle that cannot dig and whose way home is shut
+-- (see trail above). Each step is onto the cell it stood in before this one, so
+-- it needs no digging; the move layer asks the ATC before the dispatch shaft (DH),
+-- as for any step into a section, so it climbs only when no departure holds it.
+-- On the building's floor -- the top of the dispatch hole, where the trail began --
+-- it goes home the inside way. Every role that cannot dig, not supports only.
+function home.retrace(why)
+    local cells = trail.cells
+    if #cells < 2 then return false, tostring(why) .. "; and no way back is known (trail empty)" end
+    logWarn(string.format("Cannot dig and the way home is shut (%s) -- retracing the %d step(s) I came by",
+        tostring(why), #cells - 1))
+    atc.finish()
+    -- THE CLIMB IS BOOKED BEFORE THE NO-SIDESTEP ZONE (base.nearDepot). It went
+    -- back along the departures' own tunnel; waiting for the dispatch shaft at the
+    -- foot of it, it stood in the one cell a delivery coming down needed, and near
+    -- the depot neither may step aside: node_53 and node_37 at 142/143,60,-2813 to
+    -- the end of the run (sim w3_side_atc). So the shaft and the way home inside
+    -- are asked for out in the open tunnel, where a delivery coming the other way
+    -- digs round a turtle in its path; once they are its, nobody comes down.
+    local booked = not atc.ENABLED
+    while #trail.cells > 1 and not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) do
+        local n = #trail.cells
+        local p = trail.cells[n - 1]
+        if not booked and (base.nearDepot(p) or base.nearDepot(_self.pos)) then
+            booked = true
+            atc.book(atc.join({ { x = W.WORLD_EXIT.x, y = W.WORLD_EXIT.y, z = W.WORLD_EXIT.z },
+                                { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.DISPATCH_HOLE.z } },
+                W.internalReturnRouteFrom(_self.dock, W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z)), "back the way I came")
+        end
+        local ok, err = move.to(p.x, p.y, p.z)
+        if not ok then
+            return false, string.format("%s; retracing stopped at %d,%d,%d: %s", tostring(why),
+                _self.pos.x, _self.pos.y, _self.pos.z, tostring(err))
+        end
+        if #trail.cells >= n then
+            return false, string.format("%s; retracing lost its way at %d,%d,%d", tostring(why),
+                _self.pos.x, _self.pos.y, _self.pos.z)
+        end
+    end
+    if not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) then
+        return false, tostring(why) .. "; the way back ran out before the building"
+    end
+    logInfo(string.format("Back in the building at %d,%d,%d by the way I came -- homing inside",
+        _self.pos.x, _self.pos.y, _self.pos.z))
+    return home.internal()
+end
+
 function home.internal()
     if not _self.dock then return true end
     -- GPS sync first so current position is accurate
@@ -4006,6 +4117,21 @@ function base.sendComplete(result)
 end
 
 function base.sendFailed(reason, recoverable)
+    -- A DELIVERY OUT IN THE WORLD BRINGS ITS SUPPORT HOME FIRST (2026-11-14). Its
+    -- support follows it one block behind through the tunnel it digs, and gets
+    -- home only that way: it cannot dig. A JOB_ABORT here sent the support home
+    -- alone, through rock -- 6 of 8 stranded in the side-test sim (w3_side_atc).
+    -- So the failure waits: the job runner takes it home exactly as after a
+    -- delivery (DESCENDED, then the support follows, ASCENDING and RETURN_TO_DOCK
+    -- name the holding slot), and says the job failed once it is docked. Not a
+    -- recall: the job code brings the turtle home itself then.
+    if _self.role == proto.ROLE.DELIVERY and _self.partnerId and _self.jobId and not _self.failLater
+       and tostring(reason) ~= "recalled" and not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) then
+        _self.failLater = { reason = reason, recoverable = recoverable, partner = _self.partnerId }
+        logWarn(string.format("Job %s failed (%s) at %d,%d,%d -- bringing support %s home first, then reporting it",
+            tostring(_self.jobId), tostring(reason), _self.pos.x, _self.pos.y, _self.pos.z, tostring(_self.partnerId)))
+        return
+    end
     -- Tell support to abort immediately so it doesn't wait 180s for HOLE_READY.
     -- Not when this turtle is a support standing down because its delivery went
     -- on without it: the delivery is out working, and this JOB_ABORT ended its job
@@ -4271,6 +4397,26 @@ end
 -- the top of base.run, so every role does it at boot; exported so a role with
 -- its own pre-run recovery (ore_turtle's loader) can call it first -- the chest
 -- is adjacent and cheap, the loader recovery flies away. A no-op when empty.
+-- Take back only what this turtle placed where it stands now: a job that ends
+-- away from its dock ends where it failed, beside what it placed there. A
+-- delivery whose job failed at its destination left its ender chest standing, and
+-- every job given it after failed at once (ec_not_in_slot_16_at_dispatch, three
+-- times over, sim w3_side_atc). Anything placed elsewhere is left to boot recovery:
+-- asked for away from it, recover() would call for hands that are not needed.
+function base.ledger.recoverHere()
+    local n = 0
+    for kind in pairs(base.ledger._kinds or {}) do
+        local e = base.ledger.get(kind)
+        local at = e and e.turtleAt
+        if at and at.x == _self.pos.x and at.y == _self.pos.y and at.z == _self.pos.z then
+            local ok, got = pcall(base.ledger.recover, kind)
+            if ok and got then n = n + 1 end
+        end
+    end
+    if n > 0 then logInfo(string.format("Ledger: took back %d item(s) placed here before going home", n)) end
+    return n
+end
+
 function base.recoverLedger()
     local n = base.ledger.recoverAll()
     if n > 0 then logInfo(string.format("Ledger: recovered %d item(s) at boot", n)) end
@@ -4340,6 +4486,7 @@ function base.run(jobHandler)
             _self.jobId  = job.jobId
             _self.status = proto.STATUS.TRAVELLING
             pendingJob   = { id=job.jobId, type=job.jobType, params=job.params }
+            _self.jobSince = os.epoch("utc")
 
         elseif msg.type == proto.MSG.JOB_ASSIGN and _self.busy then
             comms.toServer(proto.MSG.JOB_ACK,
@@ -4583,6 +4730,26 @@ function base.run(jobHandler)
                 base.sendFailed(tostring(err), true)
             end
 
+            -- A failure held back in the world (base.sendFailed): home first, the
+            -- support with it, then the report. Down to the tunnel it came along and
+            -- DESCENDED, as after a delivery, so the support follows again; the trip
+            -- home signals it the rest of the way. failLater stays set over the
+            -- report so it is sent now, not held back again.
+            if _self.failLater then
+                local f = _self.failLater
+                pcall(gpsSync)
+                pcall(base.ledger.recoverHere)
+                if _self.pos.y > W.WORLD_ENTRY.y then pcall(move.to, _self.pos.x, W.WORLD_ENTRY.y, _self.pos.z) end
+                _self.partnerId = f.partner
+                base.signalPartnerDirect(proto.MSG.DESCENDED, f.partner, {})
+                _self.busy = true
+                local hok, herr = pcall(base.returnToDock)
+                _self.busy = false
+                if not hok then logWarn("Bringing the support home: " .. tostring(herr)) end
+                base.sendFailed(f.reason, f.recoverable)
+                _self.failLater = nil
+            end
+
             -- A JOB THAT ENDS AWAY FROM THE DOCK GOES HOME (2026-11-14). A failed
             -- job ends where it failed, and nothing brought the turtle back: the
             -- server sends no recall on JOB_FAILED, and refuses one from a turtle
@@ -4598,6 +4765,7 @@ function base.run(jobHandler)
                 if p.x ~= _self.dock.x or p.z ~= _self.dock.z or p.y ~= CFG.FLOOR_Y then
                     logWarn(string.format("Job over at %d,%d,%d, away from my dock %d,%d -- going home",
                         p.x, p.y, p.z, _self.dock.x, _self.dock.z))
+                    pcall(base.ledger.recoverHere)
                     _self.busy = true
                     local hok, herr = pcall(base.returnToDock)
                     _self.busy = false

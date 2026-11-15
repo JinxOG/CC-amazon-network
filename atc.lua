@@ -27,11 +27,35 @@ local CFG = {
     FAIR_MS     = 60000,     -- a request waiting this long keeps later overlapping ones out
     HOLD_SLOTS  = (okW and type(W) == "table" and W.ATC and W.ATC.HOLD_SLOTS) or 14,   -- per holding line, from waypoints.lua
     SLOT_KEEP_MS = 60000,    -- a slot just left is not handed to a stranger for this long
+    DEAF_GAP_MS = 10000,     -- hearing nobody at all this long: the ATC is deaf, and that time is no one's silence
 }
 
 -- ─── The rules, with no radio (tests drive these) ───────────────────────────
 
 local core = {}
+
+-- SILENCE IS ONLY SILENCE WHILE OTHERS ARE HEARD (2026-11-14). A booking and a
+-- holding slot are dropped after STALE_MS of silence from their turtle: a dead
+-- turtle must not hold the base for good. In a total radio blackout the ATC hears
+-- nobody, every turtle in the base is "silent", and after 3 minutes the sweep took
+-- from each the sections it stood in; when the radio came back it had granted
+-- them to others, and two turtles each held what the other needed -- node_35 in
+-- R5 waiting for J5, node_36 holding J5 waiting for R5, to the end of the run
+-- (sim w3_side_atc, a 5-minute blackout). So time in which the ATC heard no one at
+-- all (a gap over DEAF_GAP_MS) is counted apart, st.deaf, and does not count as
+-- anyone's silence. A dead turtle is still swept: the others keep talking.
+local function noteHeard(st, now)
+    if st.lastHeard and now - st.lastHeard > CFG.DEAF_GAP_MS then st.deaf = (st.deaf or 0) + (now - st.lastHeard) end
+    st.lastHeard = now
+end
+local function deafNow(st, now)
+    local d = st.deaf or 0
+    if st.lastHeard and now - st.lastHeard > CFG.DEAF_GAP_MS then d = d + (now - st.lastHeard) end
+    return d
+end
+local function silentFor(st, x, now)
+    return (now - x.at) - (deafNow(st, now) - (x.deafAt or 0))
+end
 
 function core.new(now)
     return { epoch = now, settleUntil = now + CFG.SETTLE_MS, q = {}, res = {}, byTurtle = {},
@@ -74,7 +98,7 @@ local function admit(st, id, list, cur, now, physical)
     local old = st.byTurtle[id]
     if old then drop(st, old) end
     local rid = newRid(st)
-    local r = { id = id, list = {}, entered = {}, at = now }
+    local r = { id = id, list = {}, entered = {}, at = now, deafAt = deafNow(st, now) }
     for _, s in ipairs(list) do r.list[#r.list + 1] = s end
     st.res[rid], st.byTurtle[id] = r, rid
     for _, s in ipairs(r.list) do
@@ -127,13 +151,28 @@ local function partnerIn(st, id, group)
     return false
 end
 
-local function olderWaiterOverlaps(st, list, id, now)
+-- The same circle for any turtle (2026-11-14): an older waiter whose route needs
+-- a section this one already stands in cannot move until this one has gone, so it
+-- is not waited for. A support that cannot dig came back up the dispatch shaft by
+-- the way it went and stood in DH asking for its way home; the departures queued
+-- for DH were older, so it was held "after an older request", in DH, to the end
+-- of the run (sim w3_side_atc).
+local function olderWaiterOverlaps(st, list, id, now, cur)
     local mine = st.waiting[id]
     local since = mine and mine.since or now
+    local holds = {}
+    if cur then holds[cur] = true end
+    for _, x in pairs(st.res) do
+        if x.id == id then for s in pairs(x.entered) do holds[s] = true end end
+    end
     for other, w in pairs(st.waiting) do
         if other ~= id and w.since < since and now - w.since > CFG.FAIR_MS and now - w.at < 10000 then
-            for _, a in ipairs(w.list) do
-                for _, b in ipairs(list) do if a == b then return true end end
+            local waitsForMe = false
+            for _, a in ipairs(w.list) do if holds[a] then waitsForMe = true end end
+            if not waitsForMe then
+                for _, a in ipairs(w.list) do
+                    for _, b in ipairs(list) do if a == b then return true end end
+                end
             end
         end
     end
@@ -148,15 +187,16 @@ end
 function core.handle(st, id, p, now)
     p = p or {}
     local rid = st.byTurtle[id]
+    noteHeard(st, now)
     -- every entry this turtle holds is alive while it talks, its one-step ones too
-    for _, x in pairs(st.res) do if x.id == id then x.at = now end end
+    for _, x in pairs(st.res) do if x.id == id then x.at, x.deafAt = now, deafNow(st, now) end end
     for _, line in pairs(st.slots) do
         for k, sl in pairs(line) do
             if sl.id == id then
                 -- a turtle stepping into the arrivals section has left its slot
                 -- a turtle stepping into the arrivals section has left its slot; the slot
                 -- is kept back a minute for the support that followed it in (below)
-                if p.op == "enter" and p.sec == "ARR" then line[k] = { freedAt = now, at = 0 } elseif sl.id then sl.at = now end
+                if p.op == "enter" and p.sec == "ARR" then line[k] = { freedAt = now, at = 0 } elseif sl.id then sl.at, sl.deafAt = now, deafNow(st, now) end
             end
         end
     end
@@ -178,7 +218,11 @@ function core.handle(st, id, p, now)
         local r = rid and st.res[rid]
         if r and r.list[1] == list[1] and #r.list == #list then return { ok = true, rid = rid } end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
-        if free and (partnerIn(st, id, p.group) or not olderWaiterOverlaps(st, list, id, now)) then
+        -- A turtle standing in a section (p.cur) is in the way of others whatever it
+        -- waits for: fairness never holds it back, only occupancy (routeFree) does.
+        -- Held back, it closed circles through chains of waiters -- one in DH behind
+        -- returns that were behind a request waiting for that DH (sim w3_side_atc).
+        if free and (p.cur ~= nil or partnerIn(st, id, p.group) or not olderWaiterOverlaps(st, list, id, now, p.cur)) then
             local nrid = admit(st, id, list, p.cur, now, p.cur ~= nil)
             st.res[nrid].group = p.group
             st.waiting[id] = nil
@@ -201,13 +245,13 @@ function core.handle(st, id, p, now)
                 -- Its slot from before -- unless it asks for the one it now stands
                 -- under: then the old one goes. node_81 kept slot 1 from a trip seven
                 -- minutes earlier and was sent back to it, through rock (2026-11-03).
-                if not want or want == k then slots[k].at = now; return { ok = true, slot = k } end
+                if not want or want == k then slots[k].at, slots[k].deafAt = now, deafNow(st, now); return { ok = true, slot = k } end
                 slots[k] = { freedAt = now, at = 0 }
             end
         end
         local function free(sl, mine)
             if not sl then return true end
-            if sl.id then return now - sl.at > CFG.STALE_MS end
+            if sl.id then return silentFor(st, sl, now) > CFG.STALE_MS end
             return mine or now - (sl.freedAt or 0) > CFG.SLOT_KEEP_MS
         end
         -- THE SLOT IT STANDS IN FIRST (p.prefer). A support cannot dig: it can
@@ -216,7 +260,7 @@ function core.handle(st, id, p, now)
         -- the first free slot instead, node_81 met solid rock one block on and
         -- stayed in the tunnel (sim, 2026-11-03).
         if want and want >= 1 and want <= CFG.HOLD_SLOTS and free(slots[want], true) then
-            slots[want] = { id = id, at = now }
+            slots[want] = { id = id, at = now, deafAt = deafNow(st, now) }
             note(st, string.format("%s slot %d (%s, the one it stands under)", id, want, line))
             return { ok = true, slot = want }
         end
@@ -237,7 +281,7 @@ function core.handle(st, id, p, now)
         for i = 0, CFG.HOLD_SLOTS - 1 do
             local k = (start - 1 + i) % CFG.HOLD_SLOTS + 1
             if free(slots[k], false) then
-                slots[k] = { id = id, at = now }
+                slots[k] = { id = id, at = now, deafAt = deafNow(st, now) }
                 st.nextSlot[line] = k % CFG.HOLD_SLOTS + 1
                 note(st, string.format("%s slot %d (%s)", id, k, line))
                 return { ok = true, slot = k }
@@ -366,14 +410,14 @@ end
 function core.sweep(st, now)
     local dropped = 0
     for rid, r in pairs(st.res) do
-        if now - r.at > CFG.STALE_MS then
+        if silentFor(st, r, now) > CFG.STALE_MS then
             for _, s in ipairs(r.list) do removeFrom(queue(st, s), rid) end
             st.res[rid] = nil
             if st.byTurtle[r.id] == rid then st.byTurtle[r.id] = nil end
             dropped = dropped + 1
             local held = {}
             for s in pairs(r.entered) do held[#held + 1] = s end
-            note(st, string.format("%s silent %ds: booking dropped%s", r.id, math.floor((now - r.at) / 1000),
+            note(st, string.format("%s silent %ds: booking dropped%s", r.id, math.floor(silentFor(st, r, now) / 1000),
                 #held > 0 and (", including " .. table.concat(held, " ") .. " it had entered") or ""))
         end
     end
