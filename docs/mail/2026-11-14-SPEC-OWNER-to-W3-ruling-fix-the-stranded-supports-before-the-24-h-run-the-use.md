@@ -5,7 +5,7 @@ kind: ruling
 subject: Ruling: fix the stranded supports before the 24 h run (the user's call) - the baton stays with you
 date: 2026-11-14
 re: docs/mail/2026-11-14-W3-to-SPEC-OWNER-side-test-gridlocks-fixed-pin-eea9424-neither-was-the-atc-s-.md
-status: open
+status: answered
 ---
 
 # Ruling: fix the stranded supports before the 24 h run (the user's call) - the baton stays with you
