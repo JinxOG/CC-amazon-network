@@ -1105,6 +1105,23 @@ class TheDriverLoop(unittest.TestCase):
         self.assertFalse(got["ok"], got)
         self.assertIn("updatedAt", got)
 
+    def test_one_fresh_push_that_never_moves_on_is_not_pushing(self):
+        # shakeout-side-b: the game froze 4 min in the copy; the push it had stuck arrived as it ended, 17 s before the check,
+        # and nothing came after it. A single fresh updatedAt passed; it must not.
+        drv = self.load("shakeout")
+        drv.READY_SETTLE_S, drv.READY_S, drv.READY_POLL_S = 0, 0.3, 0.01
+        frozen = time.time() * 1000 - 5000
+
+        class Stuck(FakeCtx):
+            def state(self):
+                return {"updatedAt": frozen}
+        got = drv.dispatch_settled(Stuck())
+        self.assertFalse(got["ok"], got)
+        self.assertEqual(got["pushes_seen"], 1)
+        got = drv.dispatch_settled(FakeCtx())              # a computer that keeps pushing passes
+        self.assertTrue(got["ok"], got)
+        self.assertGreaterEqual(got["pushes_seen"], drv.READY_PUSHES)
+
     def test_the_per_fault_check_fails_a_fault_that_did_nothing(self):
         drv, once = self.load("shakeout"), self.load("shakeout_faults_once")
         ctx = FakeCtx()

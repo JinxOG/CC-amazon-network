@@ -18,7 +18,7 @@ setup(ctx), which the proof scenarios share (shakeout_fleet_proof.py, shakeout_f
   6. PLACEMENT CHECKS (each with its evidence count): every placed node registers; the server's dock for each is the cell it
      stands in, and it stands there; no SERVER 'Assigned dock ... to', 'Dock moved' or 'No free docks' line names a placed node
      (PLACEMENT_RX: the node the server's line is about, never the line's source -- each turtle logs its own 'Assigned dock');
-  7. save_point "shakeout-fleet" (a void run restarts from it without rebuilding).
+  7. save_point "shakeout-fleet", only with SHAKEOUT_SAVE_POINT=1 (the copy froze the game in shakeout-side-b).
 Then the schedule is made (or loaded), written to <run>/schedule.json BEFORE the first fault, and run_loop fires it by wall
 clock for SHAKEOUT_HOURS, with the Task-6 feeder and housekeeping when sandbox/t2/shakeout/feeder.py exists. run_loop ends,
 whatever happened, with schedule.teardown and a check that no filler file is left on any disk; then the end-of-run turtle probe
@@ -171,32 +171,41 @@ def setup(ctx, only=None):
     ctx.wait_until(lambda: all(n in turtles(ctx) for n in placed), 1800, poll=15)
     placement_checks(ctx, placed)
 
-    # 7. a checkpoint
-    dest = world.save_point(ctx, "shakeout-fleet")
-    ctx.expect(os.path.exists(os.path.join(dest, "level.dat")), "save point written (%s)" % dest)
+    # 7. a checkpoint, ONLY when asked (SHAKEOUT_SAVE_POINT=1): copying the world on the nearly full G: drive froze the game
+    # for 4 minutes and stopped every CC computer after it (shakeout-side-b), and wedged the dispatch computer before that
+    # (shakeout-faults-d). A void run is rebuilt from scratch instead (about 20 minutes).
+    if os.environ.get("SHAKEOUT_SAVE_POINT") == "1":
+        dest = world.save_point(ctx, "shakeout-fleet")
+        ctx.expect(os.path.exists(os.path.join(dest, "level.dat")), "save point written (%s)" % dest)
+    else:
+        ctx.note("no save point (set SHAKEOUT_SAVE_POINT=1 for one): the world copy froze the game in shakeout-side-b")
 
-    # 8. the dispatch computer still WORKING once the copy has settled, before anything is measured
+    # 8. the dispatch computer WORKING -- several pushes seen, the last fresh -- before anything is measured
     ready = dispatch_settled(ctx)
-    ctx.expect(ready["ok"], "the dispatch computer is still pushing %d s after the save point (%s)" % (READY_SETTLE_S, ready))
+    ctx.expect(ready["ok"], "the dispatch computer keeps pushing before the first fault (%d distinct pushes seen, the last "
+               "%d s old or newer; %s)" % (READY_PUSHES, READY_FRESH_S, ready))
     if not ready["ok"]:
-        raise RuntimeError("the dispatch computer stopped pushing after the save point: nothing after it would measure the "
-                           "fleet (%s)" % ready)
+        raise RuntimeError("the dispatch computer is not pushing after setup: nothing after it would measure the fleet (%s)"
+                           % ready)
     return placed
 
 
 READY_SETTLE_S = 90      # the save point's copy keeps the disk busy after it returns (shakeout-faults-d: the wedge came 14 s on)
 READY_FRESH_S = 30       # a push this recent counts as pushing
+READY_PUSHES = 3         # distinct pushes that must be SEEN: one fresh push proves nothing (shakeout-side-b)
 READY_S = 300
 READY_POLL_S = 5
 
 
 def dispatch_settled(ctx):
-    """READY_SETTLE_S after the save point, a push no older than READY_FRESH_S must come within READY_S. shakeout-faults-d: the
-    copy stalled the disk, CC terminated the dispatch computer inside a storage-block write 10 s after its last push, the
-    termination itself failed (InterruptedException in ComputerExecutor.shutdown), and it sat 'on' and silent for 17 minutes
-    while the schedule ran on it."""
+    """After READY_SETTLE_S, READY_PUSHES distinct pushes (updatedAt values) must be seen within READY_S, the last no older
+    than READY_FRESH_S. shakeout-faults-d: the save point's copy stalled the disk, CC terminated the dispatch computer inside a
+    storage-block write, and it sat 'on' and silent for 17 minutes while the schedule ran. shakeout-side-b: the game froze
+    for 4 min during the copy and the whole CC layer stopped after it -- but the one push the freeze had stuck was delivered
+    as it ended, 17 s before the check, so a single fresh push passed and the schedule began on a dead fleet."""
     time.sleep(READY_SETTLE_S)
     t0 = time.time()
+    seen = []
     at = None
     while True:
         try:
@@ -204,11 +213,15 @@ def dispatch_settled(ctx):
         except Exception:  # noqa: BLE001 - an unreadable state is not a push
             at = None
         now_ms = time.time() * 1000
-        if isinstance(at, (int, float)) and at >= now_ms - READY_FRESH_S * 1000:
-            return {"updatedAt": at, "age_s": round((now_ms - at) / 1000.0, 1), "ok": True}
+        if isinstance(at, (int, float)) and at not in seen:
+            seen.append(at)
+        fresh = isinstance(at, (int, float)) and at >= now_ms - READY_FRESH_S * 1000
+        if fresh and len(seen) >= READY_PUSHES:
+            return {"updatedAt": at, "age_s": round((now_ms - at) / 1000.0, 1), "pushes_seen": len(seen),
+                    "waited_s": round(time.time() - t0, 1), "ok": True}
         if time.time() - t0 >= READY_S:
             return {"updatedAt": at, "age_s": None if not isinstance(at, (int, float)) else round((now_ms - at) / 1000.0, 1),
-                    "waited_s": READY_S, "ok": False}
+                    "pushes_seen": len(seen), "waited_s": READY_S, "ok": False}
         time.sleep(READY_POLL_S)
 
 
