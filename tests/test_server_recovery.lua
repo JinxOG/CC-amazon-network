@@ -1220,6 +1220,27 @@ return {
         assert_eq(hardware, "slot_16_must_hold_the_ore_ender_chest", "a hardware fault is not cleared by measuring")
     end,
 
+    -- A total radio blackout is no turtle's silence (2026-11-14). In the side-test sim's 5-minute blackout the server
+    -- heard nobody, timed out the turtles working in the world (HEARTBEAT_TIMEOUT 240 s) and gave their jobs to
+    -- others: job_0050 went to node_32 while node_36 still stood at its destination, and failed three times over.
+    ["a blackout in which the server hears nobody does not time a turtle out; silence while others talk does"] =
+    function(assert_eq)
+        local _, T, advance, restore = serverWithMinerOnJob()
+        T.registry.heard(os.epoch("utc"))                      -- the last message before the blackout
+        advance(5 * 60)                                        -- five minutes in which nothing is heard
+        T.registry.checkTimeouts()
+        local stillOn = T.state.registry["node_118"].online
+        local stillJob = T.state.jobs["job_0726"].assignedTo
+        -- the radio is back: others talk, node_118 does not
+        for _ = 1, 50 do advance(5); T.registry.heard(os.epoch("utc")) end
+        T.registry.checkTimeouts()
+        local laterOn = T.state.registry["node_118"].online
+        restore()
+        assert_eq(stillOn, true, "not timed out by a blackout: nobody was heard")
+        assert_eq(stillJob, "node_118", "and its job stays its own")
+        assert_eq(laterOn, false, "silent while the others are heard again, past the timeout: offline as before")
+    end,
+
     ["a hardware fault is not cleared by docking"] =
     function(assert_eq)
         local _, T, _, restore = serverWithMinerOnJob()

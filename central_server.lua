@@ -742,6 +742,38 @@ function registry.loadHolds()
     if n > 0 then logWarn(string.format("%d turtle(s) held by an operator", n)) end
 end
 
+-- SILENCE IS ONLY SILENCE WHILE OTHERS ARE HEARD (2026-11-14), as in atc.lua. In
+-- a total radio blackout the server hears nobody, and after HEARTBEAT_TIMEOUT it
+-- timed out every turtle working in the world and gave its job to another: in the
+-- side-test sim's 5-minute blackout job_0050 went to node_32 while node_36 still
+-- stood at the destination, and failed three times over. So a gap over DEAF_GAP_MS
+-- in which nothing at all was heard is kept (state.deafSpans, the last 32), and the
+-- timeout leaves it out of each turtle's silence. A dead turtle still times out:
+-- the others keep talking.
+registry.DEAF_GAP_MS = 10000
+function registry.heard(now)
+    local last = state.lastHeardAt
+    if last and now - last > registry.DEAF_GAP_MS then
+        state.deafSpans = state.deafSpans or {}
+        state.deafSpans[#state.deafSpans + 1] = { last, now }
+        while #state.deafSpans > 32 do table.remove(state.deafSpans, 1) end
+    end
+    state.lastHeardAt = now
+end
+function registry.deafSince(from, now)
+    local d = 0
+    for _, sp in ipairs(state.deafSpans or {}) do
+        local a, b = math.max(sp[1], from), math.min(sp[2], now)
+        if b > a then d = d + (b - a) end
+    end
+    local last = state.lastHeardAt
+    if last and now - last > registry.DEAF_GAP_MS then
+        local a = math.max(last, from)
+        if now > a then d = d + (now - a) end
+    end
+    return d
+end
+
 function registry.markOffline(id)
     local t = state.registry[id]
     if t and t.online then
@@ -832,7 +864,7 @@ function registry.checkTimeouts()
             and (now - t.phaseAt) < ((t.commsGapGraceSec or CFG.COMMS_GAP_GRACE_SEC) * 1000)
         if inPlannedCommsGap then
             -- skip: expected gap, don't count it as a timeout or prune it
-        elseif t.online and (now - t.lastSeen) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
+        elseif t.online and (now - t.lastSeen - registry.deafSince(t.lastSeen, now)) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
             local jobId = t.jobId
             registry.markOffline(id)
             if jobId then
@@ -6971,6 +7003,7 @@ function server.run()
             dispatcher.noteGpsReply(p4, p5)
 
         elseif event == "modem_message" then
+            registry.heard(os.epoch("utc"))
             local parsed = dispatcher.parseRadio(p4)
             if parsed then
                 local valid, msg = proto.decode(parsed)

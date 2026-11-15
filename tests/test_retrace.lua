@@ -124,4 +124,31 @@ return {
         for _, b in ipairs(r.sent) do if b:find("JOB_FAILED", 1, true) then failed = true end end
         assert_eq(failed, true, "JOB_FAILED is sent straight away")
     end,
+
+    -- Sim w3_side_atc (2026-11-14): a support that missed HOLE_READY in a radio loss gave up and sent JOB_ABORT; its
+    -- delivery, already out at the destination, took it as the end of the job ("job_aborted_at_destination", not
+    -- recoverable): the order failed for good. Out in the world a delivery does not need its support.
+    ["out in the world a delivery carries on when its support gives up; the warehouse's abort still counts"] = function(assert_eq)
+        local r = supportAt({ x = 130, y = 67, z = -2829 })
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_support")
+        local fromSupport = proto.encode(proto.MSG.JOB_ABORT, "node_support", "x", { reason = "no_hole_ready_from_delivery" })
+        local passed = r.base._firstSight(fromSupport)
+        local partner = r.base.getPartnerId()
+        local fromWarehouse = proto.encode(proto.MSG.JOB_ABORT, "warehouse", "x", { reason = "unknown job" })
+        local whPassed = r.base._firstSight(fromWarehouse)
+        assert_eq(passed, false, "the support's JOB_ABORT does not reach the job")
+        assert_eq(partner, nil, "and the delivery goes on without a support")
+        assert_eq(whPassed, true, "the warehouse's JOB_ABORT is passed on as before")
+    end,
+
+    ["inside the building a support's JOB_ABORT reaches the delivery as before"] = function(assert_eq)
+        local r = supportAt(HOLE)
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_support")
+        local m = proto.encode(proto.MSG.JOB_ABORT, "node_support", "x", { reason = "no_hole_ready_from_delivery" })
+        assert_eq(r.base._firstSight(m), true, "at the hole it still tells the delivery to go down alone")
+    end,
 }

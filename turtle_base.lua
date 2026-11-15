@@ -493,6 +493,18 @@ local function firstSight(msg)
             _self.partnerSlot = tonumber(msg.payload.slot)
         elseif msg.type == proto.MSG.PARTNER_LEFT then
             _self.partnerLeft = true
+        elseif msg.type == proto.MSG.JOB_ABORT and _self.role == proto.ROLE.DELIVERY
+               and not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) then
+            -- OUT IN THE WORLD A DELIVERY DOES NOT NEED ITS SUPPORT (2026-11-14). A
+            -- support that missed HOLE_READY in a radio loss gave up and sent this;
+            -- its delivery, already at the destination, took it as the end of the
+            -- job -- "job_aborted_at_destination", not recoverable -- and the order
+            -- failed for good (sim w3_side_atc). It goes on alone, as one that went
+            -- down alone does. The warehouse's JOB_ABORT is not its partner's.
+            logWarn(string.format("Support %s gave up (%s) while I am out -- carrying on alone",
+                tostring(msg.from), tostring(type(msg.payload) == "table" and msg.payload.reason or "?")))
+            _self.partnerId = nil
+            return false
         end
     end
     -- Live-only types are never queued, so the control loop's copy is simply
