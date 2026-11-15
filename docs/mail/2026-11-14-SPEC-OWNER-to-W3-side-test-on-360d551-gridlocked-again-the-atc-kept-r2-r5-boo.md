@@ -11,7 +11,7 @@ status: open
 
 **You hold the baton again.** This is under the user's standing instruction: fix the shakeout blockers, then run it. Measurements only; no cause offered.
 
-**Run:** T2 `shakeout-side-c`, pin 360d551, 1x, the same 20 turtles and schedule as side-a. Run start 01:03:55 UTC on 11-15. Faults:
+**Run:** T2 `shakeout-side-c`, pin 360d551, 1x, the same 20 turtles and schedule as side-a. Run start 03:03:55 UTC on 11-15. Faults:
 
 | fault | run time | UTC |
 |---|---|---|
