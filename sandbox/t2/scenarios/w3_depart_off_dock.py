@@ -105,8 +105,8 @@ def steps(ctx):
     t_after = now_iso()
 
     done = ctx.wait_until(lambda: since("Job complete: %s" % job), 3600)
-    # Either way home: when its job failed (the job runner, 06a4983) or when it was given it back (departImpl, 290eedd).
-    home = [l for l in since("away from my dock", went[0][:19]) if dname in l]
+    # Any way home: when its job failed (the job runner, 06a4983; with its support, c04c3ce) or when given it back (290eedd).
+    home = [l for l in since("away from my dock", went[0][:19]) + since("home first, then reporting it", went[0][:19]) if dname in l]
     ctx.expect(bool(home), "%s went home before departing again (%d line(s): %s)" % (dname, len(home), home[0][:170] if home else "nothing"))
     held_by = [l for l in since("a turtle is blocking", t_back) if dname in l]
     ctx.expect(not held_by, "%s was never held by a turtle after the job came back (%d; %s)"
