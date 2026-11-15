@@ -584,14 +584,16 @@ end
 -- taxi row, and "up the column into the slot" crossed it: the support one block
 -- behind stopped ON the taxi row, in ARR, and its delivery waited for ARR to go
 -- up -- for its own support, to the end of the run (T2 w3-depart-off-dock-c).
--- So from there: along its row to the column just west of the arrivals column,
--- up it to two north of the arrivals hole, along that row to the slot's column,
+-- So from there: along its row to the column two west of the arrivals column,
+-- up it to three north of the arrivals hole, along that row to the slot's column,
 -- and down into the slot -- from the slots' far side, as from anywhere else.
--- None of those cells is a section.
+-- None of those cells is a section, and the margins keep a support that fell up
+-- to 4 behind, catching up X first, out of ARR too: one block closer, node_57 (2
+-- behind) cut the corner into the shaft's foot and held ARR 18 minutes (sim).
 function W.holdingApproach(from, k, y)
     local s = W.holdingSlot(k, y)
     if from.z > s.z then
-        local cx, nz = W.ARRIVALS_HOLE.x - 1, W.ARRIVALS_HOLE.z - 2
+        local cx, nz = W.ARRIVALS_HOLE.x - 2, W.ARRIVALS_HOLE.z - 3
         return {
             { x = cx,  y = s.y, z = from.z },
             { x = cx,  y = s.y, z = nz },

@@ -230,6 +230,22 @@ return {
                 assert_eq(last[1] == slot.x and last[3] == slot.z, true, where .. ": it ends in the slot")
                 assert_eq(prev and prev[3] < slot.z and prev[1] == slot.x, true,
                     where .. ": and comes into it from the north, so the support one behind is not on the taxi row")
+                -- A support that fell behind catches up with move.to(prev) from where it is: X first, then Z. Up to 4
+                -- behind, cutting a corner that way must not take it into ARR either (sim w3_side_atc: node_57, two
+                -- behind, cut the corner of the first version of this detour into the arrivals shaft's foot and held
+                -- ARR for 18 minutes).
+                local cut = 0
+                local all = { { from.x, from.y, from.z } }
+                for _, p in ipairs(c) do all[#all + 1] = p end
+                for lag = 2, 4 do
+                    for i = 1, #all - lag do
+                        local a, b = all[i], all[i + lag]
+                        for _, q in ipairs(cells({ x = a[1], y = a[2], z = a[3] }, { { x = b[1], y = b[2], z = b[3] } })) do
+                            if W.atcSection(q[1], q[2], q[3]) == "ARR" then cut = cut + 1 end
+                        end
+                    end
+                end
+                assert_eq(cut, 0, where .. ": a support up to 4 behind, catching up X first, never steps into ARR")
             end
         end
     end,
