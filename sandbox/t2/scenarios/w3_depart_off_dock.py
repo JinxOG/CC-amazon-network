@@ -60,11 +60,11 @@ def steps(ctx):
         return [l for l in ctx.log_lines(needle) if l[:19] >= (t or t0)]
     ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": "minecraft:cobblestone", "count": 16}], "destination": DEST})
     went = ctx.wait_until(lambda: since("Dispatched job_"), 300)
-    m = went and re.search(r"Dispatched (job_\d+) \[DELIVER\] -> (node_\d+)", went[0])
+    m = went and re.search(r"Dispatched (job_\d+) \[DELIVER\] -> (node_\d+)(?:\s+support job_\d+ -> (node_\d+))?", went[0])
     ctx.expect(bool(m), "a delivery was dispatched (%s)" % (went[:1] if went else "nothing"))
     if not m:
         return
-    job, dname = m.group(1), m.group(2)
+    job, dname, sname = m.group(1), m.group(2), m.group(3)
     held = []
     for name, t in sorted((ctx.state().get("turtles") or {}).items()):
         if t.get("role") == "DELIVERY" and name != dname:
@@ -78,6 +78,16 @@ def steps(ctx):
     ctx.expect(bool(back) and bool(timeouts), "the job came back to %s while it was away from its dock (%d timeout line(s); %s)"
                % (dname, len(timeouts), back[:1] if back else "no second dispatch"))
     c.turn_on([wid])
+    # THE SUPPORT GETS HOME (the stranded-supports ruling, 2026-11-14): its delivery's job failed out in the world; the
+    # delivery brought it home through the tunnel before reporting the failure (c04c3ce). On eea9424 its support,
+    # node_141, met rock at 228,60,-2762 and stayed there.
+    if sname:
+        brought = [l for l in since("bringing support %s home first" % sname) if dname in l]
+        docked = ctx.wait_until(lambda: [l for l in since("Docked at bay") if sname in l], 900)
+        failed_home = [l for l in since("Return home failed") if sname in l]
+        ctx.expect(bool(brought), "%s held its failure back to bring %s home (%s)" % (dname, sname, brought[0][:160] if brought else "nothing"))
+        ctx.expect(bool(docked) and not failed_home, "%s got home through the tunnel after its delivery's job failed (%s; %d 'Return home failed')"
+                   % (sname, docked[0][:140] if docked else "never docked", len(failed_home)))
     if not back:
         return
     t_back = back[0][:19]
