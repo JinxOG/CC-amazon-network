@@ -202,6 +202,38 @@ return {
             "a turtle not in any section still waits its turn behind the older request")
     end,
 
+    -- T2 w3-depart-off-dock-c (2026-11-14): a delivery home from 196,67,-2761, south of the base, went X then Z to its
+    -- slot and crossed the taxi row (ARR) on the way; its support, one block behind, stopped in the taxi row holding ARR,
+    -- and the delivery waited for ARR to go up -- for its own support, to the end of the run.
+    ["the way to a holding slot never enters the arrivals section, from either side"] = function(assert_eq)
+        package.loaded["waypoints"] = nil
+        local W = require("waypoints")
+        local function cells(from, route)
+            local out, x, y, z = {}, from.x, from.y, from.z
+            for _, wp in ipairs(route) do
+                while y ~= wp.y do y = y + (wp.y > y and 1 or -1); out[#out + 1] = { x, y, z } end
+                while x ~= wp.x do x = x + (wp.x > x and 1 or -1); out[#out + 1] = { x, y, z } end
+                while z ~= wp.z do z = z + (wp.z > z and 1 or -1); out[#out + 1] = { x, y, z } end
+            end
+            return out
+        end
+        for _, from in ipairs({ { x = 196, y = 60, z = -2761 }, { x = 240, y = 60, z = -2760 }, { x = 196, y = 60, z = -2798 },
+                                { x = 300, y = 60, z = -2770 } }) do
+            for _, k in ipairs({ 1, 7, 14 }) do
+                local route = W.holdingApproach(from, k, 60)
+                local c = cells(from, route)
+                local inArr, last, prev = 0, c[#c], c[#c - 1]
+                for _, p in ipairs(c) do if W.atcSection(p[1], p[2], p[3]) == "ARR" then inArr = inArr + 1 end end
+                local slot = W.holdingSlot(k, 60)
+                local where = string.format("from %d,%d to slot %d", from.x, from.z, k)
+                assert_eq(inArr, 0, where .. ": no cell of the way is in ARR")
+                assert_eq(last[1] == slot.x and last[3] == slot.z, true, where .. ": it ends in the slot")
+                assert_eq(prev and prev[3] < slot.z and prev[1] == slot.x, true,
+                    where .. ": and comes into it from the north, so the support one behind is not on the taxi row")
+            end
+        end
+    end,
+
     ["a request kept waiting holds off later ones that overlap it"] = function(assert_eq)
         local core, st, t = live()
         -- b sits in W2 (part of long's route) for longer than FAIR_MS

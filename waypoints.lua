@@ -578,8 +578,27 @@ end
 -- slot's column, then up the column into the slot. Not along the column it came
 -- down (the destination's own, which outbound turtles use), and from the south no
 -- crossing at all: the taxi row is beyond the slots.
+--
+-- FROM THE TAXI ROW'S SIDE, ROUND IT (2026-11-14). A destination south of the
+-- base (196,67,-2761, one the shakeout feeder orders) put the turtle beyond the
+-- taxi row, and "up the column into the slot" crossed it: the support one block
+-- behind stopped ON the taxi row, in ARR, and its delivery waited for ARR to go
+-- up -- for its own support, to the end of the run (T2 w3-depart-off-dock-c).
+-- So from there: along its row to the column just west of the arrivals column,
+-- up it to two north of the arrivals hole, along that row to the slot's column,
+-- and down into the slot -- from the slots' far side, as from anywhere else.
+-- None of those cells is a section.
 function W.holdingApproach(from, k, y)
     local s = W.holdingSlot(k, y)
+    if from.z > s.z then
+        local cx, nz = W.ARRIVALS_HOLE.x - 1, W.ARRIVALS_HOLE.z - 2
+        return {
+            { x = cx,  y = s.y, z = from.z },
+            { x = cx,  y = s.y, z = nz },
+            { x = s.x, y = s.y, z = nz },
+            { x = s.x, y = s.y, z = s.z },
+        }
+    end
     return {
         { x = s.x, y = s.y, z = from.z },
         { x = s.x, y = s.y, z = s.z },
