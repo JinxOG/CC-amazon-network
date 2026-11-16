@@ -24,6 +24,7 @@ return {
     local online = sim:capture_log("ATC online")
     local heard = sim:capture_log("ATC heard")
     local done = sim:capture_log("Job complete: job_")
+    local dispatched = sim:capture_log("Dispatched job_")
     local stuck = sim:capture_log("STUCK ")
     local waits = sim:capture_log("ATC: waiting")
     sim:storage_set("minecraft:cobblestone", 100000)
@@ -40,8 +41,24 @@ return {
     end
     local area = sim.world:meta().areas[1]
     sim:dispatch{ type = "ORDER_MINE", params = { x1 = area.x1, z1 = area.z1, x2 = area.x1, z2 = area.z1, minerCount = 1 } }
-    local ok = sim:run_until(function() return #done.lines >= 4 end, 4 * 3600000)
-    sim:expect(ok, "three deliveries and a mine job completed (" .. #done.lines .. ")")
+    -- The SERVER's "Job complete" for each job it dispatched (2026-11-16). Counting any four lines passed on the
+    -- warehouse's own "[WH] Job complete" for the deliveries while the mine job was still being worked: the run then
+    -- ended with the miner out, and "every turtle is back on a dock" failed for a reason no check named.
+    local function tally()
+      local want, got, kinds = {}, {}, { DELIVER = 0, MINE = 0 }
+      for _, l in ipairs(dispatched.lines) do
+        local j, kind = l:match("Dispatched (job_%d+) %[(%u+)%]")
+        if j and kinds[kind] then want[j] = kind end
+      end
+      for _, l in ipairs(done.lines) do
+        local j = l:match("server#.-Job complete: (job_%d+)%s*$")
+        if j and want[j] and not got[j] then got[j] = true; kinds[want[j]] = kinds[want[j]] + 1 end
+      end
+      return kinds.DELIVER, kinds.MINE
+    end
+    local ok = sim:run_until(function() local d, m = tally(); return d >= 3 and m >= 1 end, 4 * 3600000)
+    local nd, nm = tally()
+    sim:expect(ok, string.format("three deliveries and a mine job completed (the server's lines: %d deliveries, %d mine)", nd, nm))
     sim:run_for(15 * 60000)
     local off = {}
     for _, c in ipairs(sim.sched.computers) do
@@ -57,6 +74,7 @@ return {
     local crashes = 0
     local f = io.open(sim.run_dir .. "/trace.log", "rb")
     if f then for line in f:lines() do if line:find(" crash ", 1, true) then crashes = crashes + 1 end end; f:close() end
-    sim:expect(crashes == 0, "no computer crashed (" .. crashes .. ")")
+    -- With SANDBOX_NO_TRACE there is no trace to read: say so rather than pass on nothing.
+    sim:expect(crashes == 0, "no computer crashed (" .. crashes .. (f and "" or "; NO TRACE, nothing judged") .. ")")
   end,
 }
