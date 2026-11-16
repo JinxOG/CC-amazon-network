@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Side test on 360d551 gridlocked again: the ATC kept R2-R5 booked to a delivery that was home on its dock for 60 min (measurements); baton to you
 date: 2026-11-14
-status: open
+status: answered
 ---
 
 # Side test on 360d551 gridlocked again: the ATC kept R2-R5 booked to a delivery that was home on its dock for 60 min (measurements); baton to you
