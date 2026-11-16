@@ -6,13 +6,18 @@ cell to empty, saying SUPPORT_STAGED again every 5 s, and goes home if its deliv
 
   1. The ATC is placed (as in w3_atc_pair.py); the arrivals side is force-loaded; once the pair is known every other
      delivery and support is held.
-  2. The moment the delivery says "At hole", every radio message reaching it on the turtles' local channel is lost for
-     90 s (the control mod's radio loss; receiver: the computer standing in the hole cell). Its support stages inside
-     that window: its first SUPPORT_STAGED is lost, as node_216's was.
-  3. A second delivery is ordered once the first is done.
-CHECKS (each with its evidence): the support staged inside the loss and said SUPPORT_STAGED again (evidence); the pair
-went down together; nobody reported STUCK; both deliveries completed; at the end the ATC holds nothing and every
-turtle is on its dock. Pin the commit under test. 1x."""
+  2. The moment the delivery says "At hole", every radio message on the turtles' local channel is lost for 90 s (the
+     control mod's radio loss; only this pair is moving). Its support stages inside that window: its first
+     SUPPORT_STAGED is lost, as node_216's was.
+  3. PART 2, the same run's second cause (sim w3_side_atc on 17d6b30): a turtle waiting in the base without a word to
+     the ATC was taken for dead at 180 s and its section given away under it. A second delivery is ordered; once the
+     ATC has let its departure in, every GPS host is shut down for 300 s and the delivery is rebooted where it stands:
+     it cannot measure its facing and waits there. A computer that is not a turtle sends the ATC an empty report every
+     10 s, as a busy base's turtles would (an ATC that hears nobody counts nobody's silence).
+CHECKS (each with its evidence): part 1 -- the support staged inside the loss and said SUPPORT_STAGED again (evidence);
+the pair went down together; nobody reported STUCK; the delivery completed. Part 2 -- the rebooted delivery waited over
+180 s for a fix (evidence); the ATC never gave away a section it stood in; nobody reported STUCK; the delivery
+completed. At the end the ATC holds nothing and every turtle is on its dock. Pin the commit under test. 1x."""
 import datetime
 import importlib.util
 import os
@@ -21,8 +26,15 @@ import tempfile
 
 NAME = "w3_atc_staged_lost"
 DEST = {"x": 196, "y": 67, "z": -2761}
-HOLE = (143, 67, -2813)
 LOSS_S = 90
+GPS_DOWN_S = 300
+CHATTER = r'''
+local proto = require("protocol")
+local m = peripheral.find("modem")
+m.open(9999)
+local n = 0
+while true do n = n + 1; proto.send(m, proto.CH_ATC, proto.encode(proto.MSG.ATC_REPORT, "node_chatter", "atc", { route = {}, nonce = n })); sleep(10) end
+'''
 _spec = importlib.util.spec_from_file_location("w3_atc_pair", os.path.join(os.path.dirname(os.path.abspath(__file__)), "w3_atc_pair.py"))
 _pair = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_pair)
@@ -83,16 +95,12 @@ def steps(ctx):
     ctx.expect(bool(at_hole), "%s reached the hole (%s)" % (dname, at_hole[:1] if at_hole else "nothing"))
     if not at_hole:
         return
-    comps = c.computers()
-    did = next((i for i, e in comps.items() if e.get("pos") == HOLE), None)
-    ctx.expect(did is not None, "the computer in the hole cell is found (#%s)" % did)
-    if did is None:
-        return
     t_loss = now_iso()
-    # THE FAULT: everything reaching the delivery on the local channel is lost for LOSS_S -- its support's first
-    # SUPPORT_STAGED with it (node_216's was sent once, and lost).
-    reply = c.radio_loss(0, LOSS_S * 1000, 1.0, channel=ch_local, to=did)
-    ctx.note("lost every message to #%d (%s) on channel %s for %d s: %s" % (did, dname, ch_local, LOSS_S, reply))
+    # THE FAULT: everything on the turtles' local channel is lost for LOSS_S -- the support's first SUPPORT_STAGED with
+    # it (node_216's was sent once, and lost). Every other pair is held, so only this pair talks there. (Run a looked
+    # for the delivery's computer by its position to aim the loss at it alone: `t2 computers` gave no turtle there.)
+    reply = c.radio_loss(0, LOSS_S * 1000, 1.0, channel=ch_local)
+    ctx.note("lost every message on channel %s for %d s: %s" % (ch_local, LOSS_S, reply))
 
     done1 = ctx.wait_until(lambda: server_done(job1, t1) and server_done(sjob1, t1), 3600)
     staged = by(since("Staged behind hole", t_loss), sname)
@@ -107,13 +115,46 @@ def steps(ctx):
     ctx.expect(not stuck, "nobody reported STUCK (%s)" % (stuck[0][-150:] if stuck else "none"))
     ctx.expect(bool(done1), "%s and its support's %s completed (the server's lines)" % (job1, sjob1))
 
+    # ── PART 2: rebooted in the base with no GPS ────────────────────────────────────────────────────────────────
+    cstart = os.path.join(tmp, "chatter.lua")
+    with open(cstart, "w", encoding="utf8", newline=chr(10)) as f:
+        f.write(CHATTER)
+    cx, cy, cz = c.free_spot()
+    if (cx, cy, cz) == (x, y, z):
+        cz += 3
+    cid = c.spawn_computer(cx, cy, cz, cstart, files={"protocol.lua": proto_text})
+    ctx.note("chatter computer #%d: an empty ATC_REPORT every 10 s" % cid)
     t2 = now_iso()
     ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": "minecraft:cobblestone", "count": 16}], "destination": DEST})
     went2 = ctx.wait_until(lambda: since("Dispatched job_", t2), 600)
-    m2 = went2 and re.search(r"Dispatched (job_\d+) \[DELIVER\]", went2[0])
-    job2 = m2.group(1) if m2 else None
-    done2 = ctx.wait_until(lambda: server_done(job2, t2), 3600) if job2 else None
-    ctx.expect(bool(done2), "a delivery ordered after it was let out and completed (%s)" % job2)
+    m2 = went2 and re.search(r"Dispatched (job_\d+) \[DELIVER\] -> (node_\d+)", went2[0])
+    job2, d2 = (m2.group(1), m2.group(2)) if m2 else (None, None)
+    ctx.expect(d2 == dname, "the second order went to the same delivery (%s)" % (went2[:1] if went2 else "nothing"))
+    admitted = ctx.wait_until(lambda: [l for l in since("admitted %s:" % dname, t2)], 900)
+    ctx.expect(bool(admitted), "its departure was let in (%s)" % (admitted[:1] if admitted else "nothing"))
+    if not (job2 and admitted):
+        return
+    ctx.wait_game(3)
+    t3 = now_iso()
+    did = int(dname.split("_")[1])          # on the test server a turtle's node id is its computer id
+    hosts = c.gps_down()
+    c.shutdown([did])
+    ctx.wait_game(2)
+    c.turn_on([did])
+    ctx.note("GPS hosts %s down for %d s; rebooted #%d (%s)" % (hosts, GPS_DOWN_S, did, dname))
+    ctx.wait_game(GPS_DOWN_S)
+    c.gps_up()
+    done2 = ctx.wait_until(lambda: server_done(job2, t2), 3600)
+    waits = by(since("NOT moving until both are measured", t3), dname)
+    meas = by(since("Position and facing measured after", t3), dname)
+    tries = int((re.search(r"measured after (\d+) retries", meas[-1]) or [0, 0])[1]) if meas else 0
+    ctx.expect(bool(waits) and tries * 10 > 180, "%s rebooted in the base and waited there over 180 s for a fix (%d tries "
+               "of 10 s): the check below has something to judge" % (dname, tries))
+    lost = [l for l in since("booking dropped, including", t3) if dname in l]
+    ctx.expect(not lost, "the ATC never gave away a section %s stood in (%s)" % (dname, lost[0][-150:] if lost else "none"))
+    stuck2 = since("STUCK ", t3)
+    ctx.expect(not stuck2, "nobody reported STUCK after the reboot (%s)" % (stuck2[0][-150:] if stuck2 else "none"))
+    ctx.expect(bool(done2), "%s completed (the server's line)" % job2)
 
     for n in held:
         ctx.dispatch("RELEASE_TURTLE", {"turtleId": n})
@@ -123,4 +164,4 @@ def steps(ctx):
     turtles = ctx.state().get("turtles") or {}
     off = [n for n, t in turtles.items() if t.get("dockX") is not None and not (t.get("x") == t.get("dockX") and t.get("z") == t.get("dockZ"))]
     ctx.expect(turtles and not off, "every registered turtle is on its dock at the end (%d of %d not: %s)" % (len(off), len(turtles), off))
-    c.shutdown([aid])
+    c.shutdown([aid, cid])

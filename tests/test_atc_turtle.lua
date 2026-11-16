@@ -123,4 +123,38 @@ return {
         base.atc.stalled("a short wait")
         assert_eq(base.statusForTest(), proto.STATUS.IDLE)
     end,
+
+    -- 2026-11-16 (sim w3_side_atc on 17d6b30): a support back in the building by the way it came stood in the dispatch
+    -- corner waiting, with no GPS, to measure its facing -- and said nothing to the ATC. At 183 s the ATC took it for
+    -- dead and let its section go; a delivery was let into the next one, and the two met head-on, each in the section
+    -- the other needed. In side test d the support blocked by its delivery went silent the same way (181 s).
+    ["a turtle waiting in the base to measure its facing keeps telling the ATC where it stands"] = function(assert_eq)
+        local c = stub.install({ pos = { x = 143, y = 67, z = -2810, facing = 0 } })
+        local fixes = 0
+        gps = { locate = function() fixes = fixes + 1; if fixes == 1 then return c.pos.x, c.pos.y, c.pos.z end end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"] = nil
+        local base = require("turtle_base")
+        local sent = {}
+        peripheral.find = function()
+            return { transmit = function(ch, rr, body) sent[#sent + 1] = tostring(body) end,
+                     open = function() end, isOpen = function() return true end, close = function() end }
+        end
+        base.recoverModem()
+        base.gpsSync()
+        base.atc.ENABLED = true
+        local savedEpoch, savedSleep, now, sleeps = os.epoch, sleep, 1700000000000, 0
+        os.epoch = function() return now end
+        sleep = function(s) now = now + math.floor((s or 0) * 1000); sleeps = sleeps + 1
+            if sleeps > 40 then error("__enough__", 0) end end
+        local here = base.atc.here()
+        local ok, err = pcall(base.waitForPositionFix, "a test")
+        os.epoch, sleep = savedEpoch, savedSleep
+        local reports = 0
+        for _, b in ipairs(sent) do if b:find("ATC_REPORT", 1, true) then reports = reports + 1 end end
+        local waited = (now - 1700000000000) / 1000
+        assert_eq(here ~= nil, true, "it stands in a section of the base (the case under test)")
+        assert_eq(ok == false and err == "__enough__", true, "it was still waiting when the test stopped it (" .. tostring(err) .. ")")
+        assert_eq(reports >= math.floor(waited / 60), true, string.format("an ATC_REPORT at least once a minute (%d in %d s)", reports, waited))
+    end,
 }

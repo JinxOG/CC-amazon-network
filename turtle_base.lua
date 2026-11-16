@@ -1034,8 +1034,20 @@ local function detectFacing()
     local x2, y2, z2 = gps.locate(CFG.GPS_TIMEOUT)
     local turnsMade = _measureTurns or 0
     _measureTurns = nil
-    jMove("back")  -- return to original position
+    local backOk = jMove("back")  -- return to original position
     if claimed then base.atc.releaseAround(claimed) end
+    -- IT MEASURED WHERE IT STANDS: IT KEEPS THAT (2026-11-16, sim w3_depart_off_dock).
+    -- The step and the step back were counted from the facing it believed, which
+    -- is what this is measuring, so the position they leave is only as good as
+    -- that guess: a support back in the building by the way it came believed it
+    -- stood one block from where GPS had just put it, drove home one cell off and
+    -- stood blocked at the next turtle's dock until STUCK. Back where it started
+    -- it is at the first fix; if the step back failed, at the second.
+    if backOk and x1 then
+        _self.pos = { x = math.floor(x1), y = math.floor(y1), z = math.floor(z1) }
+    elseif x2 then
+        _self.pos = { x = math.floor(x2), y = math.floor(y2), z = math.floor(z2) }
+    end
 
     if not x2 then
         logWarn("GPS lost during facing detection. Facing UNKNOWN; not moving on a guess.")
@@ -1086,6 +1098,7 @@ end
 -- the wrong way.
 function base.detectFacingForTest() return detectFacing() end
 function base.setFacingUnknownForTest() _self.facingKnown = false end   -- test seam
+function base.setPosForTest(p) _self.pos = { x = p.x, y = p.y, z = p.z } end     -- test seam
 function base.initPositionForTest() return initPosition() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
@@ -1120,6 +1133,9 @@ function base.waitForPositionFix(why, positionOnly)
             pcall(flushLogQueue)
             _self.saidStuckNoFix = true    -- the server now holds it until it reports docked
         end
+        -- Standing in the base, it tells the ATC so (atc.keepAlive): silent 180 s
+        -- it is taken for dead and its section given away under it.
+        if base.atc then pcall(base.atc.keepAlive) end
         sleep(10)
     end
     logInfo(string.format("Position and facing measured after %d retries: %d,%d,%d -- %s can go ahead",
@@ -1758,6 +1774,25 @@ function atc.book(waypoints, label, giveUp)
     end
 end
 
+-- STILL HERE (2026-11-16, sim w3_side_atc on 17d6b30; T2 shakeout-side-d). The
+-- ATC takes a turtle silent STALE_MS (180 s) for dead and gives back every
+-- section it holds, the one it stands in too. A turtle that waits in the base
+-- without asking -- for a GPS fix to measure its facing, or behind a turtle that
+-- does not move -- said nothing: its section was let go under it, another turtle
+-- was let into the next one, and the two met head-on, each in the section the
+-- other needed. Waiting there, it reports where it stands (ATC_REPORT: it keeps
+-- its booking alive, or takes back the section it stands in) once a KEEPALIVE_S.
+-- Rebooted with no GPS it does not know where it stands: an empty report still
+-- keeps alive whatever it holds (every message does), and claims nothing.
+atc.KEEPALIVE_S = 30
+function atc.keepAlive()
+    if not atc.ENABLED then return end
+    local now = os.epoch("utc")
+    if atc.aliveAt and now - atc.aliveAt < atc.KEEPALIVE_S * 1000 then return end
+    atc.aliveAt = now
+    if _self.posFixed and atc.here() then atc.report() else atc.send(proto.MSG.ATC_REPORT, { route = {} }) end
+end
+
 -- Done with the base: give back everything but the section it stands in.
 function atc.finish()
     if not atc.ENABLED then return end
@@ -1951,7 +1986,7 @@ local function tryMove(digFn, dir)
                 return false, "blocked by turtle (" .. dir .. ")"
             end
             turtleWaits = turtleWaits + 1
-            if inBase then atc.stalled("blocked by a turtle moving " .. dir) end
+            if inBase then atc.stalled("blocked by a turtle moving " .. dir); atc.keepAlive() end
             blockReport = blockReport or waitReporter(function()
                 return string.format("a turtle is blocking %s at %d,%d,%d (%d attempts)",
                     dir, _self.pos.x, _self.pos.y, _self.pos.z, turtleWaits)

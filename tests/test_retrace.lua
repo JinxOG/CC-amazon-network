@@ -151,4 +151,17 @@ return {
         local m = proto.encode(proto.MSG.JOB_ABORT, "node_support", "x", { reason = "no_hole_ready_from_delivery" })
         assert_eq(r.base._firstSight(m), true, "at the hole it still tells the delivery its support gave up (it then goes home: never out alone)")
     end,
+
+    -- 2026-11-16 (sim w3_depart_off_dock on 17d6b30): back in the building, a support measured its facing and went on
+    -- believing it stood one block from where GPS had just put it: it drove home one cell off, into the next turtle's
+    -- dock, and reported STUCK. A facing check measures the position too, and keeps it.
+    ["measuring its facing, a turtle also takes the position it measured"] = function(assert_eq)
+        local r = supportAt(HOLE)
+        local before = r.base.getPos()
+        r.base.setPosForTest({ x = HOLE.x - 1, y = HOLE.y, z = HOLE.z })   -- what it believed: one block off
+        r.base.detectFacingForTest()
+        local p = r.base.getPos()
+        assert_eq(before.x .. "," .. before.z, HOLE.x .. "," .. HOLE.z, "it really stands at the hole's top (the case under test)")
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, HOLE.x .. "," .. HOLE.y .. "," .. HOLE.z, "after measuring it believes where GPS put it")
+    end,
 }
