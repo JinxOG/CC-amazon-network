@@ -2566,4 +2566,26 @@ suite["sendComplete says it sent, and says when the send failed"] = function(ass
     end)
 end
 
+
+-- One trip home at a time (2026-11-15). A turtle the job runner was taking home after a job that ended away from its
+-- dock got a RECALL; not busy, the control loop started a second trip home itself, the two coroutines moved it
+-- between them, and this loop stopped heartbeating while it wandered (sim w3_atc_lost_release, node_56).
+suite["a RECALL while already on the way home starts no second trip"] =
+function(assert_eq)
+    withFakeRuntime(function()
+        local trips, routed = 0, false
+        local base = runControlLoop(repeated(beaconEvent, 3), function(b)
+            if routed then return end
+            routed = true
+            b.setHomingForTest(true)
+            b.returnToDock = function() trips = trips + 1; return true end
+            b.returnToDockInternal = b.returnToDock
+            b.returnToDockFromSky = b.returnToDock
+            b.routeMessage(proto.encode(proto.MSG.RECALL, "server", "node_test", { reason = "job_cancelled" }))
+        end)
+        assert_eq(routed, true, "the RECALL was handed to the loop (the case under test)")
+        assert_eq(trips, 0, "already on its way home, it starts no second trip")
+    end)
+end
+
 return suite

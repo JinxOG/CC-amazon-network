@@ -250,6 +250,28 @@ return {
         end
     end,
 
+    -- T2 shakeout-side-c (2026-11-15): node_208's ATC_LEAVE / ATC_CANCEL were lost in a radio loss on its way home, so
+    -- R2-R5 stayed booked to it on its dock; it asked for a departure every two seconds, every ask kept that booking
+    -- alive, and the returns waiting for R2-R5 held its departure back as the older requests: 12 of 20 jammed.
+    ["a new route is the end of the old one: what it booked and is not standing in is let go"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "home", { op = "request", route = RETURN3 }, t).ok, true)
+        core.handle(st, "home", { op = "enter", sec = "ARR" }, t)
+        core.handle(st, "home", { op = "enter", sec = "R5", cur = "ARR" }, t)
+        core.handle(st, "home", { op = "leave", sec = "ARR" }, t)
+        -- ... and home on its dock, its leaves and cancel lost. Another return now waits for the red lane.
+        local back = RETURN3     -- overlaps the departure below at J3 and S3, as node_208's did at J1 and S1
+        assert_eq(core.handle(st, "next", { op = "request", route = back }, t).ok, false, "R5 is still home's")
+        local later = t + core.CFG.FAIR_MS + 1
+        core.handle(st, "next", { op = "request", route = back }, later)
+        -- home, docked (no section), asks for a departure
+        local r = core.handle(st, "home", { op = "request", route = { "S3", "J3", "W3", "J2", "W2", "J1", "W1", "DH" } }, later)
+        assert_eq(core.handle(st, "next", { op = "request", route = back }, later).ok, true,
+            "the departure's ask let go of R5 and the rest it was not standing in: the return goes")
+        assert_eq(r.ok == true or r.why == "after an older request" or (r.why or ""):find("busy") ~= nil, true,
+            "and the departure is answered like any other (" .. tostring(r.why) .. ")")
+    end,
+
     ["a request kept waiting holds off later ones that overlap it"] = function(assert_eq)
         local core, st, t = live()
         -- b sits in W2 (part of long's route) for longer than FAIR_MS

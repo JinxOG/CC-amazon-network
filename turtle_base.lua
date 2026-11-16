@@ -1093,6 +1093,7 @@ function base.initPositionForTest() return initPosition() end
 function base.setBootGuardForTest(on) _self.bootGuard = on end
 function base.setRoleForTest(r) _self.role = r end
 function base.setDockForTest(d) _self.dock = d end
+function base.setHomingForTest(on) _self.homing = on end
 
 function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end
 
@@ -4520,6 +4521,14 @@ function base.run(jobHandler)
                 if _self.role ~= proto.ROLE.MINER then
                     base.sendFailed("recalled", true)
                 end
+            elseif _self.homing then
+                -- ALREADY GOING HOME (2026-11-15). The job runner takes a turtle home
+                -- when a job ends away from its dock; a RECALL then -- the job given
+                -- to another, a stale support -- found it not busy and started a SECOND
+                -- trip home from this loop, both coroutines moving it, and this loop
+                -- stopped beating: the server called it offline while it wandered
+                -- (sim w3_atc_lost_release, node_56). One trip home at a time.
+                logInfo("RECALL while already on my way home -- carrying on")
             else
                 -- Idle turtle: navigate directly.
                 local insideBuilding = base.isInsideBuilding(_self.pos)
@@ -4772,7 +4781,12 @@ function base.run(jobHandler)
             -- (see departImpl). Busy while it goes, so a RECALL meanwhile does not
             -- start a second trip home from the control loop, nor a job.
             if _self.dock and not pendingJob then
+                -- Busy BEFORE the GPS read: gpsSync waits for replies, and a RECALL
+                -- read meanwhile by the control loop would start its own trip home.
+                local wasBusy = _self.busy
+                _self.busy = true
                 pcall(gpsSync)
+                _self.busy = wasBusy
                 local p = _self.pos
                 if p.x ~= _self.dock.x or p.z ~= _self.dock.z or p.y ~= CFG.FLOOR_Y then
                     logWarn(string.format("Job over at %d,%d,%d, away from my dock %d,%d -- going home",

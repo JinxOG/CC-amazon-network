@@ -162,8 +162,12 @@ local function olderWaiterOverlaps(st, list, id, now, cur)
     local since = mine and mine.since or now
     local holds = {}
     if cur then holds[cur] = true end
-    for _, x in pairs(st.res) do
-        if x.id == id then for s in pairs(x.entered) do holds[s] = true end end
+    for k, x in pairs(st.res) do
+        if x.id == id then
+            for s in pairs(x.entered) do holds[s] = true end
+            -- booked and first in the queue counts too: a waiter behind it waits for it
+            for _, s in ipairs(x.list) do if queue(st, s)[1] == k then holds[s] = true end end
+        end
     end
     for other, w in pairs(st.waiting) do
         if other ~= id and w.since < since and now - w.since > CFG.FAIR_MS and now - w.at < 10000 then
@@ -217,6 +221,14 @@ function core.handle(st, id, p, now)
         if #list == 0 then return { ok = true } end
         local r = rid and st.res[rid]
         if r and r.list[1] == list[1] and #r.list == #list then return { ok = true, rid = rid } end
+        -- A NEW ROUTE IS THE END OF THE OLD ONE (2026-11-15). A turtle can be in one
+        -- place, and asks from there (p.cur): whatever else it still holds is what a
+        -- lost ATC_LEAVE / ATC_CANCEL left behind. node_208 docked in a radio loss
+        -- with R2-R5 still its own; asking for a departure every two seconds kept
+        -- that booking alive (every message does), and the returns waiting for R2-R5
+        -- held its departure back as the older requests -- 12 of 20 jammed 45 min
+        -- (T2 shakeout-side-c). Asking anew lets the old go, as the cancel would have.
+        for k, x in pairs(st.res) do if x.id == id then drop(st, k, p.cur) end end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
         -- A turtle standing in a section (p.cur) is in the way of others whatever it
         -- waits for: fairness never holds it back, only occupancy (routeFree) does.
