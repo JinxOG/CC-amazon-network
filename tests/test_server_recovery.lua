@@ -1626,4 +1626,44 @@ return {
         assert_eq(status, "ASSIGNED",
             "a brief stale IDLE must not cancel a job that was just assigned")
     end,
+
+    -- 2026-11-16 (sim w3_atc_partner_left): a delivery that would not go out without
+    -- its support failed its job before reaching the warehouse, and the job went to
+    -- another pair. The warehouse was still serving the first delivery under that
+    -- job id: it ignored the new one's request as a duplicate, timed the old one out
+    -- ten minutes later, and its abort RECALLed the new holder of the job.
+    ["a delivery job that fails is dropped at the warehouse, whoever gets it next"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        local job = T.state.jobs["job_0726"]
+        job.type = proto.JOB.DELIVER
+        T.state.registry["node_118"].role = proto.ROLE.DELIVERY
+        T.sent = {}
+        T.handlers[proto.MSG.JOB_FAILED]({ from = "node_118", payload = {
+            jobId = "job_0726", reason = "departure_failed: support node_52 not with me", recoverable = true } })
+        local toWarehouse = 0
+        for _, m in ipairs(T.sent) do
+            local ok, d = pcall(textutils.unserialise, m.body)
+            if ok and type(d) == "table" and d.type == proto.MSG.JOB_ABORT and d.to == "warehouse"
+               and m.channel == proto.CH_WAREHOUSE and type(d.payload) == "table" and d.payload.jobId == "job_0726" then
+                toWarehouse = toWarehouse + 1
+            end
+        end
+        local status = job.status
+        restore()
+        assert_eq(status, "PENDING", "the job goes back to be sent again (the case under test)")
+        assert_eq(toWarehouse, 1, "the warehouse is told to drop job_0726")
+    end,
+
+    ["a mining job that fails sends the warehouse nothing"] =
+    function(assert_eq)
+        local _, T, _, restore = serverWithMinerOnJob()
+        T.sent = {}
+        T.handlers[proto.MSG.JOB_FAILED]({ from = "node_118", payload = {
+            jobId = "job_0726", reason = "x", recoverable = true } })
+        local n = 0
+        for _, m in ipairs(T.sent) do if m.channel == proto.CH_WAREHOUSE then n = n + 1 end end
+        restore()
+        assert_eq(n, 0)
+    end,
 }

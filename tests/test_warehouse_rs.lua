@@ -610,4 +610,74 @@ return {
         assert_eq(newest ~= nil, true, "and the newest is the one kept")
     end,
 
+    -- 2026-11-16 (sim w3_atc_partner_left): a delivery job that failed before the
+    -- warehouse served it went to another pair under the same job id. The warehouse,
+    -- still serving the first delivery, answered the new one "duplicate -- ignored",
+    -- timed the old one out ten minutes later, and that abort's RECALL reached the job's
+    -- NEW holder. The server now tells it to drop a failed delivery job (JOB_ABORT).
+    ["a job the server drops is let go, queued or in service, and its next holder is served"] = function(assert_eq)
+        local sent = {}
+        local W = fresh(fakeRS(), fakeChest({}))
+        local proto = require("protocol")
+        W.modemForTest().transmit = function(ch, rr, body) sent[#sent + 1] = textutils.unserialise(body) or body end
+        local function req(from, job)
+            W.routeMsg(proto.encode(proto.MSG.ITEM_REQUEST, from, "warehouse", { jobId = job, items = {} }))
+        end
+        local function abort(job) W.routeMsg(proto.encode(proto.MSG.JOB_ABORT, "server", "warehouse", { jobId = job })) end
+        local function queuedTo(who, job)
+            for _, m in ipairs(sent) do
+                if type(m) == "table" and m.type == proto.MSG.WAREHOUSE_QUEUED and m.to == who
+                   and m.payload.jobId == job and (m.payload.position or 0) >= 1 then return true end
+            end
+            return false
+        end
+        local function recalls()
+            local n = 0
+            for _, m in ipairs(sent) do if type(m) == "table" and m.type == proto.MSG.RECALL then n = n + 1 end end
+            return n
+        end
+        -- queued
+        req("node_34", "job_1")
+        abort("job_1")
+        sent = {}
+        req("node_32", "job_1")
+        local queuedAfterQueued = queuedTo("node_32", "job_1")
+        -- in service
+        W.serveForTest({ jobId = "job_2", turtleId = "node_40", items = {}, chestsNeeded = 1 })
+        sent = {}
+        abort("job_2")
+        local recalled = recalls()
+        req("node_41", "job_2")
+        assert_eq(queuedAfterQueued, true, "the new holder of a dropped queued job is queued, not ignored")
+        assert_eq(recalled, 0, "dropping the job in service recalls nobody: the job may already be someone else's")
+        assert_eq(queuedTo("node_41", "job_2"), true, "and the new holder of the job that was in service is queued")
+    end,
+
+    -- 2026-11-16 (sim w3_side_atc on the fix above): a delivery's arrival pings for
+    -- one job, left in the inbox, were taken as its arrival for its NEXT job: the
+    -- warehouse loaded chests at once for a turtle still on its dock, timed out
+    -- waiting for CHESTS_PLACED and recalled it, and the order failed for good.
+    ["an arrival for another job is not taken as this job's arrival"] = function(assert_eq)
+        local W = fresh(fakeRS(), fakeChest({}))
+        local proto = require("protocol")
+        W.routeMsg(proto.encode(proto.MSG.DELIVERY_ARRIVED, "node_32", "warehouse", { jobId = "job_22", items = {} }))
+        local stale = W.inboxGet(proto.MSG.DELIVERY_ARRIVED, "node_32", "job_31")
+        W.routeMsg(proto.encode(proto.MSG.DELIVERY_ARRIVED, "node_32", "warehouse", { jobId = "job_31", items = {} }))
+        local fresh31 = W.inboxGet(proto.MSG.DELIVERY_ARRIVED, "node_32", "job_31")
+        assert_eq(stale, nil, "job_22's arrival does not serve job_31")
+        assert_eq(fresh31 ~= nil and fresh31.payload.jobId, "job_31", "job_31's own arrival does")
+    end,
+
+    -- The same run: the sweep a server abort did tied the warehouse up while the job's
+    -- next holder asked for it, and that ITEM_REQUEST was lost. Waiting for a turtle to
+    -- arrive, nothing has been loaded into the ender chest yet: there is nothing to sweep.
+    ["a server abort of a job still waiting for its turtle does not touch the ender chest"] = function(assert_eq)
+        local listed = 0
+        local W = fresh(fakeRS(), { list = function() listed = listed + 1; return {} end })
+        local proto = require("protocol")
+        W.serveForTest({ jobId = "job_2", turtleId = "node_40", items = {}, chestsNeeded = 1 })
+        W.routeMsg(proto.encode(proto.MSG.JOB_ABORT, "server", "warehouse", { jobId = "job_2" }))
+        assert_eq(listed, 0, "the ender chest was not read")
+    end,
+
 }

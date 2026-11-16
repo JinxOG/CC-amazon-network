@@ -149,6 +149,6 @@ return {
         r.base.setRoleForTest(proto.ROLE.DELIVERY)
         r.base.setPartnerId("node_support")
         local m = proto.encode(proto.MSG.JOB_ABORT, "node_support", "x", { reason = "no_hole_ready_from_delivery" })
-        assert_eq(r.base._firstSight(m), true, "at the hole it still tells the delivery to go down alone")
+        assert_eq(r.base._firstSight(m), true, "at the hole it still tells the delivery its support gave up (it then goes home: never out alone)")
     end,
 }

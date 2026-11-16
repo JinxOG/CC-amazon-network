@@ -3077,6 +3077,16 @@ function jobQueue.fail(jobId, reason, recoverable)
         recordFailure(job, "FAILED", reason)
         logError("Job permanently failed: " .. jobId .. " (" .. (reason or "?") .. ")")
     end
+    -- A delivery job that failed is let go at the warehouse (2026-11-16, sim
+    -- w3_atc_partner_left). A delivery that would not go out without its support
+    -- failed before it was served; the job went to another pair under the same id,
+    -- and the warehouse, still serving the first, ignored the new request as a
+    -- duplicate, timed the old one out ten minutes later and RECALLed the job's
+    -- new holder. Told now, it drops the job, and the next ITEM_REQUEST is new.
+    if job.type == proto.JOB.DELIVER then
+        proto.send(state.modem, proto.CH_WAREHOUSE,
+            proto.encode(proto.MSG.JOB_ABORT, "server", "warehouse", { jobId = jobId }))
+    end
     -- Only cancel the partner job on permanent failure. On retry (status=PENDING)
     -- each turtle handles its own recovery: the miner sends MINE_RECALL before
     -- calling sendFailed, so the support is already returning. Cancelling here

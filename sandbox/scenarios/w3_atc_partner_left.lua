@@ -5,11 +5,16 @@
 --
 -- Here: one delivery. The moment it has stepped out of crossing J1, a computer that is not a turtle steps into J1 through
 -- the ATC and KEEPS TALKING (so the ATC never sweeps it) for HOLD_S = 720 s -- longer than the delivery's 600 s wait --
--- then leaves J1. The support's way to the hole needs J1. So the delivery gives up and goes alone; the support must
--- stand down instead of following.
--- CHECKS: the delivery gave up and went alone (evidence: "never staged"); the support stood down ("went down without
--- me") and never went down the dispatch hole for this job; the delivery completed; at the end both are on a dock and
--- nobody holds DH. On the code before the fix the support goes down the hole after the delivery has left.
+-- then leaves J1. The support's way to the hole needs J1. So the delivery gives up; the support must stand down
+-- instead of following.
+-- 2026-11-16 (T2 shakeout-side-c): a delivery never goes out without its support, which carries its chunk loading --
+-- one that went alone froze in unloaded ground. It now tells the support to stand down, goes home, and the job goes
+-- back to be sent again with a support.
+-- CHECKS: the delivery gave up waiting (evidence: "never staged"); the support stood down ("stood me down"); neither
+-- went down the dispatch hole except together (every descent after the fault matched by a "Support staged"); the order
+-- was delivered all the same, the job sent again served with no warehouse timeout or stray recall; at the end both are
+-- on a dock and nobody holds DH.
+-- On 67fa474 the delivery goes down alone.
 local HOLD_S = 720
 local function atDock(p)
   if not p or p.y ~= 67 then return false end
@@ -48,7 +53,9 @@ return {
   steps = function(sim)
     local dispatched = sim:capture_log("Dispatched job_")
     local alone = sim:capture_log("never staged in")
-    local stood = sim:capture_log("went down without me")
+    local stood = sim:capture_log("stood me down")
+    local together = sim:capture_log("Support staged")
+    local retries = sim:capture_log(" retry ")
     local descend = sim:capture_log("Descending dispatch hole")
     local holding = sim:capture_log("holding position")
     local done = sim:capture_log("Job complete: job_")
@@ -67,7 +74,7 @@ return {
       destination = { x = 124, y = 67, z = -2824 } } }
     sim:run_until(function() return #dispatched.lines >= 1 end, 120000)
     local line = dispatched.lines[1] or ""
-    local dname, sname = line:match("%-> (node_%d+)%s+support job_%d+ %-> (node_%d+)")
+    local djob, dname, sname = line:match("Dispatched (job_%d+) %[DELIVER%] %-> (node_%d+)%s+support job_%d+ %-> (node_%d+)")
     sim:expect(dname ~= nil and sname ~= nil, "a delivery and its support were dispatched (" .. line:sub(-80) .. ")")
     if not dname then return end
     local dcomp, scomp
@@ -83,9 +90,14 @@ return {
     end, 10 * 60000)
     sim:expect(outOfJ1, dname .. " left crossing J1 on its way to the dispatch hole")
     if not outOfJ1 then return end
-    local d0 = #descend.lines
+    local d0, t0 = #descend.lines, #together.lines
     hog:queue_event({ "hog_go" })                         -- THE FAULT: J1 held, and kept, past the delivery's wait
-    sim:run_until(function() return #done.lines >= 1 end, 3 * 3600000)
+    -- Delivered: the server's "Job complete" for a job the delivery holds (not the warehouse's, not a failed try).
+    local function delivered()
+      for _, l in ipairs(done.lines) do if l:find("server#", 1, true) and l:find(djob .. "$") then return true end end
+      return false
+    end
+    sim:run_until(delivered, 3 * 3600000)
     sim:run_for(20 * 60000)
 
     local function by(lines, who, from)
@@ -93,17 +105,39 @@ return {
       for i = from or 1, #lines do if lines[i]:find("[" .. who .. "]", 1, true) or lines[i]:find(who .. "#", 1, true) then n = n + 1 end end
       return n
     end
-    local wentAlone = by(alone.lines, dname) > 0
+    local gaveUp = by(alone.lines, dname) > 0
+    local joint = by(together.lines, dname, t0 + 1)
+    local delDescended = by(descend.lines, dname, d0 + 1)
     local supDescended = by(descend.lines, sname, d0 + 1)
+    -- The job goes back and the support may well be given it again with another delivery: those descents are together
+    -- too. Every delivery it was paired with, and the times they went down with it.
+    local supJoint = 0
+    for _, l in ipairs(dispatched.lines) do
+      local d2, s2 = l:match("%-> (node_%d+)%s+support job_%d+ %-> (node_%d+)")
+      if s2 == sname then supJoint = supJoint + by(together.lines, d2, t0 + 1) end
+    end
     local supHeld = by(holding.lines, sname)
     local lastSummary = summary.lines[#summary.lines] or ""
     local dhHeld = lastSummary:match("DH=([%w_+]+)")
-    sim:expect(wentAlone, dname .. " gave up waiting and went down alone ('never staged'): the checks below have "
+    sim:expect(gaveUp, dname .. " gave up waiting for its support ('never staged'): the checks below have "
       .. "something to judge")
-    sim:expect(by(stood.lines, sname) > 0, sname .. " stood down ('went down without me')")
-    sim:expect(supDescended == 0 and supHeld == 0, string.format("%s never went down the hole after it (%d descents, "
-      .. "%d 'holding position')", sname, supDescended, supHeld))
-    sim:expect(#done.lines >= 1, "the delivery completed (" .. #done.lines .. ")")
+    sim:expect(by(stood.lines, sname) > 0, sname .. " stood down ('stood me down')")
+    sim:expect(delDescended <= joint, string.format("%s never went down the hole without its support (%d descents, "
+      .. "%d together)", dname, delDescended, joint))
+    -- ("holding position" is what a support says at every destination; DH held for good is the check at the end.)
+    sim:expect(supDescended <= supJoint, string.format("%s never went down the hole except with a delivery that went "
+      .. "with it (%d descents, %d together; %d 'holding position')", sname, supDescended, supJoint, supHeld))
+    sim:expect(delivered(), "the order was delivered all the same, " .. tostring(djob) .. " (the server's 'Job complete'; last: " .. tostring(done.lines[#done.lines]):sub(1, 140) .. ")")
+    -- The job sent again is served: before the server told the warehouse to drop it, the warehouse kept serving the
+    -- first delivery under the same job id, the next holder timed out at the destination (warehouse_chest_timeout),
+    -- and the warehouse's abort recalled the holder after that ("retry 3/3: recalled").
+    local bad = {}
+    for _, l in ipairs(retries.lines) do
+      if l:find("Job " .. djob .. " retry", 1, true) and (l:find("warehouse_chest_timeout", 1, true) or l:find(": recalled", 1, true)) then
+        bad[#bad + 1] = l:match("retry .*$")
+      end
+    end
+    sim:expect(#bad == 0, "the job sent again was served, with no warehouse timeout or stray recall (" .. table.concat(bad, "; ") .. ")")
     sim:expect(atDock(dcomp.pos) and atDock(scomp.pos), string.format("both on a dock at the end (%s %s,%s,%s; %s %s,%s,%s)",
       dname, tostring(dcomp.pos.x), tostring(dcomp.pos.y), tostring(dcomp.pos.z),
       sname, tostring(scomp.pos.x), tostring(scomp.pos.y), tostring(scomp.pos.z)))

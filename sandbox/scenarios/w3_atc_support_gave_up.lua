@@ -4,11 +4,15 @@
 -- the delivery reached the hole later and waited its full STAGE_WAIT_S (600 s) for a support that had gone, holding the
 -- dispatch hole -- so every pair behind timed out the same way (12 supports, a 16,140 s wait).
 --
+-- 2026-11-16 (T2 shakeout-side-c, the 160,-2752 turtle): the support must not give up at all while the ATC holds its
+-- delivery, and a delivery never goes out without its support -- the support carries its chunk loading, and a lone
+-- delivery froze in unloaded ground 11 times. The delivery now tells its support it is still coming (HOLE_PENDING).
+--
 -- Here: before the job, a computer that is not a turtle takes crossing J1 (every departure needs it) and keeps talking
--- for 240 s, then leaves. The delivery waits to be let out; its support gives up at 180 s.
--- CHECKS: the support gave up (evidence: no_hole_ready_from_delivery); the delivery heard it and went down without
--- waiting at the hole (from 'At hole' to 'Descending' under 60 s, and its 'gave up' line); the delivery completed;
--- nobody holds the dispatch hole at the end. On the code before the fix the delivery waits 600 s at the hole.
+-- for 240 s, then leaves. The delivery waits over 180 s to be let out.
+-- CHECKS: the delivery was held over 180 s (evidence); the support did not give up (no no_hole_ready_from_delivery);
+-- the delivery never went down alone; they went down together; the delivery completed; nobody holds the dispatch hole
+-- at the end. On 67fa474 the support gives up at 180 s and the delivery goes down alone.
 local HOLD_S = 240
 
 local HOG = [[
@@ -36,9 +40,9 @@ return {
   steps = function(sim)
     local dispatched = sim:capture_log("Dispatched job_")
     local noReady = sim:capture_log("no_hole_ready_from_delivery")
-    local gaveUp = sim:capture_log("gave up (")
-    local atHole = sim:capture_log("At hole")
-    local descend = sim:capture_log("Descending dispatch hole")
+    local goingAlone = sim:capture_log("going down alone")
+    local together_ = sim:capture_log("Support staged")
+    local waits = sim:capture_log("Still waiting")
     local done = sim:capture_log("Job complete: job_")
     local summary = sim:capture_log("section(s) held")
     sim:storage_set("minecraft:cobblestone", 100000)
@@ -65,15 +69,20 @@ return {
       for _, l in ipairs(lines) do if l:find("[" .. who .. "]", 1, true) or l:find(who .. "#", 1, true) then return l end end
     end
     local supGave = false
-    for _, l in ipairs(noReady.lines) do if l:find("job_0002", 1, true) then supGave = true end end
-    local a, d = first(atHole.lines, dname), first(descend.lines, dname)
-    local waited = a and d and (secs(d) - secs(a)) or nil
+    supGave = #noReady.lines > 0   -- the server's "retry: no_hole_ready_from_delivery", or the delivery hearing it
+    local alone = first(goingAlone.lines, dname)
+    local together = first(together_.lines, dname)
     local last = summary.lines[#summary.lines] or ""
-    sim:expect(supGave, sname .. " gave up waiting for HOLE_READY (no_hole_ready_from_delivery): the check below has "
-      .. "something to judge")
-    sim:expect(first(gaveUp.lines, dname) ~= nil, dname .. " heard that its support gave up (" .. tostring((first(gaveUp.lines, dname))) .. ")")
-    sim:expect(waited ~= nil and waited < 60, string.format("%s did not wait at the hole for a support that had gone "
-      .. "(%s s from 'At hole' to 'Descending')", dname, tostring(waited)))
+    local heldLine
+    for _, l in ipairs(waits.lines) do
+      if l:find(dname .. "#", 1, true) and l:find("ATC: departure", 1, true) and (tonumber(l:match("Still waiting (%d+)s")) or 0) >= 180 then heldLine = l end
+    end
+    sim:expect(heldLine ~= nil, dname .. " was held at its dock over 180 s by the ATC, so the checks below "
+      .. "have something to judge (" .. tostring((heldLine or "nothing"):sub(1, 120)) .. ")")
+    sim:expect(not supGave, sname .. " did not give up on a delivery the ATC was still holding (no_hole_ready_from_delivery)")
+    sim:expect(alone == nil, dname .. " never went out without its support, which carries its chunk loading ("
+      .. tostring((alone or ""):sub(1, 120)) .. ")")
+    sim:expect(together ~= nil, "they went down together ('Support staged')")
     sim:expect(#done.lines >= 1, "the delivery completed (" .. #done.lines .. ")")
     sim:expect(not last:find("DH=", 1, true), "nobody holds the dispatch hole at the end (" .. last:sub(-100) .. ")")
   end,

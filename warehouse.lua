@@ -205,13 +205,23 @@ local function inboxPut(msg)
     if #bucket > INBOX_MAX then table.remove(bucket, 1) end
 end
 
-local function inboxGet(wantType, fromId)
+-- With jobId, a message from that turtle about ANOTHER job is stale and is
+-- dropped, not returned (2026-11-16, sim w3_side_atc): a delivery's arrival
+-- pings for one job, left here, were taken as its arrival for its next job --
+-- chests loaded for a turtle still on its dock, a CHESTS_PLACED timeout, a
+-- recall, and the order failed for good. A message with no jobId still counts.
+local function inboxGet(wantType, fromId, jobId)
     local bucket = inbox[wantType]
     if not bucket then return nil end
-    for i, msg in ipairs(bucket) do
+    local i = 1
+    while i <= #bucket do
+        local msg = bucket[i]
         if not fromId or msg.from == fromId then
+            local mj = type(msg.payload) == "table" and msg.payload.jobId or nil
             table.remove(bucket, i)
-            return msg
+            if not jobId or mj == nil or mj == jobId then return msg end
+        else
+            i = i + 1
         end
     end
     return nil
@@ -255,17 +265,26 @@ local function broadcastQueuePositions()
     end
 end
 
-local function abortCurrent(reason)
+local function abortCurrent(reason, noRecall)
     if current then
-        log(string.format("Abort [%s]: %s — sweeping EC", current.jobId, reason))
+        -- Waiting for its turtle to arrive, nothing is in the ender chest yet:
+        -- no sweep. The sweep's peripheral calls and sleeps eat radio messages,
+        -- and on a server abort the job's next holder is asking for it right then.
+        local sweep = state ~= S.WAIT_ARRIVE
+        log(string.format("Abort [%s]: %s%s", current.jobId, reason, sweep and " — sweeping EC" or ""))
         -- Proactively recall the turtle so it fails fast instead of waiting for
         -- its own batch deadline. Routed via the server (fwdToTurtle by jobId),
         -- same path as CHESTS_READY etc., so the payload must carry the jobId.
-        sendToServer(proto.MSG.RECALL, current.turtleId, {
-            jobId  = current.jobId,
-            reason = reason or "warehouse_abort",
-        })
-        clearEnderChest()
+        -- Not when the server itself dropped the job (noRecall): routed by job
+        -- id, the RECALL reached whoever holds the job NOW -- a delivery that had
+        -- just been given it again (sim w3_atc_partner_left, 2026-11-16).
+        if not noRecall then
+            sendToServer(proto.MSG.RECALL, current.turtleId, {
+                jobId  = current.jobId,
+                reason = reason or "warehouse_abort",
+            })
+        end
+        if sweep then clearEnderChest() end
         current = nil
     end
     batches  = {}
@@ -375,10 +394,20 @@ local function routeMsg(raw)
     -- Sent by server when fwdToTurtle can't find the job (e.g. after reboot).
     -- Immediately clears current and returns to IDLE so the real turtle's
     -- ITEM_REQUEST (which IS in the queue) gets served next.
+    -- Also sent when a delivery job fails and goes back to be sent again
+    -- (2026-11-16): the job is let go wherever it is, in service or queued, so
+    -- its next holder's ITEM_REQUEST is served instead of ignored as a duplicate.
     if msg.type == proto.MSG.JOB_ABORT then
-        if current and msg.payload.jobId == current.jobId then
+        local id = msg.payload and msg.payload.jobId
+        if current and id == current.jobId then
             log("Server abort for job " .. current.jobId)
-            abortCurrent("server abort")
+            abortCurrent("server abort", true)
+        end
+        for i = #queue, 1, -1 do
+            if queue[i].jobId == id then
+                log(string.format("Server abort for job %s -- dropped from the queue (%s)", tostring(id), tostring(queue[i].turtleId)))
+                table.remove(queue, i)
+            end
         end
         return
     end
@@ -521,7 +550,7 @@ local function tick()
 
     -- ── WAIT_ARRIVE: turtle travelling to destination ─────────────────────────
     elseif state == S.WAIT_ARRIVE then
-        local msg = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId)
+        local msg = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId, current.jobId)
         if msg then
             log("Turtle arrived — clearing EC and loading chests...")
             clearEnderChest()
@@ -542,7 +571,7 @@ local function tick()
     -- ── WAIT_PLACED: chests loaded, turtle placing them ───────────────────────
     elseif state == S.WAIT_PLACED then
         -- DELIVERY_ARRIVED re-ping means turtle missed CHESTS_READY — resend.
-        local reping = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId)
+        local reping = inboxGet(proto.MSG.DELIVERY_ARRIVED, current.turtleId, current.jobId)
         if reping then
             log("Re-ping — re-sending CHESTS_READY")
             sendToServer(proto.MSG.CHESTS_READY, current.turtleId, {
@@ -1029,6 +1058,8 @@ if _G.__CC_WAREHOUSE_TEST then
         PROBE_SLOW_MS   = PROBE_SLOW_MS,
         PROBE_EVERY_MS  = PROBE_EVERY_MS,
         PROBE_BACKOFF_MS = PROBE_BACKOFF_MS,
+        modemForTest    = function() return modem end,
+        serveForTest    = function(entry) current = entry; enterState(S.WAIT_ARRIVE) end,
     }
 end
 

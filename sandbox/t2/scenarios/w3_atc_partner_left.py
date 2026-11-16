@@ -6,8 +6,10 @@ layer 2, ONE pair. Same story as sandbox/scenarios/w3_atc_partner_left.lua on th
   2. A HOLDER computer listens to the turtles' local channel. On the delivery's HOLE_READY it steps into crossing J1
      through the ATC and KEEPS TALKING (so the ATC never sweeps it) for 720 s -- longer than the delivery's 600 s wait for
      its support -- then leaves J1. The support's way to the hole needs J1.
-  3. So the delivery gives up and goes down alone. Its support must STAND DOWN: never go down the hole after it, and not
-     hold the dispatch hole (DH). Before the fix the support went down after the delivery had gone and held DH for good.
+  3. So the delivery gives up. Its support must STAND DOWN: never go down the hole after it, and not hold the dispatch
+     hole (DH). Before the fix the support went down after the delivery had gone and held DH for good.
+     Since 2026-11-16 the delivery does not go alone either (the support is its chunk loading): it goes home and the job
+     is sent again (sandbox/t2/scenarios/w3_atc_support_held.py proves that half).
 
 Pin the commit under test. 1x: the ATC's timers are real-time epoch milliseconds. Lines are matched by their own
 timestamps (the log files are not in arrival order)."""
@@ -101,17 +103,18 @@ def steps(ctx):
     job, dname, sname = m.group(1), m.group(2), m.group(3)
 
     alone = ctx.wait_until(lambda: [l for l in since("never staged in") if dname in l], 1200)
-    ctx.expect(bool(alone), "%s gave up waiting for its support and went down alone (%s): the checks below have something "
+    ctx.expect(bool(alone), "%s gave up waiting for its support (%s): the checks below have something "
                "to judge" % (dname, alone[:1] if alone else "nothing"))
-    stood = ctx.wait_until(lambda: [l for l in since("went down without me") if sname in l], 300)
+    stood = ctx.wait_until(lambda: [l for l in since("stood me down") if sname in l], 300)
     ctx.expect(bool(stood), "%s stood down (%s)" % (sname, stood[:1] if stood else "nothing"))
     done = ctx.wait_until(lambda: since("Job complete: %s" % job), 2400)
-    ctx.expect(bool(done), "%s completed, the delivery alone" % job)
+    ctx.expect(bool(done), "%s completed, sent again with a support" % job)
     ctx.wait_game(120)
+    # The job is sent again and this support may go with it: those descents are with a delivery ('Support staged').
     descents = [l for l in since("Descending dispatch hole") if sname in l]
-    holding = [l for l in since("holding position") if sname in l]
-    ctx.expect(not descents and not holding, "%s never went down the hole after it (%d descents, %d 'holding position')"
-               % (sname, len(descents), len(holding)))
+    joint = since("Support staged")
+    ctx.expect(len(descents) <= len(joint), "%s never went down the hole except with a delivery (%d descents, %d together)"
+               % (sname, len(descents), len(joint)))
     summaries = since("section(s) held")
     last = summaries[-1] if summaries else ""
     ctx.expect(bool(summaries) and "DH=" not in last, "nobody holds the dispatch hole at the end (last ATC summary: %s)"

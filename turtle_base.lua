@@ -2184,8 +2184,28 @@ local departImpl
 -- However a departure ends -- out of the hole, or a route that failed half way --
 -- the booking is given back (all but the section it stands in). A failed one kept
 -- the whole outbound route booked for good (node_3069, sim, 2026-11-03).
+-- HOLE_PENDING, the delivery's "still coming" to its support (2026-11-16, T2
+-- shakeout-side-c). The support waits 180 s for HOLE_READY and then gives up; under
+-- the ATC a delivery can be held at its dock longer than that, so the support went
+-- home and the delivery went out alone -- without the chunk loading its support
+-- carries -- and froze in unloaded ground at 160,-2752 (11 times in one run). From
+-- the start of a departure until HOLE_READY the control loop says "still coming"
+-- every HOLE_PENDING_MS; each one restarts the support's 180 s. A delivery that has
+-- died says nothing, and its support gives up as before.
+local HOLE_PENDING_MS = 20000
+function atc.keepSupport(now)
+    if not _self.holePendingTo or now - (_self.holePendingAt or 0) < HOLE_PENDING_MS then return end
+    _self.holePendingAt = now
+    atc.signalSupport(proto.MSG.HOLE_PENDING, _self.holePendingTo)
+end
+
 function base.depart(noDescend)
+    if _self.role == proto.ROLE.DELIVERY and _self.partnerId then
+        _self.holePendingTo, _self.holePendingAt = _self.partnerId, 0
+        atc.keepSupport(os.epoch("utc"))
+    end
     local ok, a, b = pcall(departImpl, noDescend)
+    _self.holePendingTo = nil
     atc.finish()
     atc.group = nil
     if not ok then error(a, 0) end
@@ -2257,6 +2277,7 @@ function departImpl(noDescend)
         if _self.partnerId then
             -- Signal support to start its departure route
             logInfo("At hole — signalling support to stage...")
+            _self.holePendingTo = nil
             local sig = proto.encode(proto.MSG.HOLE_READY, _self.id, _self.partnerId, {})
             proto.send(_self.modem, proto.CH_LOCAL, sig)
 
@@ -2298,17 +2319,29 @@ function departImpl(noDescend)
                 -- controlLoop also receives it via parallel and handles it there.
             end
             if base.isRecalled() then return true end
-            -- Going down without it: say so, so the support stands down instead of
-            -- following a turtle that has gone. One that went down anyway ended at
-            -- "Delivery ascending - holding position" and held the dispatch hole for
-            -- the rest of a 150-turtle run (w3_bay_types150, 2026-11-11).
-            if gaveUp then
-                logWarn(string.format("Support %s gave up (%s) -- going down alone",
-                    tostring(_self.partnerId), tostring(gaveUp)))
-            elseif not staged then
-                logWarn(string.format("Support %s never staged in %ds -- going down alone; told it to stand down",
-                    tostring(_self.partnerId), atc.stageWaitS()))
-                base.atc.signalSupport(proto.MSG.PARTNER_LEFT, _self.partnerId)
+            -- NEVER OUT WITHOUT ITS SUPPORT (2026-11-16, T2 shakeout-side-c). The
+            -- support is the delivery's chunk loader: a delivery that went down
+            -- alone travelled into ground nobody loaded and froze there (160,-2752,
+            -- 11 times in one run). So it does not go: it tells a support still
+            -- coming to stand down, goes home, and the job goes back to be sent
+            -- again with a support (departure_failed, recoverable). It does not
+            -- hold the dispatch hole meanwhile: the ATC booking is given back here.
+            if gaveUp or not staged then
+                local partner = _self.partnerId
+                if gaveUp then
+                    logWarn(string.format("Support %s gave up (%s) -- not going out without it; home, and the job goes back",
+                        tostring(partner), tostring(gaveUp)))
+                else
+                    logWarn(string.format("Support %s never staged in %ds -- not going out without it; told it to stand down",
+                        tostring(partner), atc.stageWaitS()))
+                    base.atc.signalSupport(proto.MSG.PARTNER_LEFT, partner)
+                end
+                -- Told already (or it told us): no JOB_ABORT from sendFailed, which
+                -- a support given a new job with this delivery would take as its own.
+                _self.partnerId = nil
+                atc.finish()
+                base.returnToDock()
+                return false, "support " .. tostring(partner) .. " not with me (" .. tostring(gaveUp or "never staged") .. ")"
             end
         end
 
@@ -2333,7 +2366,7 @@ function departImpl(noDescend)
         local booked, why = atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }),
             "departure", partnerGone)
         if not booked then
-            logWarn("Delivery " .. tostring(_self.partnerId) .. " went down without me -- staying docked")
+            logWarn("Delivery " .. tostring(_self.partnerId) .. " stood me down (not going out without me) -- staying docked")
             return false, why
         end
         local ok, err = move.followRoute(route)
@@ -2352,7 +2385,7 @@ function departImpl(noDescend)
         -- Its delivery may have gone down without it while it came: do not follow
         -- a turtle that has left -- back to the dock, and the job goes back.
         if partnerGone() then
-            logWarn("Delivery " .. tostring(_self.partnerId) .. " went down without me -- back to my dock, not down the hole")
+            logWarn("Delivery " .. tostring(_self.partnerId) .. " stood me down (not going out without me) -- back to my dock, not down the hole")
             atc.finish()
             base.returnToDock()
             return false, "partner_left"
@@ -4664,6 +4697,7 @@ function base.run(jobHandler)
             -- absent, and the only trace is that its clock moved while it
             -- did not.
             witnessTurn(now)
+            atc.keepSupport(now)
             if now - lastHeartbeatWall >= heartbeatTarget then
                 sendHeartbeat()
                 lastHeartbeatWall = now

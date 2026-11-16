@@ -14,6 +14,9 @@ local proto = require("protocol")
 local WAIT_FOR_HOLE = {
     [proto.MSG.HOLE_READY] = true,
     [proto.MSG.JOB_ABORT]  = true,
+    -- Its delivery is still coming, held by the ATC (2026-11-16, the one change
+    -- unfrozen in this file): each one restarts the wait below.
+    [proto.MSG.HOLE_PENDING] = true,
 }
 
 base.setCanDig(false)
@@ -77,6 +80,9 @@ local function supportJob(job)
                 print("JOB_ABORT received — delivery failed. Returning to dock.")
                 aborted = true
                 break
+            elseif msg.type == proto.MSG.HOLE_PENDING then
+                -- Still coming: give it the full wait again from now.
+                deadline = os.epoch("utc") / 1000 + holeTimeout
             end
         end
     end
