@@ -88,7 +88,9 @@ def steps(ctx):
     ctx.wait_until(lambda: False, max(0, 250 - int((datetime.datetime.now(datetime.timezone.utc)
                                                     - datetime.datetime.strptime(t_drop, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)).total_seconds())))
     ctx.wait_game(70)
-    after = [l for l in since("section(s) held", t_drop)]
+    # Only summaries from AFTER it docked count: in run b the one found was 5 s before it docked, and no later summary
+    # named it (its cancel had got through) -- a pass with nothing to judge. Run a's was 3 minutes after.
+    after = [l for l in since("section(s) held", docked[0][:19] if docked else t_drop) if not docked or l[:23] > docked[0][:23]]
     stale = [l for l in after if dname in l]
     ctx.expect(bool(stale), "the ATC still named %s once it was home: the stale booking the checks below judge (%s)"
                % (dname, stale[-1][-160:] if stale else "no summary named it -- nothing to judge"))
