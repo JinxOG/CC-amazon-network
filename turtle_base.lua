@@ -2199,6 +2199,47 @@ function atc.keepSupport(now)
     atc.signalSupport(proto.MSG.HOLE_PENDING, _self.holePendingTo)
 end
 
+-- THE SUPPORT DOES NOT STEP INTO THE HOLE CELL WHILE ITS DELIVERY STANDS IN IT
+-- (2026-11-16, T2 shakeout-side-d). SUPPORT_STAGED was sent once; a radio loss
+-- lost it, the delivery waited on at the hole, and the support stepped forward
+-- into it -- and inside the base a move blocked by a turtle waits for ever,
+-- deaf to its delivery standing it down. At 600 s the delivery turned for home
+-- through the support: each blocked the other's only way out, and no departure
+-- was let in again. So, standing at staging and facing the hole, it says
+-- SUPPORT_STAGED again every STAGED_REPEAT_S until the hole cell is empty (its
+-- delivery has gone down), and gives up -- home, the job goes back -- if its
+-- delivery stands it down (PARTNER_LEFT) or has not gone in STAGE_WAIT_S.
+-- Returns true when the cell is clear, else false and why.
+local STAGED_REPEAT_S = 5
+function atc.awaitHoleClear(partnerGone)
+    local hole = W.DISPATCH_HOLE
+    local dx, dz = hole.x - _self.pos.x, hole.z - _self.pos.z
+    local adjacent = _self.pos.y == hole.y and math.abs(dx) + math.abs(dz) == 1
+    if adjacent then move.face(dz < 0 and 0 or dx > 0 and 1 or dz > 0 and 2 or 3) end
+    local deadline = os.epoch("utc") / 1000 + atc.stageWaitS()
+    local nextSay, report = 0, nil
+    while true do
+        local now = os.epoch("utc") / 1000
+        if now >= nextSay then
+            nextSay = now + STAGED_REPEAT_S
+            proto.send(_self.modem, proto.CH_LOCAL, proto.encode(proto.MSG.SUPPORT_STAGED, _self.id, _self.partnerId, {}))
+        end
+        sleep(1)
+        if partnerGone() then return false, "partner_left" end
+        if base.isRecalled() then return false, "recalled" end
+        if not adjacent or not isTurtleBlock("forward") then return true end
+        if now >= deadline then
+            logWarn(string.format("Delivery %s still in the hole cell after %ds -- not stepping into it; home, the job goes back",
+                tostring(_self.partnerId), atc.stageWaitS()))
+            return false, "delivery_never_descended"
+        end
+        report = report or waitReporter(function()
+            return string.format("delivery %s still in the hole cell -- SUPPORT_STAGED repeated", tostring(_self.partnerId))
+        end, os.clock())
+        report(os.clock())
+    end
+end
+
 function base.depart(noDescend)
     if _self.role == proto.ROLE.DELIVERY and _self.partnerId then
         _self.holePendingTo, _self.holePendingAt = _self.partnerId, 0
@@ -2298,7 +2339,10 @@ function departImpl(noDescend)
                 local msg = base.receive(5)
                 if not msg then
                     -- timeout tick — keep waiting
-                elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId then
+                elseif msg.type == proto.MSG.SUPPORT_STAGED and msg.from == _self.partnerId
+                       and (tonumber(msg.ts) or 0) >= (_self.jobSince or 0) then
+                    -- From THIS job only: its support repeats SUPPORT_STAGED until the
+                    -- hole is clear (atc.awaitHoleClear), so copies are left over.
                     logInfo("Support staged — descending together.")
                     staged = true
                     break
@@ -2372,19 +2416,27 @@ function departImpl(noDescend)
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end
 
-        -- At staging position — tell delivery it can descend
+        -- At staging position — tell delivery it can descend, and wait for it to
+        -- go before stepping into the hole cell it stands in.
         if _self.partnerId then
             logInfo("Staged behind hole — signalling delivery to descend.")
-            local sig = proto.encode(proto.MSG.SUPPORT_STAGED, _self.id, _self.partnerId, {})
-            proto.send(_self.modem, proto.CH_LOCAL, sig)
+            local clear, why = atc.awaitHoleClear(partnerGone)
+            if not clear then
+                if why == "partner_left" then
+                    logWarn("Delivery " .. tostring(_self.partnerId) .. " stood me down (not going out without me) -- back to my dock, not down the hole")
+                end
+                atc.finish()
+                base.returnToDock()
+                return false, why
+            end
+        else
+            -- Brief pause so delivery starts descending first (clears the hole entrance)
+            sleep(1)
         end
-
-        -- Brief pause so delivery starts descending first (clears the hole entrance)
-        sleep(1)
 
         -- Its delivery may have gone down without it while it came: do not follow
         -- a turtle that has left -- back to the dock, and the job goes back.
-        if partnerGone() then
+        if _self.partnerId and partnerGone() then
             logWarn("Delivery " .. tostring(_self.partnerId) .. " stood me down (not going out without me) -- back to my dock, not down the hole")
             atc.finish()
             base.returnToDock()
