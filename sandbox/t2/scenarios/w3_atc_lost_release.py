@@ -97,7 +97,8 @@ def steps(ctx):
     ctx.dispatch("ORDER_DELIVERY", {"items": [{"name": "minecraft:cobblestone", "count": 16}], "destination": DEST})
     went2 = ctx.wait_until(lambda: [l for l in since("Dispatched job_", t2) if ("-> %s " % dname) in l], 600)
     ctx.expect(bool(went2), "the second delivery went to %s (%s)" % (dname, went2[:1] if went2 else "nothing"))
-    job2 = re.search(r"Dispatched (job_\d+)", went2[0]).group(1) if went2 else None
+    m2 = went2 and re.search(r"Dispatched (job_\d+) \[DELIVER\] -> node_\d+\s+support (job_\d+)", went2[0])
+    job2, sjob2 = (m2.group(1), m2.group(2)) if m2 else (None, None)
     admitted = ctx.wait_until(lambda: [l for l in since("admitted %s:" % dname, t2)], 900)
     ctx.wait_game(70)
     sums = [l for l in since("section(s) held", admitted[0][:19] if admitted else t2)]
@@ -105,8 +106,12 @@ def steps(ctx):
     ctx.expect(bool(admitted) and bool(sums) and not leftover,
                "once its departure was let in the ATC held no section of the old return for %s (%d summaries judged; %s)"
                % (dname, len(sums[:2]), leftover[0][-160:] if leftover else "none"))
-    done = ctx.wait_until(lambda: since("Job complete: %s" % job2, t2) if job2 else [], 3600)
-    ctx.expect(bool(done), "%s completed" % job2)
+    # The SERVER's "Job complete" lines, the delivery's and its support's: the warehouse logs "[WH] Job complete" as soon
+    # as it has served the delivery, minutes before either is home (run a's end checks ran while the support came in).
+    def server_done(j):
+        return [l for l in since("Job complete: %s" % j, t2) if "server#" in l] if j else []
+    done = ctx.wait_until(lambda: server_done(job2) and server_done(sjob2), 3600)
+    ctx.expect(bool(done), "%s and its support's %s completed (the server's lines)" % (job2, sjob2))
     for n in held:
         ctx.dispatch("RELEASE_TURTLE", {"turtleId": n})
     ctx.wait_game(120)
