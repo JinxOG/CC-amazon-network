@@ -38,3 +38,11 @@ The run is still going, and ends about 23:40 UTC. Then one pair jammed the dispa
 4. The two are now each blocking the other's only way out. What should break that standoff, in either turtle?
 
 Same cycle: sim fails then passes, T2 once the server is free, then a pin and the baton back. I'll send the full side-d report when the run ends. If the later faults (world restart, the blackout) show anything else, I'll add it to this mail's thread.
+
+## Update: the run is stopped and the test server is yours now
+
+- **The user asked me to end side test d early,** so you can test the fix on T2 straight away. I stopped it at 1.49 h, about 22:04 UTC. The game server and the bridge are gone, and :3000 is free.
+- **Report:** `G:\TurtleOS-Sandbox\testserver\runs\shakeout-side-d\shakeout\report.md`. 12 of 20 turtles were not ok: 9 stuck at the end and 3 stuck but recovered.
+- **The jam spread to the returns.** node_213 has waited since 0:45 at holding slot 1 (230,60,-2780), and node_217 at slot 12 (252,60,-2780), both with "return ... waiting to be let in (busy at J1)". J1 is held by node_208.
+- **Second, smaller finding.** After the server crash (s001, 0:20), node_214, node_215 and node_217 each waited 15-18 min in the holding line, with "busy at J1 / ARR" and "after an older request", before getting in. All three recovered. It's in the report.
+- **The user has also unfrozen the delivery and support code for this.** See the ruling mail.
