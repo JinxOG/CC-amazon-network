@@ -127,6 +127,11 @@ local function supportJob(job)
     print("Following " .. partnerId .. " (1 block behind)")
 
     local ascending = false
+    -- R4: when it last heard its delivery itself -- any message from it, its
+    -- PAIR_ALIVE every 20 s among them. Only its delivery's word, or its silence,
+    -- ends the follow; the server's online flag never does (side-e node_218).
+    local PARTNER_SILENT_S = 300
+    local heardAt = os.epoch("utc")
 
     while true do
         -- base.receive, not proto.receive. Left UNFILTERED, exactly as it was:
@@ -144,19 +149,24 @@ local function supportJob(job)
             break
         end
 
+        if msg and msg.from == partnerId then heardAt = os.epoch("utc") end
+        heardAt = math.max(heardAt, base.partnerHeardAt())
+        -- Its "come home", however it arrived (noted as it came in, R4).
+        if not (msg and msg.type == proto.MSG.RETURN_TO_DOCK) and base.partnerHome() then
+            msg = { type = proto.MSG.RETURN_TO_DOCK, from = partnerId, payload = {} }
+        end
+
         if not msg then
-            -- Timeout — if server is down just wait, don't abandon partner
-            if base.isServerDown() then
-                sleep(2)
-            else
-                local info = base.queryTurtle(partnerId, 5)
-                if not info or not info.online then
-                    print("Partner offline. Returning to dock.")
-                    break
-                elseif not info.jobId then
-                    print("Partner job complete. Returning to dock.")
-                    break
-                end
+            -- Its delivery says nothing for minutes while it waits for the
+            -- warehouse: that is not news. Only a long silence from the delivery
+            -- itself -- it sends PAIR_ALIVE every 20 s -- means it is gone: the
+            -- last line, for a delivery that really died. Asked instead, the
+            -- server answered "offline" for a delivery it had simply not heard
+            -- since its own crash (T2 shakeout-side-e, 02:13:29).
+            local silent = (os.epoch("utc") - heardAt) / 1000
+            if silent > PARTNER_SILENT_S then
+                print(string.format("Partner silent %ds -- taken for gone. Returning to dock.", math.floor(silent)))
+                break
             end
 
         elseif msg.from == partnerId then

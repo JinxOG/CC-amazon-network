@@ -103,7 +103,13 @@ function base.getPos()           return { x=_self.pos.x, y=_self.pos.y, z=_self.
 function base.getFacing()        return _self.facing     end
 function base.getDock()          return _self.dock       end
 function base.getPartnerId()     return _self.partnerId  end
-function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false end
+-- pairMate (R4): the job's partner, kept while partnerId is cleared for the ascent.
+function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false
+                                 _self.partnerHome = false; _self.partnerHeardAt = os.epoch("utc")
+                                 if id ~= nil then _self.pairMate = id end end
+-- R4: when its partner was last heard, and whether it said "come home" (firstSight).
+function base.partnerHeardAt()   return _self.partnerHeardAt or 0 end
+function base.partnerHome()      return _self.partnerHome == true end
 function base.partnerLeft()      return _self.partnerLeft == true end
 function base.setCanDig(val)     _self.canDig = val      end
 function base.isServerDown()     return _self.serverDown  end
@@ -357,6 +363,9 @@ local TRANSIENT_TYPES = {
     [proto.MSG.POSITION_UPDATE] = true,
     -- An ATC answer is for the step waiting on it right now; a late one is noise.
     [proto.MSG.ATC_REPLY]       = true,
+    -- A delivery's "I am here" (R4): read live by its following support; never
+    -- queued, so a support waiting on its dock for HOLE_READY is not filled with them.
+    [proto.MSG.PAIR_ALIVE]      = true,
 }
 
 local _ctrlInbox, _jobInbox = {}, {}
@@ -488,6 +497,12 @@ local function firstSight(msg)
     -- the booking wait never reads, and the support went down after a delivery
     -- that had gone (sandbox/scenarios/w3_atc_partner_left.lua, 2026-11-12).
     if msg.from ~= nil and msg.from == _self.partnerId then
+        -- R4: ANY WORD FROM ITS PARTNER, AND ITS "COME HOME", ARE NOTED HERE, where
+        -- every message passes whichever loop reads it. A support paused or mid-move
+        -- missed its delivery's PAIR_ALIVE (live-only) and its RETURN_TO_DOCK (sent
+        -- once) while the delivery went home without it (sim w3_pair_server_crash).
+        _self.partnerHeardAt = os.epoch("utc")
+        if msg.type == proto.MSG.RETURN_TO_DOCK then _self.partnerHome = true end
         if (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
            and type(msg.payload) == "table" and tonumber(msg.payload.slot) then
             _self.partnerSlot = tonumber(msg.payload.slot)
@@ -1857,10 +1872,14 @@ local function tryMove(digFn, dir)
     -- Not while homing, and never inside the base: there the ATC is the
     -- authority, and a turtle must be able to park with the server down (ATC
     -- card, requirement 7).
+    -- Nor a support following its delivery (R4): its delivery decides where it
+    -- goes, and a delivery on its way home does not pause; paused, the support
+    -- was left behind and the pair split (sim w3_pair_server_crash).
     while _self.serverDown
           and not _self.inSkyReturn
           and not _self.autonomousReturn
           and not _self.homing
+          and not (_self.role == proto.ROLE.SUPPORT and _self.partnerId)
           and not (atc.ENABLED and atc.here()) do
         -- Escape hatch for a solo miner holding a placed loader (see
         -- base.setServerDownEscape). nil for every other role, so their loop
@@ -2232,6 +2251,23 @@ local departImpl
 -- every HOLE_PENDING_MS; each one restarts the support's 180 s. A delivery that has
 -- died says nothing, and its support gives up as before.
 local HOLE_PENDING_MS = 20000
+-- R4 (docs/superpowers/specs/2026-11-17-delivery-pair-and-hole-design.md): A
+-- PAIR KEEPS TOGETHER ON ITS OWN WORD. A following support that heard nothing for
+-- 15 s asked the server whether its delivery was online; back from a crash, the
+-- server had not heard the delivery again yet, said "offline", and the support --
+-- which cannot dig -- went home alone (T2 shakeout-side-e, node_218, 02:13:29:
+-- the start of jam 2 and of every stranded support). So for the whole of its job
+-- the delivery tells its support it is there, every PAIR_ALIVE_MS, over the
+-- turtles' own radio -- no server in it. _self.pairMate is its support for the
+-- job; _self.partnerId is cleared while it delivers and is not this.
+local PAIR_ALIVE_MS = 20000
+function atc.keepPair(now)
+    if _self.role ~= proto.ROLE.DELIVERY or not _self.pairMate or not _self.jobId then return end
+    if now - (_self.pairAliveAt or 0) < PAIR_ALIVE_MS then return end
+    _self.pairAliveAt = now
+    atc.signalSupport(proto.MSG.PAIR_ALIVE, _self.pairMate)
+end
+
 function atc.keepSupport(now)
     if not _self.holePendingTo or now - (_self.holePendingAt or 0) < HOLE_PENDING_MS then return end
     _self.holePendingAt = now
@@ -4834,6 +4870,7 @@ function base.run(jobHandler)
             -- did not.
             witnessTurn(now)
             atc.keepSupport(now)
+            atc.keepPair(now)
             if now - lastHeartbeatWall >= heartbeatTarget then
                 sendHeartbeat()
                 lastHeartbeatWall = now

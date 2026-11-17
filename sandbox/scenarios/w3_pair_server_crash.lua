@@ -6,7 +6,8 @@
 -- Design: docs/superpowers/specs/2026-11-17-delivery-pair-and-hole-design.md, rule R4 (a support leaves its delivery
 -- only on the delivery's own word, never on the server's online flag).
 --
--- Here: one pair; once the support is following its delivery out in the world, the server crashes for 90 s.
+-- Here: one pair; once the delivery is up at its destination and its support holds below it, the server crashes
+-- for 90 s.
 -- CHECKS: the server went down while the support was following (evidence); the support never left its delivery on
 -- the server's word ("Partner offline"); it never had to find its own way home (no retrace, no "way home is shut");
 -- the delivery completed; both are on a dock at the end; the ATC holds nothing.
@@ -33,6 +34,7 @@ return {
   steps = function(sim)
     local dispatched = sim:capture_log("Dispatched job_")
     local follow = sim:capture_log("Following node_")
+    local holding = sim:capture_log("holding position")
     local offline = sim:capture_log("Partner offline")
     local retrace = sim:capture_log("retracing the")
     local shut = sim:capture_log("way home is shut")
@@ -53,6 +55,9 @@ return {
       return out
     end
     local following = sim:run_until(function() return #by(follow.lines, s) >= 1 end, 20 * 60000)
+    -- As in side-e: the delivery is up at its destination, delivering, and the support holds below it, hearing
+    -- nothing from it for a while (node_218 at 02:12:09 "holding position", the crash at 02:13).
+    sim:run_until(function() return #by(holding.lines, s) >= 1 end, 20 * 60000)
     sim:run_for(5000)
     -- THE FAULT: the server is down 90 s while the pair is out.
     sim:server_crash(sim.clock:now() - sim.t0, 90000)
