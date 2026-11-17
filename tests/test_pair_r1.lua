@@ -156,4 +156,46 @@ return {
         restore()
         assert_eq(partner, "node_s", "the job sent again carries its support")
     end,
+
+    -- R4, 2026-11-17 (sim w3_side_atc): the warehouse recalled a delivery already on its way home; its job went back,
+    -- and the server recalled its support as "stale" -- out in the world, alone, it could not get home (it cannot dig).
+    -- A support whose delivery is still out is brought home by it; it is recalled only once its delivery is home.
+    ["a support whose delivery is still out is not recalled as stale; once the delivery is home it is"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 254, y = 60, z = -2780 }, proto.STATUS.RETURNING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 254, y = 60, z = -2781 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "PENDING"          -- the delivery's job went back (a warehouse recall)
+        T.state.jobs["job_0010"].assignedTo = nil
+        T.state.jobs["job_0011"].status = "IN_PROGRESS"
+        T.checkStaleSupports()
+        local whileOut = T.state.jobs["job_0011"].status
+        T.state.registry["node_d"].position = { x = 153, y = 67, z = -2806 }   -- home
+        T.checkStaleSupports()
+        local whenHome = T.state.jobs["job_0011"].status
+        restore()
+        assert_eq(whileOut, "IN_PROGRESS", "its delivery is out, bringing it home: it is left with it")
+        assert_eq(whenHome ~= "IN_PROGRESS", true, "its delivery home: the stale support job ends (" .. tostring(whenHome) .. ")")
+    end,
+
+    -- 2026-11-17 (sim w3_side_atc, job_0035): both halves accepted, then the server went down; the support's wait to
+    -- be let out with its delivery gave up (departure_failed, recoverable) and jobQueue.fail requeued its half ALONE.
+    -- The delivery, still on its dock, asked the ATC "waiting for partner" for 4 h, and as the oldest waiter held the
+    -- whole return line. A support half that fails goes the way of reassign: the pair is off, the delivery is told.
+    ["a support half that fails while its delivery is on its dock calls the pair off; its half is not requeued alone"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.TRAVELLING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 153, y = 67, z = -2797 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.jobQueue.acknowledge("job_0010", "node_d", true)
+        T.jobQueue.acknowledge("job_0011", "node_s", true)
+        T.sent = {}
+        T.jobQueue.fail("job_0011", "departure_failed: no_word_from_delivery", true)
+        local master, support = T.state.jobs["job_0010"], T.state.jobs["job_0011"]
+        local told = sentTo(T, proto.MSG.PAIR_CANCEL, "node_d")
+        restore()
+        assert_eq(support.status ~= "PENDING", true, "the support's half is not left in the queue alone (" .. tostring(support.status) .. ")")
+        assert_eq(told, 1, "the delivery is told the pair is off")
+        assert_eq(master.status, "PENDING", "the delivery's job goes back to be paired again")
+    end,
 }

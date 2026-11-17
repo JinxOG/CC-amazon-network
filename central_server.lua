@@ -3050,6 +3050,19 @@ function jobQueue.fail(jobId, reason, recoverable)
         end
     end
 
+    -- A PAIR'S SUPPORT HALF THAT FAILS IS NEVER RETRIED ALONE (2026-11-17, sim
+    -- w3_side_atc, job_0035). Its wait to be let out with its delivery gave up in a
+    -- server outage; retried here, its half sat PENDING while the delivery, on its
+    -- dock, asked the ATC "waiting for partner" for 4 h -- the oldest waiter, it
+    -- held the whole return line. reassign calls the pair off and tells the
+    -- delivery, or, once the pair has gone, simply ends the support's half.
+    if job.type == proto.JOB.SUPPORT_FOLLOW and not job.cancelledByOperator
+       and (jobQueue.pairOf(job) or (job.params and job.params.masterJobId)) then
+        logWarn(string.format("Job %s (support half) failed: %s", jobId, tostring(reason)))
+        jobQueue.reassign(jobId, job.assignedTo, "failed: " .. tostring(reason))
+        return
+    end
+
     -- A REFUSAL IS NOT THE SECTOR'S FAULT.
     --
     -- 2026-09-18, the GPS outage: node_138 refused three re-dispatches with
@@ -5459,7 +5472,21 @@ local function checkStaleSupports()
             local masterActive = master
                 and (master.status == JOB_STATUS.ASSIGNED
                   or master.status == JOB_STATUS.IN_PROGRESS)
-            if not masterActive then
+            -- ITS DELIVERY BRINGS IT HOME (R4, 2026-11-17). A delivery recalled on its
+            -- way home -- a warehouse timeout -- has its job sent back; recalled as
+            -- stale, its support went home alone and, unable to dig, stayed in the
+            -- tunnel (sim w3_side_atc, node_56). While its delivery is out and online
+            -- the support stays with it (RETURN_TO_DOCK is repeated until heard); it
+            -- is recalled once its delivery is home, or gone.
+            local partner = job.params.partnerId and state.registry[job.params.partnerId]
+            local partnerOut = partner and partner.online and not registry.atDock(partner)
+            if not masterActive and partnerOut then
+                if not job.staleWaitNoted then
+                    job.staleWaitNoted = true
+                    logInfo(string.format("Support %s: master %s inactive, but its delivery %s is still out -- left with it",
+                        job.id, job.params.masterJobId, tostring(job.params.partnerId)))
+                end
+            elseif not masterActive then
                 logWarn(string.format(
                     "Stale support %s — master %s inactive, recalling",
                     job.id, job.params.masterJobId))
@@ -7598,6 +7625,7 @@ end
 -- state and registry are locals; jobQueue is already a global (line 655).
 if _G.__CC_SERVER_TEST then
     server._test = {
+        checkStaleSupports = checkStaleSupports,
         state    = state,
         bridgeJson = bridgeJson,
         registry = registry,

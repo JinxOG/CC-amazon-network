@@ -4494,10 +4494,13 @@ function base.sendFailed(reason, recoverable)
     -- alone, through rock -- 6 of 8 stranded in the side-test sim (w3_side_atc).
     -- So the failure waits: the job runner takes it home exactly as after a
     -- delivery (DESCENDED, then the support follows, ASCENDING and RETURN_TO_DOCK
-    -- name the holding slot), and says the job failed once it is docked. Not a
-    -- recall: the job code brings the turtle home itself then.
+    -- name the holding slot), and says the job failed once it is docked.
+    -- A RECALL TOO (R4, 2026-11-17): recalled out in the world -- the warehouse's
+    -- timeout recalled one already on its way home -- it sent its support JOB_ABORT
+    -- and dropped it, and the support went home alone and stayed in the tunnel (sim
+    -- w3_pair_recalled_home). The job code brings it home with its partner kept.
     if _self.role == proto.ROLE.DELIVERY and _self.partnerId and _self.jobId and not _self.failLater
-       and tostring(reason) ~= "recalled" and not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) then
+       and not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) then
         _self.failLater = { reason = reason, recoverable = recoverable, partner = _self.partnerId }
         logWarn(string.format("Job %s failed (%s) at %d,%d,%d -- bringing support %s home first, then reporting it",
             tostring(_self.jobId), tostring(reason), _self.pos.x, _self.pos.y, _self.pos.z, tostring(_self.partnerId)))

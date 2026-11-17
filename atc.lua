@@ -203,7 +203,13 @@ local function olderWaiterOverlaps(st, list, id, now, cur)
         local theirLine = lineOf(w.list)
         local myTurn = myLine ~= nil and theirLine ~= nil and myLine ~= theirLine and st.lastLine == theirLine
         local sameParty = myGroup ~= nil and w.group == myGroup
-        if other ~= id and w.since < since and now - w.at < 10000 and not myTurn and not sameParty then
+        -- HALF A PAIR IS AHEAD OF NOBODY (2026-11-17, sim w3_side_atc): it cannot go
+        -- until its partner asks too, so until then it holds nobody back. node_36,
+        -- its support gone, asked "waiting for partner" from its dock for 4 h and
+        -- stopped the whole return line with no section held.
+        local pw = w.pair and st.waiting[w.pair]
+        local halfPair = w.pair ~= nil and not (pw and pw.pair == other and now - (pw.at or 0) <= CFG.PAIR_FRESH_MS)
+        if other ~= id and w.since < since and now - w.at < 10000 and not myTurn and not sameParty and not halfPair then
             local waitsForMe = false
             for _, a in ipairs(w.list) do if holds[a] then waitsForMe = true end end
             if not waitsForMe then

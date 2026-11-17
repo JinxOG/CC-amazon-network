@@ -644,4 +644,18 @@ return {
         assert_eq(core.handle(st, "r1", { op = "request", route = RET }, t + 1000).ok, true,
             "another return, nobody in the other line: it goes, though a return went last")
     end,
+
+    -- 2026-11-17 (sim w3_side_atc): node_36's support had left the pair; node_36 asked from its dock "waiting for
+    -- partner" for 4 h, and as the oldest waiter held back every return whose way crossed its own -- the return line
+    -- stopped with no section held. Half a pair cannot go, so it is ahead of nobody until both halves are asking.
+    ["half a pair waiting for its partner holds back nobody"] = function(assert_eq)
+        local core, st, t = live()
+        local RET = { "ARR", "R5", "J5", "R4", "J4", "R3", "J3", "R2", "J2", "R1", "J1", "S1" }
+        st.lastLine = "return"                       -- the departures' turn: an older departure would go first
+        local d = core.handle(st, "del", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "del", pair = "sup" }, t)
+        assert_eq(d.why, "waiting for partner", "the delivery asks alone")
+        core.handle(st, "del", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "del", pair = "sup" }, t + 2000)
+        local r = core.handle(st, "r1", { op = "request", route = RET }, t + 3000)
+        assert_eq(r.ok, true, "a return whose way crosses the delivery's is let in (" .. tostring(r.why) .. ")")
+    end,
 }
