@@ -1784,6 +1784,7 @@ function atc.stalled(why)
     if _self.jobId then
         comms.toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(_self.jobId, "stuck: " .. why, true))
         _self.jobId = nil
+        atc.handedBack = true      -- the blocked move in the base gives way (tryMove)
     end
     _self.status = proto.STATUS.ERROR
     comms.toServer(proto.MSG.STATUS_UPDATE, proto.payloadStatusUpdate(nil, proto.STATUS.ERROR,
@@ -1795,6 +1796,7 @@ end
 -- in the queue and stays there.
 function atc.progressed()
     atc.stallAt = nil
+    atc.handedBack = nil
     if not atc.stuckSent then return end
     atc.stuckSent = false
     _self.status = (atc.statusBefore and atc.statusBefore ~= proto.STATUS.ERROR) and atc.statusBefore or proto.STATUS.IDLE
@@ -2120,6 +2122,15 @@ local function tryMove(digFn, dir)
                 if okR and revived and inBase then return false, "turned on a stopped turtle in my way -- giving way" end
             end
             if inBase then atc.stalled("blocked by a turtle moving " .. dir); atc.keepAlive() end
+            -- ITS JOB HANDED BACK, IT GIVES WAY (the card "a turtle that handed its job
+            -- back on STUCK carries on with the job"; sim w3_side_atc 2026-11-17). node_36
+            -- handed job_0035 back and waited on to move forward, for a job no longer its
+            -- own, telling its support "still coming" for 4 h. The trip ends here: a
+            -- departure fails (its support is told), any other trip goes home.
+            if inBase and atc.handedBack then
+                atc.handedBack = nil
+                return false, "stuck: my job is handed back -- giving way"
+            end
             blockReport = blockReport or waitReporter(function()
                 return string.format("a turtle is blocking %s at %d,%d,%d (%d attempts)",
                     dir, _self.pos.x, _self.pos.y, _self.pos.z, turtleWaits)
@@ -2388,6 +2399,24 @@ function atc.keepPair(now)
     atc.signalSupport(proto.MSG.PAIR_ALIVE, _self.pairMate)
 end
 
+-- IS MY PAIR STILL ON? (2026-11-17, sim w3_side_atc). A delivery waiting on its
+-- dock to be let out with its support stops when the server calls the pair off
+-- (PAIR_CANCEL) -- told once, and a blackout lost it: node_36 waited 39 min for a
+-- support that had a new job, then 600 s at the hole. So while it waits it asks
+-- (PAIR_ASK, every PAIR_ASK_MS); the server answers PAIR_CANCEL when the job is no
+-- longer its pair's. The giveUp of its departure booking: "pair_cancelled" or nil.
+local PAIR_ASK_MS = 10000
+function atc.pairStillOn()
+    if _self.pairCancelled then return "pair_cancelled" end
+    if not (_self.partnerId and _self.jobId) or _self.serverDown then return nil end
+    local now = os.epoch("utc")
+    if now - (_self.pairAskedAt or 0) >= PAIR_ASK_MS then
+        _self.pairAskedAt = now
+        comms.toServer(proto.MSG.PAIR_ASK, { jobId = _self.jobId })
+    end
+    return nil
+end
+
 function atc.keepSupport(now)
     if not _self.holePendingTo or now - (_self.holePendingAt or 0) < HOLE_PENDING_MS then return end
     _self.holePendingAt = now
@@ -2592,7 +2621,7 @@ function departImpl(noDescend)
         -- R2: let out only with its support, as one unit (atc.lua); it waits here, on
         -- its dock. A pair the server called off (its support dropped out) ends it.
         atc.pair = _self.partnerId
-        local bookedOut, whyNot = atc.book(route, "departure", function() return _self.pairCancelled and "pair_cancelled" end)
+        local bookedOut, whyNot = atc.book(route, "departure", atc.pairStillOn)
         if not bookedOut then return false, whyNot end
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end

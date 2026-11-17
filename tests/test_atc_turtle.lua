@@ -200,4 +200,62 @@ return {
         assert_eq(inHole, 1, "standing in DH: it says it is there")
         assert_eq(docked, 0, "on its dock with nothing booked: nothing to say")
     end,
+
+    -- The card "A turtle that handed its job back on STUCK carries on with the job when it can move again" (sim
+    -- w3_side_atc, 2026-11-14 and 2026-11-17). Blocked in the base, node_36 said STUCK and handed job_0035 back -- and
+    -- went on waiting to move forward, for a job that was no longer its own, telling its support "still coming" for
+    -- 4 h. Its job handed back, a turtle in the base gives way: the trip ends here, and it goes home.
+    ["a turtle that handed its job back while blocked in the base gives way instead of waiting on for it"] = function(assert_eq)
+        local c = stub.install({ pos = { x = 150, y = 67, z = -2803, facing = 1 },
+            world = { ["151,67,-2803"] = "computercraft:turtle_normal" } })     -- W1, a turtle ahead in the lane
+        gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"] = nil
+        local base = require("turtle_base")
+        peripheral.find = function()
+            return { transmit = function() end, open = function() end, isOpen = function() return true end, close = function() end }
+        end
+        base.recoverModem()
+        local proto = require("protocol")
+        local savedSleep = sleep
+        local tries = 0
+        sleep = function() tries = tries + 1; if tries > 200 then error("never gave way", 0) end end
+        base.setPosForTest({ x = 150, y = 67, z = -2803 })
+        base.setStatus(proto.STATUS.TRAVELLING, "job_0035")
+        base.atc.ENABLED = true
+        base.atc.stallAt = os.clock() - base.atc.STUCK_S - 1     -- blocked long enough: the stuck rule fires now
+        local ok, moved, why = pcall(base.move.forward)
+        sleep = savedSleep
+        assert_eq(ok, true, "it did not wait on for ever (" .. tostring(moved) .. ")")
+        assert_eq(moved, false, "it did not move")
+        assert_eq(tostring(why):find("handed", 1, true) ~= nil, true, "and says why: " .. tostring(why))
+    end,
+
+    -- 2026-11-17 (sim w3_side_atc): node_56 dropped out of its pair in a blackout; the server called the pair off and
+    -- told node_36 ONCE, and the blackout lost it. node_36 waited 39 min on its dock to be let out with a support that
+    -- had a new job, then went to the hole alone and waited 600 s for it ("never staged"). Waiting to be let out with
+    -- its support, a delivery asks the server whether its pair is still on (PAIR_ASK, every 10 s): the answer is
+    -- PAIR_CANCEL when it is not, so one lost word is asked again.
+    ["a delivery waiting on its dock asks whether its pair is still on, and stops when told it is off"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base.setRoleForTest(proto.ROLE.DELIVERY)
+        base.setStatus(proto.STATUS.TRAVELLING, "job_0035")
+        base.setPartnerId("node_56")
+        local function asks()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find("PAIR_ASK", 1, true) then n = n + 1 end end
+            return n
+        end
+        local first = base.atc.pairStillOn()
+        local again = base.atc.pairStillOn()
+        local askedOnce = asks()
+        os.queueEvent("modem_message", "top", 1, 1, proto.encode(proto.MSG.PAIR_CANCEL, "server", "broadcast", { jobId = "job_0035" }), 5)
+        pcall(base.receive, 1)     -- noted on sight; the receive then waits for more
+        local after = base.atc.pairStillOn()
+        assert_eq(first, nil, "nothing heard yet: it waits on")
+        assert_eq(again, nil)
+        assert_eq(askedOnce, 1, "it asked, and not again within 10 s")
+        assert_eq(after, "pair_cancelled", "told the pair is off: it stops waiting")
+    end,
 }
