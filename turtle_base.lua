@@ -2088,6 +2088,20 @@ local function tryMove(digFn, dir)
                 return false, "blocked by turtle (" .. dir .. ")"
             end
             turtleWaits = turtleWaits + 1
+            -- A TURTLE THAT IS OFF IS TURNED BACK ON (2026-11-17, T2 shakeout-side-f).
+            -- CC's timeout terminates a computer where it stands, and a terminated
+            -- one stays off: dead #210 plugged the departure lane and node_211 bumped
+            -- it 323 times. A turtle next to another computer can turn it on (it is a
+            -- peripheral), and then it boots and recovers like any rebooted turtle.
+            -- Once per blocked step: a turtle that is on is simply waited for.
+            -- In the base the one turned on must get home through a one-block lane
+            -- this turtle stands in: it gives way -- its trip ends here (a departure
+            -- fails and is paired again; any other trip goes home first) -- rather
+            -- than meet it head-on (sim w3_dead_turtle_lane).
+            if turtleWaits == 1 then
+                local okR, revived = pcall(base.reviveIfOff, dir)
+                if okR and revived and inBase then return false, "turned on a stopped turtle in my way -- giving way" end
+            end
             if inBase then atc.stalled("blocked by a turtle moving " .. dir); atc.keepAlive() end
             blockReport = blockReport or waitReporter(function()
                 return string.format("a turtle is blocking %s at %d,%d,%d (%d attempts)",
@@ -2472,6 +2486,18 @@ function base.prebookDeparture()
         "departure (with my delivery)", giveUp)
     atc.pair = nil
     return booked, why
+end
+
+local REVIVE_SIDE = { forward = "front", up = "top", down = "bottom" }
+function base.reviveIfOff(dir)
+    local side = REVIVE_SIDE[dir]
+    if not side or peripheral.getType(side) ~= "turtle" then return false end
+    if peripheral.call(side, "isOn") ~= false then return false end
+    local who = peripheral.call(side, "getID")
+    peripheral.call(side, "turnOn")
+    logWarn(string.format("A turtle (#%s) in my way %s at %d,%d,%d was OFF -- turned it back on",
+        tostring(who), dir, _self.pos.x, _self.pos.y, _self.pos.z))
+    return true
 end
 
 function base.depart(noDescend)
