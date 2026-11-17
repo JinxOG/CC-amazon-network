@@ -611,6 +611,13 @@ function registry.update(id, status, fuel, position, jobId, version)
     t.fuel     = fuel     or t.fuel
     t.position = position or t.position
     t.jobId    = jobId
+    -- DOCKED SINCE ITS LAST JOB (R1, 2026-11-17): idle, no job, and reporting from
+    -- its own dock. Being given a job clears it (jobQueue.assign). A turtle whose
+    -- job ended out in the world -- side-e's node_218, JOB_COMPLETE 200 blocks
+    -- from home -- is IDLE but not this, so it is not offered work until it is home.
+    if t.dock and t.status == proto.STATUS.IDLE and t.jobId == nil and registry.atDock(t) then
+        t.dockedSinceJob = true
+    end
     t.lastSeen = os.epoch("utc")
     t.online   = true
     t.offlineSince = nil   -- back online via heartbeat — don't prune
@@ -660,6 +667,12 @@ function registry.versionMismatchCount()
     return n
 end
 
+-- Its last reported position is its own dock (the floor's x and z; a dock is one cell).
+function registry.atDock(t)
+    local p, d = t.position, t.dock
+    return p ~= nil and d ~= nil and p.x == d.x and p.z == d.z
+end
+
 function registry.getIdle(role)
     local now = os.epoch("utc")
     local result = {}
@@ -691,9 +704,17 @@ function registry.getIdle(role)
             and not (t.updateSentAt and now - t.updateSentAt < CFG.UPDATE_REBOOT_MS)
         -- An operator's hold (registry.hold): until released, whatever else.
         local heldOk = not (state.operatorHolds and state.operatorHolds[t.id])
+        -- A PAIR ONLY FROM TWO DOCKED TURTLES (R1, docs/superpowers/specs/2026-11-17-
+        -- delivery-pair-and-hole-design.md). side-e jam 1: node_218 was paired 23 ms
+        -- after its job ended, still out on the returns side; it refused, and the
+        -- delivery held the dispatch hole 600 s for a support that never came. A
+        -- delivery or support is idle only on its own dock, having reported from it
+        -- since its last job. Miners keep their own rule (W1's).
+        local dockOk = not (t.role == proto.ROLE.DELIVERY or t.role == proto.ROLE.SUPPORT)
+            or (t.dockedSinceJob == true and registry.atDock(t))
         if t.online and t.status == proto.STATUS.IDLE
                     and (role == nil or t.role == role)
-                    and fuelOk and blockedOk and updatingOk and heldOk then
+                    and fuelOk and blockedOk and updatingOk and heldOk and dockOk then
             table.insert(result, t)
         end
     end
@@ -2700,6 +2721,7 @@ function jobQueue.assign(jobId, turtleId)
     job.ackBy      = os.epoch("utc") + (CFG.ACK_TIMEOUT * 1000)
     turtle.status  = proto.STATUS.TRAVELLING
     turtle.jobId   = jobId
+    turtle.dockedSinceJob = false     -- R1: idle again only once it reports from its dock
     -- This JOB_ASSIGN supersedes any re-send held since a reboot. A stale one
     -- firing on the next heartbeat is a second copy of a job already running,
     -- answered "busy" and read as a rejection (T2 world-restart-gps-late-1x,
@@ -2710,6 +2732,35 @@ function jobQueue.assign(jobId, turtleId)
     return true
 end
 
+-- The pair a job belongs to: the delivery's job, which holds the record (R1).
+function jobQueue.pairOf(job)
+    if not job then return nil end
+    if job.pair then return job end
+    local m = job.params and job.params.masterJobId and state.jobs[job.params.masterJobId]
+    if m and m.pair and m.pair.support == job.id then return m end
+    return nil
+end
+
+-- Both halves have accepted: tell the delivery to go. Once.
+function jobQueue.pairGo(master)
+    local p = master.pair
+    if p.go or not (p.acked[master.id] and p.acked[p.support]) then return end
+    p.go = true
+    if master.assignedTo then sendTo(master.assignedTo, proto.MSG.PAIR_GO, { jobId = master.id }) end
+    logInfo(string.format("Pair %s: both halves accepted -- go", master.id))
+end
+
+-- The pair is off before it moved: the delivery is told, the warehouse lets the
+-- job go, and the job goes back to be paired again from docked turtles. reassign
+-- cancels the support's half with it (the delivery's linkedJob).
+function jobQueue.pairCancel(master, why)
+    local who = master.assignedTo
+    if who then sendTo(who, proto.MSG.PAIR_CANCEL, { jobId = master.id, reason = why }) end
+    logWarn(string.format("Pair %s off before it moved (%s) -- back to be paired again", master.id, tostring(why)))
+    master.pair = nil
+    jobQueue.reassign(master.id, who, "pair: " .. tostring(why))
+end
+
 function jobQueue.acknowledge(jobId, turtleId, accepted, reason)
     local job = state.jobs[jobId]
     if not job then return end
@@ -2718,6 +2769,8 @@ function jobQueue.acknowledge(jobId, turtleId, accepted, reason)
         job.updatedAt = os.epoch("utc")
         jobQueue._hist(jobId, "ack", turtleId)
         logInfo(string.format("Job %s accepted by %s", jobId, turtleId))
+        local master = jobQueue.pairOf(job)
+        if master then master.pair.acked[jobId] = true; jobQueue.pairGo(master) end
     else
         -- A "busy" from the turtle that has ALREADY ACCEPTED this very job is a
         -- second copy of the order arriving -- a re-send held since a
@@ -3112,6 +3165,34 @@ end
 function jobQueue.reassign(jobId, fromId, reason)
     local job = state.jobs[jobId]
     if not job then return end
+    -- A PAIR'S SUPPORT HALF IS NEVER REQUEUED ALONE (R1). Nothing pairs a lone
+    -- SUPPORT_FOLLOW: side-e's job_0241 sat PENDING for good while its delivery
+    -- held the dispatch hole 600 s. Before the pair moved, the whole pair is off
+    -- and re-paired; once it has gone, the support's job simply ends.
+    if job.type == proto.JOB.SUPPORT_FOLLOW then
+        local master = jobQueue.pairOf(job)
+        local t0 = state.registry[fromId or ""]
+        if t0 then t0.status = proto.STATUS.IDLE; t0.jobId = nil end
+        if master and not master.pair.go then
+            jobQueue.pairCancel(master, "support " .. tostring(fromId) .. " " .. tostring(reason))
+            return
+        end
+        if master or (job.params and job.params.masterJobId) then
+            job.status    = JOB_STATUS.CANCELLED
+            job.updatedAt = os.epoch("utc")
+            jobQueue._hist(jobId, "cancelled", "support half, " .. tostring(reason))
+            logWarn(string.format("Job %s (support half of %s) ended: %s -- not requeued alone",
+                jobId, tostring(job.params and job.params.masterJobId), tostring(reason)))
+            saveJobs()
+            return
+        end
+    end
+    -- A delivery's job let go before it was served: the warehouse drops it too.
+    if job.type == proto.JOB.DELIVER then
+        job.pair = nil
+        proto.send(state.modem, proto.CH_WAREHOUSE,
+            proto.encode(proto.MSG.JOB_ABORT, "server", "warehouse", { jobId = jobId }))
+    end
     -- Reset the dead turtle's registry entry so it doesn't stay stuck at
     -- TRAVELLING/RETURNING and get excluded from future idle-turtle selection.
     local t = state.registry[fromId or ""]
@@ -3925,6 +4006,8 @@ function dispatcher.tick()
 
                 -- Link the two jobs
                 job.linkedJob = supportJobId
+                -- R1: the pair moves only once both have accepted (PAIR_GO).
+                job.pair = { support = supportJobId, acked = {} }
                 -- NOTE: support job intentionally has no linkedJob — prevents cancelJob() back-cycle
 
                 -- Assign support
@@ -4939,6 +5022,23 @@ handlers[proto.MSG.STORAGE_DIGEST] = function(msg)
         state.lastLoggedDigestN = state.storageItemCount
     end
 
+end
+
+-- R1: a delivery waiting at its dock asks whether its pair is on. Go once both
+-- halves have accepted; off if the job is no longer its; nothing while one half
+-- has yet to answer. A job with no pair record (dispatched before a restart that
+-- predates it) is on.
+handlers[proto.MSG.PAIR_ASK] = function(msg)
+    local id = msg.payload and msg.payload.jobId
+    local job = id and state.jobs[id]
+    if not job or job.assignedTo ~= msg.from
+       or not (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
+        sendTo(msg.from, proto.MSG.PAIR_CANCEL, { jobId = id, reason = "not your job any more" })
+        return
+    end
+    if not job.pair or job.pair.go then
+        sendTo(msg.from, proto.MSG.PAIR_GO, { jobId = id })
+    end
 end
 
 handlers[proto.MSG.ITEM_REQUEST] = function(msg)

@@ -1386,10 +1386,12 @@ return {
         local _, T, _, restore = serverWithMinerOnJob()
         T.state.registry["node_109"] = { id = "node_109", role = proto.ROLE.DELIVERY,
             status = proto.STATUS.IDLE, fuel = 100000, online = true, lastSeen = 1000000,
-            position = { x = 150, y = 67, z = -2800 } }
+            position = { x = 150, y = 67, z = -2800 },
+            dock = { x = 150, z = -2800 }, dockedSinceJob = true }      -- R1: only docked turtles are paired
         T.state.registry["node_94"] = { id = "node_94", role = proto.ROLE.SUPPORT,
             status = proto.STATUS.IDLE, fuel = 100000, online = true, lastSeen = 1000000,
-            position = { x = 154, y = 67, z = -2793 } }
+            position = { x = 154, y = 67, z = -2793 },
+            dock = { x = 154, z = -2793 }, dockedSinceJob = true }
         T.state.lastDispatchTime = 0
         local jid = T.jobQueue.add(proto.JOB.DELIVER, {
             destination = { x = 327, y = 67, z = -2742 },

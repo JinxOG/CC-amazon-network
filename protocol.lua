@@ -57,6 +57,10 @@ proto.MSG = {
     HOLE_READY     = "HOLE_READY",      -- delivery → support: I'm at the hole, come now
     PARTNER_LEFT   = "PARTNER_LEFT",    -- delivery → support: I am not going out with you; stand down, go home
     HOLE_PENDING   = "HOLE_PENDING",    -- delivery → support: still on my way to the hole (the ATC is holding me); wait on
+    -- A pair moves only once both halves have accepted (docs/superpowers/specs/2026-11-17-delivery-pair-and-hole-design.md, R1)
+    PAIR_GO        = "PAIR_GO",         -- server → delivery: your support has accepted too; go
+    PAIR_CANCEL    = "PAIR_CANCEL",     -- server → delivery: the pair is off (a half refused or dropped); stay docked
+    PAIR_ASK       = "PAIR_ASK",        -- delivery → server: is my pair on? (answered PAIR_GO, PAIR_CANCEL, or not yet)
 
     -- Server → turtle heartbeat acknowledgement
     HEARTBEAT_ACK  = "HEARTBEAT_ACK",   -- server → turtle: I'm alive, you're still registered

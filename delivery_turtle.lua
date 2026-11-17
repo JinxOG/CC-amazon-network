@@ -280,6 +280,14 @@ local ok, err = pcall(base.run, function(job)
     print("Scanning protected slots...")
     local protected = buildProtectedSlots()
 
+    -- R1: nothing -- not the warehouse, not the ATC -- until its support has
+    -- accepted too. A pair called off goes back to be paired again; this turtle
+    -- has not moved.
+    if params.partnerId then
+        local go, why = base.awaitPairGo(job.id)
+        if not go then return base.sendFailed(why or "pair_cancelled", true) end
+    end
+
     -- Send queue request to warehouse via server
     base.sendToServer(proto.MSG.ITEM_REQUEST, {
         jobId = job.id,

@@ -2291,6 +2291,39 @@ function atc.awaitHoleClear(partnerGone)
     end
 end
 
+-- R1 (docs/superpowers/specs/2026-11-17-delivery-pair-and-hole-design.md): A
+-- DELIVERY MOVES ONLY ONCE ITS SUPPORT HAS ACCEPTED TOO. side-e jam 1: the
+-- support it was given refused, and the delivery went out regardless and held
+-- the dispatch hole 600 s for nobody. Accepted, it waits on its dock -- a known
+-- place, in no section -- for the server's PAIR_GO, asking (PAIR_ASK) every 5 s
+-- so a lost answer is asked again. PAIR_CANCEL: the pair is off, the job goes
+-- back to be paired again; it stays docked. Not a timer for traffic: PAIR_LAST_S
+-- is only for a server that never answers, and freezes while it is down.
+local PAIR_LAST_S = 300
+function base.awaitPairGo(jobId)
+    local want = { [proto.MSG.PAIR_GO] = true, [proto.MSG.PAIR_CANCEL] = true }
+    local waited, nextAsk = 0, 0
+    logInfo("Waiting for my support to accept too (PAIR_GO)...")
+    while true do
+        if base.isRecalled() then return false, "recalled" end
+        if not _self.serverDown and waited >= nextAsk then
+            comms.toServer(proto.MSG.PAIR_ASK, { jobId = jobId })
+            nextAsk = waited + 5
+        end
+        local msg = base.receive(1, want)
+        if msg and type(msg.payload) == "table" and msg.payload.jobId == jobId then
+            if msg.type == proto.MSG.PAIR_GO then
+                logInfo("Pair on: my support has accepted too -- going")
+                return true
+            end
+            logWarn("Pair off (" .. tostring(msg.payload.reason) .. ") -- staying docked; the job goes back to be paired again")
+            return false, "pair_cancelled"
+        end
+        if not _self.serverDown then waited = waited + 1 end
+        if waited >= PAIR_LAST_S then return false, "no_pair_go" end
+    end
+end
+
 function base.depart(noDescend)
     if _self.role == proto.ROLE.DELIVERY and _self.partnerId then
         _self.holePendingTo, _self.holePendingAt = _self.partnerId, 0

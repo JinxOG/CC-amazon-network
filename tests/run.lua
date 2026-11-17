@@ -48,6 +48,7 @@ local files = {
     "tests.test_fence_refusal",
     "tests.test_gps3_journal",
     "tests.test_cc_local_limit",
+    "tests.test_pair_r1",
     "tests.test_bay_types",
     "tests.test_bay_types_server",
     "tests.test_atc",
