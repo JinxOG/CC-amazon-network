@@ -1784,7 +1784,11 @@ end
 -- its booking alive, or takes back the section it stands in) once a KEEPALIVE_S.
 -- Rebooted with no GPS it does not know where it stands: an empty report still
 -- keeps alive whatever it holds (every message does), and claims nothing.
-atc.KEEPALIVE_S = 30
+-- 10 s, not 30: in a 50% radio loss a 30 s report lost every time for 180 s is
+-- one in twenty, and side test sim w3_side_atc on 9ca58c9 drew it -- node_53
+-- swept 2 s after it measured its facing, then a circle with node_55 at DH.
+-- 18 reports in 180 s, all lost at 50%: one in 260,000.
+atc.KEEPALIVE_S = 10
 function atc.keepAlive()
     if not atc.ENABLED then return end
     local now = os.epoch("utc")

@@ -16,7 +16,7 @@ cell to empty, saying SUPPORT_STAGED again every 5 s, and goes home if its deliv
      10 s, as a busy base's turtles would (an ATC that hears nobody counts nobody's silence).
 CHECKS (each with its evidence): part 1 -- the support staged inside the loss and said SUPPORT_STAGED again (evidence);
 the pair went down together; nobody reported STUCK; the delivery completed. Part 2 -- the rebooted delivery waited over
-180 s for a fix (evidence); the ATC never gave away a section it stood in; nobody reported STUCK; the delivery
+180 s for a fix (evidence); the ATC never gave away a section it stood in; nobody stayed STUCK; the delivery
 completed. At the end the ATC holds nothing and every turtle is on its dock. Pin the commit under test. 1x."""
 import datetime
 import importlib.util
@@ -152,8 +152,14 @@ def steps(ctx):
                "of 10 s): the check below has something to judge" % (dname, tries))
     lost = [l for l in since("booking dropped, including", t3) if dname in l]
     ctx.expect(not lost, "the ATC never gave away a section %s stood in (%s)" % (dname, lost[0][-150:] if lost else "none"))
+    # Rebooted in the hole cell (run c), the delivery waits for its support to give up and go home before it can move:
+    # a STUCK it recovers from. One it never recovers from is the failure.
     stuck2 = since("STUCK ", t3)
-    ctx.expect(not stuck2, "nobody reported STUCK after the reboot (%s)" % (stuck2[0][-150:] if stuck2 else "none"))
+    moving = since("Moving again after STUCK", t3)
+    unrecovered = [l for l in stuck2 if not any(re.search(r"\[(node_\d+)\]", l) and re.search(r"\[(node_\d+)\]", l).group(1) in m
+                                                and m[:23] > l[:23] for m in moving)]
+    ctx.expect(not unrecovered, "nobody stayed STUCK after the reboot (%d STUCK, %d recovered; %s)"
+               % (len(stuck2), len(stuck2) - len(unrecovered), unrecovered[0][-150:] if unrecovered else "none"))
     ctx.expect(bool(done2), "%s completed (the server's line)" % job2)
 
     for n in held:
