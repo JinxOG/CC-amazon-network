@@ -1833,6 +1833,7 @@ function atc.book(waypoints, label, giveUp)
     atc.route = list
     if #list == 0 then return true end
     local report, last
+    local place, after = nil, nil
     while true do
         local stop = giveUp and giveUp()
         if stop then
@@ -1846,6 +1847,14 @@ function atc.book(waypoints, label, giveUp)
         if r and r.ok then
             atc.progressed()
             return true
+        end
+        -- ITS PLACE IN LINE (R3), said when it changes: "Departure: 3rd in line, after node_212".
+        if r and r.place and (r.place ~= place or r.after ~= after) then
+            place, after = r.place, r.after
+            local n = tonumber(place) or 0
+            local suffix = (n % 100 >= 11 and n % 100 <= 13) and "th" or ({ "st", "nd", "rd" })[n % 10] or "th"
+            logInfo(string.format("%s: %d%s in line%s", r.line == "return" and "Return" or "Departure", n, suffix,
+                after and (", after " .. tostring(after)) or ", next out"))
         end
         local now = os.clock()
         -- The reason of the LATEST answer, not the first: the shakeout review read

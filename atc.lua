@@ -202,6 +202,43 @@ end
 --   p.sec    the section (enter, leave)
 --   p.cur    the section it stands in now, or nil
 --   p.route  the sections still ahead of it, in order, from p.cur
+-- EVERY TURTLE KNOWS ITS PLACE IN LINE (R3; the user, 2026-11-17: "I'm number 5,
+-- and I'm going number 6"). A request waiting to be let in is in a line: the
+-- departures (its route goes through DH) or the returns (through ARR). Its place
+-- is one more than the waiting requests of that line that asked before it -- a
+-- pair counted once, by its group -- and "after" is the one just ahead. Only
+-- requests still asking count (each asks every 2 s): one that stopped is gone.
+local function lineOf(list)
+    for _, s in ipairs(list or {}) do
+        if s == "DH" then return "departure" elseif s == "ARR" then return "return" end
+    end
+    return nil
+end
+local function placeInLine(st, id, now)
+    local me = st.waiting[id]
+    local line = me and lineOf(me.list)
+    if not line then return nil end
+    local mine = me.group or id
+    local ahead, afterSince, after = {}, -1, nil
+    for oid, w in pairs(st.waiting) do
+        local key = w.group or oid
+        if oid ~= id and key ~= mine and lineOf(w.list) == line and now - (w.at or 0) <= CFG.PAIR_FRESH_MS
+           and (w.since < me.since or (w.since == me.since and tostring(oid) < tostring(id))) then
+            if not ahead[key] or w.since < ahead[key] then ahead[key] = w.since end
+        end
+    end
+    local n = 0
+    for key, since in pairs(ahead) do
+        n = n + 1
+        if since > afterSince then afterSince, after = since, key end
+    end
+    return line, n + 1, after
+end
+local function withPlace(st, id, now, reply)
+    reply.line, reply.place, reply.after = placeInLine(st, id, now)
+    return reply
+end
+
 function core.handle(st, id, p, now)
     p = p or {}
     local rid = st.byTurtle[id]
@@ -267,7 +304,7 @@ function core.handle(st, id, p, now)
             if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair }
             else w0.at, w0.list, w0.group, w0.cur, w0.pair = now, list, p.group, p.cur, p.pair end
             if not (pw and pw.pair == id and pw.list and now - (pw.at or 0) <= CFG.PAIR_FRESH_MS) then
-                return { ok = false, why = "waiting for partner" }
+                return withPlace(st, id, now, { ok = false, why = "waiting for partner" })
             end
             local free1, b1 = routeFree(st, list, id, p.group, p.cur)
             local free2, b2 = routeFree(st, pw.list, p.pair, pw.group, pw.cur)
@@ -281,7 +318,7 @@ function core.handle(st, id, p, now)
                     table.concat(list, " "), table.concat(pw.list, " ")))
                 return { ok = true, rid = nrid }
             end
-            return { ok = false, why = "busy at " .. tostring(free1 and b2 or b1) }
+            return withPlace(st, id, now, { ok = false, why = "busy at " .. tostring(free1 and b2 or b1) })
         end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
         -- A turtle standing in a section (p.cur) is in the way of others whatever it
@@ -296,8 +333,9 @@ function core.handle(st, id, p, now)
             return { ok = true, rid = nrid }
         end
         local w = st.waiting[id]
-        if not w then st.waiting[id] = { since = now, at = now, list = list } else w.at, w.list = now, list end
-        return { ok = false, why = free and "after an older request" or ("busy at " .. tostring(busyAt)) }
+        if not w then st.waiting[id] = { since = now, at = now, list = list, group = p.group }
+        else w.at, w.list, w.group = now, list, p.group end
+        return withPlace(st, id, now, { ok = false, why = free and "after an older request" or ("busy at " .. tostring(busyAt)) })
     end
 
     -- A holding slot (the tunnel line, or the sky line: p.line = "sky").

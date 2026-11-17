@@ -578,4 +578,23 @@ return {
         local x = core.handle(st, "x", { op = "hold", line = "tunnel", prefer = d.slot, strict = true, pair = "zz" }, t + 2000)
         assert_eq(x.ok, false, "a turtle of another pair is not")
     end,
+
+    -- R3 (the user, 2026-11-17): "every turtle should be aware of the order it's going in... I'm number 5, I go after
+    -- 4". A request waiting to be let in is told its place in its line (departures: through DH; returns: through ARR)
+    -- and who is just ahead; a pair counts once; a turtle that stopped asking is not in the line.
+    ["a waiting turtle is told its place in its line and who is ahead of it"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "x", { op = "request", route = { "W1", "DH" } }, t).ok, true, "DH taken")
+        local DEP = { "S2", "J2", "W2", "J1", "W1", "DH" }
+        local a = core.handle(st, "a", { op = "request", route = DEP }, t + 1000)
+        core.handle(st, "p1", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "p1", pair = "p2" }, t + 2000)
+        core.handle(st, "p2", { op = "request", route = { "N1", "J1", "W1", "DH" }, group = "p1", pair = "p1" }, t + 2500)
+        local b = core.handle(st, "b", { op = "request", route = DEP }, t + 3000)
+        assert_eq(a.place, 1, "the first to ask is first (" .. tostring(a.place) .. ")")
+        assert_eq(b.place, 3, "the third: a, then the pair p1+p2 counted once (" .. tostring(b.place) .. ")")
+        assert_eq(b.after, "p1", "and it goes after the pair (" .. tostring(b.after) .. ")")
+        assert_eq(b.line, "departure", "in the departure line")
+        local later = core.handle(st, "b", { op = "request", route = DEP }, t + 30000)    -- a, p1, p2 stopped asking
+        assert_eq(later.place, 1, "those that stopped asking are no longer ahead (" .. tostring(later.place) .. ")")
+    end,
 }
