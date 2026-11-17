@@ -154,10 +154,13 @@ end
 -- waiting for what the pair holds -- it cannot move until the pair has gone --
 -- so holding the second half of the pair back for it is a circle: the shakeout's
 -- 150-turtle sim froze the dispatch hole that way (w3_bay_types150, 2026-11-11).
+-- The partner's own booking counts whatever group it carries (2026-11-17): rebuilt
+-- after an ATC restart from its report, a delivery in DH had none, and its support
+-- was held "after an older request" for the DH its delivery held for it.
 local function partnerIn(st, id, group)
     if group == nil then return false end
     for _, x in pairs(st.res) do
-        if x.group == group and x.id ~= id then return true end
+        if x.id ~= id and (x.group == group or x.id == group) then return true end
     end
     return false
 end
@@ -224,13 +227,16 @@ function core.handle(st, id, p, now)
     end
 
     if now < st.settleUntil then
-        st.reports[id] = { cur = p.cur, route = p.route or {}, at = now }
+        st.reports[id] = { cur = p.cur, route = p.route or {}, at = now, group = p.group }
         if p.op == "leave" or p.op == "cancel" or p.op == "report" then return { ok = true } end
         return { ok = false, why = "settling" }
     end
 
     if p.op == "report" then
-        if p.cur and not rid then admit(st, id, (p.route and #p.route > 0) and p.route or { p.cur }, p.cur, now, true) end
+        if p.cur and not rid then
+            local nrid = admit(st, id, (p.route and #p.route > 0) and p.route or { p.cur }, p.cur, now, true)
+            st.res[nrid].group = p.group      -- its party, so a pair is rebuilt as one (R2)
+        end
         return { ok = true }
     end
 
@@ -442,7 +448,7 @@ end
 -- in a section first, nearest the open end (fewest sections left) first.
 function core.settle(st, now)
     local list = {}
-    for id, r in pairs(st.reports) do list[#list + 1] = { id = id, cur = r.cur, route = r.route } end
+    for id, r in pairs(st.reports) do list[#list + 1] = { id = id, cur = r.cur, route = r.route, group = r.group } end
     table.sort(list, function(a, b)
         if (a.cur ~= nil) ~= (b.cur ~= nil) then return a.cur ~= nil end
         if #a.route ~= #b.route then return #a.route < #b.route end
@@ -451,7 +457,8 @@ function core.settle(st, now)
     local n = 0
     for _, e in ipairs(list) do
         if e.cur then
-            admit(st, e.id, (#e.route > 0) and e.route or { e.cur }, e.cur, now, true)
+            local nrid = admit(st, e.id, (#e.route > 0) and e.route or { e.cur }, e.cur, now, true)
+            st.res[nrid].group = e.group          -- a pair rebuilt as one (R2)
             n = n + 1
         end
     end

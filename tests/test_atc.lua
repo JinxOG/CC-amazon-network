@@ -545,4 +545,25 @@ return {
         local kept = st.byTurtle["sup"] ~= nil and st.res[st.byTurtle["sup"]] ~= nil
         assert_eq(kept, true, "the support's booking survived its own 240 s of silence")
     end,
+
+    -- 2026-11-17 (sim w3_side_atc on ab88c93): the ATC restarted while a pair was going out; the delivery, in DH, was
+    -- rebuilt from its report with no party, and its support -- whose booking from its dock was not rebuilt -- asked
+    -- again and was held "after an older request" whose route needed DH: the DH its own delivery held for it.
+    ["after an ATC restart a support is not held behind an older waiter for the DH its delivery holds"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "del", { op = "report", cur = "DH", route = { "DH" } }, t)          -- rebuilt: no group
+        local OLD = { "S2", "J2", "W2", "J1", "W1", "DH" }
+        assert_eq(core.handle(st, "old", { op = "request", route = OLD }, t).ok, false, "an older waiter for DH")
+        local later = t + core.CFG.FAIR_MS + 1
+        core.handle(st, "old", { op = "request", route = OLD }, later)
+        local r = core.handle(st, "sup", { op = "request", route = { "N1", "J1", "W1", "DH" }, group = "del", pair = "del" }, later + 1000)
+        assert_eq(r.ok, true, "the support is let in to its delivery (" .. tostring(r.why) .. ")")
+    end,
+
+    ["a turtle's report carries its party, so a restarted ATC rebuilds the pair"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "del", { op = "report", cur = "DH", route = { "DH" }, group = "del" }, t)
+        local rid = st.byTurtle["del"]
+        assert_eq(rid ~= nil and st.res[rid].group, "del", "the rebuilt booking is the pair's")
+    end,
 }

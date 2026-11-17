@@ -1859,7 +1859,7 @@ end
 -- Where it is and what it still needs, for an ATC that just booted.
 function atc.report()
     local cur = atc.here()
-    atc.send(proto.MSG.ATC_REPORT, { cur = cur, route = atc.remaining(cur) })
+    atc.send(proto.MSG.ATC_REPORT, { cur = cur, route = atc.remaining(cur), group = atc.group })
 end
 base.atc = atc
 
