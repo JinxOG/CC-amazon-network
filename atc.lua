@@ -113,9 +113,19 @@ local function admit(st, id, list, cur, now, physical)
     return rid
 end
 
+-- A party is a delivery and its support: group is the delivery's id. Its own
+-- bookings are the party's whatever group they carry (2026-11-16, T2
+-- w3-atc-staged-lost-c): rebooted in the dispatch hole cell, a delivery booked
+-- its way home with no group -- a reboot forgets it -- and its support, behind
+-- it at staging and asking in the delivery's party, was held "busy at W1" by
+-- that booking while the delivery waited for the support to move: each waited
+-- for the other. And the other way: the support's bookings are its delivery's.
 local function sameParty(st, rid, id, group)
     local x = st.res[rid]
-    return x ~= nil and (x.id == id or (group ~= nil and x.group == group))
+    if x == nil then return false end
+    if x.id == id then return true end
+    if group ~= nil and (x.group == group or x.id == group) then return true end
+    return x.group ~= nil and x.group == id
 end
 
 local function headIsTurtle(st, s, id, group)

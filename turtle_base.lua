@@ -2246,13 +2246,19 @@ end
 -- delivery stands it down (PARTNER_LEFT) or has not gone in STAGE_WAIT_S.
 -- Returns true when the cell is clear, else false and why.
 local STAGED_REPEAT_S = 5
+-- EMPTY FOR CLEAR_S IN A ROW, NOT ONCE (2026-11-16, T2 w3-atc-staged-lost-c): a
+-- delivery rebooted in the hole cell measures its facing by stepping out and back;
+-- seen empty that moment, the support stepped in behind it as it came back, and
+-- each stood in the other's only way out. A delivery that has gone down leaves
+-- the cell empty; a facing check is gone in a second.
+local CLEAR_S = 3
 function atc.awaitHoleClear(partnerGone)
     local hole = W.DISPATCH_HOLE
     local dx, dz = hole.x - _self.pos.x, hole.z - _self.pos.z
     local adjacent = _self.pos.y == hole.y and math.abs(dx) + math.abs(dz) == 1
     if adjacent then move.face(dz < 0 and 0 or dx > 0 and 1 or dz > 0 and 2 or 3) end
     local deadline = os.epoch("utc") / 1000 + atc.stageWaitS()
-    local nextSay, report = 0, nil
+    local nextSay, report, emptySince = 0, nil, nil
     while true do
         local now = os.epoch("utc") / 1000
         if now >= nextSay then
@@ -2262,7 +2268,13 @@ function atc.awaitHoleClear(partnerGone)
         sleep(1)
         if partnerGone() then return false, "partner_left" end
         if base.isRecalled() then return false, "recalled" end
-        if not adjacent or not isTurtleBlock("forward") then return true end
+        if not adjacent then return true end
+        if isTurtleBlock("forward") then
+            emptySince = nil
+        else
+            emptySince = emptySince or now
+            if now - emptySince >= CLEAR_S then return true end
+        end
         if now >= deadline then
             logWarn(string.format("Delivery %s still in the hole cell after %ds -- not stepping into it; home, the job goes back",
                 tostring(_self.partnerId), atc.stageWaitS()))

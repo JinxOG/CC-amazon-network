@@ -11,6 +11,12 @@
 -- CHECKS: the delivery rebooted in a base section and waited there over 180 s (evidence); the ATC never dropped a
 -- section it stood in; nobody reported STUCK; both deliveries completed; every delivery and support ends on a dock;
 -- the ATC holds nothing at the end. On 17d6b30 the ATC drops the rebooted delivery's section at 180 s.
+--
+-- W3_AT_HOLE=1 (T2 w3-atc-staged-lost-c): the reboot comes once the delivery stands in the dispatch hole cell and
+-- its support is staged behind it. Measured again, the delivery books its way home with no party (a reboot forgets
+-- it) and waits for its support to move; the support gives up and asks for its way home through what its own
+-- delivery holds. On f4b4242 each waits for the other for good. (Here "nobody reported STUCK" is not asked: the
+-- delivery waiting for its support to go is a STUCK it reports and recovers from.)
 local CHATTER = [[
 local proto = require("protocol")
 local m = peripheral.find("modem")
@@ -19,6 +25,7 @@ local n = 0
 while true do n = n + 1; proto.send(m, proto.CH_ATC, proto.encode(proto.MSG.ATC_REPORT, "node_chatter", "atc", { route = {}, nonce = n })); sleep(10) end
 ]]
 
+local AT_HOLE = os.getenv("W3_AT_HOLE") ~= nil
 local function atDock(p)
   if not p or p.y ~= 67 then return false end
   for _, row in ipairs({ -2806, -2810, -2797, -2793 }) do
@@ -59,16 +66,23 @@ return {
     sim:dispatch{ type = "ORDER_DELIVERY", params = { items = { { name = "minecraft:cobblestone", count = 33 } },
       destination = { x = 124, y = 67, z = -2824 } } }
     sim:run_until(function() return #dispatched.lines >= 1 end, 120000)
-    local djob, dname = (dispatched.lines[1] or ""):match("Dispatched (job_%d+) %[DELIVER%] %-> (node_%d+)")
+    local djob, dname, sname = (dispatched.lines[1] or ""):match("Dispatched (job_%d+) %[DELIVER%] %-> (node_%d+)%s+support job_%d+ %-> (node_%d+)")
+    if AT_HOLE and sname then
+      -- Held at the hole: its support's SUPPORT_STAGED is lost (as in w3_atc_staged_lost) for 15 minutes.
+      local now = sim.clock:now()
+      sim.sched.radio:add_rule{ drop_rate = 1, type = "SUPPORT_STAGED", from = sname, from_ms = now, until_ms = now + 15 * 60000 }
+    end
     sim:expect(dname ~= nil, "a delivery was dispatched")
     if not dname then return end
     local dcomp
     for _, c in ipairs(sim.sched.computers) do if c.name == dname then dcomp = c end end
     local Wl = assert(loadfile(sim.sched.code_dir .. "/waypoints.lua", "t",
       setmetatable({ fs = { exists = function() return false end } }, { __index = _G })))()
+    local staged = sim:capture_log("Staged behind hole")
     local inside = sim:run_until(function()
       local p = dcomp.pos
       local s = p and p.x and Wl.atcSection(p.x, p.y, p.z)
+      if AT_HOLE then return p and p.x == 143 and p.z == -2813 and p.y == 67 and #staged.lines >= 1 end
       return s == "J1" or s == "W1"
     end, 10 * 60000)
     sim:expect(inside, dname .. " was inside the base on its way to the hole")
@@ -106,7 +120,9 @@ return {
     local lost = {}
     for i = d0 + 1, #dropped.lines do if dropped.lines[i]:find(dname, 1, true) then lost[#lost + 1] = dropped.lines[i] end end
     sim:expect(#lost == 0, "the ATC never gave away a section " .. dname .. " stood in (" .. tostring((lost[1] or "none"):sub(1, 150)) .. ")")
-    sim:expect(#stuck.lines == 0, "nobody reported STUCK (" .. tostring((stuck.lines[1] or "none"):sub(1, 150)) .. ")")
+    if not AT_HOLE then
+      sim:expect(#stuck.lines == 0, "nobody reported STUCK (" .. tostring((stuck.lines[1] or "none"):sub(1, 150)) .. ")")
+    end
     local j2 = second()
     sim:expect(serverDone(djob) and j2 ~= nil and serverDone(j2), string.format("both deliveries completed (%s, %s)", djob, tostring(j2)))
     local off = {}

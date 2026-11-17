@@ -483,4 +483,18 @@ return {
         assert_eq(core.handle(st, "b", { op = "enter", sec = "W2" }, t).ok, true, "W2 is free")
         assert_eq(core.handle(st, "b", { op = "enter", sec = "S3" }, t).ok, false, "S3 is not: a is in it")
     end,
+
+    -- 2026-11-16 (T2 w3-atc-staged-lost-c): a delivery rebooted in the dispatch hole cell, its support standing behind
+    -- it at staging. Measured again, the delivery booked its way home -- with no party now (a reboot forgets it) -- and
+    -- waited for its support to move out of its way; the support, given up, asked for its own way home in its
+    -- delivery's party and was held "busy at W1" by its own delivery's booking: each waited for the other.
+    ["a support shares its delivery's bookings even when the delivery's carry no party"] = function(assert_eq)
+        local core, st, t = live()
+        local home = { "DH", "W1", "R0", "J1", "S1" }
+        assert_eq(core.handle(st, "del", { op = "request", route = home, cur = "DH" }, t).ok, true, "the delivery's way home")
+        local r = core.handle(st, "sup", { op = "request", route = { "DH", "W1", "R0", "J1", "N1" }, cur = "DH", group = "del" }, t + 1000)
+        assert_eq(r.ok, true, "its support is let home through what its own delivery holds (" .. tostring(r.why) .. ")")
+        local other = core.handle(st, "x9", { op = "request", route = { "W1" }, group = "zz" }, t + 2000)
+        assert_eq(other.ok, false, "a turtle of another party still is not")
+    end,
 }
