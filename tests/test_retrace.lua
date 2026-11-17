@@ -143,6 +143,30 @@ return {
         assert_eq(whPassed, true, "the warehouse's JOB_ABORT is passed on as before")
     end,
 
+    -- R3, the return as a pair (2026-11-17, sim w3_side_atc): a support that lagged behind its delivery was told to
+    -- hold where it was; told then to come home, it planned its own way to the holding slot -- through rock it cannot
+    -- dig ("way home is shut"), 9 times a side run, and under R2 they piled up. Its delivery's own cells are dug: at
+    -- the holding line the delivery sends the tail of its path, and the support walks it to the cell behind it.
+    ["a support walks its delivery's own cells to the cell behind it, without digging"] = function(assert_eq)
+        local world = {}
+        -- Solid rock everywhere off the path: only the delivery's cells are open.
+        for x = 120, 140 do for z = -2835, -2825 do world[x .. ",60," .. z] = "minecraft:stone" end end
+        local path = {}
+        for x = 122, 130 do path[#path + 1] = { x = x, y = 60, z = -2830 } end      -- east along -2830
+        for z = -2829, -2826 do path[#path + 1] = { x = 130, y = 60, z = z } end   -- then south to -2826
+        for _, c in ipairs(path) do world[c.x .. ",60," .. c.z] = nil end
+        local r = supportAt({ x = 124, y = 60, z = -2830 }, world)                  -- lagging, on the path
+        r.base.setPartnerId("node_d")
+        local proto = require("protocol")
+        local msg = proto.encode(proto.MSG.ASCENDING, "node_d", "x", { slot = 7, trail = path })
+        r.base._firstSight(msg)
+        local walked = r.base.walkPartnerTrail()
+        local p = r.c.pos
+        assert_eq(walked > 0, true, "it walked (" .. tostring(walked) .. " cells)")
+        assert_eq(p.x .. "," .. p.z, "130,-2827", "to the cell behind its delivery (130,-2826)")
+        assert_eq(r.dug(), 0, "without digging a block")
+    end,
+
     ["inside the building a support's JOB_ABORT reaches the delivery as before"] = function(assert_eq)
         local r = supportAt(HOLE)
         local proto = require("protocol")

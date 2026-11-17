@@ -207,6 +207,9 @@ local function supportJob(job)
                 -- Delivery going up to deliver — hold current position
                 ascending = true
                 print("Delivery ascending — holding position")
+                -- At the holding line it names its slot and its path (R3): come up
+                -- behind it along its own dug cells, not wherever this one lagged.
+                if msg.payload and msg.payload.slot then base.walkPartnerTrail() end
                 base.sendProgress("Holding while delivery delivers")
 
             elseif msg.type == proto.MSG.DESCENDED then

@@ -55,6 +55,7 @@ return {
     local alone = sim:capture_log("never staged in")
     local stood = sim:capture_log("stood me down")
     local together = sim:capture_log("Support staged")
+    local pairAdmitted = sim:capture_log("admitted pair")
     local retries = sim:capture_log(" retry ")
     local descend = sim:capture_log("Descending dispatch hole")
     local holding = sim:capture_log("holding position")
@@ -119,9 +120,17 @@ return {
     local supHeld = by(holding.lines, sname)
     local lastSummary = summary.lines[#summary.lines] or ""
     local dhHeld = lastSummary:match("DH=([%w_+]+)")
-    sim:expect(gaveUp, dname .. " gave up waiting for its support ('never staged'): the checks below have "
-      .. "something to judge")
-    sim:expect(by(stood.lines, sname) > 0, sname .. " stood down ('stood me down')")
+    -- Since R2 (2026-11-17) the pair is admitted as one unit: the holder cannot take J1 between its halves, the
+    -- support is never kept from the hole and the delivery never gives up. Either path has something to judge.
+    local asOne = false
+    for _, l in ipairs(pairAdmitted.lines) do if l:find(dname, 1, true) and l:find(sname, 1, true) then asOne = true end end
+    sim:expect(gaveUp or asOne, dname .. " gave up waiting for its support ('never staged'), or the pair was let in as "
+      .. "one unit (" .. tostring(asOne) .. "): the checks below have something to judge")
+    if gaveUp then
+      sim:expect(by(stood.lines, sname) > 0, sname .. " stood down ('stood me down')")
+    else
+      sim:expect(joint >= 1, dname .. " and " .. sname .. " went down together (" .. joint .. " 'Support staged')")
+    end
     sim:expect(delDescended <= joint, string.format("%s never went down the hole without its support (%d descents, "
       .. "%d together)", dname, delDescended, joint))
     -- ("holding position" is what a support says at every destination; DH held for good is the check at the end.)

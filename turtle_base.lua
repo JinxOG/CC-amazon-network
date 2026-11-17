@@ -505,7 +505,14 @@ local function firstSight(msg)
         -- missed its delivery's PAIR_ALIVE (live-only) and its RETURN_TO_DOCK (sent
         -- once) while the delivery went home without it (sim w3_pair_server_crash).
         _self.partnerHeardAt = os.epoch("utc")
-        if msg.type == proto.MSG.RETURN_TO_DOCK then _self.partnerHome = true end
+        if msg.type == proto.MSG.RETURN_TO_DOCK then
+            _self.partnerHome = true
+            -- R3: tell it this one heard, so it stops repeating it.
+            pcall(base.signalPartnerDirect, proto.MSG.HOME_HEARD, msg.from, {})   -- base.: atc is declared further down
+        end
+        if msg.type == proto.MSG.ASCENDING and type(msg.payload) == "table" and type(msg.payload.trail) == "table" then
+            _self.partnerTrail = msg.payload.trail      -- R3: its path, to walk up behind it
+        end
         if (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
            and type(msg.payload) == "table" and tonumber(msg.payload.slot) then
             _self.partnerSlot = tonumber(msg.payload.slot)
@@ -524,6 +531,11 @@ local function firstSight(msg)
             _self.partnerId = nil
             return false
         end
+    end
+    -- R3: its support heard "come home" -- even after this delivery's job (and so
+    -- its partnerId) is over.
+    if msg.type == proto.MSG.HOME_HEARD and _self.callHome and msg.from == _self.callHome.to then
+        _self.callHome = nil
     end
     -- R2: a pair called off by the server, noted whichever loop reads it, so a
     -- delivery waiting on its dock to be let out stops waiting.
@@ -1214,6 +1226,55 @@ function trail.note(prev)
     trail.at[k] = #trail.cells
 end
 function base.trailForTest() return trail.cells end
+
+-- R3, THE RETURN AS A PAIR (docs/superpowers/specs/2026-11-17-delivery-pair-and-
+-- hole-design.md). A support that lagged behind its delivery was told to hold
+-- where it stood; told then to come home, it planned its own way to the holding
+-- slot -- through rock it cannot dig ("way home is shut", then a retrace): 9 times
+-- a side-test run, and under R2 they met in one tunnel and stayed. Its delivery's
+-- own cells are dug. So at the holding line the delivery sends the last
+-- base.TRAIL_TAIL_N cells of its path, and its support walks them up to the cell
+-- behind it -- every step onto a cell its delivery stood in.
+base.TRAIL_TAIL_N = 60
+function base.trailTail(n)
+    local out = {}
+    for i = math.max(1, #trail.cells - n + 1), #trail.cells do
+        local c = trail.cells[i]
+        out[#out + 1] = { x = c.x, y = c.y, z = c.z }
+    end
+    return out
+end
+function base.walkPartnerTrail()
+    local t = _self.partnerTrail
+    _self.partnerTrail = nil
+    if type(t) ~= "table" or #t < 2 then return 0 end
+    local p, at = _self.pos, nil
+    for i = #t - 1, 1, -1 do
+        local c = t[i]
+        if c.x == p.x and c.y == p.y and c.z == p.z then at = i; break end
+    end
+    if not at then
+        for i = #t - 1, 1, -1 do      -- or the cell beside it, one step onto the path
+            local c = t[i]
+            if math.abs(c.x - p.x) + math.abs(c.y - p.y) + math.abs(c.z - p.z) == 1 then
+                if not base.move.to(c.x, c.y, c.z) then return 0 end
+                at = i; break
+            end
+        end
+    end
+    if not at then return 0 end
+    local walked = 0
+    for k = at + 1, #t - 1 do        -- up to the cell behind its delivery, never into it
+        local c = t[k]
+        if not base.move.to(c.x, c.y, c.z) then break end
+        walked = walked + 1
+    end
+    if walked > 0 then
+        logInfo(string.format("Walked %d cell(s) of my delivery's path, to the cell behind it at %d,%d,%d",
+            walked, _self.pos.x, _self.pos.y, _self.pos.z))
+    end
+    return walked
+end
 
 local function applyMove(dir)
     -- Save previous position before updating
@@ -2211,8 +2272,8 @@ end
 
 -- The delivery's word to its support (ASCENDING: hold; RETURN_TO_DOCK: come
 -- home), naming its holding slot when it has one.
-function atc.signalSupport(msgType, partnerId, slot)
-    local sig = proto.encode(msgType, _self.id, partnerId, { slot = slot })
+function atc.signalSupport(msgType, partnerId, slot, trailTail)
+    local sig = proto.encode(msgType, _self.id, partnerId, { slot = slot, trail = trailTail })
     proto.send(_self.modem, proto.CH_LOCAL, sig)
 end
 
@@ -2270,7 +2331,16 @@ local HOLE_PENDING_MS = 20000
 -- turtles' own radio -- no server in it. _self.pairMate is its support for the
 -- job; _self.partnerId is cleared while it delivers and is not this.
 local PAIR_ALIVE_MS = 20000
+local HOME_REPEAT_MS = 10000
 function atc.keepPair(now)
+    local ch = _self.callHome
+    if ch then
+        if now >= ch.untilMs then _self.callHome = nil
+        elseif now - (ch.at or 0) >= HOME_REPEAT_MS then
+            ch.at = now
+            atc.signalSupport(proto.MSG.RETURN_TO_DOCK, ch.to, ch.slot)
+        end
+    end
     if _self.role ~= proto.ROLE.DELIVERY or not _self.pairMate or not _self.jobId then return end
     if now - (_self.pairAliveAt or 0) < PAIR_ALIVE_MS then return end
     _self.pairAliveAt = now
@@ -2695,7 +2765,9 @@ function home.dock()
             -- because broadcasts have already stopped so support gets no more updates).
             -- It names the holding slot: a support that lagged comes to the same one,
             -- along the path this turtle just dug (base.atc.preferSlot).
-            base.atc.signalSupport(proto.MSG.ASCENDING, savedPartnerId, slot)
+            -- And the tail of its own path (R3): a support that lagged walks these
+            -- dug cells up behind it rather than planning a way through rock.
+            base.atc.signalSupport(proto.MSG.ASCENDING, savedPartnerId, slot, base.trailTail(base.TRAIL_TAIL_N))
             sleep(0.5)
         end
     end
@@ -2765,6 +2837,11 @@ function home.dock()
         move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.RED_Z)
         logInfo("Clear of arrivals hole — signalling support to return.")
         base.atc.signalSupport(proto.MSG.RETURN_TO_DOCK, savedPartnerId, savedSlot)
+        -- REPEATED UNTIL HEARD (R3): sent once, it was lost in a radio blackout and
+        -- its support held in the holding line until the 300 s silence rule sent it
+        -- home (sim w3_side_atc, node_55). atc.keepPair repeats it every
+        -- HOME_REPEAT_MS, after this job too, until the support answers HOME_HEARD.
+        _self.callHome = { to = savedPartnerId, slot = savedSlot, untilMs = os.epoch("utc") + 600000 }
         -- partnerId already nil, nothing more to clear
     end
 

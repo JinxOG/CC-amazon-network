@@ -61,6 +61,7 @@ proto.MSG = {
     PAIR_GO        = "PAIR_GO",         -- server → delivery: your support has accepted too; go
     PAIR_CANCEL    = "PAIR_CANCEL",     -- server → delivery: the pair is off (a half refused or dropped); stay docked
     PAIR_ASK       = "PAIR_ASK",        -- delivery → server: is my pair on? (answered PAIR_GO, PAIR_CANCEL, or not yet)
+    HOME_HEARD     = "HOME_HEARD",      -- support → delivery: I heard RETURN_TO_DOCK; stop repeating it (R3)
     PAIR_ALIVE     = "PAIR_ALIVE",      -- delivery → support, every 20 s of a job: I am here (R4: the pair keeps together on its own word)
 
     -- Server → turtle heartbeat acknowledgement

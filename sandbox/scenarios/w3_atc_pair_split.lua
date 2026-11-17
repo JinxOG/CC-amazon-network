@@ -42,6 +42,7 @@ return {
   steps = function(sim)
     local dispatched = sim:capture_log("Dispatched job_")
     local together = sim:capture_log("Support staged")
+    local pairAdmitted = sim:capture_log("admitted pair")
     local done = sim:capture_log("Job complete: job_")
     local failed = sim:capture_log("Return home failed")
     local waits = sim:capture_log("departure waiting to be let in (busy at J1)")
@@ -90,8 +91,13 @@ return {
     end
     local joint = false
     for _, l in ipairs(together.lines) do if l:find(dname, 1, true) then joint = true end end
-    sim:expect(held > 60, string.format("%s was held back over 60 s by the silent holder of J1 (longest wait %d s): "
-      .. "the check below has something to judge", sname, held))
+    -- Since R2 (2026-11-17) the pair is admitted as one unit, so the holder cannot take J1 between the two halves:
+    -- the support is not held at all. Either way there is something to judge: a support held back, or a pair let in
+    -- as one ("admitted pair").
+    local asOne = false
+    for _, l in ipairs(pairAdmitted.lines) do if l:find(dname, 1, true) and l:find(sname, 1, true) then asOne = true end end
+    sim:expect(held > 60 or asOne, string.format("%s was held back over 60 s by the silent holder of J1 (longest wait %d s), "
+      .. "or the pair was let in as one unit (%s): the check below has something to judge", sname, held, tostring(asOne)))
     sim:expect(joint, dname .. " waited for its support and they went down together ('Support staged')")
     sim:expect(ok, "the delivery completed (" .. #done.lines .. ")")
     sim:expect(#failed.lines == 0, "nobody's return home failed (" .. (failed.lines[1] or "none") .. ")")
