@@ -333,6 +333,13 @@ function core.handle(st, id, p, now)
         -- STRICT: a turtle that cannot dig takes the slot it stands under or none --
         -- any other is through rock. node_81 was given slot 1 while 3 was still held
         -- (the ATC had restarted) and stayed in the tunnel (sim, 2026-11-03).
+        -- A PAIR SHARES ITS SLOT (2026-11-17): the support stands in its own delivery's
+        -- column, behind it; refused ("slot 14 is node_33's"), it waited until its
+        -- delivery had left. p.pair is its delivery.
+        if want and p.pair and slots[want] and slots[want].id == p.pair then
+            note(st, string.format("%s shares slot %d with its delivery %s (%s)", id, want, p.pair, line))
+            return { ok = true, slot = want }
+        end
         if p.strict and want then
             local sl = slots[want]
             return { ok = false, why = string.format("slot %d is %s's", want, tostring(sl and sl.id or "kept back")) }

@@ -566,4 +566,16 @@ return {
         local rid = st.byTurtle["del"]
         assert_eq(rid ~= nil and st.res[rid].group, "del", "the rebuilt booking is the pair's")
     end,
+
+    -- 2026-11-17 (sim w3_side_atc on bfd5341): a support at the holding line asked for the slot it stood under -- its
+    -- own delivery's -- and was refused, "slot 14 is node_33's", until its delivery had left. A pair shares its slot.
+    ["a support shares the holding slot its own delivery holds; a stranger does not"] = function(assert_eq)
+        local core, st, t = live()
+        local d = core.handle(st, "del", { op = "hold", line = "tunnel" }, t)
+        assert_eq(d.ok, true, "the delivery has a slot")
+        local s = core.handle(st, "sup", { op = "hold", line = "tunnel", prefer = d.slot, strict = true, pair = "del" }, t + 1000)
+        assert_eq(s.ok and s.slot, d.slot, "its support is given the same slot (" .. tostring(s.why) .. ")")
+        local x = core.handle(st, "x", { op = "hold", line = "tunnel", prefer = d.slot, strict = true, pair = "zz" }, t + 2000)
+        assert_eq(x.ok, false, "a turtle of another pair is not")
+    end,
 }

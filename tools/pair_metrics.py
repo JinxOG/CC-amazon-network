@@ -35,11 +35,22 @@ def metrics(run):
     first = None
     waits = {}       # (turtle, departure number) -> longest wait
     depno = {}
+    queued, holder, out = {}, {}, []   # order -> out the hole: queued -> its delivery's first descent after dispatch
     for l in ls:
-        m = re.search(r"Dispatched (job_\d+) \[DELIVER\]", l)
+        m = re.search(r"Job queued: (job_\d+) \[DELIVER\]", l)
+        if m:
+            queued[m.group(1)] = ts(l)
+        m = re.search(r"Dispatched (job_\d+) \[DELIVER\] -> (node_\d+)", l)
         if m:
             deliver.add(m.group(1))
             first = first or ts(l)
+            if m.group(1) in queued:
+                holder[m.group(2)] = m.group(1)
+        m = re.search(r"\[(node_\d+)\]\[INFO\] Descending dispatch hole", l)
+        if m and m.group(1) in holder:
+            j = holder.pop(m.group(1))
+            if queued.get(j) and ts(l):
+                out.append((ts(l) - queued.pop(j)).total_seconds())
         m = re.search(r"server#\S*\s+INFO\s+Job complete: (job_\d+)\s*$", l)
         if m and m.group(1) in deliver:
             done.add(m.group(1))
@@ -64,6 +75,8 @@ def metrics(run):
         "delivered": len(done), "dispatched": len(deliver), "hours": round(hours, 2),
         "per_hour": round(len(done) / hours, 1) if hours else None,
         "departure_waits": len(w), "wait_mean_s": round(sum(w) / len(w)) if w else 0, "wait_max_s": w[-1] if w else 0,
+        "order_to_out_mean_s": round(sum(out) / len(out)) if out else 0,
+        "order_to_out_max_s": round(max(out)) if out else 0,
         "markers": markers,
     }
 

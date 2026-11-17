@@ -2229,7 +2229,8 @@ function atc.holdSlot(line, prefer, maxS)
     -- A turtle that cannot dig (support) takes the slot it stands under or none.
     local strict = prefer ~= nil and not _self.canDig
     while true do
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer, strict = strict })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer, strict = strict,
+            pair = (_self.role == proto.ROLE.SUPPORT) and _self.partnerId or nil })
         last = r
         if r and r.ok and r.slot then return r.slot end
         local now = os.clock()
