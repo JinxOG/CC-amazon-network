@@ -384,7 +384,7 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
         -- the old one is let go, so a turtle is never left dockless; with no free
         -- dock of its type it stays where it is, and the next register retries.
         local heldType, held = W.dockOf(id)
-        dock = W.assignDock(dockType, id)
+        dock = W.assignDock(dockType, id, (not midJob) and position or nil)
         if dock and held then
             logInfo(string.format("Dock moved: %s from bay %d row %s (%s) to bay %d row %s (%s) -- per-bay types",
                 id, held.bay, held.row, heldType, dock.bay, dock.row, dockType))

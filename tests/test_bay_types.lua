@@ -52,6 +52,23 @@ return {
         _G.fs = oldfs
     end,
 
+    -- 2026-11-17 (sim w3_atc_small on R4): a turtle registering on a free dock of its own type was given the FIRST
+    -- free dock instead, and the start-up swap stalled one block short (node_32 at 153,67,-2807, its new dock
+    -- taken). With R1, a turtle that never reaches its own dock is never offered work: no delivery ran at all.
+    ["a turtle standing on a free dock of its type is given that dock"] = function(assert_eq)
+        local oldfs = _G.fs
+        _G.fs = { open = function() return nil end, exists = function() return false end }
+        local W = load()
+        local second = W.docks.DELIVERY[2]
+        local d = W.assignDock("DELIVERY", "d1", { x = second.x, y = 67, z = second.z })
+        local other = W.assignDock("DELIVERY", "d2", { x = second.x, y = 67, z = second.z })
+        local nowhere = W.assignDock("DELIVERY", "d3")
+        _G.fs = oldfs
+        assert_eq(d, second, "the dock it stands on")
+        assert_eq(other ~= second, true, "a second turtle on a taken dock gets another")
+        assert_eq(nowhere ~= nil, true, "and one with no position still gets the first free one")
+    end,
+
     ["routes_are_single_axis"] = function(assert_eq)
         local W = load()
         local bad, n = "", 0

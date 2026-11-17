@@ -281,9 +281,23 @@ function W.releaseAllDocks(turtleId)
     return n
 end
 
-function W.assignDock(role, turtleId)
+-- at (optional): where the turtle stands. A free dock of this type there is the
+-- one it gets (2026-11-17): given the first free dock instead, turtles booted on
+-- docks had to swap at start-up, and a swap that stalled left a turtle one
+-- block short of its new dock for good -- never offered work once only docked
+-- turtles are (R1, docs/superpowers/specs/2026-11-17-delivery-pair-and-hole-design.md).
+function W.assignDock(role, turtleId, at)
     if not _assigned[role] then _assigned[role] = {} end
     local docks = W.docks[role]
+    if at and at.x and at.z then
+        for i, dock in ipairs(docks) do
+            if not _assigned[role][i] and dock.x == at.x and dock.z == at.z then
+                _assigned[role][i] = turtleId
+                saveDockAssignments()
+                return dock
+            end
+        end
+    end
     for i, dock in ipairs(docks) do
         if not _assigned[role][i] then
             _assigned[role][i] = turtleId

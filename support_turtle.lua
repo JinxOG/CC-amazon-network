@@ -175,6 +175,16 @@ local function supportJob(job)
 
         elseif msg.from == partnerId then
 
+            -- ITS POSITION HEARD WHILE HOLDING IS ITS DESCENDED (R4, 2026-11-17). A
+            -- delivery broadcasts its position only while it travels underground --
+            -- none while it is up delivering -- so one heard now means it is on its
+            -- way again. DESCENDED is sent once: lost in a radio loss, the support
+            -- held on, its delivery went home alone and out of range, and the support
+            -- went home alone 300 s later (sim w3_side_atc, node_55).
+            if msg.type == proto.MSG.POSITION_UPDATE and ascending then
+                ascending = false
+                print("Delivery moving again -- resuming follow (its DESCENDED did not reach me)")
+            end
             if msg.type == proto.MSG.POSITION_UPDATE and not ascending then
                 -- Move to where delivery just was (1 block behind)
                 local prev = msg.payload.prev
