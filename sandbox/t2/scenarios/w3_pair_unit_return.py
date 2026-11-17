@@ -6,8 +6,8 @@ support walks its delivery's own path up behind it, and RETURN_TO_DOCK is repeat
      delivery and support is held.
   2. PART 1 (R2): one order. The ATC must log the pair let in as one unit, and the delivery's wait at the hole is its
      support's walk.
-  3. PART 2 (R3): the moment the delivery is called up from its holding slot, every message to the support on the
-     turtles' local channel is lost for 60 s: its first RETURN_TO_DOCK is lost. It must still come home behind it.
+  3. PART 2 (R3): the moment the delivery is called up from its holding slot, a total radio blackout for 60 s (every
+     channel, every receiver): its first RETURN_TO_DOCK is lost. Its support must still come home behind it.
 CHECKS (each with its evidence): the ATC let the pair in as one unit (evidence); the delivery waited at the hole under 60 s;
 the come-home was lost (evidence: the delivery was called up and the loss started); the support never took its delivery
 for gone nor found its own way home; the job completed; no jam cleared by a timer; the ATC holds nothing; every turtle is
@@ -94,10 +94,11 @@ def steps(ctx):
     ctx.expect(bool(called), "%s was called up from its holding slot (%s)" % (dname, called[:1] if called else "nothing"))
     if not called:
         return
-    sid = int(sname.split("_")[1])            # on the test server a turtle's node id is its computer id
     tLoss = now_iso()
-    reply = c.radio_loss(0, 60000, 1.0, channel=ch_local, to=sid)
-    ctx.note("every message to #%d (%s) on channel %d lost for 60 s from the call-up: %s" % (sid, sname, ch_local, reply))
+    # A TOTAL RADIO BLACKOUT (SPEC-OWNER, 2026-11-17): every message on every channel lost for 60 s from the call-up --
+    # the delivery's first RETURN_TO_DOCK with them, so its repeat-until-heard is exercised on the real game.
+    reply = c.radio_loss(0, 60000, 1.0)
+    ctx.note("a total radio blackout for 60 s from the call-up of %s: %s" % (dname, reply))
     done = ctx.wait_until(lambda: server_done(job, t1) and server_done(sjob, t1), 2400)
     gone = by(since("Partner silent", tLoss), sname)
     alone = by(since("retracing the", tLoss), sname) + by(since("way home is shut", tLoss), sname)
