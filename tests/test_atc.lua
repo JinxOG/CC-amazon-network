@@ -497,4 +497,52 @@ return {
         local other = core.handle(st, "x9", { op = "request", route = { "W1" }, group = "zz" }, t + 2000)
         assert_eq(other.ok, false, "a turtle of another party still is not")
     end,
+
+    -- R2 of docs/superpowers/specs/2026-11-17-delivery-pair-and-hole-design.md (W3, 2026-11-17): THE PAIR'S DEPARTURE
+    -- IS ADMITTED AS ONE UNIT. The delivery used to be let out alone and its support asked only once the delivery was
+    -- at the hole; traffic admitted in between held the support back while the delivery held the hole -- every
+    -- STAGE_WAIT_S expiry (600 s) sat in that gap. Now each half asks from its dock naming its partner (pair), and
+    -- neither is let in until both have asked and both routes are free.
+    ["a pair's departure is let in only once both halves have asked, and then both at once"] = function(assert_eq)
+        local core, st, t = live()
+        local DEL, SUP = { "S1", "J1", "W1", "DH" }, { "N1", "J1", "W1", "DH" }
+        local r1 = core.handle(st, "del", { op = "request", route = DEL, group = "del", pair = "sup" }, t)
+        assert_eq(r1.ok, false, "the delivery alone is not let in")
+        assert_eq(r1.why, "waiting for partner", "and is told why (" .. tostring(r1.why) .. ")")
+        local r2 = core.handle(st, "sup", { op = "request", route = SUP, group = "del", pair = "del" }, t + 1000)
+        assert_eq(r2.ok, true, "its support asks: both are let in (" .. tostring(r2.why) .. ")")
+        local r3 = core.handle(st, "del", { op = "request", route = DEL, group = "del", pair = "sup" }, t + 2000)
+        assert_eq(r3.ok, true, "the delivery's next ask finds itself let in")
+        assert_eq(core.handle(st, "other", { op = "request", route = { "S2", "J2", "W2", "J1", "W1", "DH" } }, t + 3000).ok, false,
+            "and nobody else into DH while the pair has it")
+    end,
+
+    ["a pair is not let in while either half's way is taken"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "x", { op = "request", route = { "N1" } }, t).ok, true, "a stranger holds N1, the support's way")
+        assert_eq(core.handle(st, "x", { op = "enter", sec = "N1" }, t).ok, true)
+        core.handle(st, "del", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "del", pair = "sup" }, t)
+        local r = core.handle(st, "sup", { op = "request", route = { "N1", "J1", "W1", "DH" }, group = "del", pair = "del" }, t + 1000)
+        local d = core.handle(st, "del", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "del", pair = "sup" }, t + 2000)
+        assert_eq(r.ok, false, "the support is not let in")
+        assert_eq(d.ok, false, "nor is the delivery, alone, although its own way is free")
+        core.handle(st, "x", { op = "leave", sec = "N1" }, t + 3000)
+        local r2 = core.handle(st, "sup", { op = "request", route = { "N1", "J1", "W1", "DH" }, group = "del", pair = "del" }, t + 4000)
+        assert_eq(r2.ok, true, "N1 free: the pair goes")
+    end,
+
+    ["a message from either half keeps the pair's bookings alive"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "del", { op = "request", route = { "S1", "J1", "W1", "DH" }, group = "del", pair = "sup" }, t)
+        core.handle(st, "sup", { op = "request", route = { "N1", "J1", "W1", "DH" }, group = "del", pair = "del" }, t)
+        -- the support waits silently on its dock for HOLE_READY; its delivery keeps talking
+        local later = t
+        for _ = 1, 48 do              -- every 5 s, as a turtle at a gate talks: the ATC is not deaf
+            later = later + 5000
+            core.handle(st, "del", { op = "enter", sec = "S1" }, later)
+            core.sweep(st, later)
+        end
+        local kept = st.byTurtle["sup"] ~= nil and st.res[st.byTurtle["sup"]] ~= nil
+        assert_eq(kept, true, "the support's booking survived its own 240 s of silence")
+    end,
 }

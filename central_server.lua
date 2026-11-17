@@ -3173,7 +3173,11 @@ function jobQueue.reassign(jobId, fromId, reason)
         local master = jobQueue.pairOf(job)
         local t0 = state.registry[fromId or ""]
         if t0 then t0.status = proto.STATUS.IDLE; t0.jobId = nil end
-        if master and not master.pair.go then
+        -- Or after go while the delivery is still on its dock, waiting to be let
+        -- out with this support (R2): the pair is off and re-paired, or the
+        -- delivery would wait for a partner that is never coming.
+        local dHolder = master and state.registry[master.assignedTo or ""]
+        if master and (not master.pair.go or (dHolder and registry.atDock(dHolder))) then
             jobQueue.pairCancel(master, "support " .. tostring(fromId) .. " " .. tostring(reason))
             return
         end

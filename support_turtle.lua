@@ -42,6 +42,15 @@ local function supportJob(job)
         return base.sendFailed("mining_support_deprecated", false)
     end
 
+    -- ── Step 0 (R2): ask for the way out with the delivery, from this dock ───
+    -- The ATC lets the pair in as one unit; until then both wait on their docks.
+    local booked, why = base.prebookDeparture()
+    if not booked then
+        print("[SUPPORT] Not let out with my delivery (" .. tostring(why) .. ") -- staying docked")
+        if why == "recalled" then return base.sendFailed("recalled", false) end
+        return base.sendFailed("departure_failed: " .. tostring(why), true)
+    end
+
     -- ── Step 1: Wait for HOLE_READY from delivery turtle ─────────────────────
     -- Delivery sends this when it reaches the dispatch hole entrance
 

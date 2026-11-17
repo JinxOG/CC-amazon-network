@@ -28,6 +28,7 @@ local CFG = {
     HOLD_SLOTS  = (okW and type(W) == "table" and W.ATC and W.ATC.HOLD_SLOTS) or 14,   -- per holding line, from waypoints.lua
     SLOT_KEEP_MS = 60000,    -- a slot just left is not handed to a stranger for this long
     DEAF_GAP_MS = 10000,     -- hearing nobody at all this long: the ATC is deaf, and that time is no one's silence
+    PAIR_FRESH_MS = 15000,   -- a pair's half that asked this recently is waiting with it (each asks every 2 s)
 }
 
 -- ─── The rules, with no radio (tests drive these) ───────────────────────────
@@ -203,7 +204,14 @@ function core.handle(st, id, p, now)
     local rid = st.byTurtle[id]
     noteHeard(st, now)
     -- every entry this turtle holds is alive while it talks, its one-step ones too
-    for _, x in pairs(st.res) do if x.id == id then x.at, x.deafAt = now, deafNow(st, now) end end
+    -- -- and its party's (R2, 2026-11-17): a pair admitted as one unit, the support
+    -- waits silently on its dock for HOLE_READY while its delivery talks its way to
+    -- the hole; the pair's group is the delivery's id.
+    for _, x in pairs(st.res) do
+        if x.id == id or (x.group ~= nil and (x.group == id or x.group == p.group)) then
+            x.at, x.deafAt = now, deafNow(st, now)
+        end
+    end
     for _, line in pairs(st.slots) do
         for k, sl in pairs(line) do
             if sl.id == id then
@@ -239,6 +247,36 @@ function core.handle(st, id, p, now)
         -- held its departure back as the older requests -- 12 of 20 jammed 45 min
         -- (T2 shakeout-side-c). Asking anew lets the old go, as the cancel would have.
         for k, x in pairs(st.res) do if x.id == id then drop(st, k, p.cur) end end
+        -- A PAIR'S DEPARTURE IS ADMITTED AS ONE UNIT (R2, docs/superpowers/specs/
+        -- 2026-11-17-delivery-pair-and-hole-design.md). The delivery was let out
+        -- alone and its support asked only once the delivery stood at the hole;
+        -- traffic let in between held the support back while the delivery held the
+        -- hole -- every STAGE_WAIT_S expiry sat in that gap. Each half now asks from
+        -- its dock naming its partner (p.pair). Neither is let in until both have
+        -- asked (the partner's ask is fresh: it asks every 2 s) and both ways are
+        -- free; then both at once, and nothing is let between them.
+        if p.pair and not (st.byTurtle[p.pair] and st.res[st.byTurtle[p.pair]]) then
+            local pw = st.waiting[p.pair]
+            local w0 = st.waiting[id]
+            if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair }
+            else w0.at, w0.list, w0.group, w0.cur, w0.pair = now, list, p.group, p.cur, p.pair end
+            if not (pw and pw.pair == id and pw.list and now - (pw.at or 0) <= CFG.PAIR_FRESH_MS) then
+                return { ok = false, why = "waiting for partner" }
+            end
+            local free1, b1 = routeFree(st, list, id, p.group, p.cur)
+            local free2, b2 = routeFree(st, pw.list, p.pair, pw.group, pw.cur)
+            if free1 and free2 then
+                local nrid = admit(st, id, list, p.cur, now, p.cur ~= nil)
+                st.res[nrid].group = p.group
+                local prid = admit(st, p.pair, pw.list, pw.cur, now, pw.cur ~= nil)
+                st.res[prid].group = pw.group
+                st.waiting[id], st.waiting[p.pair] = nil, nil
+                note(st, string.format("admitted pair %s + %s: %s / %s", id, p.pair,
+                    table.concat(list, " "), table.concat(pw.list, " ")))
+                return { ok = true, rid = nrid }
+            end
+            return { ok = false, why = "busy at " .. tostring(free1 and b2 or b1) }
+        end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
         -- A turtle standing in a section (p.cur) is in the way of others whatever it
         -- waits for: fairness never holds it back, only occupancy (routeFree) does.

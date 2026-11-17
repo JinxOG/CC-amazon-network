@@ -105,7 +105,7 @@ function base.getDock()          return _self.dock       end
 function base.getPartnerId()     return _self.partnerId  end
 -- pairMate (R4): the job's partner, kept while partnerId is cleared for the ascent.
 function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false
-                                 _self.partnerHome = false; _self.partnerHeardAt = os.epoch("utc")
+                                 _self.partnerHome = false; _self.partnerHeardAt = os.epoch("utc"); _self.pairCancelled = false
                                  if id ~= nil then _self.pairMate = id end end
 -- R4: when its partner was last heard, and whether it said "come home" (firstSight).
 function base.partnerHeardAt()   return _self.partnerHeardAt or 0 end
@@ -524,6 +524,12 @@ local function firstSight(msg)
             _self.partnerId = nil
             return false
         end
+    end
+    -- R2: a pair called off by the server, noted whichever loop reads it, so a
+    -- delivery waiting on its dock to be let out stops waiting.
+    if msg.type == proto.MSG.PAIR_CANCEL and type(msg.payload) == "table" and msg.payload.jobId ~= nil
+       and msg.payload.jobId == _self.jobId then
+        _self.pairCancelled = true
     end
     -- Live-only types are never queued, so the control loop's copy is simply
     -- dropped and the job's wait must still get its own. Claiming one here
@@ -1774,7 +1780,7 @@ function atc.book(waypoints, label, giveUp)
             logWarn(string.format("ATC: %s no longer wanted (%s) -- not waiting to be let in", label or "route", tostring(stop)))
             return false, stop
         end
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = atc.pair })
         last = r
         if r and r.ok then
             atc.progressed()
@@ -2363,6 +2369,31 @@ function base.awaitPairGo(jobId)
     end
 end
 
+-- R2: A SUPPORT ASKS FOR ITS WAY OUT FROM ITS DOCK, WITH ITS DELIVERY, as soon as
+-- it has its job: the ATC lets the pair in as one unit, so once its delivery is
+-- at the hole its own way is already its, and nothing in between can hold it
+-- back. It asks every 2 s until let in (atc.book), so a half that reboots and
+-- asks again is the same request. It stops only on its delivery's word, a
+-- recall, the pair being called off, or -- the last line, for a delivery that
+-- died -- PREBOOK_SILENT_S with no word from its delivery at all.
+local PREBOOK_SILENT_S = 180
+function base.prebookDeparture()
+    if not _self.dock or not _self.partnerId then return true end
+    local route = W.supportDepartureRoute(_self.dock)
+    atc.group, atc.pair = _self.partnerId, _self.partnerId
+    local function giveUp()
+        if base.partnerLeft() then return "partner_left" end
+        if base.isRecalled() then return "recalled" end
+        if _self.pairCancelled then return "pair_cancelled" end
+        if (os.epoch("utc") - base.partnerHeardAt()) / 1000 > PREBOOK_SILENT_S then return "no_word_from_delivery" end
+        return nil
+    end
+    local booked, why = atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }),
+        "departure (with my delivery)", giveUp)
+    atc.pair = nil
+    return booked, why
+end
+
 function base.depart(noDescend)
     if _self.role == proto.ROLE.DELIVERY and _self.partnerId then
         _self.holePendingTo, _self.holePendingAt = _self.partnerId, 0
@@ -2372,6 +2403,7 @@ function base.depart(noDescend)
     _self.holePendingTo = nil
     atc.finish()
     atc.group = nil
+    atc.pair = nil
     if not ok then error(a, 0) end
     return a, b
 end
@@ -2434,7 +2466,11 @@ function departImpl(noDescend)
 
         local route = W.departureRoute(_self.dock)
         atc.group = _self.id
-        atc.book(route, "departure")
+        -- R2: let out only with its support, as one unit (atc.lua); it waits here, on
+        -- its dock. A pair the server called off (its support dropped out) ends it.
+        atc.pair = _self.partnerId
+        local bookedOut, whyNot = atc.book(route, "departure", function() return _self.pairCancelled and "pair_cancelled" end)
+        if not bookedOut then return false, whyNot end
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end
 
@@ -2529,6 +2565,7 @@ function departImpl(noDescend)
         -- One party with the delivery it follows: it may share the dispatch
         -- corner its partner is holding for it.
         atc.group = _self.partnerId
+        atc.pair = _self.partnerId
         local function partnerGone() return base.partnerLeft() and "partner_left" end
         local booked, why = atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }),
             "departure", partnerGone)
