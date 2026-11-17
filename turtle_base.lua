@@ -109,6 +109,9 @@ function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; 
                                  if id ~= nil then _self.pairMate = id end end
 -- R4: when its partner was last heard, and whether it said "come home" (firstSight).
 function base.partnerHeardAt()   return _self.partnerHeardAt or 0 end
+-- When this turtle last heard any radio message at all (R4: silence from a partner
+-- means something only while others are heard; in a blackout everyone is silent).
+function base.heardAnyAt()       return _self.heardAnyAt or os.epoch("utc") end
 function base.partnerHome()      return _self.partnerHome == true end
 function base.partnerLeft()      return _self.partnerLeft == true end
 function base.setCanDig(val)     _self.canDig = val      end
@@ -4888,6 +4891,7 @@ function base.run(jobHandler)
 
             if event == "modem_message" then
                 _baseMsgs = _baseMsgs + 1
+                _self.heardAnyAt = os.epoch("utc")     -- R4: a support's partner silence counts only while it hears others
                 local parsed = type(p4) == "table" and p4 or textutils.unserialise(p4)
                 if parsed then
                     local valid, msg = proto.decode(parsed)

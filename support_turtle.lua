@@ -151,6 +151,10 @@ local function supportJob(job)
 
         if msg and msg.from == partnerId then heardAt = os.epoch("utc") end
         heardAt = math.max(heardAt, base.partnerHeardAt())
+        -- Hearing nobody at all (a radio blackout), its delivery's silence is no
+        -- news: that time is nobody's silence, as at the ATC. Three supports left
+        -- their deliveries in side test sim's 5-minute blackout before this.
+        if os.epoch("utc") - base.heardAnyAt() > 10000 then heardAt = os.epoch("utc") end
         -- Its "come home", however it arrived (noted as it came in, R4).
         if not (msg and msg.type == proto.MSG.RETURN_TO_DOCK) and base.partnerHome() then
             msg = { type = proto.MSG.RETURN_TO_DOCK, from = partnerId, payload = {} }

@@ -4893,7 +4893,20 @@ function registry.reSendOnHeartbeat(id, status)
     local job = state.jobs[jid]
     if job and job.assignedTo == id
        and (job.status == JOB_STATUS.ASSIGNED or job.status == JOB_STATUS.IN_PROGRESS) then
-        sendTo(id, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(job.id, job.type, job.params))
+        -- A DELIVERY'S RE-SENT JOB NAMES ITS SUPPORT (2026-11-17, sim w3_side_atc).
+        -- The partner is added to the dispatch's own copy of the params, never to
+        -- job.params, so a delivery rebooted mid-job was sent its job with no
+        -- partner: it went down the hole alone, its support waited 180 s for a
+        -- HOLE_READY that never came, and the order failed for good.
+        local params = job.params
+        local sup = job.type == proto.JOB.DELIVER and job.linkedJob and state.jobs[job.linkedJob]
+        if sup and sup.assignedTo
+           and (sup.status == JOB_STATUS.ASSIGNED or sup.status == JOB_STATUS.IN_PROGRESS) then
+            params = {}
+            for k, v in pairs(job.params or {}) do params[k] = v end
+            params.partnerId = sup.assignedTo
+        end
+        sendTo(id, proto.MSG.JOB_ASSIGN, proto.payloadJobAssign(job.id, job.type, params))
         logInfo(string.format("Re-sent job %s to %s (first heartbeat)", jid, id))
     else
         logInfo(string.format("Held re-send of %s to %s dropped: no longer its job", jid, id))

@@ -57,6 +57,7 @@ def metrics(run):
         "never staged": sum(1 for l in ls if "never staged in" in l),
         "gave up 120s": sum(1 for l in ls if "Gave up after 120s" in l),
         "swept live": sum(1 for l in ls if re.search(r"silent \d+s: booking dropped", l)),
+        "partner silent": sum(1 for l in ls if "Partner silent" in l),
     }
     return {
         "run": os.path.basename(run.rstrip("/\\")),

@@ -132,4 +132,28 @@ return {
         assert_eq(go, 1, "go once both accepted")
         assert_eq(notYours, 1, "a turtle the job is not assigned to is told it is off")
     end,
+
+    -- 2026-11-17 (sim w3_side_atc on R4): a delivery rebooted mid-job was sent its job again with no partner -- the
+    -- dispatch adds it to its own copy of the params only -- went down the hole alone, and the order failed for good.
+    ["a delivery's job sent again after a reboot names its support"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.TRAVELLING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 153, y = 67, z = -2797 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0011"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].params = { destination = { x = 124, y = 67, z = -2824 } }   -- as a real dispatch stores it
+        T.state.registry["node_d"].reSendJobId = "job_0010"
+        T.sent = {}
+        T.registry.reSendOnHeartbeat("node_d", proto.STATUS.IDLE)
+        local partner
+        for _, m in ipairs(T.sent) do
+            local ok, d = pcall(textutils.unserialise, m.body)
+            if ok and type(d) == "table" and d.type == proto.MSG.JOB_ASSIGN and d.to == "node_d" then
+                partner = d.payload and d.payload.params and d.payload.params.partnerId
+            end
+        end
+        restore()
+        assert_eq(partner, "node_s", "the job sent again carries its support")
+    end,
 }
