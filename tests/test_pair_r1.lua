@@ -198,4 +198,62 @@ return {
         assert_eq(told, 1, "the delivery is told the pair is off")
         assert_eq(master.status, "PENDING", "the delivery's job goes back to be paired again")
     end,
+
+    -- 2026-11-17 (sim w3_side_atc): in the outage the server took node_32 for timed out and sent job_0036 back; that
+    -- cancelled its support's half and RECALLed node_51, which was out in the tunnel with its live delivery: it went
+    -- home alone, got no slot, retraced 216 steps and met the next pair head-on. A support out with its delivery is
+    -- left with it (R4: it leaves only on its delivery's word); its half ends once it is home.
+    ["a delivery's job sent back does not recall its support while the support is out"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 248, y = 60, z = -2780 }, proto.STATUS.RETURNING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 248, y = 60, z = -2781 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0011"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].pair.go = true
+        T.sent = {}
+        T.jobQueue.reassign("job_0010", "node_d", "turtle_timeout")
+        local support = T.state.jobs["job_0011"].status
+        local recalled = sentTo(T, proto.MSG.RECALL, "node_s")
+        restore()
+        assert_eq(support, "IN_PROGRESS", "the support's half is left with it")
+        assert_eq(recalled, 0, "and it is not recalled")
+    end,
+
+    -- 2026-11-17 (sim w3_side_atc, job_0043): the server called a pair off and sent the job back; the delivery's
+    -- "departure_failed: pair_cancelled" that followed was counted as a fresh failure -- retry 1/3, 2/3, 3/3, one of
+    -- them landing after the job had gone out again to the same delivery -- and the order failed for good. A failure
+    -- that is the echo of the server's own call-off is not counted.
+    ["a delivery's 'pair_cancelled' after the server called the pair off is not counted against the job"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.TRAVELLING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 153, y = 67, z = -2797 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].assignedTo = "node_d"
+        T.handlers[proto.MSG.JOB_FAILED]({ from = "node_d", payload = { jobId = "job_0010", reason = "departure_failed: pair_cancelled", recoverable = true } })
+        local job = T.state.jobs["job_0010"]
+        restore()
+        assert_eq(job.retries, 0, "no retry counted (" .. tostring(job.retries) .. ")")
+    end,
+
+    -- 2026-11-17 (sim w3_side_atc): the heartbeat timeout of node_32 in the outage cancelled its support's half and
+    -- RECALLed node_51 ("partner_timed_out"), out in the tunnel with its live delivery. Left with it, as in reassign.
+    ["a delivery's heartbeat timeout does not recall its support while the support is out"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 248, y = 60, z = -2780 }, proto.STATUS.RETURNING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 248, y = 60, z = -2781 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0011"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].pair.go = true
+        T.state.registry["node_d"].lastSeen = 0                    -- long silent: timed out
+        T.sent = {}
+        T.registry.checkTimeouts()
+        local support = T.state.jobs["job_0011"].status
+        local recalled = sentTo(T, proto.MSG.RECALL, "node_s")
+        restore()
+        assert_eq(recalled, 0, "the support out with it is not recalled")
+        assert_eq(support, "IN_PROGRESS", "and its half is left with it")
+    end,
 }

@@ -289,6 +289,28 @@ function core.handle(st, id, p, now)
     end
 
     if p.op == "report" then
+        -- A REPORT SAYS WHERE IT STANDS AND WHAT IT STILL NEEDS (2026-11-17, T2
+        -- shakeout-side-h s002). node_215 and node_219 left DH for the tunnel; their
+        -- ATC_LEAVEs were lost and DH stayed booked, empty, until the 180 s sweep. A
+        -- section it entered and no longer stands in is left; from outside the base
+        -- (out) its booking is done. Only a report that says where it stands counts.
+        local r = rid and st.res[rid]
+        if r and p.out then
+            drop(st, rid)
+            note(st, string.format("%s reports from outside the base: its booking is done", id))
+            return { ok = true }
+        end
+        if r and p.cur then
+            local keep = { [p.cur] = true }
+            for _, s in ipairs(p.route or {}) do keep[s] = true end
+            local gone = {}
+            for s in pairs(r.entered) do if not keep[s] then gone[#gone + 1] = s end end
+            for _, s in ipairs(gone) do core.handle(st, id, { op = "leave", sec = s }, now) end
+            if #gone > 0 then
+                note(st, string.format("%s reports from %s: left %s", id, p.cur, table.concat(gone, " ")))
+            end
+            return { ok = true }
+        end
         if p.cur and not rid then
             local nrid = admit(st, id, (p.route and #p.route > 0) and p.route or { p.cur }, p.cur, now, true)
             st.res[nrid].group = p.group      -- its party, so a pair is rebuilt as one (R2)

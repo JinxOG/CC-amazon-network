@@ -292,4 +292,30 @@ return {
         assert_eq(asc2, 3, "called home: the hold notice stops")
         assert_eq(home >= 1 and homeTrail == home, true, "and the come-home carries its path (" .. home .. "/" .. homeTrail .. ")")
     end,
+
+    -- 2026-11-17 (T2 shakeout-side-h, s002): out of the base into the tunnel, node_215's ATC_LEAVE for DH was lost and
+    -- DH stayed booked, empty, until the 180 s sweep. Having stepped out of the base, a turtle says so (a report with
+    -- out) every 10 s for a while, so the first one heard lets its booking go; asking for a new route ends that.
+    ["a turtle that stepped out of the base says so until it asks for a new route"] = function(assert_eq)
+        local base, sent = fresh()
+        local atc = base.atc
+        atc.ENABLED = true
+        base.gpsSync()                                             -- a measured position
+        base.setPosForTest({ x = 144, y = 60, z = -2813 })        -- the tunnel, one block past the shaft's foot
+        local function outs()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find("ATC_REPORT", 1, true) and b:find("out", 1, true) then n = n + 1 end end
+            return n
+        end
+        atc.route, atc.aliveAt = nil, nil
+        atc.steppedOut()
+        atc.keepInBase()
+        local first = outs()
+        atc.ask = function() return { ok = true } end
+        atc.book({ { x = 144, y = 60, z = -2813 } }, "anything")
+        atc.route, atc.aliveAt = nil, nil
+        atc.keepInBase()
+        assert_eq(first, 1, "out of the base: it says so")
+        assert_eq(outs(), 1, "asking for a new route ends it")
+    end,
 }
