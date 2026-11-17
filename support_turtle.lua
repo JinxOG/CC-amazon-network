@@ -204,9 +204,10 @@ local function supportJob(job)
                 end
 
             elseif msg.type == proto.MSG.ASCENDING then
-                -- Delivery going up to deliver — hold current position
+                -- Delivery going up to deliver — hold current position. Repeated
+                -- every 10 s while it holds (side-h): said once.
+                if not ascending then print("Delivery ascending — holding position") end
                 ascending = true
-                print("Delivery ascending — holding position")
                 -- At the holding line it names its slot and its path (R3): come up
                 -- behind it along its own dug cells, not wherever this one lagged.
                 if msg.payload and msg.payload.slot then base.walkPartnerTrail() end
@@ -222,6 +223,10 @@ local function supportJob(job)
                 -- Wait for it to clear the area before ascending.
                 print("Delivery inside — waiting for it to clear arrivals hole...")
                 sleep(8)
+                -- Up its delivery's own cells first (T2 shakeout-side-h, node_219: its
+                -- hold notice lost, it planned its own way from 6 cells off, into rock,
+                -- and retraced 158 steps). The come-home carries the path too.
+                base.walkPartnerTrail()
                 print("Ascending and returning to dock independently")
                 break
 

@@ -510,8 +510,11 @@ local function firstSight(msg)
             -- R3: tell it this one heard, so it stops repeating it.
             pcall(base.signalPartnerDirect, proto.MSG.HOME_HEARD, msg.from, {})   -- base.: atc is declared further down
         end
-        if msg.type == proto.MSG.ASCENDING and type(msg.payload) == "table" and type(msg.payload.trail) == "table" then
-            _self.partnerTrail = msg.payload.trail      -- R3: its path, to walk up behind it
+        -- R3: its path, to walk up behind it -- from the hold notice or, that lost,
+        -- from the come-home (T2 shakeout-side-h, node_219).
+        if (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
+           and type(msg.payload) == "table" and type(msg.payload.trail) == "table" then
+            _self.partnerTrail = msg.payload.trail
         end
         if (msg.type == proto.MSG.ASCENDING or msg.type == proto.MSG.RETURN_TO_DOCK)
            and type(msg.payload) == "table" and tonumber(msg.payload.slot) then
@@ -2386,13 +2389,39 @@ local HOLE_PENDING_MS = 20000
 -- job; _self.partnerId is cleared while it delivers and is not this.
 local PAIR_ALIVE_MS = 20000
 local HOME_REPEAT_MS = 10000
+-- THE HOLD NOTICE IS REPEATED TOO (2026-11-17, T2 shakeout-side-h). At its holding
+-- slot a delivery told its support "hold; I am in slot N, by this path" ONCE; lost
+-- in the server outage, node_219 stood 8.5 min in another pair's path (it held
+-- node_221 120 s), and told to come home it planned its own way, from 6 cells off,
+-- into rock. So the notice goes every HOME_REPEAT_MS while the delivery holds, and
+-- the come-home -- which carries the path as well -- replaces it.
+function atc.startHoldNotice(to, slot, trail)
+    local now = os.epoch("utc")
+    _self.holdNotice = { to = to, slot = slot, trail = trail, at = now, untilMs = now + 600000 }
+    atc.signalSupport(proto.MSG.ASCENDING, to, slot, trail)
+end
+function atc.callSupportHome(to, slot)
+    local trail = _self.holdNotice and _self.holdNotice.trail
+    _self.holdNotice = nil
+    atc.signalSupport(proto.MSG.RETURN_TO_DOCK, to, slot, trail)
+    _self.callHome = { to = to, slot = slot, trail = trail, at = os.epoch("utc"), untilMs = os.epoch("utc") + 600000 }
+end
+
 function atc.keepPair(now)
     local ch = _self.callHome
     if ch then
         if now >= ch.untilMs then _self.callHome = nil
         elseif now - (ch.at or 0) >= HOME_REPEAT_MS then
             ch.at = now
-            atc.signalSupport(proto.MSG.RETURN_TO_DOCK, ch.to, ch.slot)
+            atc.signalSupport(proto.MSG.RETURN_TO_DOCK, ch.to, ch.slot, ch.trail)
+        end
+    end
+    local hn = _self.holdNotice
+    if hn then
+        if now >= hn.untilMs then _self.holdNotice = nil
+        elseif now - (hn.at or 0) >= HOME_REPEAT_MS then
+            hn.at = now
+            atc.signalSupport(proto.MSG.ASCENDING, hn.to, hn.slot, hn.trail)
         end
     end
     if _self.role ~= proto.ROLE.DELIVERY or not _self.pairMate or not _self.jobId then return end
@@ -2851,7 +2880,7 @@ function home.dock()
             -- along the path this turtle just dug (base.atc.preferSlot).
             -- And the tail of its own path (R3): a support that lagged walks these
             -- dug cells up behind it rather than planning a way through rock.
-            base.atc.signalSupport(proto.MSG.ASCENDING, savedPartnerId, slot, base.trailTail(base.TRAIL_TAIL_N))
+            base.atc.startHoldNotice(savedPartnerId, slot, base.trailTail(base.TRAIL_TAIL_N))
             sleep(0.5)
         end
     end
@@ -2920,12 +2949,12 @@ function home.dock()
     if savedPartnerId then
         move.to(W.ARRIVALS_HOLE.x, FLOOR_Y, W.RED_Z)
         logInfo("Clear of arrivals hole — signalling support to return.")
-        base.atc.signalSupport(proto.MSG.RETURN_TO_DOCK, savedPartnerId, savedSlot)
         -- REPEATED UNTIL HEARD (R3): sent once, it was lost in a radio blackout and
         -- its support held in the holding line until the 300 s silence rule sent it
         -- home (sim w3_side_atc, node_55). atc.keepPair repeats it every
         -- HOME_REPEAT_MS, after this job too, until the support answers HOME_HEARD.
-        _self.callHome = { to = savedPartnerId, slot = savedSlot, untilMs = os.epoch("utc") + 600000 }
+        -- It carries the path, for a support that missed the hold notice.
+        base.atc.callSupportHome(savedPartnerId, savedSlot)
         -- partnerId already nil, nothing more to clear
     end
 

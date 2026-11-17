@@ -258,4 +258,38 @@ return {
         assert_eq(askedOnce, 1, "it asked, and not again within 10 s")
         assert_eq(after, "pair_cancelled", "told the pair is off: it stops waiting")
     end,
+
+    -- 2026-11-17 (T2 shakeout-side-h, node_211 and node_219): at its holding slot a delivery sent its support the hold
+    -- notice (ASCENDING: its slot and its path) ONCE; lost, the support stood 8.5 min in another pair's path, not
+    -- knowing where its delivery went. The notice is repeated every 10 s while the delivery holds, as R3 repeats the
+    -- come-home, and the come-home (which carries the path too) replaces it.
+    ["a delivery in its holding slot repeats its hold notice until it calls its support home"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base.setRoleForTest(proto.ROLE.DELIVERY)
+        base.setStatus(proto.STATUS.TRAVELLING, "job_0229")
+        local trail = { { x = 226, y = 60, z = -2783 }, { x = 226, y = 60, z = -2782 } }
+        local function count(kind)
+            local n, withTrail = 0, 0
+            for _, b in ipairs(sent) do
+                if b:find(kind, 1, true) then n = n + 1; if b:find("trail", 1, true) and b:find("2782", 1, true) then withTrail = withTrail + 1 end end
+            end
+            return n, withTrail
+        end
+        local t0 = os.epoch("utc")
+        base.atc.startHoldNotice("node_219", 11, trail)
+        local firstAsc = count("ASCENDING")
+        base.atc.keepPair(t0 + 11000)
+        base.atc.keepPair(t0 + 22000)
+        local asc, ascTrail = count("ASCENDING")
+        base.atc.callSupportHome("node_219", 11)
+        base.atc.keepPair(t0 + 40000)
+        local asc2 = count("ASCENDING")
+        local home, homeTrail = count("RETURN_TO_DOCK")
+        assert_eq(firstAsc, 1, "the notice is sent at once")
+        assert_eq(asc, 3, "and again every 10 s while it holds")
+        assert_eq(ascTrail, 3, "each naming its path")
+        assert_eq(asc2, 3, "called home: the hold notice stops")
+        assert_eq(home >= 1 and homeTrail == home, true, "and the come-home carries its path (" .. home .. "/" .. homeTrail .. ")")
+    end,
 }

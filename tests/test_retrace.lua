@@ -188,4 +188,24 @@ return {
         assert_eq(before.x .. "," .. before.z, HOLE.x .. "," .. HOLE.z, "it really stands at the hole's top (the case under test)")
         assert_eq(p.x .. "," .. p.y .. "," .. p.z, HOLE.x .. "," .. HOLE.y .. "," .. HOLE.z, "after measuring it believes where GPS put it")
     end,
+
+    -- 2026-11-17 (T2 shakeout-side-h, node_219): its delivery's hold notice (ASCENDING, with the trail) was lost, so
+    -- the support never knew where it went; told to come home, it planned its own way to slot 11 from 6 cells off,
+    -- was blocked at once and retraced 158 steps. RETURN_TO_DOCK carries the trail too, and walks it the same way.
+    ["a support that heard only the come-home walks its delivery's cells from it"] = function(assert_eq)
+        local world = {}
+        for x = 120, 140 do for z = -2835, -2825 do world[x .. ",60," .. z] = "minecraft:stone" end end
+        local path = {}
+        for x = 122, 130 do path[#path + 1] = { x = x, y = 60, z = -2830 } end
+        for z = -2829, -2826 do path[#path + 1] = { x = 130, y = 60, z = z } end
+        for _, c in ipairs(path) do world[c.x .. ",60," .. c.z] = nil end
+        local r = supportAt({ x = 124, y = 60, z = -2830 }, world)
+        r.base.setPartnerId("node_d")
+        local proto = require("protocol")
+        r.base._firstSight(proto.encode(proto.MSG.RETURN_TO_DOCK, "node_d", "x", { slot = 7, trail = path }))
+        local walked = r.base.walkPartnerTrail()
+        assert_eq(walked > 0, true, "it walked (" .. tostring(walked) .. " cells)")
+        assert_eq(r.c.pos.x .. "," .. r.c.pos.z, "130,-2827", "to the cell behind its delivery")
+        assert_eq(r.dug(), 0, "without digging a block")
+    end,
 }
