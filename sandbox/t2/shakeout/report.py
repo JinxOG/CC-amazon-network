@@ -635,6 +635,39 @@ SECTOR_DONE_RX = re.compile(r"^Sector \(-?\d+,-?\d+\) done by node_\d+")
 FAIL_RX = re.compile(r"fail|STUCK|stuck|NEEDS HANDS|Gave up|blocked|blocking|retry|ERROR|refused|lost|cannot|no fix|timeout",
                      re.I)
 HK_RX = re.compile(r"^(\S+) HOUSEKEEPING (\S+?):?(\s.*)?$")
+# A WAIT CLEARED ONLY BY A TIMER IS A FAILURE (the user, 2026-11-17). Each last-line timer, by the words it logs (turtle_base.lua and
+# atc.lua at 9c81a76); W3 tells SPEC-OWNER when one is added or reworded. The ATC's sweep counts only for a turtle heard again after
+# it (it was alive, so the timer moved live traffic); a sweep of a turtle never heard again is a dead turtle, counted apart.
+TIMER_RX = (
+    ("stage_wait_delivery", re.compile(r"Support node_\d+ never staged in \d+s")),
+    ("stage_wait_support", re.compile(r"Delivery node_\d+ still in the hole cell after \d+s")),
+    ("blocked_give_up", re.compile(r"Gave up after \d+s blocked")),
+    # the line where it fires; "Return home failed ...: no holding slot of mine in 120 s; retracing stopped" later is the same wait
+    ("no_holding_slot", re.compile(r"\(no holding slot of mine in \d+ s\) -- retracing")),
+)
+SWEEP_RX = re.compile(r"(node_\d+) silent \d+s: booking dropped")
+
+
+def timer_clears(lines):
+    """([{"t", "node", "kind", "line"}], evidence): every wait a last-line timer ended, in run time order."""
+    out, dead, last_heard = [], 0, {}
+    for l in lines:
+        m = NODE_RX.match(l["src"])
+        if m:
+            last_heard[l["src"]] = l["rt"]
+    for l in lines:
+        for kind, rx in TIMER_RX:
+            if rx.search(l["msg"]):
+                out.append({"t": l["rt"], "node": l["src"] if NODE_RX.match(l["src"]) else None, "kind": kind, "line": l["raw"]})
+                break
+        else:
+            m = SWEEP_RX.search(l["msg"])
+            if m:
+                if last_heard.get(m.group(1), -1) > l["rt"]:
+                    out.append({"t": l["rt"], "node": m.group(1), "kind": "atc_sweep_live", "line": l["raw"]})
+                else:
+                    dead += 1
+    return out, {"lines_scanned": len(lines), "dead_sweeps": dead}
 
 
 def _t0_from_faults(fault_lines):
@@ -1108,6 +1141,16 @@ def build_report(run_dir, expected=None):
         else:
             cards.append({"title": "Storage headroom low outside a scheduled storage fault", "turtles": [], "why": [line],
                           "lines": [line], "seed": seed, "schedule": R["schedule_path"], "faults_near": [], "at": None})
+    tclears, tevidence = timer_clears(R["lines"])
+    by_kind = {}
+    for c in tclears:
+        by_kind.setdefault(c["kind"], []).append(c)
+    for kind, members in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
+        cards.append({"title": "Timer-cleared waits: %d x %s" % (len(members), kind),
+                      "turtles": sorted({c["node"] for c in members if c["node"]}, key=_node_key),
+                      "why": ["a wait that only a last-line timer ended (the user, 2026-11-17: a FAILURE, not a recovery)"],
+                      "lines": [c["line"] for c in members[:3]], "seed": seed, "schedule": R["schedule_path"],
+                      "faults_near": faults_near(members[0]["t"]), "at": members[0]["t"]})
     for r in (R["fault_lines"] or []):
         if r.get("phase") == "fail":
             cards.append({"title": "Harness: fault %s %s never began" % (r.get("id"), r.get("fault")), "turtles": [],
@@ -1157,7 +1200,7 @@ def build_report(run_dir, expected=None):
         "long_sites": [dict(s, jobs=sorted(s["jobs"])) for s in long_sites(R)] if R["kind"] == "t2" else None,
         "faults": fstats, "fault_evidence": fevidence, "housekeeping": hk, "hours": hours, "drift": drift,
         "log_gaps": [{"from": a, "to": b} for a, b in log_gaps], "snap_gaps": [{"from": a, "to": b} for a, b in snap_gaps],
-        "cards": cards, "expected": exp,
+        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence,
         "evidence": {"log_lines": len(R["lines"]), "unparsed_lines": R["unparsed"], "snapshots": len(R["snapshots"]),
                      "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "loaders": fd["loaders"], "fault_lines": fevidence,
                      "windows": len(W)},
@@ -1207,6 +1250,11 @@ def _render(rep):
               "" if rep["failed_job"] else " -- TRUNCATED: no failed job traced to a turtle, so this item has no evidence"),
           "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, counted apart)" % (c["decommissioned"],
                                                                                                        c["expected_hands"]),
+          "- No wait cleared only by a timer (the user, 2026-11-17): **%d wait(s) cleared only by a timer**%s (evidence: %d log "
+          "lines scanned; %d ATC sweep(s) of a turtle never heard again, counted apart as dead)" % (
+              len(rep["timer_clears"]), (" -- " + ", ".join("%s %d" % (k, n) for k, n in sorted(
+                  {c["kind"]: sum(1 for x in rep["timer_clears"] if x["kind"] == c["kind"]) for c in rep["timer_clears"]}.items())))
+              if rep["timer_clears"] else "", rep["timer_evidence"]["lines_scanned"], rep["timer_evidence"]["dead_sweeps"]),
           "- Verdicts: %s; stuck at least once: %d" % (", ".join("%s %d" % (k, c[k]) for k in VERDICTS), rep["stuck_ever"])]
     if judged == 0:
         o.append("- TRUNCATED: no turtle could be judged, so none of the counts above is evidence")

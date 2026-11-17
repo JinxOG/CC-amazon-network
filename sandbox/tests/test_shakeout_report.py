@@ -388,6 +388,53 @@ class JamsAndSections(unittest.TestCase):
             shutil.rmtree(run, ignore_errors=True)
 
 
+class TimerClearedIsAFailure(unittest.TestCase):
+    """The user, 2026-11-17: a jam that only a last-line timer clears is a FAILURE, not a recovery. The lines below are the
+    exact wording each timer logs (turtle_base.lua, atc.lua at 9c81a76; side-e's own lines for the first three)."""
+
+    LINES = [
+        (10 * MIN, "node_212", "WARN", "[node_212][WARN] Support node_218 never staged in 600s -- not going out without it; "
+                                        "told it to stand down"),
+        (11 * MIN, "node_218", "WARN", "[node_218][WARN] Gave up after 120s blocked by a turtle moving down at 226,61,-2781"),
+        (12 * MIN, "node_218", "WARN", "[node_218][WARN] Cannot dig and the way home is shut (no holding slot of mine in 120 s) "
+                                        "-- retracing the 198 step(s) I came by"),
+        (16 * MIN, "node_218", "WARN", "[node_218][WARN] Return home failed at 226,61,-2781: no holding slot of mine in 120 s; "
+                                        "retracing stopped at 226,61,-2781"),     # the same wait reported again: not a second one
+        (13 * MIN, "node_216", "WARN", "[node_216][WARN] Delivery node_214 still in the hole cell after 600s -- not stepping "
+                                        "into it; home, the job goes back"),
+        (14 * MIN, "atc", "-", "[ATC] node_34 silent 183s: booking dropped, including W1 J1 it had entered"),
+        (20 * MIN, "node_34", "INFO", "[node_34][INFO] loop baseline: healthy"),     # node_34 was alive: the sweep moved traffic
+        (15 * MIN, "atc", "-", "[ATC] node_99 silent 400s: booking dropped"),        # node_99 never heard again: really dead
+    ]
+
+    def test_each_timer_is_counted_and_fails_the_bar(self):
+        run = make_run(hours=1, extra_lines=self.LINES)
+        try:
+            rep = report.build_report(run)
+            kinds = sorted(c["kind"] for c in rep["timer_clears"])
+            self.assertEqual(kinds, ["atc_sweep_live", "blocked_give_up", "no_holding_slot", "stage_wait_delivery",
+                                     "stage_wait_support"], rep["timer_clears"])
+            self.assertEqual(rep["timer_evidence"]["dead_sweeps"], 1, "a sweep of a turtle never heard again is not traffic")
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**5 wait(s) cleared only by a timer**", md)
+            self.assertTrue(any(c["title"].startswith("Timer-cleared") for c in rep["cards"]), [c["title"] for c in rep["cards"]])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_none_is_zero_with_its_evidence(self):
+        run = make_run(hours=1)
+        try:
+            rep = report.build_report(run)
+            self.assertEqual(rep["timer_clears"], [])
+            self.assertGreater(rep["timer_evidence"]["lines_scanned"], 0, "a zero must say how many lines it looked at")
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**0 wait(s) cleared only by a timer**", md)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
 CONTROL = "G:/TurtleOS-Sandbox/run/20261103-181857-w3_atc_base150-1"
 
 
