@@ -2129,6 +2129,8 @@ local function tryMove(digFn, dir)
             -- departure fails (its support is told), any other trip goes home.
             if inBase and atc.handedBack then
                 atc.handedBack = nil
+                logWarn(string.format("My job is handed back and a turtle blocks me %s at %d,%d,%d -- giving way",
+                    dir, _self.pos.x, _self.pos.y, _self.pos.z))
                 return false, "stuck: my job is handed back -- giving way"
             end
             blockReport = blockReport or waitReporter(function()

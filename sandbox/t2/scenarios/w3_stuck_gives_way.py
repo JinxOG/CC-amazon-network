@@ -101,17 +101,19 @@ def steps(ctx):
     shome = ctx.wait_until(lambda: docked(sname), 600)
     waitedOn = [l for l in by(since("Waiting for hole signal", tStuck), sname)]
     ctx.expect(bool(shome), "its support %s was home too (%d 'waiting for hole signal' after the STUCK)" % (sname, len(waitedOn)))
-    carried = [l for l in by(since("Exited depot", tStuck), dname) + by(since("At hole", tStuck), dname)]
 
     # ── the way cleared: the handed-back job goes out again ─────────────────────────────────────────────────────
     tClear = now_iso()
     ctx.note("blocker removed: %s" % c.command("setblock %d %d %d air" % BLOCK).strip()[:80])
-    redo = ctx.wait_until(lambda: since("Dispatched %s [DELIVER]" % job, tClear), 900)
-    before = [l for l in carried if not redo or l[:23] < redo[0][:23]]
-    ctx.expect(not before, "%s did not carry on with the job it handed back (%d: %s)"
-               % (dname, len(before), before[0][-100:] if before else "none"))
     done = ctx.wait_until(lambda: server_done(job, t1), 2400)
     ctx.expect(bool(done), "with the way clear, %s went out again and completed (the server's line)" % job)
+    # Carrying on = leaving the depot after the STUCK for the job it handed back: any "Exited depot" / "At hole" of the
+    # delivery before the job was dispatched to it again (if ever), to the end -- the way clearing is when it would.
+    back = [l for l in since("Dispatched %s [DELIVER] -> %s" % (job, dname), tStuck)]
+    carried = [l for l in by(since("Exited depot", tStuck), dname) + by(since("At hole", tStuck), dname)
+               if not back or l[:23] < back[0][:23]]
+    ctx.expect(not carried, "%s did not carry on with the job it handed back (%d: %s)"
+               % (dname, len(carried), carried[0][-100:] if carried else "none"))
 
     for n in held:
         ctx.dispatch("RELEASE_TURTLE", {"turtleId": n})
