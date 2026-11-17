@@ -171,8 +171,24 @@ end
 -- the way it went and stood in DH asking for its way home; the departures queued
 -- for DH were older, so it was held "after an older request", in DH, to the end
 -- of the run (sim w3_side_atc).
+-- The departures go through DH, the returns through ARR (R3).
+local function lineOf(list)
+    for _, s in ipairs(list or {}) do
+        if s == "DH" then return "departure" elseif s == "ARR" then return "return" end
+    end
+    return nil
+end
+
+-- R3: NO CLOCK IN THE ORDER (SPEC-OWNER's ruling, 2026-11-17: "alternate; if only one
+-- line is waiting it goes straight away, and the order never depends on a clock").
+-- FAIR_MS let a newer request overtake an older one for its first 60 s. Now an older
+-- waiter whose route overlaps always goes first -- unless it is in the other line
+-- and that line had the last turn (st.lastLine): the departure and the return lines
+-- take turns where they share sections. A pair never waits for itself.
 local function olderWaiterOverlaps(st, list, id, now, cur)
     local mine = st.waiting[id]
+    local myLine = lineOf(list)
+    local myGroup = mine and mine.group
     local since = mine and mine.since or now
     local holds = {}
     if cur then holds[cur] = true end
@@ -184,7 +200,10 @@ local function olderWaiterOverlaps(st, list, id, now, cur)
         end
     end
     for other, w in pairs(st.waiting) do
-        if other ~= id and w.since < since and now - w.since > CFG.FAIR_MS and now - w.at < 10000 then
+        local theirLine = lineOf(w.list)
+        local myTurn = myLine ~= nil and theirLine ~= nil and myLine ~= theirLine and st.lastLine == theirLine
+        local sameParty = myGroup ~= nil and w.group == myGroup
+        if other ~= id and w.since < since and now - w.at < 10000 and not myTurn and not sameParty then
             local waitsForMe = false
             for _, a in ipairs(w.list) do if holds[a] then waitsForMe = true end end
             if not waitsForMe then
@@ -208,12 +227,6 @@ end
 -- is one more than the waiting requests of that line that asked before it -- a
 -- pair counted once, by its group -- and "after" is the one just ahead. Only
 -- requests still asking count (each asks every 2 s): one that stopped is gone.
-local function lineOf(list)
-    for _, s in ipairs(list or {}) do
-        if s == "DH" then return "departure" elseif s == "ARR" then return "return" end
-    end
-    return nil
-end
 local function placeInLine(st, id, now)
     local me = st.waiting[id]
     local line = me and lineOf(me.list)
@@ -314,6 +327,7 @@ function core.handle(st, id, p, now)
                 local prid = admit(st, p.pair, pw.list, pw.cur, now, pw.cur ~= nil)
                 st.res[prid].group = pw.group
                 st.waiting[id], st.waiting[p.pair] = nil, nil
+                st.lastLine = lineOf(list) or st.lastLine
                 note(st, string.format("admitted pair %s + %s: %s / %s", id, p.pair,
                     table.concat(list, " "), table.concat(pw.list, " ")))
                 return { ok = true, rid = nrid }
@@ -329,6 +343,7 @@ function core.handle(st, id, p, now)
             local nrid = admit(st, id, list, p.cur, now, p.cur ~= nil)
             st.res[nrid].group = p.group
             st.waiting[id] = nil
+            st.lastLine = lineOf(list) or st.lastLine
             note(st, string.format("admitted %s: %s", id, table.concat(list, " ")))
             return { ok = true, rid = nrid }
         end

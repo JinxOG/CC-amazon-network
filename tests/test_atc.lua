@@ -266,10 +266,23 @@ return {
         core.handle(st, "next", { op = "request", route = back }, later)
         -- home, docked (no section), asks for a departure
         local r = core.handle(st, "home", { op = "request", route = { "S3", "J3", "W3", "J2", "W2", "J1", "W1", "DH" } }, later)
-        assert_eq(core.handle(st, "next", { op = "request", route = back }, later).ok, true,
-            "the departure's ask let go of R5 and the rest it was not standing in: the return goes")
-        assert_eq(r.ok == true or r.why == "after an older request" or (r.why or ""):find("busy") ~= nil, true,
-            "and the departure is answered like any other (" .. tostring(r.why) .. ")")
+        -- What it booked for the trip home and is not standing in is let go: nothing in R5..R2 is home's now.
+        local stale = 0
+        for _, sec in ipairs({ "R5", "R4", "R3", "R2" }) do
+            for _, rid in ipairs(st.q[sec] or {}) do if st.res[rid] and st.res[rid].id == "home" then stale = stale + 1 end end
+        end
+        assert_eq(stale, 0, "the departure's ask let go of R5 and the rest it was not standing in")
+        -- And the return goes: at once, or -- a return was let in last, so by turns (R3) the departure first -- once
+        -- the departure is through J3 and S3.
+        local n = core.handle(st, "next", { op = "request", route = back }, later)
+        if not n.ok then
+            assert_eq(r.ok, true, "the return waits only because the departure had its turn (" .. tostring(n.why) .. ")")
+            for _, sec in ipairs({ "S3", "J3", "W3", "J2", "W2", "J1", "W1", "DH" }) do
+                core.handle(st, "home", { op = "enter", sec = sec }, later); core.handle(st, "home", { op = "leave", sec = sec }, later)
+            end
+            n = core.handle(st, "next", { op = "request", route = back }, later + 1000)
+        end
+        assert_eq(n.ok, true, "the return goes (" .. tostring(n.why) .. ")")
     end,
 
     ["a request kept waiting holds off later ones that overlap it"] = function(assert_eq)
@@ -596,5 +609,39 @@ return {
         assert_eq(b.line, "departure", "in the departure line")
         local later = core.handle(st, "b", { op = "request", route = DEP }, t + 30000)    -- a, p1, p2 stopped asking
         assert_eq(later.place, 1, "those that stopped asking are no longer ahead (" .. tostring(later.place) .. ")")
+    end,
+
+    -- R3 (SPEC-OWNER's ruling 2026-11-17: "alternate; if only one line is waiting it goes straight away, and the order
+    -- never depends on a clock"). FAIR_MS let a newer request overtake an older one for 60 s; now an older waiter of
+    -- the same line always goes first, and the departure and return lines take turns where they share sections.
+    ["in one line the older waiter goes first, with no clock"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "x", { op = "request", route = { "J2" } }, t).ok, true, "J2 taken")
+        core.handle(st, "old", { op = "request", route = { "S2", "J2", "W2", "J1", "W1", "DH" } }, t + 1000)    -- held at J2
+        local new = core.handle(st, "new", { op = "request", route = { "S1", "J1", "W1", "DH" } }, t + 2000)
+        assert_eq(new.ok, false, "the newer departure does not overtake the older one (" .. tostring(new.why) .. ")")
+    end,
+
+    ["the departure and return lines take turns where they share a section"] = function(assert_eq)
+        local core, st, t = live()
+        local DEP, RET = { "S1", "J1", "W1", "DH" }, { "ARR", "R1", "J1", "S1" }
+        assert_eq(core.handle(st, "d0", { op = "request", route = DEP }, t).ok, true, "a departure goes: the last one let in")
+        core.handle(st, "d0", { op = "enter", sec = "S1" }, t); core.handle(st, "d0", { op = "enter", sec = "J1" }, t)
+        core.handle(st, "d1", { op = "request", route = DEP }, t + 1000)     -- older, the departure line
+        core.handle(st, "r1", { op = "request", route = RET }, t + 2000)     -- newer, the return line
+        for _, sec in ipairs({ "S1", "J1", "W1", "DH" }) do core.handle(st, "d0", { op = "leave", sec = sec }, t + 3000) end
+        local r = core.handle(st, "r1", { op = "request", route = RET }, t + 4000)
+        assert_eq(r.ok, true, "a departure went last: the return's turn, though the departure waiting is older (" .. tostring(r.why) .. ")")
+        local d = core.handle(st, "d1", { op = "request", route = DEP }, t + 5000)
+        assert_eq(d.ok, false, "the departure waits for the return it shares J1 and S1 with")
+    end,
+
+    ["with one line waiting it goes straight away"] = function(assert_eq)
+        local core, st, t = live()
+        local RET = { "ARR", "R1", "J1", "S1" }
+        assert_eq(core.handle(st, "r0", { op = "request", route = RET }, t).ok, true, "a return goes")
+        for _, sec in ipairs(RET) do core.handle(st, "r0", { op = "enter", sec = sec }, t); core.handle(st, "r0", { op = "leave", sec = sec }, t) end
+        assert_eq(core.handle(st, "r1", { op = "request", route = RET }, t + 1000).ok, true,
+            "another return, nobody in the other line: it goes, though a return went last")
     end,
 }
