@@ -6,9 +6,9 @@ cell to empty, saying SUPPORT_STAGED again every 5 s, and goes home if its deliv
 
   1. The ATC is placed (as in w3_atc_pair.py); the arrivals side is force-loaded; once the pair is known every other
      delivery and support is held.
-  2. The moment the delivery says "At hole", every radio message on the turtles' local channel is lost for 90 s (the
-     control mod's radio loss; only this pair is moving). Its support stages inside that window: its first
-     SUPPORT_STAGED is lost, as node_216's was.
+  2. From the moment the delivery's departure is let in, every radio message TO THE DELIVERY on the turtles' local
+     channel is lost for 90 s (the control mod's radio loss, receiver: the delivery). Its support stages inside that
+     window: its SUPPORT_STAGED is lost, as node_216's was; HOLE_READY, which goes the other way, is not.
   3. PART 2, the same run's second cause (sim w3_side_atc on 17d6b30): a turtle waiting in the base without a word to
      the ATC was taken for dead at 180 s and its section given away under it. A second delivery is ordered; once the
      ATC has let its departure in, every GPS host is shut down for 300 s and the delivery is rebooted where it stands:
@@ -91,17 +91,20 @@ def steps(ctx):
             held.append(name)
     ctx.note("pair %s + %s; held the others: %s" % (dname, sname, held))
 
-    at_hole = ctx.wait_until(lambda: by(since("At hole", t1), dname), 1200)
-    ctx.expect(bool(at_hole), "%s reached the hole (%s)" % (dname, at_hole[:1] if at_hole else "nothing"))
-    if not at_hole:
+    # THE FAULT, from the moment its departure is let in (run e: noticed only at "At hole", on a 10 s poll, the loss
+    # began after the support had staged): every message on the turtles' local channel TO THE DELIVERY is lost for
+    # LOSS_S -- its support's SUPPORT_STAGED with them (node_216's was sent once, and lost). The support still hears
+    # HOLE_READY: that goes the other way. On the test server a turtle's node id is its computer id.
+    adm = ctx.wait_until(lambda: [l for l in since("admitted %s:" % dname, t1)], 900, poll=1)
+    ctx.expect(bool(adm), "%s's departure was let in (%s)" % (dname, adm[:1] if adm else "nothing"))
+    if not adm:
         return
+    did = int(dname.split("_")[1])
     t_loss = now_iso()
-    # THE FAULT: everything on the turtles' local channel is lost for LOSS_S -- the support's first SUPPORT_STAGED with
-    # it (node_216's was sent once, and lost). Every other pair is held, so only this pair talks there. (Run a looked
-    # for the delivery's computer by its position to aim the loss at it alone: `t2 computers` gave no turtle there.)
-    reply = c.radio_loss(0, LOSS_S * 1000, 1.0, channel=ch_local)
-    ctx.note("lost every message on channel %s for %d s: %s" % (ch_local, LOSS_S, reply))
-
+    reply = c.radio_loss(0, LOSS_S * 1000, 1.0, channel=ch_local, to=did)
+    ctx.note("lost every message to #%d (%s) on channel %s for %d s: %s" % (did, dname, ch_local, LOSS_S, reply))
+    at_hole = ctx.wait_until(lambda: by(since("At hole", t1), dname), 600)
+    ctx.expect(bool(at_hole), "%s reached the hole (%s)" % (dname, at_hole[:1] if at_hole else "nothing"))
     done1 = ctx.wait_until(lambda: server_done(job1, t1) and server_done(sjob1, t1), 3600)
     staged = by(since("Staged behind hole", t_loss), sname)
     in_loss = [l for l in staged if l[:19] <= (datetime.datetime.strptime(t_loss, "%Y-%m-%dT%H:%M:%S")
@@ -154,7 +157,7 @@ def steps(ctx):
     ctx.expect(not lost, "the ATC never gave away a section %s stood in (%s)" % (dname, lost[0][-150:] if lost else "none"))
     # Rebooted in the hole cell (run c), the delivery waits for its support to give up and go home before it can move:
     # a STUCK it recovers from. One it never recovers from is the failure.
-    stuck2 = since("STUCK ", t3)
+    stuck2 = [l for l in since("STUCK ", t3) if "Moving again after STUCK" not in l]
     moving = since("Moving again after STUCK", t3)
     unrecovered = [l for l in stuck2 if not any(re.search(r"\[(node_\d+)\]", l) and re.search(r"\[(node_\d+)\]", l).group(1) in m
                                                 and m[:23] > l[:23] for m in moving)]
