@@ -1828,6 +1828,11 @@ end
 -- the booking is cancelled and book returns false, reason. A support whose
 -- delivery went down without it stops waiting (PARTNER_LEFT, base.depart).
 function atc.book(waypoints, label, giveUp)
+    -- THE PAIR TAG IS FOR ONE ADMISSION (2026-11-17, T2 w3-pair-dropout-b). Left
+    -- set, it made node_96's way home from the hole -- its support gone -- a pair's
+    -- request: the ATC waited for the partner's ask, and node_96 held DH for good.
+    local pair = atc.pair
+    atc.pair = nil
     if not atc.ensure() then return true end
     local list = W.routeSections(base.getPos(), waypoints)
     atc.route = list
@@ -1842,7 +1847,7 @@ function atc.book(waypoints, label, giveUp)
             logWarn(string.format("ATC: %s no longer wanted (%s) -- not waiting to be let in", label or "route", tostring(stop)))
             return false, stop
         end
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = atc.pair })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = pair })
         last = r
         if r and r.ok then
             atc.progressed()
@@ -1889,6 +1894,18 @@ function atc.keepAlive()
     if atc.aliveAt and now - atc.aliveAt < atc.KEEPALIVE_S * 1000 then return end
     atc.aliveAt = now
     if _self.posFixed and atc.here() then atc.report() else atc.send(proto.MSG.ATC_REPORT, { route = {} }) end
+end
+
+-- STANDING IN THE BASE, IT SAYS SO, WHATEVER IT WAITS FOR (2026-11-17, sim
+-- w3_side_atc). node_31 waited at the dispatch hole for SUPPORT_STAGED and said
+-- nothing to the ATC; at 180 s it was taken for dead, DH was dropped under it and
+-- the next pair let into the hole it stood in -- a head-on that held the base 4 h.
+-- Called from the control loop: while it stands in a section or holds a booking.
+-- A docked turtle with nothing booked has nothing to say.
+function atc.keepInBase()
+    if not atc.ENABLED then return end
+    if atc.route == nil and atc.here() == nil then return end
+    atc.keepAlive()
 end
 
 -- Done with the base: give back everything but the section it stands in.
@@ -5027,6 +5044,7 @@ function base.run(jobHandler)
             witnessTurn(now)
             atc.keepSupport(now)
             atc.keepPair(now)
+            atc.keepInBase()
             if now - lastHeartbeatWall >= heartbeatTarget then
                 sendHeartbeat()
                 lastHeartbeatWall = now

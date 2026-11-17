@@ -658,4 +658,13 @@ return {
         local r = core.handle(st, "r1", { op = "request", route = RET }, t + 3000)
         assert_eq(r.ok, true, "a return whose way crosses the delivery's is let in (" .. tostring(r.why) .. ")")
     end,
+
+    -- 2026-11-17 (T2 w3-pair-dropout-b): node_96, in DH with its support gone home, asked its way home naming its
+    -- partner, and the ATC waited for the partner's ask for good. A pair asks from its docks, which are in no section;
+    -- a request from inside a section is the turtle's alone, whatever it names.
+    ["a request from inside a section is never half of a pair"] = function(assert_eq)
+        local core, st, t = live()
+        local r = core.handle(st, "del", { op = "request", cur = "DH", route = { "W1", "J1", "S1" }, group = "del", pair = "sup" }, t)
+        assert_eq(r.ok, true, "standing in DH, its way home is let in alone (" .. tostring(r.why) .. ")")
+    end,
 }

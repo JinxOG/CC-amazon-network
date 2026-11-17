@@ -317,7 +317,10 @@ function core.handle(st, id, p, now)
         -- its dock naming its partner (p.pair). Neither is let in until both have
         -- asked (the partner's ask is fresh: it asks every 2 s) and both ways are
         -- free; then both at once, and nothing is let between them.
-        if p.pair and not (st.byTurtle[p.pair] and st.res[st.byTurtle[p.pair]]) then
+        -- A pair asks from its docks, which are in no section: a request from inside
+        -- one (p.cur) is the turtle's alone (T2 w3-pair-dropout-b: node_96 in DH, its
+        -- support gone home, waited "for partner" on its way home for good).
+        if p.pair and p.cur == nil and not (st.byTurtle[p.pair] and st.res[st.byTurtle[p.pair]]) then
             local pw = st.waiting[p.pair]
             local w0 = st.waiting[id]
             if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair }

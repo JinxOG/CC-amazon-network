@@ -157,4 +157,47 @@ return {
         assert_eq(ok == false and err == "__enough__", true, "it was still waiting when the test stopped it (" .. tostring(err) .. ")")
         assert_eq(reports >= math.floor(waited / 60), true, string.format("an ATC_REPORT at least once a minute (%d in %d s)", reports, waited))
     end,
+
+    -- 2026-11-17 (T2 w3-pair-dropout-b): a blackout lost node_96's HOLE_READY; its support gave up and node_96 turned
+    -- for home from the hole -- asking the ATC still as half of the pair (atc.pair was never cleared). The ATC lets a
+    -- pair in only when both halves ask, so it waited "homing inside the base ... (waiting for partner)" for good,
+    -- holding DH. The pair tag is for ONE admission: the next request is the turtle's alone.
+    ["a request made as half of a pair does not make the next one a pair's"] = function(assert_eq)
+        local base = fresh()
+        local asks = {}
+        base.atc.ensure = function() return true end
+        base.atc.ask = function(_, payload) asks[#asks + 1] = payload; return { ok = true } end
+        base.atc.pair = "node_94"
+        base.atc.book({ { x = 158, y = 67, z = -2811 }, { x = 143, y = 67, z = -2811 } }, "departure")
+        base.atc.book({ { x = 143, y = 67, z = -2811 }, { x = 158, y = 67, z = -2811 } }, "homing")
+        assert_eq(asks[1] and asks[1].pair, "node_94", "the departure asked as half of the pair")
+        assert_eq(asks[2] and asks[2].pair, nil, "the way home after it is its own (" .. tostring(asks[2] and asks[2].pair) .. ")")
+    end,
+
+    -- 2026-11-17 (sim w3_side_atc): node_31 waited at the dispatch hole for SUPPORT_STAGED and said nothing to the ATC;
+    -- at 180 s it was taken for dead, DH "it had entered" was dropped, and the next pair was let into the hole it stood
+    -- in -- a head-on in the dispatch corner that held the base for 4 h. Standing in the base, or holding a booking, a
+    -- turtle's control loop tells the ATC it is there (atc.keepInBase), whatever else it is waiting for.
+    ["a turtle standing in the base tells the ATC it is there, whatever it waits for; a docked one says nothing"] = function(assert_eq)
+        local base, sent = fresh()
+        local atc = base.atc
+        atc.ENABLED = true
+        base.setPosForTest({ x = 143, y = 67, z = -2813 })        -- the dispatch hole: DH
+        local function reports()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find("ATC_REPORT", 1, true) then n = n + 1 end end
+            return n
+        end
+        atc.aliveAt = nil
+        atc.route = nil
+        atc.keepInBase()
+        local inHole = reports()
+        for k in pairs(sent) do sent[k] = nil end
+        base.setPosForTest({ x = 153, y = 67, z = -2806 })        -- its dock: in no section
+        atc.aliveAt, atc.route = nil, nil
+        atc.keepInBase()
+        local docked = reports()
+        assert_eq(inHole, 1, "standing in DH: it says it is there")
+        assert_eq(docked, 0, "on its dock with nothing booked: nothing to say")
+    end,
 }

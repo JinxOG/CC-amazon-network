@@ -50,7 +50,8 @@ def steps(ctx):
                "the ATC came online and settled")
     ctx.wait_until(lambda: len([l for l in ctx.log_lines("ATC heard") if l[:19] >= t_atc]) >= 10, 180)
     server_text = _pair.show(pin, "central_server.lua")
-    ctx.expect("(support half) failed" in server_text and "HALF A PAIR IS AHEAD OF NOBODY" in _pair.show(pin, "atc.lua"),
+    ctx.expect("(support half) failed" in server_text and "HALF A PAIR IS AHEAD OF NOBODY" in _pair.show(pin, "atc.lua")
+               and "THE PAIR TAG IS FOR ONE ADMISSION" in _pair.show(pin, "turtle_base.lua"),
                "the pinned commit carries the pair-dropout fix (the commit under test)")
 
     def since(needle, t):
@@ -85,11 +86,21 @@ def steps(ctx):
     tLoss = now_iso()
     reply = c.radio_loss(0, 200000, 1.0)
     ctx.note("a total radio blackout for 200 s from 'Pair on' of %s: %s" % (dname, reply))
-    gave = ctx.wait_until(lambda: [l for l in by(since("no_word_from_delivery", tLoss), sname)], 600)
+    # The support drops out one of two ways, by where the blackout caught the pair: still asking to be let out
+    # (no_word_from_delivery: the server must call the pair off) or let out and waiting for HOLE_READY (its delivery,
+    # at the hole, hears it gave up and goes home). Either is the fault; each has its own way the pair is ended.
+    def gaveUp():
+        return by(since("no_word_from_delivery", tLoss), sname) + by(since("No HOLE_READY signal", tLoss), sname)
+    gave = ctx.wait_until(gaveUp, 600)
     ctx.expect(bool(gave), "%s gave up on its silent delivery: the fault happened (%s)"
                % (sname, gave[0][-110:] if gave else "it never did -- this run cannot judge the fix"))
-    off = ctx.wait_until(lambda: [l for l in since("off before it moved", tLoss) if job in l], 600)
-    ctx.expect(bool(off), "the server called the pair off (%s)" % (off[0][-120:] if off else "nothing"))
+
+    def ended():
+        return [l for l in since("off before it moved", tLoss) if job in l] \
+            + by(since("not going out without it", tLoss), dname)
+    off = ctx.wait_until(ended, 600)
+    ctx.expect(bool(off), "the pair was ended: the server called it off, or %s turned for home (%s)"
+               % (dname, off[0][-120:] if off else "nothing"))
     tOff = off[0][:19] if off else now_iso()
     done = ctx.wait_until(lambda: server_done(job, t1), 2400)
     ctx.expect(bool(done), "%s was paired again and completed (the server's line)" % job)
