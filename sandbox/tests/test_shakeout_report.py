@@ -388,6 +388,20 @@ class JamsAndSections(unittest.TestCase):
             shutil.rmtree(run, ignore_errors=True)
 
 
+class ServerHealthIsRecorded(unittest.TestCase):
+    def test_compact_state_keeps_the_servers_health_numbers(self):
+        """2026-11-18: the 160-turtle proof run could not say how many events the RS wait kept, or why dispatch was held 63 min,
+        because the snapshots dropped the server's own health fields."""
+        st = {"turtles": {}, "jobs": [], "updatedAt": 5000000, "serverTime": 5000500, "pushBuildMs": 326, "pushSliceWorstMs": 4,
+              "pushSlices": 170, "rsKeptEvents": 109, "rsPollMs": 65, "rsPollWorstMs": 260,
+              "gps": {"ok": False, "reason": "no fix", "since": 4990000}}
+        out = report.compact_state(st)
+        self.assertEqual(out["server"], {"pushBuildMs": 326, "pushSliceWorstMs": 4, "pushSlices": 170, "rsKeptEvents": 109,
+                                         "rsPollMs": 65, "rsPollWorstMs": 260,
+                                         "gps": {"ok": False, "reason": "no fix", "since": 4990000}})
+        self.assertNotIn("server", report.compact_state({"turtles": {}, "jobs": []}), "an older server has none: nothing invented")
+
+
 class TimerClearedIsAFailure(unittest.TestCase):
     """The user, 2026-11-17: a jam that only a last-line timer clears is a FAILURE, not a recovery. The lines below are the
     exact wording each timer logs (turtle_base.lua, atc.lua at 9c81a76; side-e's own lines for the first three)."""
