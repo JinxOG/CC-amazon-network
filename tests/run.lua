@@ -37,6 +37,7 @@ local files = {
     "tests.test_bridge_push_order",
     "tests.test_bridge_push_cap",
     "tests.test_bridge_sliced",
+    "tests.test_eta_index",
     "tests.test_server_disk_budget",
     "tests.test_bridge_commands",
     "tests.test_gps_tick",

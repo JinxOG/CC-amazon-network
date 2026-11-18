@@ -2253,7 +2253,44 @@ ETA.RETURN_S    = 840    -- 14 min, the trip home (see ETA.forJob)
 ETA.UNKNOWN_ORE = 4600
 
 -- What the survey saw in one sector, summed over its depth levels.
+-- PRICED FROM AN INDEX, ONCE A ZONE (2026-11-18, T2 shakeout-payload-b: 29 LOOP
+-- STALLs in one bridge slice, up to 3846 ms -- one zone's forJob at 160 turtles).
+-- For every pending sector the helpers below scanned every key of sectorSeen and
+-- sectorMined, and an unscanned one also took meanOre, which scans them again for
+-- every sector: cubic in the zone's size. ETA.forJob indexes the zone once by its
+-- "x,z" (ETA.index) and the helpers read that while it runs; outside it they scan
+-- as before. Same answers (tests/test_eta_index.lua).
+ETA._idx = nil
+function ETA.index(zone)
+    local idx = { zone = zone, found = {}, mined = {}, scanned = {}, mean = nil }
+    for k, seen in pairs(zone.sectorSeen or {}) do
+        local xz = type(k) == "string" and k:match("^(%-?%d+,%-?%d+),")
+        if xz then
+            idx.scanned[xz] = true
+            local t = idx.found[xz] or 0
+            for _, n in pairs(seen) do t = t + (tonumber(n) or 0) end
+            idx.found[xz] = t
+        end
+    end
+    for k, mined in pairs(zone.sectorMined or {}) do
+        local xz = type(k) == "string" and k:match("^(%-?%d+,%-?%d+),")
+        if xz then
+            local t = idx.mined[xz] or 0
+            for _, n in pairs(mined) do t = t + (tonumber(n) or 0) end
+            idx.mined[xz] = t
+        end
+    end
+    return idx
+end
+function ETA._get(zone)
+    local i = ETA._idx
+    if i and i.zone == zone then return i end
+    return nil
+end
+
 function ETA.foundOre(zone, x, z)
+    local i = ETA._get(zone)
+    if i then return i.found[string.format("%d,%d", x, z)] or 0 end
     local total = 0
     local prefix = string.format("%d,%d,", x, z)
     for k, seen in pairs(zone.sectorSeen or {}) do
@@ -2268,6 +2305,8 @@ end
 -- miners report mined ore in batches as they dig, so for the sector a miner is
 -- holding right now this number grows while it works.
 function ETA.minedOre(zone, x, z)
+    local i = ETA._get(zone)
+    if i then return i.mined[string.format("%d,%d", x, z)] or 0 end
     local total = 0
     local prefix = string.format("%d,%d,", x, z)
     for k, mined in pairs(zone.sectorMined or {}) do
@@ -2288,6 +2327,8 @@ end
 -- reached looks identical to an empty one in sectorSeen -- both have no entry --
 -- so the caller must also know whether the survey has finished.
 function ETA.hasScan(zone, x, z)
+    local i = ETA._get(zone)
+    if i then return i.scanned[string.format("%d,%d", x, z)] == true end
     local prefix = string.format("%d,%d,", x, z)
     for k in pairs(zone.sectorSeen or {}) do
         if k:sub(1, #prefix) == prefix then return true end
@@ -2299,13 +2340,16 @@ end
 -- fleet figure while no scan has landed. A prior, replaced by measurement within
 -- minutes of the survey starting.
 function ETA.meanOre(zone)
+    local i = ETA._get(zone)
+    if i and i.mean then return i.mean end
     local total, n = 0, 0
     for _, sec in ipairs(zone.allSectors or {}) do
         local ore = ETA.foundOre(zone, sec.x, sec.z)
         if ore > 0 then total, n = total + ore, n + 1 end
     end
-    if n == 0 then return ETA.UNKNOWN_ORE end
-    return total / n
+    local mean = (n == 0) and ETA.UNKNOWN_ORE or (total / n)
+    if i then i.mean = mean end
+    return mean
 end
 
 -- Seconds a sector still in the queue will cost.
@@ -2355,6 +2399,15 @@ end
 --   * work splits evenly across the miners on the zone, which is what the
 --     dispatcher does but not what finishing times look like sector by sector.
 function ETA.forJob(zone, activeMiners)
+    if not zone then return nil end
+    local prev = ETA._idx
+    ETA._idx = ETA.index(zone)
+    local ok, r = pcall(ETA._forJob, zone, activeMiners)
+    ETA._idx = prev
+    if not ok then error(r, 0) end
+    return r
+end
+function ETA._forJob(zone, activeMiners)
     if not zone then return nil end
     local miners = math.max(1, activeMiners or 1)
     local queued = 0
@@ -7841,6 +7894,7 @@ end
 -- state and registry are locals; jobQueue is already a global (line 655).
 if _G.__CC_SERVER_TEST then
     server._test = {
+        ETA      = ETA,
         checkStaleSupports = checkStaleSupports,
         state    = state,
         bridgeJson = bridgeJson,
