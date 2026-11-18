@@ -335,4 +335,32 @@ return {
         local regAt = src:find("register(role", initAt, true)
         assert_eq(loadAt ~= nil and regAt ~= nil and loadAt < regAt, true, "base.init reads it before it registers and homes")
     end,
+
+    -- 2026-11-18 (SPEC-OWNER's ruling; sim w3_depart_off_dock): a JOB_FAILED sent once was lost and the job never came
+    -- back. A turtle repeats its JOB_FAILED every 10 s until the server's JOB_FAILED_ACK for it arrives.
+    ["a JOB_FAILED is repeated until the server acknowledges it"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        local function fails()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find("JOB_FAILED", 1, true) and not b:find("JOB_FAILED_ACK", 1, true) then n = n + 1 end end
+            return n
+        end
+        local t0 = os.epoch("utc")
+        local failId = base.reportFailed("job_0010", "warehouse_chest_timeout", true)
+        local first = fails()
+        base.keepFails(t0 + 5000)
+        local early = fails()
+        base.keepFails(t0 + 11000)
+        local again = fails()
+        os.queueEvent("modem_message", "top", 1, 1, proto.encode(proto.MSG.JOB_FAILED_ACK, "server", "broadcast",
+            { jobId = "job_0010", failId = failId }), 5)
+        pcall(base.receive, 1)
+        base.keepFails(t0 + 30000)
+        local after = fails()
+        assert_eq(first, 1, "sent at once")
+        assert_eq(early, 1, "not again within 10 s")
+        assert_eq(again, 2, "again after 10 s")
+        assert_eq(after, 2, "acknowledged: no more")
+    end,
 }

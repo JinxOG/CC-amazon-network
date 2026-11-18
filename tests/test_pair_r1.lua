@@ -198,4 +198,31 @@ return {
         assert_eq(told, 1, "the delivery is told the pair is off")
         assert_eq(master.status, "PENDING", "the delivery's job goes back to be paired again")
     end,
+
+    -- 2026-11-18 (SPEC-OWNER's ruling; sim w3_depart_off_dock): a delivery's JOB_FAILED was sent once and thrown away in
+    -- an RS-poll wait; the job never came back. A JOB_FAILED is now repeated until the server acknowledges it
+    -- (JOB_FAILED_ACK); the server acknowledges every one, and one it has already taken (by its failId) is not
+    -- counted again.
+    ["the server acknowledges a JOB_FAILED, and the same one repeated is not counted twice"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.TRAVELLING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 153, y = 67, z = -2797 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        local msg = { from = "node_d", payload = { jobId = "job_0010", reason = "warehouse_chest_timeout", recoverable = true,
+                                                   failId = "node_d:1:1" } }
+        T.sent = {}
+        T.handlers[proto.MSG.JOB_FAILED](msg)
+        local acked = sentTo(T, proto.MSG.JOB_FAILED_ACK, "node_d")
+        local after1 = T.state.jobs["job_0010"].retries
+        T.state.jobs["job_0010"].assignedTo = "node_d"            -- sent out again to the same delivery
+        T.handlers[proto.MSG.JOB_FAILED](msg)                     -- its repeat of the first one
+        local after2 = T.state.jobs["job_0010"].retries
+        local acked2 = sentTo(T, proto.MSG.JOB_FAILED_ACK, "node_d")
+        restore()
+        assert_eq(acked, 1, "acknowledged")
+        assert_eq(after1, 1, "counted once")
+        assert_eq(after2, 1, "the repeat is not counted again")
+        assert_eq(acked2, 2, "and the repeat is acknowledged too")
+    end,
 }

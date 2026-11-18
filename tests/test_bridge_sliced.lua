@@ -74,4 +74,33 @@ return {
         assert_eq(steps > 1, true, "in more than one step (" .. steps .. ")")
         assert_eq(r and r[1] == s1 and r[2] == t1, true, "and byte for byte the same")
     end,
+
+    -- 2026-11-18 (SPEC-OWNER's ruling; sim w3_depart_off_dock on the sliced build): an RS peripheral call waits for its
+    -- task_complete and CC throws away every other event arriving meanwhile -- 270 modem_messages in one sim run, a
+    -- one-shot JOB_FAILED among them. server.keepEvents runs such a call pumping the events itself: the ones the call
+    -- waits for go to it, every other one is kept and queued again, in order, once the call returns.
+    ["a call that waits for its event keeps every other event, in order, for the loop"] = function(assert_eq)
+        local server, _, restore = freshServer()
+        local feed = {
+            { "modem_message", "top", 1, 1, "hello", 5 },
+            { "timer", 42 },
+            { "task_complete", 7, true, "items" },
+        }
+        local queued = {}
+        local savedPull, savedQueue = os.pullEventRaw, os.queueEvent
+        os.pullEventRaw = function() return table.unpack(table.remove(feed, 1)) end
+        os.queueEvent = function(...) queued[#queued + 1] = { ... } end
+        local result = server.keepEvents(function()
+            local ev = { coroutine.yield("task_complete") }
+            return ev[4]
+        end)
+        os.pullEventRaw, os.queueEvent = savedPull, savedQueue
+        local kept = server.keptEventsForTest and server.keptEventsForTest() or nil
+        restore()
+        assert_eq(result, "items", "the call gets its own event and returns its result")
+        assert_eq(#queued, 2, "the two other events are queued again")
+        assert_eq(queued[1] and queued[1][1], "modem_message", "in order: the radio message first")
+        assert_eq(queued[1] and queued[1][5], "hello", "with all its arguments")
+        assert_eq(queued[2] and queued[2][1] .. ":" .. tostring(queued[2][2]), "timer:42", "then the timer, its id kept")
+    end,
 }

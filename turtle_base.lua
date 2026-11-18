@@ -393,6 +393,8 @@ local CTRL_TYPES = {
 -- warning every 5 seconds on every turtle in the fleet.
 local TRANSIENT_TYPES = {
     [proto.MSG.LOADER_BEACON]   = true,
+    -- Noted on sight (base.reportFailed's repeat stops); nothing waits for it.
+    [proto.MSG.JOB_FAILED_ACK]  = true,
     [proto.MSG.POSITION_UPDATE] = true,
     -- An ATC answer is for the step waiting on it right now; a late one is noise.
     [proto.MSG.ATC_REPLY]       = true,
@@ -569,6 +571,11 @@ local function firstSight(msg)
     -- its partnerId) is over.
     if msg.type == proto.MSG.HOME_HEARD and _self.callHome and msg.from == _self.callHome.to then
         _self.callHome = nil
+    end
+    -- A JOB_FAILED the server has: stop repeating it (base.reportFailed).
+    if msg.type == proto.MSG.JOB_FAILED_ACK and type(msg.payload) == "table" and msg.payload.failId
+       and _self.failsOut then
+        _self.failsOut[msg.payload.failId] = nil
     end
     -- R2: a pair called off by the server, noted whichever loop reads it, so a
     -- delivery waiting on its dock to be let out stops waiting.
@@ -1815,7 +1822,7 @@ function atc.stalled(why)
     logWarn(string.format("STUCK %ds at %d,%d,%d (%s) -- handing job %s back, status ERROR",
         math.floor(now - atc.stallAt), _self.pos.x, _self.pos.y, _self.pos.z, why, tostring(_self.jobId)))
     if _self.jobId then
-        comms.toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(_self.jobId, "stuck: " .. why, true))
+        base.reportFailed(_self.jobId, "stuck: " .. why, true)
         _self.jobId = nil
         atc.handedBack = true      -- the blocked move in the base gives way (tryMove)
     end
@@ -4602,6 +4609,34 @@ function base.sendComplete(result)
     _self.busy      = false
 end
 
+-- A JOB_FAILED IS REPEATED UNTIL THE SERVER HAS IT (2026-11-18, SPEC-OWNER's ruling;
+-- sim w3_depart_off_dock: one sent once was thrown away in the server's RS-poll
+-- wait, and the job never came back). Each one carries its own failId; the control
+-- loop sends it again every FAIL_REPEAT_MS (base.keepFails) until JOB_FAILED_ACK for
+-- that failId arrives, for up to 10 minutes. The server takes each failId once.
+local FAIL_REPEAT_MS = 10000
+function base.reportFailed(jobId, reason, recoverable)
+    local p = proto.payloadJobFailed(jobId, reason, recoverable)
+    _self.failSeq = (_self.failSeq or 0) + 1
+    local now = os.epoch("utc")
+    p.failId = tostring(_self.id) .. ":" .. tostring(math.floor(now)) .. ":" .. tostring(_self.failSeq)
+    _self.failsOut = _self.failsOut or {}
+    _self.failsOut[p.failId] = { p = p, at = now, untilMs = now + 600000 }
+    comms.toServer(proto.MSG.JOB_FAILED, p)
+    return p.failId
+end
+function base.keepFails(now)
+    if not _self.failsOut then return end
+    for id, f in pairs(_self.failsOut) do
+        if now >= f.untilMs then
+            _self.failsOut[id] = nil
+        elseif now - f.at >= FAIL_REPEAT_MS then
+            f.at = now
+            comms.toServer(proto.MSG.JOB_FAILED, f.p)
+        end
+    end
+end
+
 function base.sendFailed(reason, recoverable)
     -- A DELIVERY OUT IN THE WORLD BRINGS ITS SUPPORT HOME FIRST (2026-11-14). Its
     -- support follows it one block behind through the tunnel it digs, and gets
@@ -4628,7 +4663,7 @@ function base.sendFailed(reason, recoverable)
     if _self.partnerId and not tostring(reason):find("partner_left", 1, true) then
         base.signalPartnerDirect(proto.MSG.JOB_ABORT, _self.partnerId, { reason = reason })
     end
-    comms.toServer(proto.MSG.JOB_FAILED, proto.payloadJobFailed(_self.jobId, reason, recoverable))
+    base.reportFailed(_self.jobId, reason, recoverable)
     _self.status    = proto.STATUS.IDLE
     _self.jobId     = nil
     _self.partnerId = nil
@@ -5148,6 +5183,7 @@ function base.run(jobHandler)
             witnessTurn(now)
             atc.keepSupport(now)
             atc.keepPair(now)
+            base.keepFails(now)
             atc.keepInBase()
             if now - lastHeartbeatWall >= heartbeatTarget then
                 sendHeartbeat()

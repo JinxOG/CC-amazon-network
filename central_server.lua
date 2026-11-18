@@ -4456,6 +4456,18 @@ end
 
 handlers[proto.MSG.JOB_FAILED] = function(msg)
     local p = msg.payload
+    -- ACKNOWLEDGED, AND TAKEN ONCE (2026-11-18, SPEC-OWNER's ruling): the turtle
+    -- repeats a JOB_FAILED until JOB_FAILED_ACK; each failId is acted on once (the
+    -- last 500 are remembered), so a repeat is never a second failure.
+    if p.failId then
+        sendTo(msg.from, proto.MSG.JOB_FAILED_ACK, { jobId = p.jobId, failId = p.failId })
+        local seen = state.failSeen or { set = {}, order = {} }
+        state.failSeen = seen
+        if seen.set[p.failId] then return end
+        seen.set[p.failId] = true
+        seen.order[#seen.order + 1] = p.failId
+        if #seen.order > 500 then seen.set[table.remove(seen.order, 1)] = nil end
+    end
     if jobQueue.ownedByAnother(p.jobId, msg.from, "JOB_FAILED") then return end
     jobQueue.fail(p.jobId, p.reason, p.recoverable)
     -- Job may have re-queued for retry — try to dispatch right away
@@ -5177,6 +5189,33 @@ end
 function server.slicedStart(fn)
     return { co = coroutine.create(fn) }
 end
+-- A CALL THAT WAITS, WITHOUT THROWING EVENTS AWAY (2026-11-18, SPEC-OWNER's ruling;
+-- sim w3_depart_off_dock on the sliced build). An RS peripheral call waits for its
+-- task_complete, and CC discards every other event that arrives meanwhile: 270
+-- modem_messages in one sim run, a one-shot JOB_FAILED among them. keepEvents runs
+-- such a call in its own coroutine and pumps the events itself: what the call is
+-- waiting for goes to it (and terminate), every other event is kept, and queued again
+-- in order once the call returns. server._kept counts them (published in /state).
+server._kept = 0
+function server.keepEvents(fn)
+    local co = coroutine.create(fn)
+    local kept = {}
+    local res = table.pack(coroutine.resume(co))
+    while res[1] and coroutine.status(co) ~= "dead" do
+        local filter = res[2]
+        local ev = table.pack(os.pullEventRaw())
+        if filter == nil or ev[1] == filter or ev[1] == "terminate" then
+            res = table.pack(coroutine.resume(co, table.unpack(ev, 1, ev.n)))
+        else
+            kept[#kept + 1] = ev
+        end
+    end
+    for _, ev in ipairs(kept) do os.queueEvent(table.unpack(ev, 1, ev.n)) end
+    server._kept = server._kept + #kept
+    if not res[1] then error(res[2], 0) end
+    return table.unpack(res, 2, res.n)
+end
+
 -- One step. Returns false (more to do), true and the result (done), or nil and an
 -- error (it failed, or yielded something other than a slice: abandoned).
 function server.slicedStep(task)
@@ -6050,7 +6089,7 @@ function server.run()
         -- Between rounds it still ran every 60 s -- one of the original four
         -- stalls, 588 ms. Same guard and window as refreshStorage's.
         if os.epoch("utc") - (state.storageSenderSeenAt or 0) < 180000 then return end
-        local ok, craft = pcall(function() return rsBridge.listCraftableItems() end)
+        local ok, craft = pcall(server.keepEvents, function() return rsBridge.listCraftableItems() end)
         if ok and type(craft) == "table" then
             craftableMap = {}
             for _, item in ipairs(craft) do
@@ -6118,7 +6157,7 @@ function server.run()
         -- would look like if this call were eating the window the push
         -- completion arrives in.
         local rsStart = os.epoch("utc")
-        local ok, raw = pcall(function() return rsBridge.listItems() end)
+        local ok, raw = pcall(server.keepEvents, function() return rsBridge.listItems() end)
         lastRsPollMs = os.epoch("utc") - rsStart
         if lastRsPollMs > rsPollWorstMs then rsPollWorstMs = lastRsPollMs end
         if not ok then
@@ -6481,7 +6520,7 @@ function server.run()
             if rsBridge then
                 for _, item in ipairs(items) do
                     if item.craft then
-                        local ok, res = pcall(function()
+                        local ok, res = pcall(server.keepEvents, function()
                             return rsBridge.craftItem({ name = item.name, count = item.count })
                         end)
                         if ok then
@@ -6941,6 +6980,9 @@ function server.run()
                         -- pushSliceWorstMs is the longest slice -- the deaf window.
                         ',"pushSliceWorstMs":' .. tostring(bb.lastWorst) ..
                         ',"pushSlices":'  .. tostring(bb.lastSlices) ..
+                        -- Events an RS call's wait would have thrown away, kept and
+                        -- queued again instead (server.keepEvents), since boot.
+                        ',"rsKeptEvents":' .. tostring(server._kept) ..
                         ',"rsPollMs":'     .. tostring(lastRsPollMs) ..
                         ',"rsPollWorstMs":' .. tostring(rsPollWorstMs) ..
                         -- The other half of the storage step. Published
