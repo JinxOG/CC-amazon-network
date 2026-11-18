@@ -7707,8 +7707,13 @@ function server.run()
             if nowB - bb.since > 60000 then     -- each slice waits behind the events queued before it: slow, not hung
                 logWarn(string.format("Bridge build abandoned after %d ms (%d slices) -- starting afresh",
                     nowB - bb.since, bb.slices))
-                bb.build = nil
+                bb.build, bb.queued = nil, false
             elseif event ~= "bridge_slice" and nowB - bb.at > 500 then
+                -- Not stepped for 500 ms: its "bridge_slice" was thrown away, so the
+                -- flag that stops a second one being queued is stale (sim
+                -- w3_bay_types150 on aa8fd27: left set, every later build crawled at
+                -- one slice a second and was abandoned at 60 s, 65 slices of 175).
+                bb.queued = false
                 pcall(bb.step)
             end
         end
