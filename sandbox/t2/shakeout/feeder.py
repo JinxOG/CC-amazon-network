@@ -53,6 +53,7 @@ each destination: the plain chests placed at z+1..z+MAX_CHESTS (MAX_CHESTS read 
 small box, only when no turtle is inside it and no delivery is heading there. All through the raw control (ctx._raw), never
 ctx.control, so none of it is an INTERVENTION.
 """
+import glob
 import json
 import math
 import os
@@ -122,6 +123,9 @@ def _build_zones():
 # below_zero_retrogen or blending_data in worlds/unpacked/2026-10-18_1700). These five grid zones (padded) hold old chunks
 # (169, 169, 13, 20 and 33 of them); every other zone holds none. The live server avoids old chunks too.
 OLD_CHUNK_ZONES = {"zone_0_0", "zone_0_1", "zone_0_2", "zone_1_0", "zone_1_1"}
+# The server's line for a miner that could not scan the level below 0 (the floor of an old chunk), naming the job:
+#   "Job job_0206 retry 1/3: scan_level_incomplete: place_failed at Y=0 after 3 retries" (also "Job permanently failed: ...").
+FLOOR_FAIL_RX = re.compile(r"\bJob (?:permanently failed: )?([A-Za-z0-9_]+)\b[^\n]*scan_level_incomplete: place_failed at Y=0\b")
 ZONES = _build_zones()
 
 # Where deliveries go: free ground south of the building, staggered in z (a row on one z piled 19 turtles up on 2026-11-03).
@@ -204,6 +208,9 @@ class Feeder:
         self.noted = {}
         self.dests = self._probe(list(DESTINATIONS), destinations)
         self._last_post = None
+        self.bad_zones = set()          # zones called off on a floor failure (FLOOR_FAIL_RX)
+        self.floor_jobs = set()         # job ids whose floor failure has been acted on
+        self.log_pos = {}               # bridge log file -> bytes already read
 
     def _dispatch(self, type_, params):
         """ctx.dispatch, never two within POST_GAP_S of each other (the server's ts:type dedupe)."""
@@ -353,6 +360,56 @@ class Feeder:
         extra = {"MINER": sum(o["n"] for o in keep if o["kind"] == "MINE"), "DELIVERY": sum(o["n"] for o in keep if o["kind"] == "DELIVER")}
         return extra, sum(extra.values()), keys
 
+    # -- floor failures ---------------------------------------------------------------------------------------------
+    def _new_log_text(self):
+        """The bridge log text written since the last call (the files under <run>/bridge/logs, each read from where it left off)."""
+        out = []
+        for p in sorted(glob.glob(os.path.join(getattr(self.ctx, "run", "") or "", "bridge", "logs", "*.txt"))):
+            try:
+                size = os.path.getsize(p)
+                start = self.log_pos.get(p, 0)
+                if size < start:                # a new file under an old name: read it from the top
+                    start = 0
+                if size == start:
+                    continue
+                with open(p, "rb") as f:
+                    f.seek(start)
+                    data = f.read(size - start)
+                cut = data.rfind(b"\n") + 1     # only whole lines; the rest is read next time
+                self.log_pos[p] = start + cut
+                out.append(data[:cut].decode("utf8", "replace"))
+            except OSError:
+                continue
+        return "".join(out)
+
+    def _floor_failures(self, now, jobs):
+        """The user, 2026-11-18: a mining zone whose miner hits the bottom of the world (FLOOR_FAIL_RX: the geo scanner cannot be
+        placed for the level below 0, an old pre-1.18 chunk) is called off -- every unfinished job in it cancelled -- and marked
+        bad. A lane whose zone that was is then free to open its next zone, farther along its row (tick step 1); a short-work
+        zone is replaced from the pool, which runs nearest-first, so farther out."""
+        failed = [m.group(1) for m in FLOOR_FAIL_RX.finditer(self._new_log_text()) if m.group(1) not in self.floor_jobs]
+        if not failed:
+            return
+        by_key = {zone_key(z): z for z in ZONES}
+        for jid in failed:
+            self.floor_jobs.add(jid)
+            job = next((j for j in jobs if j.get("id") == jid), None)
+            zone = by_key.get((job or {}).get("zoneKey"))
+            if zone is None or zone["id"] in self.bad_zones:
+                continue
+            self.bad_zones.add(zone["id"])
+            key = zone_key(zone)
+            doomed = [j.get("id") for j in jobs if j.get("type") == "MINE" and j.get("zoneKey") == key
+                      and j.get("status") not in ("COMPLETE", "FAILED", "CANCELLED")]
+            for d in doomed:
+                self._dispatch("CANCEL_JOB", {"jobId": d})
+            self.ctx.note("feeder: %s hit the bottom of the world (old chunks: %s); zone called off, %d job(s) cancelled, "
+                          "replaced farther out" % (zone["id"], jid, len(doomed)))
+            for k, cur in enumerate(self.lane_zone):
+                if cur is not None and cur[0] == zone["id"]:
+                    self.lane_zone[k] = None
+            self.unseen = [o for o in self.unseen if o.get("id") != zone["id"]]
+
     # -- the tick ---------------------------------------------------------------------------------------------------
     def tick(self, now):
         """Never orders from a stale /state. The idle clock is the evidence, so ORDERING RESETS NOTHING: a turtle's clock restarts
@@ -366,6 +423,9 @@ class Feeder:
             self._note_every(now, "stale", "feeder: /state is not fresh (%s): no orders until it is" % why)
             return
         jobs, turtles = self._look(st)
+        self._floor_failures(now, jobs)
+        jobs = [j for j in jobs if not (j.get("type") == "MINE" and j.get("zoneKey") in
+                                        {zone_key(z) for z in ZONES if z["id"] in self.bad_zones})]
         extra, extra_jobs, keys_open = self._reconcile(now, jobs)
         pending = {"MINER": extra["MINER"] + sum(1 for j in jobs if j.get("type") == "MINE" and j.get("status") == "PENDING"),
                    "DELIVERY": extra["DELIVERY"] + sum(1 for j in jobs if j.get("type") == "DELIVER" and j.get("status") == "PENDING")}

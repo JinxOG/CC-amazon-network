@@ -397,6 +397,57 @@ class OldChunkTests(unittest.TestCase):
             self.assertFalse(box[0] <= x <= box[2] and box[1] <= z <= box[3], "%s covers 544,-2304" % zz["id"])
 
 
+class FloorFailureTests(unittest.TestCase):
+    """The user, 2026-11-18: if a miner hits the bottom-of-the-world error (the geo scanner cannot be placed for the level below
+    0: old chunks), call that mining zone off and replace it farther out."""
+
+    LINE = "2026-11-18T03:00:00.000Z  server#900     WARN   Job %s retry 1/3: scan_level_incomplete: place_failed at Y=0 after 3 retries\n"
+
+    def log(self, ctx, text):
+        d = os.path.join(ctx.run, "bridge", "logs")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "2026-11-18.txt"), "a", encoding="utf8") as f:
+            f.write(text)
+
+    def test_floor_failure_cancels_the_zone_and_the_lane_moves_farther_out(self):
+        ctx = FakeCtx()
+        f = feeder.Feeder(ctx)
+        f.tick(1000.0)
+        first = f.lane_zone[0][0]
+        key = feeder.zone_key(next(z for z in feeder.ZONES if z["id"] == first))
+        in_zone = [j for j in ctx.jobs.values() if j.get("zoneKey") == key]
+        self.assertTrue(in_zone, "the lane's zone was ordered")
+        before = len(ctx.orders)
+        self.log(ctx, self.LINE % in_zone[0]["id"])
+        f.tick(1000.0 + 30)
+        cancels = [p["jobId"] for t, p in ctx.orders[before:] if t == "CANCEL_JOB"]
+        self.assertEqual(sorted(cancels), sorted(j["id"] for j in in_zone), "every job of the zone is called off")
+        for j in in_zone:               # the server marks them cancelled
+            j["status"] = "CANCELLED"
+        f.tick(1000.0 + 60)
+        self.assertIn(first, f.bad_zones)
+        self.assertNotEqual(f.lane_zone[0][0], first, "the lane opened its next zone")
+        nxt = next(z for z in feeder.ZONES if z["id"] == f.lane_zone[0][0])
+        old = next(z for z in feeder.ZONES if z["id"] == first)
+        self.assertGreater(nxt["x1"], old["x1"], "and the next zone is farther along the row")
+        self.assertTrue(any("bottom of the world" in n for n in ctx.notes), ctx.notes)
+
+    def test_the_same_failure_is_acted_on_once_and_other_lines_are_ignored(self):
+        ctx = FakeCtx()
+        f = feeder.Feeder(ctx)
+        f.tick(1000.0)
+        key = feeder.zone_key(next(z for z in feeder.ZONES if z["id"] == f.lane_zone[0][0]))
+        jid = next(j["id"] for j in ctx.jobs.values() if j.get("zoneKey") == key)
+        self.log(ctx, "2026-11-18T03:00:00.000Z  server#901     WARN   Job %s retry 1/3: departure_failed: blocked\n" % jid)
+        n = len(ctx.orders)
+        f.tick(1000.0 + 30)
+        self.assertFalse(any(t == "CANCEL_JOB" for t, _ in ctx.orders[n:]), "an unrelated failure cancels nothing")
+        self.log(ctx, self.LINE % jid)
+        f.tick(1000.0 + 60)
+        f.tick(1000.0 + 90)             # the same line read again (no new text) does nothing more
+        self.assertEqual(sum(1 for t, p in ctx.orders if t == "CANCEL_JOB" and p["jobId"] == jid), 1)
+
+
 class LongSiteTests(unittest.TestCase):
     def test_three_lanes_of_contiguous_disjoint_zones(self):
         self.assertEqual(len(feeder.LONG_SITES), 3)
