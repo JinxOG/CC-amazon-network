@@ -30,3 +30,17 @@ Each one sends the job back ("Job job_0206 retry 1/3: scan_level_incomplete: pla
 **The test world:** worlds/unpacked/2026-10-18_1700, a copy of the live world; mining sites from sandbox/t2/shakeout/feeder.py LONG_SITES and the feeder's orders.
 
 **Question:** why does placing the scanner below fail at Y=0, and only there? Is it the block below Y=0 (the deepslate transition?), a scan-depth setting, or something else? Measure before answering. No code change is wanted mid-run: the 24 h pin is fixed. This is for after the run.
+
+## Update: the user's diagnosis (2026-11-18)
+
+> "The area that you chose to mine at is pretty close to the service center, and that area ... is actually old chunks. So when it tries to go to zero, it's in old chunks before the depths change, and then it runs into issues with the geoscanner, and then it returns."
+
+- Pre-1.18 chunks have their floor (bedrock) at about Y 0-4 and nothing below. New chunks go to Y -64.
+- Consistent with what was measured:
+  - node_275 scanned "Y 0..32" fine and failed only on the level below 0.
+  - Its GPS resync right after was y=4.
+  - It is always Y=0, at sites near the base.
+- I couldn't read the blocks myself without forceloading the chunk, which would be an intervention in the 24 h run.
+- **The live world has the same old chunks near the base,** so this is a live miner bug, not just test-site placement.
+
+**What the fix must do (the user's rule: logic, not patches):** a miner that reaches the world floor, whether old-chunk bedrock about 0-4 or -64 in new chunks, treats it as the sector's bottom (done), not as a scan failure that sends the job back. Measure how the miner can tell, for example inspect below for bedrock, or a per-chunk floor. Then write a test that fails before and passes after. After the 24 h run; its pin is fixed.
