@@ -380,6 +380,23 @@ class StaleStateTests(unittest.TestCase):
         self.assertEqual(f.unseen, [])
 
 
+class OldChunkTests(unittest.TestCase):
+    """2026-11-18: miners cannot scan below Y=0 in pre-1.18 chunks (floor at Y 0-4): 40 of 41 'place_failed at Y=0' in the T2
+    runs were in old chunks, 176 of 180 scans below 0 in new ones. node_275 failed at 544,-2304 in shakeout-24h-a."""
+
+    def test_no_zone_holds_old_chunks(self):
+        ids = {z["id"] for z in feeder.ZONES}
+        self.assertEqual(ids & feeder.OLD_CHUNK_ZONES, set(), "a zone with old chunks is still offered")
+        for lane in feeder.LONG_SITES:
+            self.assertEqual(set(lane) & feeder.OLD_CHUNK_ZONES, set(), "a long lane runs through old chunks")
+
+    def test_node_275s_failing_spot_is_not_offered(self):
+        x, z = 544, -2304
+        for zz in feeder.ZONES:
+            box = server_bounds(zz["x1"], zz["z1"], zz["x2"], zz["z2"])
+            self.assertFalse(box[0] <= x <= box[2] and box[1] <= z <= box[3], "%s covers 544,-2304" % zz["id"])
+
+
 class LongSiteTests(unittest.TestCase):
     def test_three_lanes_of_contiguous_disjoint_zones(self):
         self.assertEqual(len(feeder.LONG_SITES), 3)

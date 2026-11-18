@@ -113,9 +113,15 @@ def _build_zones():
             x, z = GRID_X0 + ZONE_PITCH * c, GRID_Z0 + ZONE_PITCH * r
             zones.append(_zone("zone_%d_%d" % (r, c), "long", x, z, x + span, z + span))
     zones.sort(key=lambda z: (math.hypot(z["x1"] + 80 - BASE_CENTRE[0], z["z1"] + 80 - BASE_CENTRE[1]), z["id"]))
-    return zones
+    return [z for z in zones if z["id"] not in OLD_CHUNK_ZONES]
 
 
+# OLD CHUNKS (the user, 2026-11-18): a pre-1.18 chunk's floor is bedrock at about Y 0-4, so a miner there fails to place its
+# geo scanner for the level below 0 ("place_failed at Y=0") and hands the job back, again and again. Of the T2 runs' 41
+# place_failed-at-Y=0 sites, 40 were in old chunks; of 180 sites scanned below 0, 176 were in new ones (chunks tagged
+# below_zero_retrogen or blending_data in worlds/unpacked/2026-10-18_1700). These five grid zones (padded) hold old chunks
+# (169, 169, 13, 20 and 33 of them); every other zone holds none. The live server avoids old chunks too.
+OLD_CHUNK_ZONES = {"zone_0_0", "zone_0_1", "zone_0_2", "zone_1_0", "zone_1_1"}
 ZONES = _build_zones()
 
 # Where deliveries go: free ground south of the building, staggered in z (a row on one z piled 19 turtles up on 2026-11-03).
@@ -174,7 +180,9 @@ def state_is_fresh(st):
 # base. When a lane's zone is spent the NEXT zone of the same lane is ordered at once: contiguous (the padded boxes 32 apart),
 # disjoint after pad and snap, and clear of worked ground like every zone. A lane of 13 zones at ~2 h a zone (36 sectors, twelve
 # miners, 4x) outlasts 24 h. Every other zone is short work for the rest of the fleet.
-LONG_SITES = [["zone_%d_%d" % (r, c) for c in range(GRID_COLS)] for r in range(3)]
+# Rows 2-4: the nearest whole rows clear of old chunks (rows 0 and 1 lose zones to OLD_CHUNK_ZONES, and a lane must stay a full
+# contiguous row to outlast the run).
+LONG_SITES = [["zone_%d_%d" % (r, c) for c in range(GRID_COLS)] for r in range(2, 5)]
 
 
 class Feeder:
