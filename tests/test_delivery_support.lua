@@ -69,4 +69,23 @@ return {
                 "support_turtle.lua must still dispatch on " .. t)
         end
     end,
+
+    -- 2026-11-18 (T2 shakeout-24h-b, pin 7af241ff): after the world restarts, node_210, node_214 and node_217 raised
+    -- "NEEDS HANDS: delivery_ec ... unknown_kind". base.init's boot recovery (base.homeAfterBoot) asks the ledger to
+    -- recover what the turtle left out -- the one recovery that happens while the chest is still beside it -- and the
+    -- delivery registered its kind on the line AFTER base.init. A role's ledger kinds are registered before base.init
+    -- (ore_turtle has done so since its own unknown_kind).
+    ["every role registers its ledger kinds before base.init"] = function(assert_eq)
+        for _, file in ipairs({ "delivery_turtle.lua", "ore_turtle.lua" }) do
+            local n, initAt, lastKind = 0, nil, nil
+            for line in io.lines(file) do
+                n = n + 1
+                if not initAt and not line:find("^%s*%-%-") and line:find("base%.init[%(,%)]") then initAt = n end
+                if line:find("^base%.ledger%.registerKind%(") then lastKind = n end
+            end
+            assert_eq(initAt ~= nil and lastKind ~= nil, true, file .. ": base.init and a registerKind are there")
+            assert_eq(lastKind < initAt, true, file .. ": every registerKind (last on line " .. tostring(lastKind)
+                .. ") comes before base.init (line " .. tostring(initAt) .. ")")
+        end
+    end,
 }

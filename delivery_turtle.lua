@@ -14,13 +14,17 @@ local EC_SLOT = 16
 -- Max regular chests per delivery (must match warehouse CFG.maxChestsPerDelivery)
 local MAX_CHESTS = 6
 
-base.init(proto.ROLE.DELIVERY)
-
 -- The delivery chest is a ledger kind (recovery layer release 4): recorded
 -- before it goes down at the destination, cleared once it is back in EC_SLOT,
 -- and recovered by base.homeAfterBoot if a reboot lands while it is out. The
 -- record carries the item's own name; this is only the fallback.
+-- REGISTERED BEFORE base.init (2026-11-18, T2 shakeout-24h-b): base.init's boot
+-- recovery is the one that runs while the chest is still beside the turtle, and
+-- registered after it the kind was unknown -- "NEEDS HANDS: delivery_ec ...
+-- unknown_kind" for node_210, node_214 and node_217 after the world restarts.
 base.ledger.registerKind("delivery_ec", { blockName = "enderstorage:ender_chest", homeSlot = EC_SLOT })
+
+base.init(proto.ROLE.DELIVERY)
 
 -- Full refuel using base.fuel.refuelFromChest() — CHEST_SLOT=15 (fuel EC),
 -- handles direction, slot selection, and chest recovery automatically.
