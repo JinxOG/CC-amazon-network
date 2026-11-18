@@ -221,7 +221,7 @@ const BRIDGE_OWNED = new Set(['locations', 'players', 'updatedAt',
 // Listed so the generic merge skips them rather than assigning twice.
 const EXPLICITLY_MERGED = new Set([
     'turtles', 'jobs', 'version', 'storage', 'storageTs', 'mineZones', 'serverLog',
-    'turtleLogs',
+    'turtleLogs', 'mineZonesChanged', 'mineZoneKeys',
 ]);
 
 // This bridge's boot identity, sent with every /update reply.
@@ -1018,7 +1018,7 @@ app.post('/update', async (req, res) => {
     // the body by this point, so this does not capture JSON parsing -- worth
     // knowing when reading the number, since a ~190 KB payload is not free.
     const pushStart = process.hrtime.bigint();
-    const { turtles, jobs, version, storage, storageTs, mineZones } = req.body || {};
+    const { turtles, jobs, version, storage, storageTs, mineZones, mineZonesChanged, mineZoneKeys } = req.body || {};
     console.log(`[UPDATE] v=${version} turtles=${Object.keys(turtles||{}).length} storage=${Array.isArray(storage)?storage.length:'?'}`);
     if (!turtles && !jobs && !version) return res.status(400).json({ error: 'missing data' });
 
@@ -1078,6 +1078,16 @@ app.post('/update', async (req, res) => {
         }
     }
     if (mineZones)                   state.mineZones = mineZones;
+    // ONLY WHAT CHANGED (W3, 2026-11-18; SPEC-OWNER's ruling after T2 shakeout-24h-b:
+    // zones were 341 KB of every push). Between full pushes the CC server sends the
+    // zones that changed and the list of every zone it has: keep the listed ones we
+    // hold, take the changed ones, drop the rest.
+    else if (mineZonesChanged && typeof mineZonesChanged === 'object' && Array.isArray(mineZoneKeys)) {
+        const next = {};
+        for (const k of mineZoneKeys) if (state.mineZones && state.mineZones[k]) next[k] = state.mineZones[k];
+        for (const [k, v] of Object.entries(mineZonesChanged)) next[k] = v;
+        state.mineZones = next;
+    }
     // ACCUMULATE, do not replace. W3's Phase 2 (1.9.85) changed what these two
     // fields mean: they were "the last N lines", a window safe to overwrite with,
     // and they are now "what the bridge has not acknowledged writing" -- a delta.

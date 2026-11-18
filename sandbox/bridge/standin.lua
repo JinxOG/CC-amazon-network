@@ -26,7 +26,7 @@ local FLUSH_EVENTS = tonumber(os.getenv("SANDBOX_FLUSH_EVENTS")) or 1000
 
 local BRIDGE_OWNED = { locations = true, players = true, updatedAt = true, storageSource = true, storageAt = true }
 local EXPLICITLY_MERGED = { turtles = true, jobs = true, version = true, storage = true, storageTs = true,
-  mineZones = true, serverLog = true, turtleLogs = true }
+  mineZones = true, serverLog = true, turtleLogs = true, mineZonesChanged = true, mineZoneKeys = true }
 
 local OBJ = JSON.object
 
@@ -319,7 +319,14 @@ function Standin:update(body)
   if body.storage ~= nil or body.storageTs ~= nil then
     self:accept_storage({ storage = body.storage, storageTs = body.storageTs }, "dispatch")
   end
-  if body.mineZones then st.mineZones = body.mineZones end
+  if body.mineZones then st.mineZones = body.mineZones
+  -- Only what changed (W3, 2026-11-18), as server.js: keep the listed zones held, take the changed, drop the rest.
+  elseif type(body.mineZonesChanged) == "table" and type(body.mineZoneKeys) == "table" then
+    local nextZ = OBJ()
+    for _, k in ipairs(body.mineZoneKeys) do if st.mineZones and st.mineZones[k] ~= nil then nextZ[k] = st.mineZones[k] end end
+    for k, v in pairs(body.mineZonesChanged) do nextZ[k] = v end
+    st.mineZones = nextZ
+  end
 
   if type(body.serverLog) == "table" and #body.serverLog > 0 then
     local merged = st.serverLog

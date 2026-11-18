@@ -4303,6 +4303,7 @@ local function noteBridgeBoot(id)
     state.bridgeBootId = id
     if prev == nil or prev == id then return false end
     state.logAck = {}
+    state.zoneSentSig = nil      -- its zones are gone too: the next push sends them all
     logWarn(string.format(
         "Bridge restarted (boot %d -> %d) — replaying log rings so its panel "
         .. "is not blank until the next thing happens", prev, id))
@@ -5151,6 +5152,47 @@ server = {}
 -- update halves the share (noteBridgeRefused); each accepted one doubles it back.
 -- No locals here: server.run has 5 to spare (tests/test_cc_local_limit.lua).
 server.PUSH_CAP   = 512 * 1024
+
+-- WORK IN SLICES, SO THE SERVER NEVER STOPS LISTENING (2026-11-18, SPEC-OWNER's
+-- ruling after T2 shakeout-24h-b). At 150 turtles buildBridgePayload ran 2307 ms in
+-- one go, and while it ran the server heard nothing: 1362 LOOP STALLs in ~3 h, deaf
+-- 22-58% of every 10 minutes, the fleet pausing on "Server unreachable" ~30 times
+-- each. A long job runs instead as a sliced task: server.slice() hands control back
+-- to the main loop, which handles every event waiting and then steps the task again
+-- (a self-queued "bridge_slice"). Deaf for one slice at most, whatever the fleet.
+--   * server.slice() yields only inside the task's own coroutine: called anywhere
+--     else (tests, the first push at boot) it does nothing.
+--   * The task must not call anything that waits on an event (a peripheral call,
+--     sleep, pullEvent): that would yield its filter to the stepper, and the event
+--     it waits for would go to the main loop instead. A task that yields anything
+--     but a slice is abandoned with an error rather than mis-stepped.
+-- (Fields of server, not locals: the main chunk's locals count toward CC's 200 in
+-- every function below it, and server.run has almost none to spare.)
+server._SLICE = {}
+server._slicing = nil
+function server.slice()
+    local co = server._slicing
+    if co ~= nil and coroutine.running() == co then coroutine.yield(server._SLICE) end
+end
+function server.slicedStart(fn)
+    return { co = coroutine.create(fn) }
+end
+-- One step. Returns false (more to do), true and the result (done), or nil and an
+-- error (it failed, or yielded something other than a slice: abandoned).
+function server.slicedStep(task)
+    if not task or not task.co or coroutine.status(task.co) == "dead" then return nil, "no task" end
+    local prev = server._slicing
+    server._slicing = task.co
+    local ok, a = coroutine.resume(task.co)
+    server._slicing = prev
+    if not ok then task.co = nil; return nil, tostring(a) end
+    if coroutine.status(task.co) == "dead" then task.co = nil; return true, a end
+    if a ~= server._SLICE then
+        task.co = nil
+        return nil, "the sliced task yielded " .. tostring(a) .. " -- it must not wait on an event"
+    end
+    return false
+end
 server._pushScale = 1
 
 -- The duplicate key of a bridge command: its time, type and parameters. Keyed
@@ -5210,8 +5252,9 @@ function server.bridgeLogs(restBytes)
     local n, tParts = #ids, {}
     local start = (state.logFitCursor or 0) % math.max(1, n)
     for i = 0, n - 1 do
+        server.slice()
         local id = ids[(start + i) % n + 1]
-        local out = logSelect(state.turtleLogs[id], id, TURTLE_LOG_PUSH_WINDOW)
+        local out = logSelect(state.turtleLogs[id] or {}, id, TURTLE_LOG_PUSH_WINDOW)
         local full = false
         if #out > 0 then
             local key = textutils.serialiseJSON(tostring(id))
@@ -5791,6 +5834,30 @@ local function bridgeJson(val, fallback, label)
         return fallback
     end
     return r
+end
+
+-- A section as a JSON object built one entry at a time, slicing every `every`
+-- entries (server.slice: the payload build may hand the loop back between them).
+-- One entry that will not serialise is dropped with a warning; before, one bad
+-- entry made the whole section its fallback.
+function server.slicedObjectJSON(map, label, every)
+    local keys = {}
+    for k in pairs(map or {}) do keys[#keys + 1] = k end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    local parts = {}
+    for i, k in ipairs(keys) do
+        local v = map[k]
+        if v ~= nil then
+            local ok, r = pcall(textutils.serialiseJSON, v)
+            if ok then
+                parts[#parts + 1] = textutils.serialiseJSON(tostring(k)) .. ":" .. r
+            else
+                logWarn("Bridge serialise[" .. label .. "." .. tostring(k) .. "] failed: " .. tostring(r))
+            end
+        end
+        if i % (every or 1) == 0 then server.slice() end
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
 end
 
 function server.run()
@@ -6562,11 +6629,24 @@ function server.run()
     -- Duration of the last assembly, published as pushBuildMs. -1 until the
     -- first build completes.
     local lastBuildMs = -1
+    -- THE SLICED BUILD, in one table: server.run is close to CC's 200-local limit
+    -- (tests/test_cc_local_limit.lua). build = the task in progress; worst and
+    -- slices = this build's longest slice (the deaf window) and slice count;
+    -- lastWorst / lastSlices = the last finished build's, published in /state.
+    local bb = { build = nil, since = 0, worst = 0, slices = 0, lastWorst = -1, lastSlices = -1 }
 
     local function buildBridgePayload()
+        local buildStartMs = os.epoch("utc")
         local turtles = {}
         local nowMs = os.epoch("utc")
-        for id, t in pairs(state.registry) do
+        -- Ids first: the build hands the loop back between slices (server.slice),
+        -- and a turtle registering meanwhile must not be added under a live pairs().
+        local regIds = {}
+        for id in pairs(state.registry) do regIds[#regIds + 1] = id end
+        for regN, id in ipairs(regIds) do
+            if regN % 20 == 0 then server.slice() end
+            local t = state.registry[id]
+            if not t then goto next_turtle end
             -- Skip retrieved loaders. checkTimeouts deletes them too, but it
             -- runs on the health timer; filtering here clears them from the map
             -- within one bridge push instead of up to a health cycle later.
@@ -6621,7 +6701,10 @@ function server.run()
         -- field-by-field, dropping any value that is a non-serialisable table.
         local function buildJobsJSON(jobMap)
             local parts = {}
+            local jobN = 0
             for id, j in pairs(jobMap) do
+                jobN = jobN + 1
+                if jobN % 25 == 0 then server.slice() end
                 local supportId = nil
                 if j.linkedJob and jobMap[j.linkedJob] then
                     supportId = jobMap[j.linkedJob].assignedTo
@@ -6678,8 +6761,16 @@ function server.run()
         end
         local jobs = buildJobsJSON(activeJobs)
         -- Build mineZones summary for the dashboard overlay (active + historical)
-        local buildStartMs = os.epoch("utc")
+        -- ONLY WHAT CHANGED (2026-11-18, SPEC-OWNER's ruling (a) after 24h-b: zones
+        -- were 341 KB of the payload, every zone rebuilt and re-serialised every
+        -- push). Active zones are sent every push; a historical zone only when its
+        -- numbers moved; every key is listed so the bridge drops a zone that went.
+        -- All of them every 20th push and after a bridge restart (noteBridgeBoot).
         local mineZones = {}
+        local zoneKeyList = {}
+        server._pushN = (server._pushN or 0) + 1
+        local fullZones = state.zoneSentSig == nil or server._pushN % 20 == 1
+        state.zoneSentSig = state.zoneSentSig or {}
         -- Active zones — keyed by jobId
         -- Shallow-copy a table so serialiseJSON sees distinct objects even when
         -- multiple jobs share the same zone (Lua table reference semantics).
@@ -6688,7 +6779,12 @@ function server.run()
             local c = {}; for k,v in pairs(t) do c[k] = v end; return c
         end
         local activeKeys = {}
-        for jid, z in pairs(state.miningZones) do
+        local zoneIds = {}
+        for jid in pairs(state.miningZones) do zoneIds[#zoneIds + 1] = jid end
+        for _, jid in ipairs(zoneIds) do
+          server.slice()
+          local z = state.miningZones[jid]
+          if z then
             -- Use ore-based pct during mine/rescan once oreFound is populated;
             -- fall back to sector-based during survey (no ore data yet).
             local pct
@@ -6734,14 +6830,25 @@ function server.run()
                 rescanTotal   = z.rescanTotal or 0,
                 persistentKey = z.persistentKey or nil,
             }
+            zoneKeyList[#zoneKeyList + 1] = jid
             if z.persistentKey then activeKeys[z.persistentKey] = true end
+          end
         end
         -- Historical zones — persistent zones with no current active job.
         -- Include zones with 0 completed mine sectors (crashed during survey) so
         -- the user can see them and they are not silently re-dispatched from scratch.
-        for key, pz in pairs(state.persistentZones) do
-            if not activeKeys[key] and pz.doneSectors then
-                local done = #pz.doneSectors
+        local pzKeys = {}
+        for key in pairs(state.persistentZones) do pzKeys[#pzKeys + 1] = key end
+        for pzN, key in ipairs(pzKeys) do
+            if pzN % 5 == 0 then server.slice() end
+            local pz = state.persistentZones[key]
+            local hk = "zone:" .. tostring(key)
+            local done = pz and pz.doneSectors and #pz.doneSectors or 0
+            local sig = pz and pz.doneSectors and table.concat({ tostring(pz.total), tostring(done),
+                tostring(pz.surveyed or false), tostring(pz.oreMinedTotal or ""), tostring(pz.oreFoundTotal or "") }, "|")
+            if pz and not activeKeys[key] and pz.doneSectors then zoneKeyList[#zoneKeyList + 1] = hk end
+            if pz and not activeKeys[key] and pz.doneSectors and (fullZones or state.zoneSentSig[hk] ~= sig) then
+                state.zoneSentSig[hk] = sig
                 -- Ore-based pct if data available; sector-based fallback for old zones
                 local pct = orePct(pz.oreFound, pz.oreMined)
                            or (pz.total > 0 and math.floor(done / pz.total * 100) or 0)
@@ -6808,7 +6915,7 @@ function server.run()
         local diskFree = nil
         pcall(function() diskFree = fs.getFreeSpace(".") end)
 
-        local payload = '{"turtles":'      .. js(turtles,             "{}",  "turtles") ..
+        local payload = '{"turtles":'      .. server.slicedObjectJSON(turtles, "turtles", 20) ..
                         ',"jobs":'         .. jobs ..
                         ',"version":'      .. js(proto.VERSION,        '"?"', "version") ..
                         -- Nodes reporting a different proto.VERSION from this
@@ -6829,6 +6936,11 @@ function server.run()
                         -- Previous, not current, because the current build cannot
                         -- include its own elapsed time.
                         ',"pushBuildMs":'  .. tostring(lastBuildMs) ..
+                        -- Built in slices since 2026-11-18: pushBuildMs is now the
+                        -- whole build across them, the loop handling events between;
+                        -- pushSliceWorstMs is the longest slice -- the deaf window.
+                        ',"pushSliceWorstMs":' .. tostring(bb.lastWorst) ..
+                        ',"pushSlices":'  .. tostring(bb.lastSlices) ..
                         ',"rsPollMs":'     .. tostring(lastRsPollMs) ..
                         ',"rsPollWorstMs":' .. tostring(rsPollWorstMs) ..
                         -- The other half of the storage step. Published
@@ -6844,7 +6956,10 @@ function server.run()
                         ',"healthWorstMs":' .. tostring(healthWorstMs) ..
                         ',"storage":'      .. storageJSON ..
                         ',"storageTs":'    .. tostring(storageTs) ..
-                        ',"mineZones":'    .. js(mineZones,            "{}",  "mineZones") ..
+                        (fullZones
+                            and (',"mineZones":' .. server.slicedObjectJSON(mineZones, "mineZones", 1))
+                            or  (',"mineZonesChanged":' .. server.slicedObjectJSON(mineZones, "mineZones", 1) ..
+                                 ',"mineZoneKeys":' .. (#zoneKeyList == 0 and "[]" or js(zoneKeyList, "[]", "mineZoneKeys")))) ..
                         ',"oreThresholds":' .. js(oreThresholds,       "{}",  "oreThresholds") ..
                         -- Persistence health. A dead disk is otherwise invisible
                         -- unless someone reads the log ring at the right moment:
@@ -6978,6 +7093,38 @@ function server.run()
     -- every doubly-dropped stall.
     local BRIDGE_FORCE_CLEAR_MS = 10000
 
+    function bb.post(payload)
+        local now = os.epoch("utc")
+        local started = http.request(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
+        if started then
+            bridgePending     = true
+            bridgePendingSince = now
+            bridgeTimeoutId   = os.startTimer(BRIDGE_PUSH_TIMEOUT)
+            pushWitness.start()
+        else
+            logWarn("Bridge: http.request could not start")
+        end
+    end
+    function bb.step()
+        if not bb.build then return end
+        local t0 = os.epoch("utc")
+        local done, result = server.slicedStep(bb.build)
+        local dt = os.epoch("utc") - t0
+        bb.slices = bb.slices + 1
+        if dt > bb.worst then bb.worst = dt end
+        if done == false then
+            os.queueEvent("bridge_slice")
+            return
+        end
+        bb.build = nil
+        bb.lastWorst, bb.lastSlices = bb.worst, bb.slices
+        if done == nil then
+            logWarn("Bridge payload build error: " .. tostring(result))
+            return
+        end
+        bb.post(result)
+    end
+
     local function startBridgePush()
         local now = os.epoch("utc")
         -- Wall-clock failsafe: if bridgePending has been stuck this long, both
@@ -7017,21 +7164,12 @@ function server.run()
             bridgePending   = false
             bridgeTimeoutId = nil
         end
-        if bridgePending then return end
-        local ok, payload = pcall(buildBridgePayload)
-        if not ok then
-            logWarn("Bridge payload build error: " .. tostring(payload))
-            return
-        end
-        local started = http.request(CFG.BRIDGE_URL, payload, { ["Content-Type"] = "application/json" })
-        if started then
-            bridgePending     = true
-            bridgePendingSince = now
-            bridgeTimeoutId   = os.startTimer(BRIDGE_PUSH_TIMEOUT)
-            pushWitness.start()
-        else
-            logWarn("Bridge: http.request could not start")
-        end
+        if bridgePending or bb.build then return end
+        -- BUILT IN SLICES (server.slicedStart): the first slice runs here, the rest
+        -- on "bridge_slice" events the main loop handles between everything else.
+        bb.build = server.slicedStart(buildBridgePayload)
+        bb.since, bb.worst, bb.slices = now, 0, 0
+        bb.step()
     end
 
     -- Push immediately on startup so bridge sees the freshly-reset registry
@@ -7189,6 +7327,11 @@ function server.run()
                     end
                 end
             end
+
+        elseif event == "bridge_slice" then
+            -- The next slice of the bridge payload (startBridgePush).
+            local ok, err = timed("bridgeSlice", bb.step)
+            if not ok then logError("Bridge slice error: " .. tostring(err)) end
 
         elseif event == "http_success" then
             -- Async bridge response — process only if it's our push and we're waiting.
