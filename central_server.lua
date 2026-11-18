@@ -6633,7 +6633,7 @@ function server.run()
     -- (tests/test_cc_local_limit.lua). build = the task in progress; worst and
     -- slices = this build's longest slice (the deaf window) and slice count;
     -- lastWorst / lastSlices = the last finished build's, published in /state.
-    local bb = { build = nil, since = 0, worst = 0, slices = 0, lastWorst = -1, lastSlices = -1 }
+    local bb = { build = nil, since = 0, worst = 0, slices = 0, lastWorst = -1, lastSlices = -1, at = 0, queued = false }
 
     local function buildBridgePayload()
         local buildStartMs = os.epoch("utc")
@@ -7108,12 +7108,19 @@ function server.run()
     function bb.step()
         if not bb.build then return end
         local t0 = os.epoch("utc")
+        bb.at = t0
         local done, result = server.slicedStep(bb.build)
         local dt = os.epoch("utc") - t0
         bb.slices = bb.slices + 1
         if dt > bb.worst then bb.worst = dt end
         if done == false then
-            os.queueEvent("bridge_slice")
+            -- ONE "bridge_slice" WAITING AT MOST (sim w3_depart_off_dock on the first
+            -- cut): the watchdog's extra steps each queued another, they never drained,
+            -- and a queue full of them dropped a JOB_FAILED. The event clears the flag.
+            if not bb.queued then
+                bb.queued = true
+                os.queueEvent("bridge_slice")
+            end
             return
         end
         bb.build = nil
@@ -7330,6 +7337,7 @@ function server.run()
 
         elseif event == "bridge_slice" then
             -- The next slice of the bridge payload (startBridgePush).
+            bb.queued = false
             local ok, err = timed("bridgeSlice", bb.step)
             if not ok then logError("Bridge slice error: " .. tostring(err)) end
 
@@ -7684,6 +7692,24 @@ function server.run()
                 local ok_bp, err_bp = timed("bridgePush", startBridgePush)
                 if not ok_bp then logError("Bridge push error: " .. tostring(err_bp)) end
                 lastBridgePushWC = pushWc
+            end
+        end
+
+        -- THE SLICED BUILD MUST NOT HANG ON ONE EVENT (sim w3_bay_types150 on cef05ff:
+        -- the pushes stopped 50 min in). Each slice queues "bridge_slice", and any
+        -- filtered wait elsewhere in the loop (the RS poll's peripheral call) throws
+        -- away the events it is not waiting for -- that one too -- and a build that
+        -- never steps again keeps startBridgePush returning for good. So whatever
+        -- woke the loop, a build not stepped for half a second is stepped now, and
+        -- one older than 60 s is abandoned and the next push starts afresh.
+        if bb.build then
+            local nowB = os.epoch("utc")
+            if nowB - bb.since > 60000 then     -- each slice waits behind the events queued before it: slow, not hung
+                logWarn(string.format("Bridge build abandoned after %d ms (%d slices) -- starting afresh",
+                    nowB - bb.since, bb.slices))
+                bb.build = nil
+            elseif event ~= "bridge_slice" and nowB - bb.at > 500 then
+                pcall(bb.step)
             end
         end
 
