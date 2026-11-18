@@ -667,4 +667,34 @@ return {
         local r = core.handle(st, "del", { op = "request", cur = "DH", route = { "W1", "J1", "S1" }, group = "del", pair = "sup" }, t)
         assert_eq(r.ok, true, "standing in DH, its way home is let in alone (" .. tostring(r.why) .. ")")
     end,
+
+    -- 2026-11-17 (T2 shakeout-side-h, s002): node_215 and node_219 left DH for the tunnel and their ATC_LEAVEs were lost;
+    -- DH stayed booked, empty, until the 180 s sweep -- one message sent once, cleared by a timer. A report says where
+    -- the turtle stands and what it still needs: a section it entered and is no longer in is left, and a report from
+    -- outside the base (out) ends its booking. One with no known position changes nothing.
+    ["a report from where a turtle stands lets go of the sections it has left"] = function(assert_eq)
+        local core, st, t = live()
+        local DEP = { "W1", "DH" }
+        assert_eq(core.handle(st, "a", { op = "request", route = DEP }, t).ok, true)
+        core.handle(st, "a", { op = "enter", sec = "W1" }, t)
+        core.handle(st, "a", { op = "enter", sec = "DH" }, t)
+        -- its ATC_LEAVE for W1 is lost; it reports from DH with nothing more ahead
+        core.handle(st, "a", { op = "report", cur = "DH", route = { "DH" } }, t + 1000)
+        local w1 = core.handle(st, "b", { op = "request", route = { "W1" } }, t + 2000)
+        assert_eq(w1.ok, true, "W1, which it left, is free (" .. tostring(w1.why) .. ")")
+        local dh = core.handle(st, "c", { op = "request", route = { "DH" } }, t + 3000)
+        assert_eq(dh.ok, false, "DH, where it stands, is still its own")
+    end,
+
+    ["a report from outside the base ends the booking; one with no known position changes nothing"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "a", { op = "request", route = { "DH" } }, t).ok, true)
+        core.handle(st, "a", { op = "enter", sec = "DH" }, t)
+        core.handle(st, "a", { op = "report", route = {} }, t + 1000)            -- position unknown
+        local still = core.handle(st, "b", { op = "request", route = { "DH" } }, t + 2000)
+        core.handle(st, "a", { op = "report", out = true, route = {} }, t + 3000) -- out in the tunnel, its LEAVE lost
+        local freed = core.handle(st, "b", { op = "request", route = { "DH" } }, t + 4000)
+        assert_eq(still.ok, false, "a report that does not say where it stands lets nothing go")
+        assert_eq(freed.ok, true, "out of the base: DH is free (" .. tostring(freed.why) .. ")")
+    end,
 }
