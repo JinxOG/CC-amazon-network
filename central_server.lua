@@ -86,6 +86,15 @@ local CFG = {
     -- Gives the previous pair time to clear the dispatch hole and taxiway
     -- before the next pair starts their departure route.
     DISPATCH_STAGGER  = 60,
+    -- A MINE job's own stagger (2026-11-18, SPEC-OWNER: one a minute means 128
+    -- miners take ~2 h to leave after a start or a world restart). MEASURED with
+    -- sandbox/scenarios/w3_mine_turnover.lua (118 miners, 60 MINE jobs at once):
+    -- the limit is not this but the base's one departure lane, ~1 miner a minute.
+    -- At 60 s: 29 miners out by 30 min, median departure 31.7 min, worst ATC wait
+    -- 100 s. At 10 s: 36 by 30 min, median 25.0 min -- and dozens queued on their
+    -- docks up to 1992 s, each asking the ATC every 2 s. So it stays at the lane's
+    -- pace; faster turnover needs a second way out for miners, not a shorter stagger.
+    MINE_STAGGER      = 60,
     -- Absolute floor before a MINER is considered for dispatch at all. The real
     -- gate is mineTripFuel(), which is distance-aware; this only stops a turtle
     -- that cannot even complete its departure route from being picked.
@@ -4032,10 +4041,11 @@ function dispatcher.tick()
     for _, job in ipairs(workerJobs) do
         local isMine = job.type == proto.JOB.MINE
         local sinceType = now - (state.lastDispatchByType[job.type] or 0)
+        local stagger = (isMine and CFG.MINE_STAGGER or CFG.DISPATCH_STAGGER) * 1000
 
         -- Delivery: skip if destination already has an active job
-        if sinceType < CFG.DISPATCH_STAGGER * 1000 then
-            staggered = staggered or { job = job, wait = math.ceil((CFG.DISPATCH_STAGGER * 1000 - sinceType) / 1000) }
+        if sinceType < stagger then
+            staggered = staggered or { job = job, wait = math.ceil((stagger - sinceType) / 1000) }
         elseif not isMine and job.params and destinationBusy(job.params.destination) then
             logInfo(string.format("Skip %s — destination already has an active delivery", job.id))
             -- continue to next pending job
