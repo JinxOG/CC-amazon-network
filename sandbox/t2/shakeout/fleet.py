@@ -346,6 +346,8 @@ def place_fleet(ctx, layout=None, kit=None, donors=None, server_id=None, loader_
 
 
 FLEET_ROLES = ("DELIVERY", "SUPPORT", "MINER", "LOADER")
+# Fleet turtles the 2026-10-18 world copy has out in the field, in chunks no area of the base keeps loaded: (computer id, pos).
+KNOWN_STRAYS = ((178, (839, 200, -2813)),)
 
 
 def retire_strays(ctx, keep=()):
@@ -358,16 +360,32 @@ def retire_strays(ctx, keep=()):
     c = ctx.control
     keep = set(keep)
     out = []
-    for cid, v in sorted(c.computers().items()):
-        role = (c.role_of(cid) or "").strip().upper()
-        if cid in keep or role not in FLEET_ROLES:
+    # A stray in an unloaded chunk is not in the computer list at all (24h-b, 2026-11-18: #178 was missed and registered later
+    # as a 161st turtle). The known ones are forceloaded for the sweep, waited for, and released after it.
+    forced = []
+    for cid, pos in KNOWN_STRAYS:
+        if cid in keep:
             continue
-        pos = tuple(v["pos"])
-        c.shutdown([cid])
-        r = c.command("setblock %d %d %d minecraft:air" % pos)
-        if "Changed the block" not in r:
-            raise RuntimeError("retiring #%d (%s) at %s -> %r" % (cid, role, pos, r.strip()[:200]))
-        out.append((cid, pos, role))
+        c.command("forceload add %d %d" % (pos[0], pos[2]))
+        forced.append(pos)
+        for _ in range(20):                     # the chunk loads on a later tick
+            if cid in c.computers():
+                break
+            time.sleep(0.5)
+    try:
+        for cid, v in sorted(c.computers().items()):
+            role = (c.role_of(cid) or "").strip().upper()
+            if cid in keep or role not in FLEET_ROLES:
+                continue
+            pos = tuple(v["pos"])
+            c.shutdown([cid])
+            r = c.command("setblock %d %d %d minecraft:air" % pos)
+            if "Changed the block" not in r:
+                raise RuntimeError("retiring #%d (%s) at %s -> %r" % (cid, role, pos, r.strip()[:200]))
+            out.append((cid, pos, role))
+    finally:
+        for pos in forced:
+            c.command("forceload remove %d %d" % (pos[0], pos[2]))
     if out and hasattr(ctx, "note"):
         ctx.note("shakeout fleet: retired %d fleet computers not part of the shakeout: %s" % (
             len(out), ", ".join("#%d %s at %d,%d,%d" % ((i, r) + p) for i, p, r in out)))

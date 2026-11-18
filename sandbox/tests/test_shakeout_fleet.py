@@ -40,11 +40,28 @@ class FakeGame:
         b = self.blocks.get(pos)
         return b if b and b.get("cid") is not None else None
 
+    unloaded = ()           # (x, z) chunk columns not loaded: their computers are not listed until forceloaded
+    forced = None
+
+    def _listed(self, p):
+        if self.forced is None:
+            self.forced = set()
+        ch = (p[0] >> 4, p[2] >> 4)
+        return ch not in self.unloaded or ch in self.forced
+
     def command(self, text):
         self.sent.append(text)
+        m = re.match(r"^forceload (add|remove) (-?\d+) (-?\d+)$", text)
+        if m:
+            if self.forced is None:
+                self.forced = set()
+            ch = (int(m.group(2)) >> 4, int(m.group(3)) >> 4)
+            (self.forced.add if m.group(1) == "add" else self.forced.discard)(ch)
+            return "Marked chunk for force loading" if m.group(1) == "add" else "Unmarked chunk"
         if text == "t2 computers":     # the control mod's full list (the dump stops at 99 rows)
             return json.dumps({"computers": [{"id": b["cid"], "on": b["on"], "x": p[0], "y": p[1], "z": p[2]}
-                                             for p, b in sorted(self.blocks.items()) if b.get("cid") is not None]})
+                                             for p, b in sorted(self.blocks.items())
+                                             if b.get("cid") is not None and self._listed(p)]})
         if text == "computercraft dump":
             return "\n".join("#%d | %s | %d, %d, %d" % ((b["cid"], "Y" if b["on"] else "N") + p)
                              for p, b in sorted(self.blocks.items()) if b.get("cid") is not None)
@@ -463,6 +480,19 @@ class Strays(unittest.TestCase):
         self.assertIn((164, 67, -2812), g.blocks, "a turtle with no role is not a fleet node")
         self.assertIn((160, 67, -2786), g.blocks, "the ATC is not a fleet turtle")
         self.assertTrue(os.path.exists(os.path.join(ctx.control.disks, "178", "startup.lua")), "its disk (code) stays")
+
+    def test_the_known_stray_is_retired_even_where_its_chunk_is_not_loaded(self):
+        """24h-b (2026-11-18): #178 at 839,200,-2813 sat in an unloaded chunk at setup, so retire_strays never listed it; it
+        registered later as a 161st turtle ("No dock assigned, staying put")."""
+        ctx = FakeCtx()
+        g = ctx.game
+        write_disk(ctx.control.disks, 178, {"role.txt": "MINER", "startup.lua": "-- ore_turtle.lua\n"})
+        g.blocks[(839, 200, -2813)] = {"kind": "computercraft:turtle_advanced", "cid": 178, "on": True, "items": {}}
+        g.unloaded = {(839 >> 4, -2813 >> 4)}
+        out = fleet.retire_strays(ctx, keep=[95])
+        self.assertEqual(out, [(178, (839, 200, -2813), "MINER")])
+        self.assertNotIn((839, 200, -2813), g.blocks)
+        self.assertEqual(g.forced, set(), "the chunk is released again afterwards")
 
 
 class TheKit(unittest.TestCase):
