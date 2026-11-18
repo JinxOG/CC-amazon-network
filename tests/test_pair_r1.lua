@@ -225,4 +225,27 @@ return {
         assert_eq(after2, 1, "the repeat is not counted again")
         assert_eq(acked2, 2, "and the repeat is acknowledged too")
     end,
+
+    -- 2026-11-18 (T2 shakeout-payload-b and 24h-b): no DELIVER went out until 63 min into the fault clock, before any
+    -- fault. The feeder queued 51 MINE jobs just before the orders, and dispatcher.tick sent ONE job per
+    -- DISPATCH_STAGGER (60 s), oldest first, whatever its type: 51 miners one a minute, the deliveries behind them. The
+    -- stagger is per job type: a delivery waits 60 s after the last delivery, a mine job after the last mine job.
+    ["a delivery is not held behind the mining queue's stagger"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.IDLE)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 153, y = 67, z = -2797 }, proto.STATUS.IDLE)
+        T.registry.update("node_d", proto.STATUS.IDLE, 100000, { x = 153, y = 67, z = -2806 }, nil)
+        T.registry.update("node_s", proto.STATUS.IDLE, 100000, { x = 153, y = 67, z = -2797 }, nil)
+        T.state.jobs["job_0001"] = { id = "job_0001", type = proto.JOB.MINE, status = "PENDING", priority = 5, createdAt = 1,
+            params = { x1 = 0, z1 = 0, x2 = 31, z2 = 31 }, history = {}, retries = 0 }
+        T.state.jobs["job_0002"] = { id = "job_0002", type = proto.JOB.DELIVER, status = "PENDING", priority = 5, createdAt = 2,
+            params = { items = {}, destination = { x = 196, y = 67, z = -2761 } }, history = {}, retries = 0 }
+        T.state.lastDispatchTime = os.epoch("utc")                 -- a mine job went out a moment ago
+        T.state.lastDispatchByType = { [proto.JOB.MINE] = os.epoch("utc") }
+        T.dispatcher.tick()
+        local d = T.state.jobs["job_0002"]
+        restore()
+        assert_eq(d.status ~= "PENDING" and d.assignedTo == "node_d", true,
+            "the delivery went out though a mine job left a moment ago (" .. tostring(d.status) .. ", " .. tostring(d.assignedTo) .. ")")
+    end,
 }

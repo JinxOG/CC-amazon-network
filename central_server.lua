@@ -1382,6 +1382,7 @@ local function loadJobs()
         -- Apply dispatch stagger on restart: prevents fresh pairs from going out
         -- before turtles have had time to re-register and re-link to their jobs.
         state.lastDispatchTime = os.epoch("utc")
+        state.dispatchHoldUntil = state.lastDispatchTime + CFG.DISPATCH_STAGGER * 1000
         logInfo(string.format("Startup stagger active — no new dispatch for %ds", CFG.DISPATCH_STAGGER))
     end
 end
@@ -3972,21 +3973,25 @@ function dispatcher.tick()
     -- Multi-turtle stagger: only dispatch one new pair per DISPATCH_STAGGER window.
     -- This prevents two pairs from colliding at the single-block dispatch hole.
     local now = os.epoch("utc")
-    local msSinceLast = now - state.lastDispatchTime
-    if msSinceLast < CFG.DISPATCH_STAGGER * 1000 then
-        if (now - lastStaggerLog) >= 60000 then
-            local waitSec = math.ceil((CFG.DISPATCH_STAGGER * 1000 - msSinceLast) / 1000)
-            logInfo(string.format("Dispatch stagger: next pair in %ds", waitSec))
-            lastStaggerLog = now
-        end
-        return
-    end
+    -- After a restart nothing goes out for a while, whatever its type (job restore).
+    if now < (state.dispatchHoldUntil or 0) then return end
+    -- THE STAGGER IS PER JOB TYPE (2026-11-18, T2 shakeout-payload-b and 24h-b: no
+    -- DELIVER went out until 63 min into the fault clock, before any fault). The
+    -- feeder queued 51 MINE jobs just before the orders and one job went out per
+    -- DISPATCH_STAGGER, oldest first, whatever its type: 51 miners one a minute, the
+    -- deliveries behind them. Now a delivery waits DISPATCH_STAGGER after the last
+    -- delivery, a mine job after the last mine job; the ATC orders the base.
+    state.lastDispatchByType = state.lastDispatchByType or {}
+    local staggered = nil
 
     for _, job in ipairs(workerJobs) do
         local isMine = job.type == proto.JOB.MINE
+        local sinceType = now - (state.lastDispatchByType[job.type] or 0)
 
         -- Delivery: skip if destination already has an active job
-        if not isMine and job.params and destinationBusy(job.params.destination) then
+        if sinceType < CFG.DISPATCH_STAGGER * 1000 then
+            staggered = staggered or { job = job, wait = math.ceil((CFG.DISPATCH_STAGGER * 1000 - sinceType) / 1000) }
+        elseif not isMine and job.params and destinationBusy(job.params.destination) then
             logInfo(string.format("Skip %s — destination already has an active delivery", job.id))
             -- continue to next pending job
         else
@@ -4099,6 +4104,7 @@ function dispatcher.tick()
             end
 
             state.lastDispatchTime = os.epoch("utc")
+            state.lastDispatchByType[job.type] = state.lastDispatchTime
             return
         else
             if (now - lastDispatchHoldLog) >= 60000 then
@@ -4114,6 +4120,10 @@ function dispatcher.tick()
         end
 
         end -- destination-busy / mine else
+    end
+    if staggered and (now - lastStaggerLog) >= 60000 then
+        logInfo(string.format("Dispatch stagger: next %s in %ds", tostring(staggered.job.type), staggered.wait))
+        lastStaggerLog = now
     end
 end
 
