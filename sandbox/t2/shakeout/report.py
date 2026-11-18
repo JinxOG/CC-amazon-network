@@ -165,6 +165,7 @@ def _read_jsonl(path):
 # ---------------------------------------------------------------------------------------------------------------------------
 
 TURTLE_KEYS = ("x", "y", "z", "status", "phase", "dockX", "dockZ", "lastSeen", "online", "needsHands", "role")
+SERVER_HEALTH_KEYS = ("pushBuildMs", "pushSliceWorstMs", "pushSlices", "rsKeptEvents", "rsPollMs", "rsPollWorstMs", "gps")
 
 
 def compact_state(st):
@@ -177,12 +178,17 @@ def compact_state(st):
     turtles = {tid: {k: e.get(k) for k in TURTLE_KEYS if e.get(k) is not None} for tid, e in ts.items() if isinstance(e, dict)}
     jobs = [j for j in feeder._as_list(st.get("jobs")) if isinstance(j, dict)]
     disk = st.get("disk") if isinstance(st.get("disk"), dict) else {}
-    return {"fresh": fresh, "why": why, "serverTime": st.get("serverTime"), "updatedAt": st.get("updatedAt"),
-            "disk_bytes": disk.get("bytes"), "disk_free": st.get("diskFree", disk.get("free")),
-            "pending": sum(1 for j in jobs if j.get("status") == "PENDING"),
-            "jobs": [[j.get("id"), j.get("type"), j.get("status"), j.get("zoneKey"), j.get("assignedTo")] for j in jobs
-                     if j.get("status") in feeder.ACTIVE],
-            "turtles": turtles}
+    out = {"fresh": fresh, "why": why, "serverTime": st.get("serverTime"), "updatedAt": st.get("updatedAt"),
+           "disk_bytes": disk.get("bytes"), "disk_free": st.get("diskFree", disk.get("free")),
+           "pending": sum(1 for j in jobs if j.get("status") == "PENDING"),
+           "jobs": [[j.get("id"), j.get("type"), j.get("status"), j.get("zoneKey"), j.get("assignedTo")] for j in jobs
+                    if j.get("status") in feeder.ACTIVE],
+           "turtles": turtles}
+    # the server's own health (2026-11-18): the deaf window, the RS wait's kept events, and its GPS check (ok=false holds dispatch)
+    health = {k: st[k] for k in SERVER_HEALTH_KEYS if st.get(k) is not None}
+    if health:
+        out["server"] = health
+    return out
 
 
 def record_state(ctx, wall_ms, t0_epoch_ms, every_s=SNAPSHOT_EVERY_S, get=None):
