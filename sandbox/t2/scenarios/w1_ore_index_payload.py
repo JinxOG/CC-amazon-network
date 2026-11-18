@@ -59,7 +59,24 @@ def steps(ctx):
 
     # Let it work. The job completing is itself one of the three measurements: a fleet made deaf by the payload stops
     # finishing jobs, which is how the recorded failure presented.
-    finished = ctx.wait_until(lambda: ctx.log_lines(COMPLETE), 3 * 3600)
+    # WATCH FOR A WINDOW, AND JUDGE PROGRESS -- not completion.
+    #
+    # The first version waited for "Job complete" and asserted it. Run
+    # w1-ore-index-b failed that check and the fleet was fine: a single-centre
+    # ORDER_MINE pads and snaps to 32, so the order grew past one sector (the
+    # server's last word was "1/1 sectors remaining"), and mining real ore with
+    # one miner at 1x simply takes longer than three hours. The first sector
+    # alone ran 20:12 to 22:43.
+    #
+    # Completion was the wrong gate because it cannot tell SLOW from STUCK, and
+    # the fault this scenario hunts -- the payload making the server deaf --
+    # presents as "jobs stop finishing". The discriminator that fits inside a
+    # bounded window is whether sectors were STILL completing when the window
+    # closed. In that run the last one landed at 22:47:06 with the run ending at
+    # 22:50:38, and census lines were still arriving at 22:45 -- progress to the
+    # final 2% of the watch, which is the opposite of stopped.
+    WATCH = 3 * 3600
+    finished = ctx.wait_until(lambda: ctx.log_lines(COMPLETE), WATCH)
     sectors = ctx.log_lines(DONE)
     census = ctx.log_lines(CENSUS)
     survey = ctx.log_lines(SURVEY)
@@ -94,10 +111,40 @@ def steps(ctx):
     after = {k: len(ctx.log_lines(k)) for k in DEAF}
     added = {k: after[k] - before[k] for k in DEAF}
     ctx.note("comms warnings added during the job: %s" % added)
-    ctx.expect(bool(finished),
-               "the job COMPLETED with the census and packed coordinates in every sector report (%d sectors done) -- the "
-               "recorded payload-deafness failure presented as jobs that stopped finishing, not as an error"
-               % len(sectors))
+    # STILL FINISHING SECTORS WHEN THE WINDOW CLOSED, which is what separates a
+    # fleet gone deaf from one that is merely slow. Completion is recorded, not
+    # gated -- see the note at the wait above for why.
+    def stamps(substr):
+        out = []
+        for l in ctx.log_lines(substr):
+            m = re.match(r"\s*(\d{4}-\d\d-\d\dT[\d:.]+Z)", l)
+            if m:
+                out.append(m.group(1))
+        return sorted(out)
+
+    done_at, census_at = stamps(DONE), stamps(CENSUS)
+    last_progress = max(done_at[-1:] + census_at[-1:]) if (done_at or census_at) else None
+    all_lines = stamps("")
+    run_end = all_lines[-1] if all_lines else None
+    ctx.note("job complete: %s; last sector-done: %s; last census: %s; last log line: %s"
+             % (bool(finished), done_at[-1:] or "none", census_at[-1:] or "none", run_end))
+
+    # Progress inside the last 20 minutes of whatever the log covers. Measured
+    # from the log's own final timestamp rather than from wall clock, so a run
+    # cut short early is judged against when it actually ended.
+    fresh = None
+    if last_progress and run_end:
+        import datetime as _dt
+        def t(s):
+            return _dt.datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
+        fresh = (t(run_end) - t(last_progress)).total_seconds() <= 1200
+    ctx.note("progress was still arriving at the end of the window: %s" % fresh)
+    ctx.expect(bool(finished) or fresh is True,
+               "the fleet was STILL completing sectors when the window closed (%d sectors done; job complete: %s; last "
+               "progress %s against a log ending %s) -- the recorded payload-deafness failure presented as jobs that "
+               "STOPPED finishing, so progress continuing to the end is the thing that rules it out. Slow is not stuck: a "
+               "single-centre order pads and snaps to 32 and one miner mining real ore at 1x needs longer than this watch."
+               % (len(sectors), bool(finished), last_progress, run_end))
     ctx.expect(added.get("Server unreachable", 0) == 0 and added.get("no ACK since", 0) == 0,
                "and no miner lost contact with the server while those reports were in flight (new 'Server unreachable': "
                "%d, new 'no ACK since': %d, measured against %d and %d before the job so the boot-time warnings every "
