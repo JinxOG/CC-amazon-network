@@ -6,7 +6,9 @@
 --
 -- Here: the small fleet with the ATC; the first delivery's ATC_LEAVE and ATC_CANCEL are dropped from the moment it is
 -- called up from its holding slot until it has docked, so it docks holding its way home. Deliveries keep being ordered.
--- CHECKS: the first delivery docked with a booking left (evidence: the ATC's summary names it once it is home); every
+-- CHECKS: the first delivery docked while every release it sent was lost (evidence); the ATC let its booking go on its
+-- own reports (since 2026-11-17, T2 shakeout-side-h s002: a report says where a turtle stands, and one out of the base
+-- says so -- before, it docked still holding its way home, and this scenario's evidence was that stale booking); every
 -- delivery ordered completed; nobody waited over 900 s to be let in; at the end the ATC holds no section.
 -- On 360d551 the stale booking stays and the returns queue behind it.
 local DESTS = { { x = 118, z = -2830 }, { x = 124, z = -2830 }, { x = 196, z = -2761 }, { x = 130, z = -2830 } }
@@ -22,6 +24,7 @@ return {
     local done = sim:capture_log("Job complete: job_")
     local called = sim:capture_log("Called up from holding slot")
     local docked = sim:capture_log("Docked at bay")
+    local healed = sim:capture_log("reports from")
     local waits = sim:capture_log("Still waiting")
     local summary = sim:capture_log("section(s) held")
     sim:storage_set("minecraft:cobblestone", 1000000)
@@ -79,9 +82,13 @@ return {
     while #mine(docked.lines) <= dockedBefore and sim.clock:now() - t1 < 20 * 60000 do feed(10000) end
     for _, id in ipairs(rules) do if type(id) == "number" then sim.sched.radio:remove_rule(id) end end
     feed(70000)
-    local stale = summary.lines[#summary.lines] or ""
-    sim:expect(stale:find(first, 1, true) ~= nil, first .. " docked with a booking the ATC still held, so the checks below "
-      .. "have something to judge (" .. stale:sub(-140) .. ")")
+    sim:expect(#mine(docked.lines) > dockedBefore, first .. " docked while every ATC_LEAVE and ATC_CANCEL it sent was lost, "
+      .. "so the checks below have something to judge")
+    local own = {}
+    for _, l in ipairs(healed.lines) do if l:find(first .. " reports from", 1, true) then own[#own + 1] = l end end
+    local held = summary.lines[#summary.lines] or ""
+    sim:expect(#own >= 1 and held:find(first, 1, true) == nil, "the ATC let its booking go on its own reports ("
+      .. tostring((own[#own] or "none"):sub(-90)) .. "; now: " .. held:sub(-80) .. ")")
 
     local waitsFrom = #waits.lines
     feed(60 * 60000)

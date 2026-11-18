@@ -543,6 +543,16 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
                             la.x, la.z, id))
                     end
                 end
+            elseif job.type == proto.JOB.DELIVER and job.delivered then
+                -- DELIVERED, IT LOST ITS JOB_COMPLETE (2026-11-17, sim w3_side_atc on
+                -- w3-timeout): node_34 docked after delivering job_0033, the outage lost
+                -- its JOB_COMPLETE, and re-registering with no job it was taken for
+                -- rebooted -- job_0033 was re-sent, and it set out on a delivered job and
+                -- waited 38 min for its partner. Its goods are at the destination: the
+                -- job is complete.
+                logInfo(string.format("%s registers with no job after delivering %s -- its JOB_COMPLETE was lost; the job is complete",
+                    id, job.id))
+                jobQueue.complete(job.id)
             else
                 -- Turtle rebooted — keep job IN_PROGRESS so no new pair is dispatched
                 -- to the same destination.  Re-send JOB_ASSIGN after REGISTER_ACK.
@@ -888,7 +898,21 @@ function registry.checkTimeouts()
         elseif t.online and (now - t.lastSeen - registry.deafSince(t.lastSeen, now)) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
             local jobId = t.jobId
             registry.markOffline(id)
-            if jobId then
+            local delivered = jobId and state.jobs[jobId] and state.jobs[jobId].delivered
+            if delivered then
+                -- A DELIVERY THAT HAS DELIVERED IS LATE HOME, NOT A JOB TO DO AGAIN
+                -- (2026-11-17, sim w3_side_atc on w3-leave-wip). In the outage node_32,
+                -- alive in the holding line with its goods delivered, timed out; its job
+                -- went out again and was delivered twice, its support was recalled in
+                -- the tunnel, and the next order to that destination waited behind
+                -- "already has an active delivery". The job is complete; its support's
+                -- half too (complete leaves the support's own entry alone: it is still
+                -- coming home with its delivery).
+                logInfo(string.format("Delivery %s timed out after delivering %s -- the job is complete; it is late home",
+                    id, jobId))
+                jobQueue.complete(jobId)
+                t.jobId = nil
+            elseif jobId then
                 local job = state.jobs[jobId]
                 jobQueue.reassign(jobId, id, "turtle_timeout")
                 t.jobId = nil
@@ -896,7 +920,16 @@ function registry.checkTimeouts()
                 local linkedId = job and job.linkedJob
                 if linkedId then
                     local linkedJob = state.jobs[linkedId]
-                    if linkedJob and (linkedJob.status == "ASSIGNED" or linkedJob.status == "IN_PROGRESS") then
+                    local supT = linkedJob and state.registry[linkedJob.assignedTo or ""]
+                    if linkedJob and supT and not registry.atDock(supT)
+                       and (linkedJob.status == "ASSIGNED" or linkedJob.status == "IN_PROGRESS") then
+                        -- OUT WITH ITS DELIVERY, IT IS LEFT WITH IT (R4; sim w3_side_atc,
+                        -- 2026-11-17: node_51, RECALLed "partner_timed_out" in the tunnel
+                        -- while node_32 lived). It leaves on its delivery's word, or its own
+                        -- silence rule; checkStaleSupports ends its half once that is home.
+                        logInfo(string.format("Support %s (%s) is out with its timed-out delivery %s -- left with it",
+                            tostring(linkedId), tostring(linkedJob.assignedTo), id))
+                    elseif linkedJob and (linkedJob.status == "ASSIGNED" or linkedJob.status == "IN_PROGRESS") then
                         local supportTurtle = linkedJob.assignedTo
                         linkedJob.status = "CANCELLED"
                         linkedJob.assignedTo = nil
@@ -3270,13 +3303,25 @@ function jobQueue.reassign(jobId, fromId, reason)
     if t then t.status = proto.STATUS.IDLE; t.jobId = nil end
     -- Cancel the linked support job so it doesn't orphan indefinitely.
     -- Use cancelJobInline — server.cancelJob is defined after jobQueue.
+    -- A SUPPORT OUT WITH ITS DELIVERY IS LEFT WITH IT (R4; 2026-11-17, sim
+    -- w3_side_atc). In the outage the server took node_32 for timed out and sent
+    -- its job back; the cancel RECALLed node_51, out in the tunnel with its live
+    -- delivery: home alone, no slot, a 216-step retrace into the next pair. A
+    -- support leaves only on its delivery's word; checkStaleSupports ends its half
+    -- once the delivery is home (or gone).
     if job.linkedJob then
         local linked = state.jobs[job.linkedJob]
         if linked
            and linked.status ~= JOB_STATUS.COMPLETE
            and linked.status ~= JOB_STATUS.CANCELLED
            and linked.status ~= JOB_STATUS.FAILED then
-            cancelJobInline(job.linkedJob)
+            local sup = state.registry[linked.assignedTo or ""]
+            if linked.type == proto.JOB.SUPPORT_FOLLOW and sup and sup.online and not registry.atDock(sup) then
+                logInfo(string.format("Support %s (%s) is out with its delivery -- left with it, not recalled",
+                    job.linkedJob, tostring(linked.assignedTo)))
+            else
+                cancelJobInline(job.linkedJob)
+            end
         end
     end
     job.status     = JOB_STATUS.PENDING
@@ -4532,6 +4577,19 @@ handlers[proto.MSG.JOB_FAILED] = function(msg)
         if #seen.order > 500 then seen.set[table.remove(seen.order, 1)] = nil end
     end
     if jobQueue.ownedByAnother(p.jobId, msg.from, "JOB_FAILED") then return end
+    -- THE ECHO OF THE SERVER'S OWN CALL-OFF IS NOT A FAILURE (2026-11-17, sim
+    -- w3_side_atc, job_0043). pairCancel already sent the job back; the delivery's
+    -- "departure_failed: pair_cancelled" that follows counted retry 1/3, 2/3, 3/3 --
+    -- one after the job had gone out again to the same delivery -- and the order
+    -- failed for good.
+    if tostring(p.reason or ""):find("pair_cancelled", 1, true) then
+        -- Nothing else: the job may already be out again under the same id to the
+        -- same delivery (sim w3_side_atc, job_0043: clearing its registry job made
+        -- the live one a "ghost" and it was cancelled).
+        logInfo(string.format("Job %s: %s confirms the pair is off (%s) -- already sent back, not counted",
+            tostring(p.jobId), msg.from, tostring(p.reason)))
+        return
+    end
     jobQueue.fail(p.jobId, p.reason, p.recoverable)
     -- Job may have re-queued for retry — try to dispatch right away
     pcall(dispatcher.tick)
@@ -5163,7 +5221,13 @@ end
 handlers[proto.MSG.DELIVERY_ARRIVED] = fwdToWarehouse
 handlers[proto.MSG.CHESTS_PLACED]    = fwdToWarehouse
 handlers[proto.MSG.BATCH_DONE]       = fwdToWarehouse
-handlers[proto.MSG.ITEM_COLLECTED]   = fwdToWarehouse
+-- THE GOODS ARE AT THE DESTINATION (2026-11-17): noted on the job, so a timeout
+-- after it is a turtle late home, not a job to do again (registry.checkTimeouts).
+handlers[proto.MSG.ITEM_COLLECTED]   = function(msg)
+    local job = msg.payload and state.jobs[msg.payload.jobId]
+    if job and job.assignedTo == msg.from then job.delivered = true end
+    fwdToWarehouse(msg)
+end
 
 -- Warehouse → turtle (forward to turtle by jobId → assignedTo)
 local function fwdToTurtle(msg)

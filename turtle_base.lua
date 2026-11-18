@@ -1875,6 +1875,7 @@ function atc.book(waypoints, label, giveUp)
     -- request: the ATC waited for the partner's ask, and node_96 held DH for good.
     local pair = atc.pair
     atc.pair = nil
+    atc.owesUntil = nil        -- asking anew: no more "I am out" (atc.keepInBase)
     if not atc.ensure() then return true end
     local list = W.routeSections(base.getPos(), waypoints)
     atc.route = list
@@ -1946,8 +1947,25 @@ end
 -- A docked turtle with nothing booked has nothing to say.
 function atc.keepInBase()
     if not atc.ENABLED then return end
-    if atc.route == nil and atc.here() == nil then return end
+    if atc.route == nil and atc.here() == nil then
+        -- OUT OF THE BASE, IT SAYS SO A WHILE (2026-11-17, T2 shakeout-side-h s002):
+        -- node_215's ATC_LEAVE for DH, sent once as it stepped into the tunnel, was
+        -- lost, and DH stayed booked, empty, until the 180 s sweep. The first of these
+        -- the ATC hears lets its booking go. Only from a measured position.
+        local now = os.epoch("utc")
+        if atc.owesUntil and now < atc.owesUntil and _self.posFixed
+           and not (atc.aliveAt and now - atc.aliveAt < atc.KEEPALIVE_S * 1000) then
+            atc.aliveAt = now
+            atc.send(proto.MSG.ATC_REPORT, { out = true, route = {} })
+        end
+        return
+    end
     atc.keepAlive()
+end
+atc.OWE_MS = 300000
+function atc.steppedOut()
+    atc.owesUntil = os.epoch("utc") + atc.OWE_MS
+    atc.aliveAt = nil
 end
 
 -- Done with the base: give back everything but the section it stands in.
@@ -2123,7 +2141,10 @@ local function tryMove(digFn, dir)
         if jMove(dir) then
             applyMove(dir)
             atc.progressed()
-            if atcFrom and atcFrom ~= atcInto then atc.send(proto.MSG.ATC_LEAVE, { sec = atcFrom }) end
+            if atcFrom and atcFrom ~= atcInto then
+                atc.send(proto.MSG.ATC_LEAVE, { sec = atcFrom })
+                if atcInto == nil then atc.steppedOut() end      -- out of the base: it says so a while
+            end
             return true
         end
 
