@@ -292,4 +292,27 @@ return {
         assert_eq(asc2, 3, "called home: the hold notice stops")
         assert_eq(home >= 1 and homeTrail == home, true, "and the come-home carries its path (" .. home .. "/" .. homeTrail .. ")")
     end,
+
+    -- 2026-11-17 (T2 shakeout-side-h, node_217 at 21:43:52): standing behind its delivery's slot, it asked for that slot
+    -- while the ATC computer was down -- "no answer from the ATC" for 120 s -- and its 120 s bound took it for a refusal:
+    -- it retraced 192 steps the long way round. A silent ATC is a pause, not a refusal: only refusals count.
+    ["a support waiting for its slot counts only the ATC's refusals, not its silence"] = function(assert_eq)
+        local base = fresh()
+        local atc = base.atc
+        local savedClock, savedSleep = os.clock, sleep
+        local t = 0
+        os.clock = function() return t end
+        sleep = function(sec) t = t + (sec or 0) end
+        local asks = 0
+        atc.ask = function() asks = asks + 1; if asks <= 100 then return nil end; return { ok = true, slot = 6 } end
+        local gotAfterSilence = atc.holdSlot("tunnel", 6, 120)
+        t, asks = 0, 0
+        atc.ask = function() asks = asks + 1; if asks > 500 then error("never gave up", 0) end; return { ok = false, why = "slot 6 is node_9's" } end
+        local refused = atc.holdSlot("tunnel", 6, 120)
+        local tRefused = t
+        os.clock, sleep = savedClock, savedSleep
+        assert_eq(gotAfterSilence, 6, "300 s of silence, then the ATC answers: it gets its slot")
+        assert_eq(refused, nil, "refused 120 s: it gives up as before")
+        assert_eq(tRefused >= 120 and tRefused < 130, true, "after about 120 s of refusals (" .. tRefused .. ")")
+    end,
 }

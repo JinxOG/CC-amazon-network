@@ -2284,13 +2284,20 @@ function atc.holdSlot(line, prefer, maxS)
     local since = os.clock()
     -- A turtle that cannot dig (support) takes the slot it stands under or none.
     local strict = prefer ~= nil and not _self.canDig
+    -- ONLY REFUSALS COUNT (2026-11-17, T2 shakeout-side-h, node_217). Behind its
+    -- delivery's slot, it asked while the ATC computer was down -- "no answer" for
+    -- 120 s -- and its bound took silence for a refusal: a 192-step retrace the long
+    -- way round. A silent ATC is a pause, not a refusal.
+    local refusedFor, lastT = 0, since
     while true do
         local r = atc.ask(proto.MSG.ATC_REQUEST, { kind = "hold", line = line, prefer = prefer, strict = strict,
             pair = (_self.role == proto.ROLE.SUPPORT) and _self.partnerId or nil })
         last = r
         if r and r.ok and r.slot then return r.slot end
         local now = os.clock()
-        if maxS and now - since >= maxS then return nil end
+        if r then refusedFor = refusedFor + (now - lastT) end
+        lastT = now
+        if maxS and refusedFor >= maxS then return nil end
         report = report or waitReporter(function()
             return string.format("ATC: no %s holding slot yet (%s) at %d,%d,%d", line,
                 last and tostring(last.why) or "no answer from the ATC", _self.pos.x, _self.pos.y, _self.pos.z)
