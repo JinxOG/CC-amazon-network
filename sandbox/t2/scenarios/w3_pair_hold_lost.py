@@ -97,7 +97,10 @@ def steps(ctx):
     tLoss = now_iso()
     lagAt = pos(sname)
     ctx.note("loss to %s on channel %d from %s: %s" % (sname, ch_local, lagAt, c.radio_loss(0, 300000, 1.0, channel=ch_local, to=scid)))
-    inSlot = ctx.wait_until(lambda: by(since("Return: ", tLoss), dname), 600, poll=1)
+    # In its slot: it logs its place in line only when it has to wait, so "Called up" (it reached the slot and left it)
+    # counts too (w3-pair-hold-lost-a: called up at once, its "Return:" never came and the loss ran its full 300 s).
+    inSlot = ctx.wait_until(lambda: by(since("Return: ", tLoss), dname) + by(since("Called up from holding slot", tLoss), dname),
+                            600, poll=1)
     ctx.wait_game(3)
     ctx.note("loss cleared: %s" % c.radio_clear())
     dp, sp = pos(dname), pos(sname)
