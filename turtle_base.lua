@@ -102,6 +102,36 @@ function base.getPos()           return { x=_self.pos.x, y=_self.pos.y, z=_self.
 -- placement error that cannot be undone without a pickaxe we aren't holding.
 function base.getFacing()        return _self.facing     end
 function base.getDock()          return _self.dock       end
+-- A TURTLE KEEPS ITS DOCK (2026-11-18, T2 shakeout-24h-b). It learned its dock only
+-- from REGISTER_ACK and kept it nowhere: node_481, rebooted while the server was
+-- deaf, flew home not knowing where home was, said "No dock assigned, staying put"
+-- in the arrivals column and held ARR 38 min. dock.dat holds the last dock the
+-- server gave it (".dat": a copied turtle's disk never carries it); a reboot starts
+-- from it, and the server's next assignment replaces it.
+local DOCK_FILE = "dock.dat"
+function base.saveDock(d)
+    if type(d) ~= "table" or not d.x then return false end
+    local ok = pcall(function()
+        local f = fs.open(DOCK_FILE, "w")
+        if not f then error("no file", 0) end
+        f.write(textutils.serialise({ x = d.x, y = d.y, z = d.z, bay = d.bay, row = d.row }))
+        f.close()
+    end)
+    return ok
+end
+function base.loadSavedDock()
+    if not (fs.exists and fs.exists(DOCK_FILE)) then return false end
+    local ok, d = pcall(function()
+        local f = fs.open(DOCK_FILE, "r")
+        local text = f.readAll(); f.close()
+        return textutils.unserialise(text)
+    end)
+    if ok and type(d) == "table" and tonumber(d.x) and tonumber(d.z) then
+        _self.dock = d
+        return true
+    end
+    return false
+end
 function base.getPartnerId()     return _self.partnerId  end
 -- pairMate (R4): the job's partner, kept while partnerId is cleared for the ascent.
 function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false
@@ -4141,6 +4171,7 @@ local function register(maxAttempts)
             -- Server sends assigned dock in the ACK
             if reply.payload.dock then
                 _self.dock = reply.payload.dock
+                base.saveDock(_self.dock)
                 logInfo(string.format("Assigned dock: bay %d row %s (%d,%d,%d)",
                     _self.dock.bay, _self.dock.row,
                     _self.dock.x, _self.dock.y, _self.dock.z))
@@ -4833,6 +4864,12 @@ function base.init(role)
     -- Miner only: bounded so a field reboot with a placed loader can get to
     -- ore_turtle's recoverPlacedLoader without the server. nil (unbounded, the
     -- original behaviour) for every other role.
+    -- Its dock from before the reboot, so a boot with no server still knows where
+    -- home is (node_481, 24h-b); registering replaces it with the server's.
+    if not _self.dock and base.loadSavedDock() then
+        logInfo(string.format("Dock from before the reboot: bay %s row %s (%d,%d)",
+            tostring(_self.dock.bay), tostring(_self.dock.row), _self.dock.x, _self.dock.z))
+    end
     register(role == proto.ROLE.MINER and BOOT_REGISTER_ATTEMPTS or nil)
     base.homeAfterBoot()
     -- Startup homing may have set status to RETURNING — reset to IDLE now we're docked.

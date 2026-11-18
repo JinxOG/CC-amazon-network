@@ -315,4 +315,24 @@ return {
         assert_eq(refused, nil, "refused 120 s: it gives up as before")
         assert_eq(tRefused >= 120 and tRefused < 130, true, "after about 120 s of refusals (" .. tRefused .. ")")
     end,
+
+    -- 2026-11-18 (T2 shakeout-24h-b): miner node_481 rebooted at 04:16 while the server was deaf. A turtle learned its
+    -- dock only from REGISTER_ACK and kept it nowhere, so it flew home not knowing where home was, logged "No dock
+    -- assigned, staying put" in the arrivals column at 228,200,-2782 -- and held ARR 38 min. A turtle keeps the dock it
+    -- was given (dock.dat) and starts from it after a reboot; the server's next assignment replaces it.
+    ["a turtle keeps its dock on disk and knows it again after a reboot, before it registers"] = function(assert_eq)
+        local base = fresh()
+        base.saveDock({ x = 214, y = 67, z = -2797, bay = 5, row = "A" })
+        package.loaded["turtle_base"] = nil
+        local again = require("turtle_base")
+        local loaded = again.loadSavedDock()
+        local d = again.getDock()
+        assert_eq(loaded, true, "the saved dock is read back")
+        assert_eq(d and (d.x .. "," .. d.z .. " bay " .. d.bay .. d.row), "214,-2797 bay 5A", "the same dock")
+        local f = assert(io.open("turtle_base.lua", "r")); local src = f:read("*a"); f:close()
+        local initAt = src:find("function base.init(", 1, true)
+        local loadAt = src:find("loadSavedDock()", initAt, true)
+        local regAt = src:find("register(role", initAt, true)
+        assert_eq(loadAt ~= nil and regAt ~= nil and loadAt < regAt, true, "base.init reads it before it registers and homes")
+    end,
 }
