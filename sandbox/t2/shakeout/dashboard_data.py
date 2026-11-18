@@ -48,7 +48,8 @@ def pin_of(run_dir):
     except OSError:
         pass
     try:
-        return open(os.path.join(run_dir, "PINNED.txt"), encoding="utf8").read().strip()[:8]
+        m = re.search(r"\b[0-9a-f]{40}\b", open(os.path.join(run_dir, "PINNED.txt"), encoding="utf8").read())
+        return m.group(0)[:8] if m else ""
     except OSError:
         return ""
 
@@ -66,7 +67,8 @@ def headline(rep, run_id, run_dir, planned_hours=None, faults_planned=None):
         "support_jobs": sum(1 for j in jobs if j["type"] == "SUPPORT_FOLLOW"),
         "mine_sectors": sum(1 for j in jobs if j["type"] == "MINE sector done"),
         "mine_zones": sum(1 for j in jobs if j["type"] == "MINE"),
-        "faults_fired": sum(1 for w in rep["windows"]),
+        # windows past the run's end are faults still to come (the schedule plans all of them up front)
+        "faults_fired": sum(1 for w in rep["windows"] if w["begin"] <= rep["end_ms"]),
         "faults_planned": faults_planned,
         "lost": c["lost"],
         "decommissioned": c["decommissioned"],
