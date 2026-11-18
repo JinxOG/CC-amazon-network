@@ -543,6 +543,16 @@ function registry.register(id, role, fuel, fuelMax, position, midJob, awaitingSe
                             la.x, la.z, id))
                     end
                 end
+            elseif job.type == proto.JOB.DELIVER and job.delivered then
+                -- DELIVERED, IT LOST ITS JOB_COMPLETE (2026-11-17, sim w3_side_atc on
+                -- w3-timeout): node_34 docked after delivering job_0033, the outage lost
+                -- its JOB_COMPLETE, and re-registering with no job it was taken for
+                -- rebooted -- job_0033 was re-sent, and it set out on a delivered job and
+                -- waited 38 min for its partner. Its goods are at the destination: the
+                -- job is complete.
+                logInfo(string.format("%s registers with no job after delivering %s -- its JOB_COMPLETE was lost; the job is complete",
+                    id, job.id))
+                jobQueue.complete(job.id)
             else
                 -- Turtle rebooted — keep job IN_PROGRESS so no new pair is dispatched
                 -- to the same destination.  Re-send JOB_ASSIGN after REGISTER_ACK.
@@ -888,7 +898,21 @@ function registry.checkTimeouts()
         elseif t.online and (now - t.lastSeen - registry.deafSince(t.lastSeen, now)) > (CFG.HEARTBEAT_TIMEOUT * 1000) then
             local jobId = t.jobId
             registry.markOffline(id)
-            if jobId then
+            local delivered = jobId and state.jobs[jobId] and state.jobs[jobId].delivered
+            if delivered then
+                -- A DELIVERY THAT HAS DELIVERED IS LATE HOME, NOT A JOB TO DO AGAIN
+                -- (2026-11-17, sim w3_side_atc on w3-leave-wip). In the outage node_32,
+                -- alive in the holding line with its goods delivered, timed out; its job
+                -- went out again and was delivered twice, its support was recalled in
+                -- the tunnel, and the next order to that destination waited behind
+                -- "already has an active delivery". The job is complete; its support's
+                -- half too (complete leaves the support's own entry alone: it is still
+                -- coming home with its delivery).
+                logInfo(string.format("Delivery %s timed out after delivering %s -- the job is complete; it is late home",
+                    id, jobId))
+                jobQueue.complete(jobId)
+                t.jobId = nil
+            elseif jobId then
                 local job = state.jobs[jobId]
                 jobQueue.reassign(jobId, id, "turtle_timeout")
                 t.jobId = nil
@@ -5087,7 +5111,13 @@ end
 handlers[proto.MSG.DELIVERY_ARRIVED] = fwdToWarehouse
 handlers[proto.MSG.CHESTS_PLACED]    = fwdToWarehouse
 handlers[proto.MSG.BATCH_DONE]       = fwdToWarehouse
-handlers[proto.MSG.ITEM_COLLECTED]   = fwdToWarehouse
+-- THE GOODS ARE AT THE DESTINATION (2026-11-17): noted on the job, so a timeout
+-- after it is a turtle late home, not a job to do again (registry.checkTimeouts).
+handlers[proto.MSG.ITEM_COLLECTED]   = function(msg)
+    local job = msg.payload and state.jobs[msg.payload.jobId]
+    if job and job.assignedTo == msg.from then job.delivered = true end
+    fwdToWarehouse(msg)
+end
 
 -- Warehouse → turtle (forward to turtle by jobId → assignedTo)
 local function fwdToTurtle(msg)

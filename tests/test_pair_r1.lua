@@ -198,4 +198,61 @@ return {
         assert_eq(told, 1, "the delivery is told the pair is off")
         assert_eq(master.status, "PENDING", "the delivery's job goes back to be paired again")
     end,
+
+    -- 2026-11-17 (sim w3_side_atc on w3-leave-wip): in the outage the server timed out node_32 -- alive, its goods
+    -- delivered, waiting in the holding line -- and sent job_0036 out again: it was delivered TWICE, its support was
+    -- recalled out in the tunnel, and the order after it was blocked behind "destination already has an active
+    -- delivery". Once the delivery says it has collected (ITEM_COLLECTED: the goods are at the destination), a
+    -- timeout is a turtle late home, not a job to do again: the job is complete and its support is left with it.
+    ["a delivery that has delivered and then times out: its job is complete, not sent out again"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 248, y = 60, z = -2780 }, proto.STATUS.RETURNING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 248, y = 60, z = -2781 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0011"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].pair.go = true
+        T.handlers[proto.MSG.ITEM_COLLECTED]({ from = "node_d", payload = { jobId = "job_0010" } })
+        T.state.registry["node_d"].lastSeen = 0                    -- long silent: timed out
+        T.sent = {}
+        T.registry.checkTimeouts()
+        local job = T.state.jobs["job_0010"].status
+        local recalled = sentTo(T, proto.MSG.RECALL, "node_s")
+        restore()
+        assert_eq(job, "COMPLETE", "its goods are at the destination: the job is done (" .. tostring(job) .. ")")
+        assert_eq(recalled, 0, "and its support is not recalled")
+    end,
+
+    ["a delivery that times out before it has delivered is sent out again, as before"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 200, y = 60, z = -2800 }, proto.STATUS.TRAVELLING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 200, y = 60, z = -2801 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].pair.go = true
+        T.state.registry["node_d"].lastSeen = 0
+        T.registry.checkTimeouts()
+        local job = T.state.jobs["job_0010"].status
+        restore()
+        assert_eq(job, "PENDING", "not delivered yet: back to the queue")
+    end,
+
+    -- 2026-11-17 (sim w3_side_atc on w3-timeout): node_34 docked after delivering job_0033 and its JOB_COMPLETE was lost
+    -- in the outage; re-registering with no job it was taken for rebooted and job_0033 was RE-SENT -- it set out on a
+    -- delivered job and waited 38 min "for partner" on its dock. A delivery that registers with no job after it has
+    -- delivered lost its JOB_COMPLETE: the job is complete, not sent again.
+    ["a delivery that registers jobless after delivering has its job completed, not re-sent"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.RETURNING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 240, y = 60, z = -2780 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.state.jobs["job_0010"].status = "IN_PROGRESS"
+        T.state.jobs["job_0010"].pair.go = true
+        T.state.jobs["job_0010"].delivered = true
+        local _, reSendJob = T.registry.register("node_d", proto.ROLE.DELIVERY, 90000, 100000, { x = 153, y = 67, z = -2806 }, false)
+        local job = T.state.jobs["job_0010"].status
+        restore()
+        assert_eq(reSendJob, nil, "nothing is re-sent")
+        assert_eq(job, "COMPLETE", "the job is complete (" .. tostring(job) .. ")")
+    end,
 }
