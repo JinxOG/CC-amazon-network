@@ -363,4 +363,23 @@ return {
         assert_eq(recalled, 0, "the support out with it is not recalled")
         assert_eq(support, "IN_PROGRESS", "and its half is left with it")
     end,
+
+    -- 2026-11-23 (sim w3_side_atc on f9e6f7b): job_0071's support was recalled before the pair moved; the job went back
+    -- to be paired again -- and 4 ms later the delivery's JOB_ACK for that first send arrived and was taken: the job
+    -- IN_PROGRESS with nobody on it. Never sent again, never timed out, its destination "already has an active
+    -- delivery" for 3.5 h. An accept from a turtle the job is not assigned to is one that came too late.
+    ["an accept from a turtle the job is no longer assigned to does not take the job back"] = function(assert_eq)
+        local T, turtle, restore = server()
+        turtle("node_d", proto.ROLE.DELIVERY, DOCK_D, { x = 153, y = 67, z = -2806 }, proto.STATUS.TRAVELLING)
+        turtle("node_s", proto.ROLE.SUPPORT, DOCK_S, { x = 153, y = 67, z = -2797 }, proto.STATUS.TRAVELLING)
+        pair(T)
+        T.jobQueue.acknowledge("job_0011", "node_s", false, "recalled")   -- the pair is off; job_0010 back to the queue
+        local back = T.state.jobs["job_0010"].status
+        T.jobQueue.acknowledge("job_0010", "node_d", true)               -- the delivery's late accept of the first send
+        local master = T.state.jobs["job_0010"]
+        restore()
+        assert_eq(back, "PENDING", "the pair is off: the job is back in the queue")
+        assert_eq(master.status, "PENDING", "the late accept leaves it there, to be paired again")
+        assert_eq(master.assignedTo, nil, "with nobody on it")
+    end,
 }

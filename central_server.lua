@@ -2861,6 +2861,16 @@ function jobQueue.acknowledge(jobId, turtleId, accepted, reason)
     local job = state.jobs[jobId]
     if not job then return end
     if accepted then
+        -- TOO LATE TO TAKE IT (2026-11-23, sim w3_side_atc): job_0071's pair was off
+        -- and the job back in the queue when node_32's accept of the first send came
+        -- in; taken, it left the job IN_PROGRESS with nobody on it -- never sent again,
+        -- never timed out, its destination blocked 3.5 h. Only the turtle the job is
+        -- assigned to can accept it.
+        if job.assignedTo ~= turtleId then
+            logInfo(string.format("Job %s: accept from %s ignored -- it is %s's now (%s)", jobId, tostring(turtleId),
+                tostring(job.assignedTo or "nobody"), tostring(job.status)))
+            return
+        end
         job.status    = JOB_STATUS.IN_PROGRESS
         job.updatedAt = os.epoch("utc")
         jobQueue._hist(jobId, "ack", turtleId)
