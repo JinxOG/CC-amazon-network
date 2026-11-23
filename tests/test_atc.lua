@@ -697,4 +697,18 @@ return {
         assert_eq(still.ok, false, "a report that does not say where it stands lets nothing go")
         assert_eq(freed.ok, true, "out of the base: DH is free (" .. tostring(freed.why) .. ")")
     end,
+
+    -- 2026-11-18 (T2 shakeout-payload-c): docked miner node_453 measured its facing, claiming the section beside its
+    -- dock (N4) for the turn; the ATC_LEAVE that let it go was lost, and the one-off claim -- no booking behind it --
+    -- was never healed by its reports nor swept (every message it sent kept it alive). 8 bay-4 miners could never
+    -- claim N4 to measure theirs, and were decommissioned. A report heals ALL of a turtle's holds, one-off ones too.
+    ["a report from outside the base ends a one-off claim too, not only a booking"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "a", { op = "enter", sec = "N4" }, t).ok, true, "a turtle on its dock claims N4 for a turn")
+        local blocked = core.handle(st, "b", { op = "enter", sec = "N4" }, t + 500).ok
+        core.handle(st, "a", { op = "report", out = true, route = {} }, t + 1000)   -- its ATC_LEAVE lost; it says it is out
+        local after = core.handle(st, "b", { op = "enter", sec = "N4" }, t + 2000)
+        assert_eq(blocked, false, "while claimed, nobody else gets N4")
+        assert_eq(after.ok, true, "out: N4 is free (" .. tostring(after.why) .. ")")
+    end,
 }

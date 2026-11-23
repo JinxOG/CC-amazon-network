@@ -294,22 +294,37 @@ function core.handle(st, id, p, now)
         -- ATC_LEAVEs were lost and DH stayed booked, empty, until the 180 s sweep. A
         -- section it entered and no longer stands in is left; from outside the base
         -- (out) its booking is done. Only a report that says where it stands counts.
+        -- EVERY HOLD OF ITS OWN, one-off claims too (T2 shakeout-payload-c, node_453:
+        -- the section beside its dock, claimed to measure its facing, stayed held when
+        -- its ATC_LEAVE was lost -- a one-off claim has no booking behind it, so the
+        -- report healed nothing and every message kept it alive; 8 bay-4 miners could
+        -- never measure theirs).
         local r = rid and st.res[rid]
-        if r and p.out then
-            drop(st, rid)
+        local mine = {}
+        for k, x in pairs(st.res) do if x.id == id then mine[#mine + 1] = k end end
+        if #mine > 0 and p.out then
+            for _, k in ipairs(mine) do drop(st, k) end
             note(st, string.format("%s reports from outside the base: its booking is done", id))
             return { ok = true }
         end
-        if r and p.cur then
+        if #mine > 0 and p.cur then
             local keep = { [p.cur] = true }
             for _, s in ipairs(p.route or {}) do keep[s] = true end
-            local gone = {}
-            for s in pairs(r.entered) do if not keep[s] then gone[#gone + 1] = s end end
+            local gone, seenS = {}, {}
+            for _, k in ipairs(mine) do
+                local x = st.res[k]
+                if x then
+                    for s in pairs(x.entered) do
+                        if not keep[s] and not seenS[s] then seenS[s] = true; gone[#gone + 1] = s end
+                    end
+                end
+            end
             for _, s in ipairs(gone) do core.handle(st, id, { op = "leave", sec = s }, now) end
             if #gone > 0 then
                 note(st, string.format("%s reports from %s: left %s", id, p.cur, table.concat(gone, " ")))
             end
-            return { ok = true }
+            if rid then return { ok = true } end
+            rid = st.byTurtle[id]        -- only one-off claims: it is admitted where it stands, below
         end
         if p.cur and not rid then
             local nrid = admit(st, id, (p.route and #p.route > 0) and p.route or { p.cur }, p.cur, now, true)

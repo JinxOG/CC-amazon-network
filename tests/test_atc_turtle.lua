@@ -389,4 +389,29 @@ return {
         assert_eq(first, 1, "out of the base: it says so")
         assert_eq(outs(), 1, "asking for a new route ends it")
     end,
+
+    -- 2026-11-18 (T2 shakeout-payload-c): node_453's release of the sections it claimed to measure its facing was one
+    -- ATC_LEAVE, lost; the claim stood for good. Having let them go, a turtle says it is out, as after stepping out of
+    -- the base -- but not while it still holds them to measure.
+    ["after releasing what it claimed to measure its facing, a turtle says it is out; not while it holds them"] = function(assert_eq)
+        local base, sent = fresh()
+        local atc = base.atc
+        atc.ENABLED = true
+        base.gpsSync()
+        base.setPosForTest({ x = 153, y = 67, z = -2797 })        -- on a dock: in no section
+        local function outs()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find("ATC_REPORT", 1, true) and b:find("out", 1, true) then n = n + 1 end end
+            return n
+        end
+        atc.route, atc.aliveAt, atc.owesUntil = nil, nil, nil
+        atc.claiming = true
+        atc.keepInBase()
+        local holding = outs()
+        atc.releaseAround({ "N1" })
+        atc.aliveAt = nil
+        atc.keepInBase()
+        assert_eq(holding, 0, "while it holds what it claimed: no 'out'")
+        assert_eq(outs(), 1, "released: it says it is out")
+    end,
 }

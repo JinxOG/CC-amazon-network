@@ -1953,7 +1953,7 @@ function atc.keepInBase()
         -- lost, and DH stayed booked, empty, until the 180 s sweep. The first of these
         -- the ATC hears lets its booking go. Only from a measured position.
         local now = os.epoch("utc")
-        if atc.owesUntil and now < atc.owesUntil and _self.posFixed
+        if atc.owesUntil and now < atc.owesUntil and _self.posFixed and not atc.claiming
            and not (atc.aliveAt and now - atc.aliveAt < atc.KEEPALIVE_S * 1000) then
             atc.aliveAt = now
             atc.send(proto.MSG.ATC_REPORT, { out = true, route = {} })
@@ -1987,6 +1987,7 @@ function atc.claimAround(x, y, z)
         if s and s ~= cur and not seen[s] then seen[s] = true; want[#want + 1] = s end
     end
     if #want == 0 or not atc.ensure() then return nil end
+    atc.claiming = true          -- held to measure: no "out" report meanwhile (atc.keepInBase)
     local got = {}
     for _, s in ipairs(want) do
         local r = atc.ask(proto.MSG.ATC_ENTER, { sec = s, cur = cur, route = { cur, s } })
@@ -2001,6 +2002,11 @@ end
 
 function atc.releaseAround(list)
     for _, s in ipairs(list or {}) do atc.send(proto.MSG.ATC_LEAVE, { sec = s }) end
+    -- Its ATC_LEAVEs go once (T2 shakeout-payload-c, node_453: one lost, the claim
+    -- beside its dock stood for good and 8 bay-4 miners could never measure their
+    -- facing). Let go, it says it is out a while, as after stepping out of the base.
+    atc.claiming = nil
+    if atc.here() == nil then atc.steppedOut() end
 end
 
 -- Where it is and what it still needs, for an ATC that just booted.
