@@ -1968,6 +1968,19 @@ function atc.steppedOut()
     atc.aliveAt = nil
 end
 
+-- GIVING WAY BEFORE ITS FIRST STEP IN, IT GIVES BACK WHAT IT WAS LET INTO (T2
+-- shakeout-payload-d, 2026-11-23). node_218, on its dock after the world restart,
+-- was let out (S1 J1 W1 DH), found a turtle in front of it, said STUCK and gave
+-- way -- and held S1, the section beside its dock, 45 min to the end of the run:
+-- it never stepped into the base, so it never stepped out of it, nothing cancelled
+-- the booking, and its keep-alives held it. Its neighbours could not measure their
+-- facing. The cancel goes once; the "out" reports after it heal a lost one.
+function atc.giveBackUnentered()
+    if not atc.ENABLED then return end
+    atc.finish()
+    atc.steppedOut()
+end
+
 -- Done with the base: give back everything but the section it stands in.
 function atc.finish()
     if not atc.ENABLED then return end
@@ -2186,7 +2199,10 @@ local function tryMove(digFn, dir)
             -- than meet it head-on (sim w3_dead_turtle_lane).
             if turtleWaits == 1 then
                 local okR, revived = pcall(base.reviveIfOff, dir)
-                if okR and revived and inBase then return false, "turned on a stopped turtle in my way -- giving way" end
+                if okR and revived and inBase then
+                    if atcFrom == nil then atc.giveBackUnentered() end
+                    return false, "turned on a stopped turtle in my way -- giving way"
+                end
             end
             if inBase then atc.stalled("blocked by a turtle moving " .. dir); atc.keepAlive() end
             -- ITS JOB HANDED BACK, IT GIVES WAY (the card "a turtle that handed its job
@@ -2198,6 +2214,7 @@ local function tryMove(digFn, dir)
                 atc.handedBack = nil
                 logWarn(string.format("My job is handed back and a turtle blocks me %s at %d,%d,%d -- giving way",
                     dir, _self.pos.x, _self.pos.y, _self.pos.z))
+                if atcFrom == nil then atc.giveBackUnentered() end
                 return false, "stuck: my job is handed back -- giving way"
             end
             blockReport = blockReport or waitReporter(function()

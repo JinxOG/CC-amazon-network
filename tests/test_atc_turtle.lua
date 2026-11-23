@@ -231,6 +231,55 @@ return {
         assert_eq(tostring(why):find("handed", 1, true) ~= nil, true, "and says why: " .. tostring(why))
     end,
 
+    -- T2 shakeout-payload-d, 2026-11-23: node_218, on its dock at 159,67,-2806 after the world restart, was let out
+    -- (S1 J1 W1 DH), found a turtle in front of it, said STUCK and gave way -- and kept S1, the section beside its dock,
+    -- 45 min to the end: nothing gave the booking back, it never stepped into the base to step out of it, and its
+    -- keep-alives held it. A step from outside the base that ends in giving way gives back what it was let into.
+    ["a turtle on its dock that gives way before its first step gives its booking back, and says it is out"] = function(assert_eq)
+        local c = stub.install({ pos = { x = 159, y = 67, z = -2806, facing = 0 },
+            world = { ["159,67,-2807"] = "computercraft:turtle_normal" } })     -- S1, a turtle in front of the dock
+        gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"] = nil
+        local base = require("turtle_base")
+        local sent = {}
+        peripheral.find = function()
+            return { transmit = function(ch, rr, body) sent[#sent + 1] = tostring(body) end,
+                     open = function() end, isOpen = function() return true end, close = function() end }
+        end
+        base.recoverModem()
+        local proto = require("protocol")
+        local savedSleep = sleep
+        local tries = 0
+        sleep = function() tries = tries + 1; if tries > 200 then error("never gave way", 0) end end
+        base.gpsSync()                                             -- a measured position
+        base.setPosForTest({ x = 159, y = 67, z = -2806 })
+        base.setStatus(proto.STATUS.TRAVELLING, "job_0359")
+        base.atc.ENABLED = true
+        local savedAsk = base.atc.ask
+        base.atc.ask = function() return { ok = true } end                    -- let into S1
+        base.atc.route = { "S1", "J1", "W1", "DH" }
+        base.atc.stallAt = os.clock() - base.atc.STUCK_S - 1
+        local ok, moved = pcall(base.move.forward)
+        sleep = savedSleep
+        base.atc.ask = savedAsk
+        local function count(what)
+            local n = 0
+            for _, b in ipairs(sent) do if b:find(what, 1, true) then n = n + 1 end end
+            return n
+        end
+        local cancels = count("ATC_CANCEL")
+        local route = base.atc.route
+        local outs0 = count("ATC_REPORT")
+        base.atc.aliveAt = nil
+        base.atc.keepInBase()
+        local outs = count("ATC_REPORT") - outs0
+        assert_eq(ok and moved == false, true, "it gave way and did not move (" .. tostring(moved) .. ")")
+        assert_eq(cancels >= 1, true, "it gives its booking back (" .. cancels .. " ATC_CANCEL)")
+        assert_eq(route, nil, "and holds no route")
+        assert_eq(outs, 1, "and says it is out, in case the cancel is lost")
+    end,
+
     -- 2026-11-17 (sim w3_side_atc): node_56 dropped out of its pair in a blackout; the server called the pair off and
     -- told node_36 ONCE, and the blackout lost it. node_36 waited 39 min on its dock to be let out with a support that
     -- had a new job, then went to the hole alone and waited 600 s for it ("never staged"). Waiting to be let out with
