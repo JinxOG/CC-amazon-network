@@ -118,6 +118,36 @@ return {
         assert_eq(after, 2, "and no more once acknowledged")
     end,
 
+    -- T2 shakeout-payload-h: two physical turtles carried id 397 (a kill-restart with no save). The server tells that
+    -- id PARK (duplicate_id); both copies hear it, and neither takes another step until a person has seen to it.
+    ["a turtle told PARK takes no step"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base._firstSight(proto.encode(proto.MSG.PARK, "server", base.getSelfId(),
+            { reason = "duplicate_id: node_9 heard at 238,200,-2780 and 239,200,-2780" }))
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 20 then error("still parked", 0) end end
+        local ok, err = pcall(base.move.forward)
+        sleep = savedSleep
+        base.flushLogs()
+        local warned = 0
+        for _, b in ipairs(sent) do if b:find("PARKED: duplicate_id", 1, true) then warned = warned + 1 end end
+        assert_eq(ok, false, "it did not move")
+        assert_eq(tostring(err), "still parked", "it waits, parked (" .. tostring(err) .. ")")
+        assert_eq(warned >= 1, true, "and says so (" .. warned .. ")")
+    end,
+
+    ["a turtle not told PARK moves"] = function(assert_eq)
+        local base = fresh()
+        local proto = require("protocol")
+        base._firstSight(proto.encode(proto.MSG.PARK, "node_fake", base.getSelfId(), { reason = "x" }))
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 20 then error("still parked", 0) end end
+        local ok, err = pcall(base.move.forward)
+        sleep = savedSleep
+        assert_eq(ok, true, "a PARK from anyone but the server is ignored (" .. tostring(err) .. ")")
+    end,
+
     ["a refusal from the ATC at boot that clears in seconds raises nothing"] = function(assert_eq)
         local count = refusedAtBoot(2)
         assert_eq(count("stuck_no_fix"), 0, "no stuck_no_fix")

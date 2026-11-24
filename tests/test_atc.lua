@@ -916,4 +916,19 @@ return {
         assert_eq(r.ok, false, "refused")
         assert_eq(r.why, "busy at N2 (node_397)", "and says where and whose (" .. tostring(r.why) .. ")")
     end,
+
+    -- T2 shakeout-payload-h: two physical turtles carried id 397 and the ATC held the arrivals chain for the pair.
+    -- On the server's ATC_BAN (duplicate_id) the ATC drops every booking of that id and refuses it from then on.
+    ["a banned id loses its bookings and is refused new ones"] = function(assert_eq)
+        local core, st, t = live()
+        assert_eq(core.handle(st, "node_397", { op = "enter", sec = "N2" }, t).ok, true, "it holds N2")
+        core.ban(st, "node_397")
+        assert_eq(core.handle(st, "node_369", { op = "enter", sec = "N2" }, t + 100).ok, true, "N2 is free for another")
+        core.handle(st, "node_369", { op = "leave", sec = "N2" }, t + 200)
+        local r = core.handle(st, "node_397", { op = "enter", sec = "N2" }, t + 300)
+        assert_eq(r.ok, false, "the banned id is refused")
+        assert_eq(r.why, "refused: duplicate id", "and told why (" .. tostring(r.why) .. ")")
+        local q = core.handle(st, "node_397", { op = "request", route = DEPART3 }, t + 400)
+        assert_eq(q.ok, false, "a route too (" .. tostring(q.why) .. ")")
+    end,
 }

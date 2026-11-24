@@ -3096,6 +3096,48 @@ end
 -- miner's next passing check wiped it within seconds ("back in service (was:
 -- needs_hands: fuel_chest ...)"), and on roles with no hardware check nothing
 -- ever cleared it. Cleared by the turtle's own "ledger_ok" report.
+-- A DUPLICATED TURTLE (T2 shakeout-payload-h, 2026-11-24; Head Engineer ruling). After the
+-- restart burst -- server kills with no save -- two physical turtles carried id 397: one
+-- id, two seq counters, transmitting in the same millisecond from 238 and 239,200,-2780.
+-- The ATC held the whole arrivals chain for the pair, and two docked turtles beside N2
+-- waited to the end of the run. A duplicate is two seq streams from one id BOTH advancing,
+-- interleaved, DUP_SWAPS times with each within DUP_WINDOW_MS of the other; a reboot also
+-- starts the seq again, but its old stream stops. Then: NEEDS HANDS (a player has to remove
+-- one copy), held from work, both copies told to PARK where they are, the ATC told to drop
+-- and refuse the id. Cleared only by a person (the operator's hold).
+registry.DUP_SWAPS, registry.DUP_WINDOW_MS = 6, 20000
+function registry.dupCheck(msg)
+    local id, seq = msg.from, tonumber(msg.seq)
+    local t = state.registry[id or ""]
+    if not t or not seq then return end
+    state.dupTrack = state.dupTrack or {}
+    local d, now = state.dupTrack[id], os.epoch("utc")
+    local pos = type(msg.payload) == "table" and type(msg.payload.position) == "table" and msg.payload.position or nil
+    if not d or now - d.hiAt > 60000 then
+        state.dupTrack[id] = { hi = seq, hiAt = now, hiPos = pos, swaps = 0, last = "hi" }
+        return
+    end
+    -- a swap: this message is from the other stream than the last one, and that other stream is live
+    if seq > d.hi then
+        if d.last == "lo" and now - d.loAt < registry.DUP_WINDOW_MS then d.swaps = d.swaps + 1 end
+        d.hi, d.hiAt, d.hiPos, d.last = seq, now, pos or d.hiPos, "hi"
+    elseif seq < d.hi - 2 and (not d.lo or seq > d.lo) then
+        if d.last == "hi" and d.lo and now - d.hiAt < registry.DUP_WINDOW_MS then d.swaps = d.swaps + 1 end
+        d.lo, d.loAt, d.loPos, d.last = seq, now, pos or d.loPos, "lo"
+    end
+    if d.swaps < registry.DUP_SWAPS or d.flagged then return end
+    d.flagged = true
+    local function at(p) return p and string.format("%s,%s,%s", tostring(p.x), tostring(p.y), tostring(p.z)) or "?" end
+    local detail = string.format("duplicate_id: %s heard at %s and %s", id, at(d.hiPos), at(d.loPos))
+    logError(string.format("NEEDS HANDS: %s — %s. Two turtles share this id: a player has to remove one. "
+        .. "Both are told to stay where they are, and the ATC drops the id.", id, detail))
+    t.needsHands = detail
+    state.operatorHolds = state.operatorHolds or {}
+    state.operatorHolds[id] = true
+    sendTo(id, proto.MSG.PARK, { reason = detail })
+    proto.send(state.modem, proto.CH_ATC, proto.encode(proto.MSG.ATC_BAN, "server", "atc", { id = id, reason = detail }))
+end
+
 function registry.flagNeedsHands(id, detail)
     local t = state.registry[id or ""]
     if not t then return end
@@ -7526,6 +7568,7 @@ function server.run()
                     end
                 end
                 if valid then
+                    pcall(registry.dupCheck, msg)
                     local handler = handlers[msg.type]
                     if handler then
                         local ok, err = timed("handler:" .. tostring(msg.type), function() handler(msg) end)

@@ -592,6 +592,13 @@ local function firstSight(msg)
        and _self.failsOut then
         _self.failsOut[msg.payload.failId] = nil
     end
+    -- ANOTHER TURTLE SHARES MY ID (the server's PARK, duplicate_id): stay where I am until a
+    -- person has removed one of us (tryMove waits); both copies hear it on the shared channel.
+    if msg.type == proto.MSG.PARK and msg.from == "server" and not _self.parked then
+        _self.parked = true
+        logWarn("PARKED: " .. tostring(type(msg.payload) == "table" and msg.payload.reason or "the server says another turtle shares my id")
+            .. " -- staying where I am")
+    end
     -- A JOB_COMPLETE the server has: stop repeating it (base.sendComplete).
     if msg.type == proto.MSG.JOB_COMPLETE_ACK and type(msg.payload) == "table" and msg.payload.jobId
        and _self.completesOut then
@@ -2477,6 +2484,8 @@ function atc.pathAllow(dir)
 end
 
 local function tryMove(digFn, dir)
+    -- Parked (duplicate_id): no step, whatever asks for one, until a person sees to it.
+    while _self.parked do sleep(10) end
     -- NO TURTLE MOVES AFTER BOOT ON A GUESS (recovery layer release 2). Only
     -- miners ever called waitForPositionFix; delivery and support moved on
     -- whatever initPosition guessed ("Facing assumed north") -- the failure that

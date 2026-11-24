@@ -70,7 +70,9 @@ proto.MSG = {
     -- JOB_FAILED until this arrives (2026-11-18: a one-shot JOB_FAILED was lost in
     -- the server's RS-poll wait and the job never came back).
     JOB_FAILED_ACK = "JOB_FAILED_ACK",
-    JOB_COMPLETE_ACK = "JOB_COMPLETE_ACK",   -- server → turtle: your JOB_COMPLETE for this job is here (stop repeating it)
+    JOB_COMPLETE_ACK = "JOB_COMPLETE_ACK",
+    PARK           = "PARK",            -- server → turtle: another turtle shares your id -- stay where you are (duplicate_id)
+    ATC_BAN        = "ATC_BAN",         -- server → ATC: drop this id's bookings and refuse it new ones (duplicate_id)   -- server → turtle: your JOB_COMPLETE for this job is here (stop repeating it)
 
     -- Real-time follow signals (CH_LOCAL)
     POSITION_UPDATE = "POSITION_UPDATE", -- delivery → support: here is where I just was

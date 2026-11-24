@@ -332,6 +332,11 @@ function core.handle(st, id, p, now)
         end
     end
 
+    -- A duplicated id (ATC_BAN from the server): it holds nothing and is let into nothing; what it
+    -- gives back is taken.
+    if st.banned and st.banned[id] and p.op ~= "leave" and p.op ~= "cancel" then
+        return { ok = false, why = "refused: duplicate id" }
+    end
     if now < st.settleUntil then
         st.reports[id] = { cur = p.cur, route = p.route or {}, at = now, group = p.group }
         if p.op == "leave" or p.op == "cancel" or p.op == "report" then return { ok = true } end
@@ -706,6 +711,16 @@ function core.handle(st, id, p, now)
     return { ok = false, why = "unknown op" }
 end
 
+-- A duplicated id (the server's ATC_BAN): every booking of it dropped, and it is refused from now on.
+function core.ban(st, id)
+    st.banned = st.banned or {}
+    st.banned[id] = true
+    local n = 0
+    for k, x in pairs(st.res) do if x.id == id then drop(st, k); n = n + 1 end end
+    st.waiting[id] = nil
+    note(st, string.format("%s banned (duplicate id): %d booking(s) dropped", id, n))
+end
+
 -- End of the settle window: rebuild from what the turtles said. Turtles standing
 -- in a section first, nearest the open end (fewest sections left) first.
 function core.settle(st, now)
@@ -834,6 +849,8 @@ local function main()
                     end
                     out.nonce, out.epoch = pl.nonce, st.epoch
                     if op ~= "leave" and op ~= "report" and op ~= "path" then reply(msg.from, pl.ch, out) end
+                elseif msg.type == proto.MSG.ATC_BAN and msg.from == "server" and type(msg.payload) == "table" then
+                    pcall(core.ban, st, msg.payload.id)
                 elseif msg.type == proto.MSG.UPDATE_ALL then
                     log("UPDATE_ALL -- updating")
                     proto.stageUpdateRef(msg.payload and msg.payload.ref)
