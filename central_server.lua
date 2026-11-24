@@ -6965,6 +6965,9 @@ function server.run()
                 blockedUntil = t.dispatchBlockedUntil or nil,
                 -- An operator's hold (HOLD_TURTLE), with its reason.
                 held = state.operatorHolds and state.operatorHolds[id] or nil,
+                -- Docked since its last job: a delivery or support is only offered work so (getIdle's
+                -- dockOk). Only when set (payload size).
+                dockedSinceJob = t.dockedSinceJob and true or nil,
                 -- Set only for a hardware fault: something only a person in the
                 -- world can fix. Distinct from a timed bench, which clears itself.
                 needsHands = t.needsHands or t.ledgerNeedsHands or nil,
