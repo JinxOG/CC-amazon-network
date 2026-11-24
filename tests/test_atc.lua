@@ -770,4 +770,60 @@ return {
         local r = core.handle(st, "r", { op = "request", route = { "DT", "DH" } }, t + 1100)
         assert_eq(r.ok, false, "still held (" .. tostring(r.why) .. ")")
     end,
+
+    -- (D), PATH-SCOPED BOOKINGS (Head Engineer ruling, 2026-11-24; sim w3_pair_server_crash and T2 payload-g: a
+    -- support walking back the departures' tunnel met a pair coming out, head-on, two turtles that cannot dig).
+    -- A booking may carry the cells it will walk in the zone near the base (its corners); a request whose path
+    -- shares a cell with another party's is held until those cells are walked past.
+    ["a path shared with another party's waits; one that shares no cell goes"] = function(assert_eq)
+        local core, st, t = live()
+        local back = { { x = 196, y = 60, z = -2766 }, { x = 196, y = 60, z = -2813 }, { x = 150, y = 60, z = -2813 } }
+        local r = core.handle(st, "r", { op = "request", route = { "DH" }, path = back }, t)
+        local same = core.handle(st, "d", { op = "request", route = { "S1" },
+            path = { { x = 144, y = 60, z = -2813 }, { x = 196, y = 60, z = -2813 }, { x = 196, y = 60, z = -2770 } } }, t + 100)
+        local other = core.handle(st, "e", { op = "request", route = { "S2" },
+            path = { { x = 140, y = 60, z = -2830 }, { x = 120, y = 60, z = -2830 } } }, t + 200)
+        assert_eq(r.ok, true, "the turtle walking back is let in")
+        assert_eq(same.ok, false, "a departure along the same cells waits (" .. tostring(same.why) .. ")")
+        assert_eq(tostring(same.why):find("path", 1, true) ~= nil, true, "and is told why")
+        assert_eq(other.ok, true, "a departure that shares no cell goes (" .. tostring(other.why) .. ")")
+    end,
+
+    ["cells walked past are let go, by the walker's own word"] = function(assert_eq)
+        local core, st, t = live()
+        local back = { { x = 196, y = 60, z = -2766 }, { x = 196, y = 60, z = -2813 }, { x = 150, y = 60, z = -2813 } }
+        core.handle(st, "r", { op = "request", route = { "DH" }, path = back }, t)
+        local col = { { x = 196, y = 60, z = -2780 }, { x = 196, y = 60, z = -2770 } }        -- part of its column
+        local before = core.handle(st, "d", { op = "request", route = { "S1" }, path = col }, t + 100).ok
+        core.handle(st, "r", { op = "path", walked = 47 }, t + 200)                -- down its column to the corner
+        local after = core.handle(st, "d", { op = "request", route = { "S1" }, path = col }, t + 300)
+        local row = core.handle(st, "e", { op = "request", route = { "S2" },
+            path = { { x = 160, y = 60, z = -2813 }, { x = 160, y = 60, z = -2800 } } }, t + 400)
+        assert_eq(before, false, "its column is held while it is still to walk it")
+        assert_eq(after.ok, true, "walked past, it is free (" .. tostring(after.why) .. ")")
+        assert_eq(row.ok, false, "the row still ahead of it stays held")
+    end,
+
+    ["a detour is added to a path only where no other party's path is"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "r", { op = "request", route = { "DH" }, path = { { x = 196, y = 60, z = -2790 }, { x = 196, y = 60, z = -2800 } } }, t)
+        core.handle(st, "d", { op = "request", route = { "S2" }, path = { { x = 170, y = 60, z = -2813 }, { x = 180, y = 60, z = -2813 } } }, t + 100)
+        local free = core.handle(st, "d", { op = "pathadd", cells = { { x = 175, y = 61, z = -2813 } } }, t + 200)
+        local taken = core.handle(st, "d", { op = "pathadd", cells = { { x = 196, y = 60, z = -2795 } } }, t + 300)
+        assert_eq(free.ok, true, "a free detour cell is added")
+        assert_eq(taken.ok, false, "one on another party's path is refused (" .. tostring(taken.why) .. ")")
+    end,
+
+    ["a report that does not say it is on its path lets the path go; one that does keeps it"] = function(assert_eq)
+        local core, st, t = live()
+        local back = { { x = 196, y = 60, z = -2766 }, { x = 196, y = 60, z = -2813 } }
+        local probe = { { x = 196, y = 60, z = -2790 }, { x = 196, y = 60, z = -2780 } }
+        core.handle(st, "r", { op = "request", route = { "DH" }, path = back }, t)
+        core.handle(st, "r", { op = "report", route = {}, onPath = true }, t + 100)
+        local kept = core.handle(st, "d", { op = "request", route = { "S1" }, path = probe }, t + 200).ok
+        core.handle(st, "r", { op = "report", route = {} }, t + 300)                 -- rebooted: it says nothing of a path
+        local gone = core.handle(st, "d", { op = "request", route = { "S1" }, path = probe }, t + 400)
+        assert_eq(kept, false, "on its path: kept")
+        assert_eq(gone.ok, true, "a report that does not say so lets it go (" .. tostring(gone.why) .. ")")
+    end,
 }

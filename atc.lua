@@ -157,6 +157,49 @@ end
 -- The partner's own booking counts whatever group it carries (2026-11-17): rebuilt
 -- after an ATC restart from its report, a delivery in DH had none, and its support
 -- was held "after an older request" for the DH its delivery held for it.
+-- (D), PATH-SCOPED BOOKINGS (Head Engineer ruling, 2026-11-24). Sim w3_pair_server_crash and T2
+-- shakeout-payload-g: a support walking back the departures' tunnel -- it cannot dig -- met a pair
+-- coming out along it, head-on, and both gave up after 120 s. A booking may carry the cells its turtle
+-- will walk in the zone near the base, as corners (p.path); a request whose path shares a cell with
+-- another party's waits, told its place, until that party has walked past (op "path", by its moves --
+-- never a clock). A dig-round asks for its detour cells first (op "pathadd"). A report that does not
+-- say it is on its path (p.onPath) lets the path go: rebooted, a turtle has forgotten it.
+local function cellKey(x, y, z) return string.format("%d,%d,%d", x, y, z) end
+local function expandPath(corners)
+    if type(corners) ~= "table" or #corners == 0 then return nil end
+    local list, set = {}, {}
+    for i, c in ipairs(corners) do
+        if type(c) ~= "table" or type(c.x) ~= "number" or type(c.y) ~= "number" or type(c.z) ~= "number" then return nil end
+        local a = corners[i - 1]
+        if a then
+            local d = math.abs(c.x - a.x) + math.abs(c.y - a.y) + math.abs(c.z - a.z)
+            if d == 0 or d > 4000 then return nil end
+            local sx, sy, sz = math.floor((c.x - a.x) / d), math.floor((c.y - a.y) / d), math.floor((c.z - a.z) / d)
+            if math.abs(sx) + math.abs(sy) + math.abs(sz) ~= 1 then return nil end
+            for k = 1, d do
+                local key = cellKey(a.x + sx * k, a.y + sy * k, a.z + sz * k)
+                list[#list + 1] = key; set[key] = true
+            end
+        else
+            local key = cellKey(c.x, c.y, c.z)
+            list[1] = key; set[key] = true
+        end
+    end
+    return { list = list, set = set, done = 0 }
+end
+-- The id of another party whose path, still to be walked, shares a cell with `path`; nil if none.
+local function pathClash(st, path, id, group)
+    if not path then return nil end
+    for k, x in pairs(st.res) do
+        if x.path and x.id ~= id and not sameParty(st, k, id, group) then
+            for i = x.path.done + 1, #x.path.list do
+                if path.set[x.path.list[i]] then return x.id end
+            end
+        end
+    end
+    return nil
+end
+
 local function partnerIn(st, id, group)
     if group == nil then return false end
     for _, x in pairs(st.res) do
@@ -302,6 +345,15 @@ function core.handle(st, id, p, now)
         local r = rid and st.res[rid]
         local mine = {}
         for k, x in pairs(st.res) do if x.id == id then mine[#mine + 1] = k end end
+        if not p.onPath then
+            for _, k in ipairs(mine) do
+                local x = st.res[k]
+                if x and x.path then
+                    x.path = nil
+                    note(st, string.format("%s reports without its path: path let go", id))
+                end
+            end
+        end
         if #mine > 0 and p.out then
             for _, k in ipairs(mine) do drop(st, k) end
             note(st, string.format("%s reports from outside the base: its booking is done", id))
@@ -372,18 +424,25 @@ function core.handle(st, id, p, now)
         if p.pair and p.cur == nil and not (st.byTurtle[p.pair] and st.res[st.byTurtle[p.pair]]) then
             local pw = st.waiting[p.pair]
             local w0 = st.waiting[id]
-            if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair }
-            else w0.at, w0.list, w0.group, w0.cur, w0.pair = now, list, p.group, p.cur, p.pair end
+            if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair, path = p.path }
+            else w0.at, w0.list, w0.group, w0.cur, w0.pair, w0.path = now, list, p.group, p.cur, p.pair, p.path end
             if not (pw and pw.pair == id and pw.list and now - (pw.at or 0) <= CFG.PAIR_FRESH_MS) then
                 return withPlace(st, id, now, { ok = false, why = "waiting for partner" })
             end
             local free1, b1 = routeFree(st, list, id, p.group, p.cur)
             local free2, b2 = routeFree(st, pw.list, p.pair, pw.group, pw.cur)
+            local path1, path2 = expandPath(p.path), expandPath(pw.path)
+            local c1 = free1 and pathClash(st, path1, id, p.group)
+            if c1 then free1, b1 = false, "path of " .. tostring(c1) end
+            local c2 = free2 and pathClash(st, path2, p.pair, pw.group)
+            if c2 then free2, b2 = false, "path of " .. tostring(c2) end
             if free1 and free2 then
                 local nrid = admit(st, id, list, p.cur, now, p.cur ~= nil)
                 st.res[nrid].group = p.group
+                st.res[nrid].path = path1
                 local prid = admit(st, p.pair, pw.list, pw.cur, now, pw.cur ~= nil)
                 st.res[prid].group = pw.group
+                st.res[prid].path = path2
                 st.waiting[id], st.waiting[p.pair] = nil, nil
                 st.lastLine = lineOf(list) or st.lastLine
                 note(st, string.format("admitted pair %s + %s: %s / %s", id, p.pair,
@@ -393,6 +452,9 @@ function core.handle(st, id, p, now)
             return withPlace(st, id, now, { ok = false, why = "busy at " .. tostring(free1 and b2 or b1) })
         end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
+        local path = expandPath(p.path)
+        local clash = free and pathClash(st, path, id, p.group)
+        if clash then free, busyAt = false, "path of " .. tostring(clash) end
         -- A turtle standing in a section (p.cur) is in the way of others whatever it
         -- waits for: fairness never holds it back, only occupancy (routeFree) does.
         -- Held back, it closed circles through chains of waiters -- one in DH behind
@@ -400,9 +462,11 @@ function core.handle(st, id, p, now)
         if free and (p.cur ~= nil or partnerIn(st, id, p.group) or not olderWaiterOverlaps(st, list, id, now, p.cur)) then
             local nrid = admit(st, id, list, p.cur, now, p.cur ~= nil)
             st.res[nrid].group = p.group
+            st.res[nrid].path = path
             st.waiting[id] = nil
             st.lastLine = lineOf(list) or st.lastLine
-            note(st, string.format("admitted %s: %s", id, table.concat(list, " ")))
+            note(st, string.format("admitted %s: %s%s", id, table.concat(list, " "),
+                path and string.format(" (path of %d cells)", #path.list) or ""))
             return { ok = true, rid = nrid }
         end
         local w = st.waiting[id]
@@ -546,6 +610,33 @@ function core.handle(st, id, p, now)
                     end
                 end
             end
+        end
+        return { ok = true }
+    end
+
+    if p.op == "path" then
+        local n = tonumber(p.walked)
+        for _, x in pairs(st.res) do
+            if x.id == id and x.path and n then x.path.done = math.max(x.path.done, math.min(n, #x.path.list)) end
+        end
+        return { ok = true }
+    end
+
+    if p.op == "pathadd" then
+        local own
+        for _, x in pairs(st.res) do if x.id == id and x.path then own = x end end
+        if not own then return { ok = false, why = "no path" } end
+        local extra = { list = {}, set = {}, done = 0 }
+        for _, c in ipairs(type(p.cells) == "table" and p.cells or {}) do
+            local one = expandPath({ c })
+            if not one then return { ok = false, why = "bad cell" } end
+            extra.list[#extra.list + 1] = one.list[1]; extra.set[one.list[1]] = true
+        end
+        if #extra.list == 0 then return { ok = false, why = "no cells" } end
+        local clash = pathClash(st, extra, id, own.group)
+        if clash then return { ok = false, why = "path of " .. tostring(clash) } end
+        for _, key in ipairs(extra.list) do
+            if not own.path.set[key] then own.path.list[#own.path.list + 1] = key; own.path.set[key] = true end
         end
         return { ok = true }
     end
