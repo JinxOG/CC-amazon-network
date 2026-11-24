@@ -622,6 +622,10 @@ local function firstSight(msg)
         logWarn("PARKED: " .. tostring(type(msg.payload) == "table" and msg.payload.reason or "the server says another turtle shares my id")
             .. " -- staying where I am")
     end
+    if msg.type == proto.MSG.UNPARK and msg.from == "server" and _self.parked then
+        _self.parked = false
+        logInfo("UNPARKED: my duplicate is seen to -- moving again")
+    end
     -- A JOB_COMPLETE the server has: stop repeating it (base.sendComplete).
     if msg.type == proto.MSG.JOB_COMPLETE_ACK and type(msg.payload) == "table" and msg.payload.jobId
        and _self.completesOut then

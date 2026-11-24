@@ -762,6 +762,17 @@ function registry.release(id)
     state.operatorHolds[id] = nil
     registry.saveHolds()
     logInfo("Released hold on " .. id)
+    -- A DUPLICATE SEEN TO (the user's ruling, 2026-11-24: a player removes one copy and clears the hold).
+    -- From here the fleet recovers by itself: the turtle left moves again, the ATC takes it again, and a
+    -- later duplicate of the same id is caught again.
+    local t = state.registry[id]
+    if t and type(t.needsHands) == "string" and t.needsHands:find("^duplicate_id") then
+        t.needsHands = nil
+        if state.dupTrack then state.dupTrack[id] = nil end
+        sendTo(id, proto.MSG.UNPARK, {})
+        proto.send(state.modem, proto.CH_ATC, proto.encode(proto.MSG.ATC_UNBAN, "server", "atc", { id = id }))
+        logInfo(string.format("%s: duplicate_id released -- told to move again, and the ATC to take it", id))
+    end
 end
 
 function registry.saveHolds()
@@ -3132,8 +3143,7 @@ function registry.dupCheck(msg)
     logError(string.format("NEEDS HANDS: %s — %s. Two turtles share this id: a player has to remove one. "
         .. "Both are told to stay where they are, and the ATC drops the id.", id, detail))
     t.needsHands = detail
-    state.operatorHolds = state.operatorHolds or {}
-    state.operatorHolds[id] = true
+    registry.hold(id, detail)    -- saved: it outlasts a server restart, until RELEASE_TURTLE
     sendTo(id, proto.MSG.PARK, { reason = detail })
     proto.send(state.modem, proto.CH_ATC, proto.encode(proto.MSG.ATC_BAN, "server", "atc", { id = id, reason = detail }))
 end

@@ -62,7 +62,7 @@ return {
         assert_eq(ok, true, tostring(err))
         assert_eq(tostring(t.needsHands), "duplicate_id: node_9 heard at 238,200,-2780 and 239,200,-2780",
             "NEEDS HANDS with its own code and both places")
-        assert_eq(held, true, "held from work")
+        assert_eq(type(held) == "string" and held:find("^duplicate_id") ~= nil, true, "held from work, the hold saved with its reason (" .. tostring(held) .. ")")
         assert_eq(park >= 1, true, "both copies are told to park (" .. park .. ")")
         assert_eq(ban, 1, "and the ATC is told, once (" .. ban .. ")")
     end,
@@ -102,6 +102,35 @@ return {
         end
         restore()
         assert_eq(found ~= nil and found <= 180000, true, "found at " .. tostring(found and found / 1000) .. " s")
+    end,
+
+    -- The user's ruling (2026-11-24): the test models a player, who removes one copy and clears the hold
+    -- (RELEASE_TURTLE). From there the fleet must recover by itself: the one left unparks, the ATC takes it again,
+    -- and a later duplicate of the same id is caught again.
+    ["releasing a duplicate_id hold unparks the turtle and lifts the ATC ban"] = function(assert_eq)
+        local T, at, restore = server()
+        for k = 0, 9 do
+            at(k * 600); T.registry.dupCheck(msg(21 + k, A))
+            at(k * 600 + 50); T.registry.dupCheck(msg(11 + k, B))
+        end
+        T.sent = {}
+        T.registry.release("node_9")
+        local t = T.state.registry["node_9"]
+        local held = T.state.operatorHolds and T.state.operatorHolds["node_9"]
+        local unpark, unban = sent(T, proto.MSG.UNPARK), sent(T, proto.MSG.ATC_UNBAN, proto.CH_ATC)
+        local cleared = t.needsHands
+        -- a later duplicate is caught again
+        for k = 0, 9 do
+            at(20000 + k * 600); T.registry.dupCheck(msg(40 + k, A))
+            at(20000 + k * 600 + 50); T.registry.dupCheck(msg(31 + k, B))
+        end
+        local again = T.state.registry["node_9"].needsHands
+        restore()
+        assert_eq(held, nil, "the hold is gone")
+        assert_eq(cleared, nil, "and the NEEDS HANDS (" .. tostring(cleared) .. ")")
+        assert_eq(unpark >= 1, true, "the turtle is told to unpark (" .. unpark .. ")")
+        assert_eq(unban, 1, "the ATC is told to take it again (" .. unban .. ")")
+        assert_eq(tostring(again):find("^duplicate_id") ~= nil, true, "a later duplicate is caught again (" .. tostring(again) .. ")")
     end,
 
     ["a reboot starts the seq again, and is not a duplicate"] = function(assert_eq)

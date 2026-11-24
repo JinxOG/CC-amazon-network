@@ -72,7 +72,9 @@ proto.MSG = {
     JOB_FAILED_ACK = "JOB_FAILED_ACK",
     JOB_COMPLETE_ACK = "JOB_COMPLETE_ACK",
     PARK           = "PARK",            -- server → turtle: another turtle shares your id -- stay where you are (duplicate_id)
-    ATC_BAN        = "ATC_BAN",         -- server → ATC: drop this id's bookings and refuse it new ones (duplicate_id)   -- server → turtle: your JOB_COMPLETE for this job is here (stop repeating it)
+    ATC_BAN        = "ATC_BAN",         -- server → ATC: drop this id's bookings and refuse it new ones (duplicate_id)
+    UNPARK         = "UNPARK",          -- server → turtle: the duplicate is seen to (its hold released) -- move again
+    ATC_UNBAN      = "ATC_UNBAN",       -- server → ATC: take this id again (its duplicate_id hold released)   -- server → turtle: your JOB_COMPLETE for this job is here (stop repeating it)
 
     -- Real-time follow signals (CH_LOCAL)
     POSITION_UPDATE = "POSITION_UPDATE", -- delivery → support: here is where I just was

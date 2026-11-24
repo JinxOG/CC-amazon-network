@@ -261,6 +261,18 @@ return {
         assert_eq(calls >= 3, true, "and called it home, and again (" .. calls .. " RETURN_TO_DOCK)")
     end,
 
+    ["a parked turtle told UNPARK moves again"] = function(assert_eq)
+        local base = fresh()
+        local proto = require("protocol")
+        base._firstSight(proto.encode(proto.MSG.PARK, "server", base.getSelfId(), { reason = "duplicate_id: x" }))
+        base._firstSight(proto.encode(proto.MSG.UNPARK, "server", base.getSelfId(), {}))
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 20 then error("still parked", 0) end end
+        local ok, err = pcall(base.move.forward)
+        sleep = savedSleep
+        assert_eq(ok, true, "it moves (" .. tostring(err) .. ")")
+    end,
+
     ["a turtle not told PARK moves"] = function(assert_eq)
         local base = fresh()
         local proto = require("protocol")

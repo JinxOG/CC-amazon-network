@@ -931,4 +931,12 @@ return {
         local q = core.handle(st, "node_397", { op = "request", route = DEPART3 }, t + 400)
         assert_eq(q.ok, false, "a route too (" .. tostring(q.why) .. ")")
     end,
+
+    ["an unbanned id is let in again"] = function(assert_eq)
+        local core, st, t = live()
+        core.ban(st, "node_397")
+        core.unban(st, "node_397")
+        local r = core.handle(st, "node_397", { op = "enter", sec = "N2" }, t)
+        assert_eq(r.ok, true, "let in (" .. tostring(r.why) .. ")")
+    end,
 }

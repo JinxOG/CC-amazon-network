@@ -721,6 +721,12 @@ function core.ban(st, id)
     note(st, string.format("%s banned (duplicate id): %d booking(s) dropped", id, n))
 end
 
+-- Its duplicate seen to (the server's ATC_UNBAN, on RELEASE_TURTLE): taken again.
+function core.unban(st, id)
+    if st.banned then st.banned[id] = nil end
+    note(st, string.format("%s unbanned (its duplicate seen to)", tostring(id)))
+end
+
 -- End of the settle window: rebuild from what the turtles said. Turtles standing
 -- in a section first, nearest the open end (fewest sections left) first.
 function core.settle(st, now)
@@ -851,6 +857,8 @@ local function main()
                     if op ~= "leave" and op ~= "report" and op ~= "path" then reply(msg.from, pl.ch, out) end
                 elseif msg.type == proto.MSG.ATC_BAN and msg.from == "server" and type(msg.payload) == "table" then
                     pcall(core.ban, st, msg.payload.id)
+                elseif msg.type == proto.MSG.ATC_UNBAN and msg.from == "server" and type(msg.payload) == "table" then
+                    pcall(core.unban, st, msg.payload.id)
                 elseif msg.type == proto.MSG.UPDATE_ALL then
                     log("UPDATE_ALL -- updating")
                     proto.stageUpdateRef(msg.payload and msg.payload.ref)
