@@ -4058,6 +4058,7 @@ function base.ledger.registerKind(kind, spec)
     base.ledger._kinds[kind] = spec
 end
 
+base.ledger.RECOVER_REACH = 4      -- cells: how far from where it placed an item a rebooted turtle walks back
 -- Any recovery that cannot finish keeps the record -- it is the only evidence
 -- -- and says where, so a person can go and get it.
 function base.ledger.needsHands(kind, e, reason)
@@ -4099,6 +4100,22 @@ function base.ledger.recover(kind)
     local dir = (e.face == "down" and "down") or (e.face == "up" and "up") or "forward"
     base.waitForPositionFix("recovering the " .. kind, dir ~= "forward")
     local at = e.turtleAt or {}
+    -- A FEW CELLS OFF, IT GOES BACK (sim w3_delivery_ec_reboot W3_AFTER_CHEST; T2 shakeout-
+    -- payload-d). A delivery steps off its ender chest to put its regular chests down; rebooted
+    -- there -- one cell away -- it left the chest in the world for hands, and the order failed.
+    -- With GPS on it, within RECOVER_REACH of where it stood, it walks back without digging --
+    -- a chest it just placed may be on the way -- and the checks below still decide: aimed at
+    -- the recorded face, the block must be the item. Further, or blocked: hands, as before.
+    if _self.posFixed and type(at.x) == "number" and type(at.y) == "number" and type(at.z) == "number"
+       and (_self.pos.x ~= at.x or _self.pos.y ~= at.y or _self.pos.z ~= at.z)
+       and math.abs(_self.pos.x - at.x) + math.abs(_self.pos.y - at.y) + math.abs(_self.pos.z - at.z) <= L.RECOVER_REACH then
+        logInfo(string.format("Ledger: the %s was placed from %d,%d,%d -- going back there from %d,%d,%d",
+            kind, at.x, at.y, at.z, _self.pos.x, _self.pos.y, _self.pos.z))
+        local couldDig = _self.canDig
+        _self.canDig = false
+        pcall(move.to, at.x, at.y, at.z)
+        _self.canDig = couldDig
+    end
     if _self.pos.x ~= at.x or _self.pos.y ~= at.y or _self.pos.z ~= at.z then
         return L.needsHands(kind, e, "not_where_it_was_placed")
     end

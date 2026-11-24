@@ -50,8 +50,24 @@ return {
     end
     -- THE FAULT: a reboot with its chest in the world -- at the very step it says it is dumping into it (a watch
     -- fires on the scheduler step; polling from here landed seconds late, after the chest was back aboard)
+    -- W3_AFTER_CHEST=1 (Head Engineer, 2026-11-24: "a reboot landing just after 'Placed chest 1' is a real moment"):
+    -- the reboot comes the moment its regular chest is in the world below 124,67,-2823 -- the delivery has stepped
+    -- off its ender chest (below 124,67,-2824) to put it there. By the world's own state: log lines reach the
+    -- scenario in batches, and a trigger on one landed after the chest was back aboard.
+    local AFTER_CHEST = os.getenv("W3_AFTER_CHEST") ~= nil
+    local function blockName(x, y, z)
+      local b = sim:get_block(x, y, z)
+      return type(b) == "table" and b.name or b
+    end
     local rebootedAt
-    sim:watch(function() return mine(dumping, d) ~= nil end, function(x) rebootedAt = x.clock:now(); x:reboot(d) end)
+    if AFTER_CHEST then
+      sim:watch(function() return blockName(124, 66, -2823) == "minecraft:chest" end,
+        function(x) rebootedAt = x.clock:now(); x:reboot(d) end)
+    else
+      -- the moment its ender chest is down below the destination (the dump), by the world's state too
+      sim:watch(function() local b = blockName(124, 66, -2824); return b ~= nil and tostring(b):find("ender_chest", 1, true) ~= nil end,
+        function(x) rebootedAt = x.clock:now(); x:reboot(d) end)
+    end
     local down = sim:run_until(function() return rebootedAt ~= nil end, 30 * 60000)
     sim:expect(down, d .. " put its ender chest down at the destination")
     if not down then return end
