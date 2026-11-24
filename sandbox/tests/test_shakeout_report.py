@@ -236,11 +236,25 @@ class FixRound1(unittest.TestCase):
                 # node_10: failed at 20, wanders (never stuck), never home
                 "node_10": {"x": 300 + t // MIN, "y": 70, "z": -2600, "status": "BUSY", "dockX": 199, "dockZ": -2806,
                             "lastSeen": T0 + t, "online": True},
-                # node_12: failed at 20, home from 25, never given work again -> not "back to work"
+                # node_12: failed at 20, home from 25, never given work, and no MINER job went to anyone: available, not a miss
                 "node_12": {"x": 227, "y": 67, "z": -2806, "status": "IDLE", "dockX": 227, "dockZ": -2806, "lastSeen": T0 + t,
-                            "online": True} if t >= 25 * MIN else
+                            "online": True, "role": "MINER"} if t >= 25 * MIN else
                            {"x": 400 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 227, "dockZ": -2806,
-                            "lastSeen": T0 + t, "online": True},
+                            "lastSeen": T0 + t, "online": True, "role": "MINER"},
+                # node_13: failed at 20, home from 25, then 3 DELIVER jobs go to node_14, home only since 50: passed over
+                "node_13": {"x": 241, "y": 67, "z": -2806, "status": "IDLE", "dockX": 241, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True, "role": "DELIVERY"} if t >= 25 * MIN else
+                           {"x": 500 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 241, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
+                # node_16: failed at 20, home from 25, back out on a re-send after a reboot (payload-g's node_215): back to work
+                "node_16": {"x": 269, "y": 67, "z": -2806, "status": "IDLE", "dockX": 269, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True, "role": "DELIVERY"} if t >= 25 * MIN else
+                           {"x": 600 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 269, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
+                "node_14": {"x": 255, "y": 67, "z": -2806, "status": "IDLE", "dockX": 255, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True, "role": "DELIVERY"} if t >= 50 * MIN else
+                           {"x": 255, "y": 67, "z": -2700 - t // MIN, "status": "BUSY", "dockX": 255, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
                 # node_11: stuck, silent AND needs hands at the end: one turtle, counted once
                 "node_11": {"x": 900, "y": 20, "z": -2900, "status": "ERROR", "dockX": 213, "dockZ": -2806, "lastSeen": T0,
                             "online": False, "needsHands": "stuck_no_fix"},
@@ -251,19 +265,29 @@ class FixRound1(unittest.TestCase):
                  (20 * MIN, "server", "WARN", "Job permanently failed: job_0103 (departure_failed)"),
                  (11 * MIN, "server", "INFO", "Dispatched job_0104 [DELIVER] -> node_12"),
                  (20 * MIN, "server", "WARN", "Job permanently failed: job_0104 (departure_failed)"),
-                 (40 * MIN, "server", "INFO", "Job job_0102 accepted by node_9")]
+                 (40 * MIN, "server", "INFO", "Job job_0102 accepted by node_9"),
+                 (12 * MIN, "server", "INFO", "Dispatched job_0105 [DELIVER] -> node_13"),
+                 (20 * MIN, "server", "WARN", "Job permanently failed: job_0105 (departure_failed)"),
+                 (13 * MIN, "server", "INFO", "Dispatched job_0109 [DELIVER] -> node_16"),
+                 (20 * MIN, "server", "WARN", "Job job_0109 retry 1/3: warehouse_chest_timeout"),
+                 (45 * MIN, "server", "WARN", "Re-send of job_0110 to node_16 held for its first heartbeat"),
+                 (56 * MIN, "server", "INFO", "Dispatched job_0106 [DELIVER] -> node_14  support job_0206 -> node_99"),
+                 (61 * MIN, "server", "INFO", "Dispatched job_0107 [DELIVER] -> node_14  support job_0207 -> node_99"),
+                 (66 * MIN, "server", "INFO", "Dispatched job_0108 [DELIVER] -> node_14  support job_0208 -> node_99")]
         run = make_run(hours=2, extra_lines=extra, turtles_at=ts)
         try:
             rep = report.build_report(run)
             self.assertEqual(rep["failed_job"]["node_9"]["how"], "home and back to work")
             self.assertEqual(rep["failed_job"]["node_10"]["how"], "never home")
-            self.assertEqual(rep["failed_job"]["node_12"]["how"], "home, but no later job")
+            self.assertEqual(rep["failed_job"]["node_12"]["how"], "home and available (passed over 0 times)")
+            self.assertEqual(rep["failed_job"]["node_13"]["how"], "home, but passed over 3 time(s) for turtles home less long")
+            self.assertEqual(rep["failed_job"]["node_16"]["how"], "home and back to work")
             self.assertEqual(rep["not_recovered"], ["node_11"])
             with open(report.write_report(run), encoding="utf8") as f:
                 md = f.read()
             self.assertIn("**1 turtle(s) not recovered**", md)
             self.assertIn("**0 jam(s) never cleared**", md)
-            self.assertIn("**2 of 3** judged did NOT", md)
+            self.assertIn("**2 of 5** judged did NOT", md)
             self.assertIn("Evidence: 0 remove_item fault window(s)", md)
         finally:
             shutil.rmtree(run, ignore_errors=True)

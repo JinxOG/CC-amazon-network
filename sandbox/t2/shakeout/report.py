@@ -634,6 +634,12 @@ DOCK_RX = re.compile(r"Assigned dock: bay \d+ row \w+ \((-?\d+),(-?\d+),(-?\d+)\
 PHASE_RX = re.compile(r"^(node_\d+) phase: (.+)$")
 ACCEPT_RX = re.compile(r"^Job (job_\d+) accepted by (node_\d+)")
 DISPATCH_RX = re.compile(r"^Dispatched (job_\d+) \[\w+\] -> (node_\d+)")
+DISPATCH_ANY_RX = re.compile(r"(job_\d+)(?: \[\w+\])? -> (node_\d+)")     # the job and its support half, both on one line
+PASSED_OVER_MISS = 3
+# other server lines that hand a turtle a job (payload-g's node_215 went back out on a re-send after a reboot): (job, node) groups
+GIVEN_RXS = (re.compile(r"^Re-send of (job_\d+) to (node_\d+)"),
+             re.compile(r"^\[ROUTE\] WAREHOUSE_QUEUED job=(job_\d+) \S+ (node_\d+)"))
+RELINK_RX = re.compile(r"^Re-linked (node_\d+) to job (job_\d+)")
 HANDS_RX = re.compile(r"NEEDS HANDS: (node_\d+) \S+ (.*)$")
 HANDS_CLEAR_RX = re.compile(r"^(node_\d+) passed its own hardware check")
 JOB_TYPE_RX = re.compile(r"\b(job_\d+) \[([A-Z_]+)\]")
@@ -1293,10 +1299,16 @@ def build_report(run_dir, expected=None):
     for l in R["lines"]:
         if l["src"] != "server":
             continue
-        m = ACCEPT_RX.match(l["msg"]) or DISPATCH_RX.match(l["msg"])
+        m = ACCEPT_RX.match(l["msg"]) or DISPATCH_RX.match(l["msg"]) or next((g for g in (rx.match(l["msg"]) for rx in GIVEN_RXS)
+                                                                             if g), None)
         if m:
             holder[m.group(1)] = m.group(2)
             given.setdefault(m.group(2), []).append(l["rt"])
+            continue
+        m = RELINK_RX.match(l["msg"])
+        if m:
+            holder[m.group(2)] = m.group(1)
+            given.setdefault(m.group(1), []).append(l["rt"])
             continue
         m = JOB_FAIL_RX.match(l["msg"])
         if m:
@@ -1304,16 +1316,49 @@ def build_report(run_dir, expected=None):
             tid = holder.get(m.group(1) or m.group(2))
             if tid in fd["all"]:
                 last_fail[tid] = l["rt"]
+    # A turtle home with no later job is a miss only if it was PASSED OVER: PASSED_OVER_MISS or more jobs went to turtles of its role
+    # that had been home for less time than it (W3 and SPEC-OWNER, 2026-11-24). A big idle pool with work handed out one a minute
+    # (MINE_STAGGER) leaves most of it idle, and that is not a turtle failing to get back to work.
+    role_of = {}
+    for snap in R["snapshots"]:
+        for rid, e in (snap.get("turtles") or {}).items():
+            if e.get("role"):
+                role_of[rid] = e["role"]
+    dispatched = [(l["rt"], m.group(2)) for l in R["lines"] if l["src"] == "server" for m in DISPATCH_ANY_RX.finditer(l["msg"])]
+
+    def home_since(rid, t):
+        """When rid's current run of IDLE-on-its-dock samples began, as of run time t (None: not home and idle at t)."""
+        since = None
+        for smp in (tls[rid]["samples"] if rid in tls else []):
+            if smp["t"] > t:
+                break
+            idle = smp.get("on_dock") and str(smp.get("phase") or "").startswith("IDLE/")
+            since = (since if since is not None else smp["t"]) if idle else None
+        return since
+
     for tid, tf in last_fail.items():
         home = any(s.get("on_dock") and s["t"] > tf for s in tls[tid]["samples"]) if tid in tls else False
         again = any(t > tf for t in given.get(tid, []))
+        passed = 0
+        if home and not again:
+            for t, other in dispatched:
+                mine = home_since(tid, t) if t > tf else None
+                if mine is None or other == tid or role_of.get(other) != role_of.get(tid):
+                    continue
+                theirs = home_since(other, t)
+                if theirs is None or theirs > mine:
+                    passed += 1
         if home and again:
             how = "home and back to work"
         elif end - tf < 30 * MIN:
             how = "too late to judge (failed %d min before the end)" % ((end - tf) // MIN)
+        elif not home:
+            how = "never home"
+        elif passed >= PASSED_OVER_MISS:
+            how = "home, but passed over %d time(s) for turtles home less long" % passed
         else:
-            how = "never home" if not home else "home, but no later job"
-        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how}
+            how = "home and available (passed over %d times)" % passed
+        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how, "passed_over": passed}
     return {
         "run": run_dir, "kind": R["kind"], "t0_epoch_ms": R["t0"], "end_ms": end, "seed": seed, "schedule": R["schedule_path"],
         "notes": R["notes"], "windows": [dict(w, targets=sorted(w["targets"]) if w["targets"] is not None else None) for w in W],
@@ -1366,9 +1411,11 @@ def _render(rep):
           % (len(rep["not_recovered"]), rep["stuck_at_end"], rep["gone_at_end"], rep["hands_at_end"],
              sum(1 for j in rep["jams"] if j["clear"] is None)),
           "- A turtle that fails a job gets itself home and back to work: **%d of %d** judged did NOT (on its dock after the "
-          "failure AND given a later job); %d too late to judge (evidence: %d failed/retried job lines, traced to %d turtles)%s" % (
-              sum(1 for v in rep["failed_job"].values() if not v["how"].startswith(("home and back", "too late"))),
+          "failure AND given a later job, or home and not passed over %d+ times for a turtle of its role home less long); %d "
+          "too late to judge (evidence: %d failed/retried job lines, traced to %d turtles)%s" % (
+              sum(1 for v in rep["failed_job"].values() if not v["how"].startswith(("home and back", "home and available", "too late"))),
               sum(1 for v in rep["failed_job"].values() if not v["how"].startswith("too late")),
+              PASSED_OVER_MISS,
               sum(1 for v in rep["failed_job"].values() if v["how"].startswith("too late")),
               rep["failed_job_lines"], len(rep["failed_job"]),
               "" if rep["failed_job"] else " -- TRUNCATED: no failed job traced to a turtle, so this item has no evidence"),
