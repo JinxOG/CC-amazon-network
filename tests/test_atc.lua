@@ -838,4 +838,35 @@ return {
         assert_eq(b.ok, true, "a second way out along the same row goes (" .. tostring(b.why) .. ")")
         assert_eq(r.ok, false, "a way back along it waits (" .. tostring(r.why) .. ")")
     end,
+
+    -- The hold-and-wait at the shaft's foot (Head Engineer, 2026-11-24): a turtle walking back holds its corridor
+    -- cell and wants DH; a departure wants DH and its way out through that cell. A departure's DH and its path are
+    -- granted together or not at all, and the walker's climb carries the cell it stands in, so it keeps it.
+    ["at the shaft's foot a departure is refused holding nothing, the walker climbs first, the departure after"] = function(assert_eq)
+        local core, st, t = live()
+        local foot = { x = 144, y = 60, z = -2813 }
+        local walker = core.handle(st, "w", { op = "request", route = {},
+            path = { { x = 190, y = 60, z = -2813 }, foot }, pathKind = "back" }, t)
+        core.handle(st, "w", { op = "path", walked = 45 }, t + 100)          -- at the foot, its cell its own
+        local dep = core.handle(st, "d", { op = "request", route = { "S1", "J1", "W1", "DH" },
+            path = { foot, { x = 190, y = 60, z = -2813 } }, pathKind = "out" }, t + 200)
+        local heldByD = 0
+        for _, x in pairs(st.res) do if x.id == "d" then heldByD = heldByD + 1 end end
+        local other = core.handle(st, "x", { op = "enter", sec = "DH" }, t + 300)    -- DH is not the departure's
+        core.handle(st, "x", { op = "leave", sec = "DH" }, t + 350)
+        local climb = core.handle(st, "w", { op = "request", route = { "DH", "W1" },
+            path = { foot }, pathKind = "back" }, t + 400)
+        local dep2 = core.handle(st, "d", { op = "request", route = { "S1", "J1", "W1", "DH" },
+            path = { foot, { x = 190, y = 60, z = -2813 } }, pathKind = "out" }, t + 500)
+        core.handle(st, "w", { op = "cancel" }, t + 600)                       -- home inside: all of it given back
+        local dep3 = core.handle(st, "d", { op = "request", route = { "S1", "J1", "W1", "DH" },
+            path = { foot, { x = 190, y = 60, z = -2813 } }, pathKind = "out" }, t + 700)
+        assert_eq(walker.ok, true, "the walker is let in on its way back")
+        assert_eq(dep.ok, false, "a departure through its cell is refused (" .. tostring(dep.why) .. ")")
+        assert_eq(heldByD, 0, "and holds nothing: not DH, not a path")
+        assert_eq(other.ok, true, "DH stays free for others")
+        assert_eq(climb.ok, true, "the walker is let up the shaft next (" .. tostring(climb.why) .. ")")
+        assert_eq(dep2.ok, false, "the departure still waits while it climbs (" .. tostring(dep2.why) .. ")")
+        assert_eq(dep3.ok, true, "and goes after it (" .. tostring(dep3.why) .. ")")
+    end,
 }

@@ -257,7 +257,10 @@ local function olderWaiterOverlaps(st, list, id, now, cur)
         local pw = w.pair and st.waiting[w.pair]
         local halfPair = w.pair ~= nil and not (pw and pw.pair == other and now - (pw.at or 0) <= CFG.PAIR_FRESH_MS)
         if other ~= id and w.since < since and now - w.at < 10000 and not myTurn and not sameParty and not halfPair then
-            local waitsForMe = false
+            -- held by this one's path ((D)): it waits for this one, so holds it back from nothing --
+            -- else, at the shaft's foot, a walker waiting for DH and a departure waiting for the
+            -- walker's cell each waited for the other (unit test, Head Engineer 2026-11-24)
+            local waitsForMe = w.pathBlockedBy == id
             for _, a in ipairs(w.list) do if holds[a] then waitsForMe = true end end
             if not waitsForMe then
                 for _, a in ipairs(w.list) do
@@ -455,6 +458,7 @@ function core.handle(st, id, p, now)
                     table.concat(list, " "), table.concat(pw.list, " ")))
                 return { ok = true, rid = nrid }
             end
+            if st.waiting[id] then st.waiting[id].pathBlockedBy = c1 or c2 or nil end
             return withPlace(st, id, now, { ok = false, why = "busy at " .. tostring(free1 and b2 or b1) })
         end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
@@ -477,8 +481,8 @@ function core.handle(st, id, p, now)
             return { ok = true, rid = nrid }
         end
         local w = st.waiting[id]
-        if not w then st.waiting[id] = { since = now, at = now, list = list, group = p.group }
-        else w.at, w.list, w.group = now, list, p.group end
+        if not w then st.waiting[id] = { since = now, at = now, list = list, group = p.group, pathBlockedBy = clash or nil }
+        else w.at, w.list, w.group, w.pathBlockedBy = now, list, p.group, clash or nil end
         return withPlace(st, id, now, { ok = false, why = free and "after an older request" or ("busy at " .. tostring(busyAt)) })
     end
 
