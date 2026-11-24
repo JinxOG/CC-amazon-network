@@ -35,6 +35,63 @@ end
 
 return {
 
+    -- THE LOADER MUST NOT RE-MEASURE ITS POSITION EVERY BEACON.
+    --
+    -- SOURCE-ONLY, weaker, and for the reason this file already documents:
+    -- loader_turtle.lua is a top-level script with an infinite loop and is not
+    -- unit-testable. It also requires ONLY protocol, deliberately, so the rule
+    -- cannot be moved into mine_flow without giving the loader role a new module
+    -- dependency it has never had.
+    --
+    -- WHY IT MATTERS (W3, shakeout-payload-j): a gps.locate is not one message.
+    -- CC pings with reply channel 65534, all TWELVE gps hosts answer on 65534,
+    -- and every host also listens there, so each reply wakes the other eleven --
+    -- about 130 radio wake-ups per locate. With 39 loaders locating every 5 s
+    -- that measured 3,132 deliveries/s on 65534, while 34 miners paused in the
+    -- climb shaft because the server was starved of CC's one shared thread.
+    -- A placed loader is a block in the world and cannot move, so almost all of
+    -- that was measuring something that had not changed.
+    ["the loader caches its position instead of locating every beacon (SOURCE-ONLY, weaker)"] =
+    function(assert_eq)
+        local f = assert(io.open("loader_turtle.lua", "r"))
+        local src = f:read("*a"); f:close()
+
+        assert_eq(src:find("FIX_EVERY", 1, true) ~= nil, true,
+            "there must be a re-measure interval at all")
+        -- The cache must be CONSULTED before the locate, not after it.
+        local cacheAt = src:find("if _fix and _beaconsOnFix < FIX_EVERY then", 1, true)
+        local locateAt = src:find("pcall(gps.locate, 2)", 1, true)
+        assert_eq(cacheAt ~= nil, true, "the cached fix must be checked")
+        assert_eq(locateAt ~= nil and cacheAt < locateAt, true,
+            "and checked BEFORE the locate, or the saving is zero")
+
+        -- A FAILED LOCATE MUST NOT WIPE A GOOD FIX. Returning nil on a hiccup
+        -- would make the beacon carry no position at all, which is the one thing
+        -- worse than carrying a minute-old one.
+        -- ANCHORED ON THE FALLBACK ITSELF, not on "return _fix" anywhere after
+        -- the locate: the SUCCESS branch also ends `return _fix`, so a window
+        -- search matched that instead and a mutant turning the fallback into
+        -- `return nil` survived with nothing red. Pin the comment-plus-return,
+        -- which only the fallback has.
+        assert_eq(src:find("before caching existed.\n    return _fix", 1, true) ~= nil, true,
+            "a failed locate must fall back to the last known fix, not to nil -- "
+            .. "a beacon carrying no position at all is worse than one carrying a "
+            .. "minute-old one")
+
+        -- AND THE BEACON RATE IS UNCHANGED. The miner reads beacon ARRIVAL as
+        -- "my chunk is still loaded", so slowing the beacon would trade a radio
+        -- problem for a chunk-loading one.
+        -- `local BEACON_INTERVAL = 5`, WITH the keyword: the bare
+        -- "BEACON_INTERVAL = 5" also appears in this file's own explanatory
+        -- comment, so a mutant that slowed the real interval to 60 survived by
+        -- matching the prose. Anchor on the declaration, never on a string a
+        -- comment can satisfy.
+        assert_eq(src:find("local BEACON_INTERVAL = 5\n", 1, true) ~= nil, true,
+            "the beacon interval must stay at 5s -- this change is about the COST "
+            .. "of a beacon, not how often one goes out, and slowing it would trade "
+            .. "a radio problem for a chunk-loading one")
+    end,
+
     ["ROLE.LOADER exists with the exact value central_server matches on"] = function(assert_eq)
         local proto = fresh()
         assert_eq(proto.ROLE.LOADER, "LOADER")

@@ -377,6 +377,8 @@ Q_ARRIVE  = "ensureEquipmentAboard sucks it back when the dig dropped it"
 Q_KIND    = "scanner recovery runs at boot and verifies identity (SOURCE-ONLY, weaker)"
 # The world floor is the sector's bottom, not a scan failure (2026-11-24).
 F_FLOOR   = "isWorldFloor recognises bedrock and nothing else"
+# The loader stopped re-measuring an immovable block 12 times a minute.
+B_CACHE   = "the loader caches its position instead of locating every beacon (SOURCE-ONLY, weaker)"
 F_STRUCT  = "the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"
 J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
 B_REC     = "placeLoader records the label of the loader it put down"
@@ -2208,6 +2210,20 @@ MUTANTS = [
      [('        base.ledger.record("geo_scanner", {', '        local _norecord = ({')], Q_KIND),
     ("clearing the scanner leaves a ledger ghost behind", "ore_turtle.lua",
      [('    pcall(base.ledger.clear, "geo_scanner")\n', '')], Q_KIND),
+
+    # ---- the loader's position cache (2026-11-24) --------------------------
+    # A gps.locate is ~130 radio wake-ups, not one message: 12 hosts all reply
+    # on 65534 and all listen there. 39 loaders locating every 5 s measured
+    # 3,132 deliveries/s while the server had 2.4-3.5% of CC's one thread.
+    ("the loader locates on every beacon again", "loader_turtle.lua",
+     [('    if _fix and _beaconsOnFix < FIX_EVERY then', '    if false then')], B_CACHE),
+    # Anchored on the comment line above the fallback so the match is unique:
+    # there are two `return _fix` in position(), one per branch.
+    ("a failed locate wipes the last known fix", "loader_turtle.lua",
+     [('    -- which is exactly what this did before caching existed.\n    return _fix',
+       '    -- which is exactly what this did before caching existed.\n    return nil')], B_CACHE),
+    ("the beacon interval is slowed instead of the locate", "loader_turtle.lua",
+     [('local BEACON_INTERVAL = 5', 'local BEACON_INTERVAL = 60')], B_CACHE),
 
     # ---- the world floor is the sector's bottom, not a failure -------------
     ("deepslate counts as the bottom of the world", "mine_flow.lua",

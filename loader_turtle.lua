@@ -64,13 +64,55 @@ end
 -- through this beacon's payload for that to work.
 local deployedBy = nil
 
+-- Re-measure the position every Nth beacon instead of every single one.
+-- 12 beacons at BEACON_INTERVAL = 5 s is about once a minute.
+local FIX_EVERY = 12
+local _fix, _beaconsOnFix = nil, math.huge
+
 local function position()
+    -- A PLACED LOADER CANNOT MOVE. It is a block in the world from the moment
+    -- the miner puts it down until the miner digs it up, so measuring its
+    -- position twelve times a minute is measuring something that by
+    -- construction has not changed.
+    --
+    -- WHY THAT MATTERS SO MUCH MORE THAN IT LOOKS, measured by W3 in
+    -- shakeout-payload-j: a gps.locate is not one message. CC pings with reply
+    -- channel 65534, all TWELVE gps hosts answer on 65534, and every host also
+    -- listens there -- so each reply wakes the other eleven. That is about 130
+    -- radio wake-ups per locate, not the five a message count suggests. With 39
+    -- loaders locating every 5 s it came to 3,132 deliveries/s on 65534, and 34
+    -- miners were pausing in the climb shaft because the server was being
+    -- starved of ComputerCraft's one shared thread (it got 2.4-3.5% of it).
+    -- Dropping to one locate per minute removes roughly 2,300 of those
+    -- wake-ups/s: about 28% of all radio work in that run.
+    --
+    -- NOT CACHED INDEFINITELY, for the same reason we never trust a stored
+    -- facing: something outside this program could move the loader, and a
+    -- beacon that lies about where it is would be worse than one that costs
+    -- too much. A minute is short enough to self-correct and long enough to
+    -- stop being the fleet's biggest radio consumer.
+    --
+    -- THE BEACON RATE IS UNCHANGED, deliberately. The miner reads beacon
+    -- ARRIVAL as "my chunk is still loaded", so slowing the beacon would trade a
+    -- radio problem for a chunk-loading one. This changes the cost of a beacon,
+    -- not how often one goes out.
+    if _fix and _beaconsOnFix < FIX_EVERY then
+        _beaconsOnFix = _beaconsOnFix + 1
+        return _fix
+    end
+
     -- pcall belt-and-suspenders: gps.locate() already returns nil (not an
     -- error) on a plain timeout, but a wrapped GPS/peripheral hiccup must
     -- cost this one position lookup, not the beacon that carries it.
     local ok, x, y, z = pcall(gps.locate, 2)
-    if ok and x then return { x = x, y = y, z = z } end
-    return nil
+    if ok and x then
+        _fix, _beaconsOnFix = { x = x, y = y, z = z }, 0
+        return _fix
+    end
+    -- A FAILED LOCATE MUST NOT WIPE A GOOD FIX, and must not be cached either:
+    -- keep beaconing the last known position and try again on the next beacon,
+    -- which is exactly what this did before caching existed.
+    return _fix
 end
 
 print("[LOADER] " .. selfId .. " holding chunk. Beaconing every "
