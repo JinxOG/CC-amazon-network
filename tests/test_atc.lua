@@ -869,4 +869,41 @@ return {
         assert_eq(dep2.ok, false, "the departure still waits while it climbs (" .. tostring(dep2.why) .. ")")
         assert_eq(dep3.ok, true, "and goes after it (" .. tostring(dep3.why) .. ")")
     end,
+
+    -- Sim w3_atc_leave_lost on (D): a departure's ATC_LEAVE for DH was lost, and on its path it sent no "out" report
+    -- (that would have dropped its path too), so DH stayed booked and the next pair waited. Out on its path, it says
+    -- both: its sections go, its path stays.
+    ["a report from outside the base on its path lets the sections go and keeps the path"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "d", { op = "request", route = { "W1", "DH" },
+            path = { { x = 150, y = 60, z = -2813 }, { x = 190, y = 60, z = -2813 } }, pathKind = "out" }, t)
+        core.handle(st, "d", { op = "enter", sec = "W1" }, t + 100)
+        core.handle(st, "d", { op = "enter", sec = "DH" }, t + 200)          -- its leave for DH is lost
+        core.handle(st, "d", { op = "report", out = true, route = {}, onPath = true }, t + 1000)
+        local dh = core.handle(st, "x", { op = "enter", sec = "DH" }, t + 1100)
+        local back = core.handle(st, "r", { op = "request", route = {},
+            path = { { x = 190, y = 60, z = -2813 }, { x = 160, y = 60, z = -2813 } }, pathKind = "back" }, t + 1200)
+        assert_eq(dh.ok, true, "DH is free (" .. tostring(dh.why) .. ")")
+        assert_eq(back.ok, false, "its path still holds a way back off its cells (" .. tostring(back.why) .. ")")
+    end,
+
+    -- Sim w3_side_atc on (D): node_52, walking back, stood at 142,60,-2813 beside the shaft's foot asking for its climb;
+    -- refused (J1 was taken), it held nothing -- asking anew lets the old go -- and node_36 was let out with a path
+    -- through that cell, came down the shaft into it, and was stuck. A turtle standing in the zone holds the cell it
+    -- stands in, refused or not.
+    ["refused, a turtle walking back still holds the cell it stands in"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "o", { op = "enter", sec = "J1" }, t)                    -- someone else holds J1
+        local here = { x = 142, y = 60, z = -2813 }
+        local climb = core.handle(st, "w", { op = "request", route = { "DH", "J1" },
+            path = { here }, pathKind = "back", pathStanding = true }, t + 100)
+        local dep = core.handle(st, "d", { op = "request", route = { "S1" },
+            path = { { x = 142, y = 60, z = -2813 }, { x = 120, y = 60, z = -2813 } }, pathKind = "out" }, t + 200)
+        core.handle(st, "w", { op = "request", route = { "DH", "J1" }, path = { here }, pathKind = "back", pathStanding = true }, t + 300)
+        local dep2 = core.handle(st, "d", { op = "request", route = { "S1" },
+            path = { { x = 142, y = 60, z = -2813 }, { x = 120, y = 60, z = -2813 } }, pathKind = "out" }, t + 400)
+        assert_eq(climb.ok, false, "its climb waits for J1 (" .. tostring(climb.why) .. ")")
+        assert_eq(dep.ok, false, "a departure through the cell it stands in is refused (" .. tostring(dep.why) .. ")")
+        assert_eq(dep2.ok, false, "and still after it asks again (" .. tostring(dep2.why) .. ")")
+    end,
 }

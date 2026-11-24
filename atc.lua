@@ -362,8 +362,18 @@ function core.handle(st, id, p, now)
             end
         end
         if #mine > 0 and p.out then
-            for _, k in ipairs(mine) do drop(st, k) end
-            note(st, string.format("%s reports from outside the base: its booking is done", id))
+            -- Out on its path ((D), sim w3_atc_leave_lost): its sections go, its path stays.
+            for _, k in ipairs(mine) do
+                local x = st.res[k]
+                if p.onPath and x and x.path then
+                    for _, s in ipairs(x.list) do removeFrom(queue(st, s), k) end
+                    x.list, x.entered = {}, {}
+                else
+                    drop(st, k)
+                end
+            end
+            note(st, string.format("%s reports from outside the base: its booking is done%s", id,
+                p.onPath and " (its path kept)" or ""))
             return { ok = true }
         end
         -- THE DISPATCH TUNNEL, DT (Head Engineer ruling, 2026-11-24): a turtle in there
@@ -479,6 +489,15 @@ function core.handle(st, id, p, now)
             note(st, string.format("admitted %s: %s%s", id, table.concat(list, " "),
                 path and string.format(" (path of %d cells)", #path.list) or ""))
             return { ok = true, rid = nrid }
+        end
+        -- REFUSED, IT STILL HOLDS THE CELL IT STANDS IN ((D), sim w3_side_atc): asking anew
+        -- dropped its old booking above, and node_52, beside the shaft's foot asking for its
+        -- climb, held nothing -- node_36 was let out through that cell and came down into it.
+        if path and p.pathStanding then
+            local k0 = path.list[1]
+            local nrid = newRid(st)
+            st.res[nrid] = { id = id, list = {}, entered = {}, at = now, deafAt = deafNow(st, now), standing = true,
+                             path = { list = { k0 }, set = { [k0] = true }, done = 0, kind = path.kind } }
         end
         local w = st.waiting[id]
         if not w then st.waiting[id] = { since = now, at = now, list = list, group = p.group, pathBlockedBy = clash or nil }

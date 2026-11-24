@@ -2086,7 +2086,8 @@ function atc.book(waypoints, label, giveUp, path)
             logWarn(string.format("ATC: %s no longer wanted (%s) -- not waiting to be let in", label or "route", tostring(stop)))
             return false, stop
         end
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = pair, path = path, pathKind = path and path.kind })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = pair, path = path, pathKind = path and path.kind,
+            pathStanding = path and path.standing or nil })
         last = r
         if r and r.ok then
             atc.progressed()
@@ -2144,7 +2145,19 @@ end
 -- A docked turtle with nothing booked has nothing to say.
 function atc.keepInBase()
     if not atc.ENABLED then return end
-    if atc.route == nil and atc.here() == nil and atc.path then atc.keepAlive(); return end
+    -- On its path out of every section: it says it is out -- which heals a lost leave -- and
+    -- on its path, so the path stays (sim w3_atc_leave_lost on (D)).
+    if atc.route == nil and atc.here() == nil and atc.path then
+        local now = os.epoch("utc")
+        if atc.owesUntil and now < atc.owesUntil and _self.posFixed
+           and not (atc.aliveAt and now - atc.aliveAt < atc.KEEPALIVE_S * 1000) then
+            atc.aliveAt = now
+            atc.send(proto.MSG.ATC_REPORT, { out = true, route = {}, onPath = true })
+            return
+        end
+        atc.keepAlive()
+        return
+    end
     if atc.route == nil and atc.here() == nil then
         -- OUT OF THE BASE, IT SAYS SO A WHILE (2026-11-17, T2 shakeout-side-h s002):
         -- node_215's ATC_LEAVE for DH, sent once as it stepped into the tunnel, was
@@ -2366,6 +2379,9 @@ function atc.retracePath()
     if #leg == 0 then return nil end
     local corners = atc.corners(leg)
     corners.kind = "back"
+    -- standing in the zone already (rebooted out there), its first cell is the one it stands in
+    local c1 = corners[1]
+    corners.standing = c1.x == _self.pos.x and c1.y == _self.pos.y and c1.z == _self.pos.z or nil
     return corners
 end
 function atc.takePath(corners)
@@ -2421,6 +2437,12 @@ function atc.pathAllow(dir)
     local r = atc.ask(proto.MSG.ATC_PATHADD, { cells = { c } })
     if r and r.ok then
         p.list[#p.list + 1] = k; p.set[k] = true; p.idx[k] = p.at
+        return true
+    end
+    -- The ATC holds no path of its (it restarted, or a report let it go): there is nothing of
+    -- its to keep, and waiting for a cell nobody will grant waited for good (sim w3_side_atc).
+    if r and r.why == "no path" then
+        atc.path = nil
         return true
     end
     logInfo(string.format("Detour into %d,%d,%d not booked (%s) -- waiting", c.x, c.y, c.z,
@@ -3583,7 +3605,7 @@ function home.retrace(why)
                 W.internalReturnRouteFrom(_self.dock, W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z)), "back the way I came", nil,
                 -- the cell it stands in goes with it: asking anew ends its path, and waiting
                 -- for the shaft it would stand in a cell a departure could be let out into
-                path and { { x = _self.pos.x, y = _self.pos.y, z = _self.pos.z }, kind = "back" } or nil)
+                path and { { x = _self.pos.x, y = _self.pos.y, z = _self.pos.z }, kind = "back", standing = true } or nil)
         end
         local ok, err = move.to(p.x, p.y, p.z)
         if not ok then
