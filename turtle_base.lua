@@ -2367,8 +2367,13 @@ function base.awaitSupportInChunk(why)
             end
         end
         if os.epoch("utc") - heard > base.SUPPORT_SILENT_S * 1000 then
-            logWarn(string.format("Support %s silent %ds at the edge of chunk %d,%d -- taken for gone",
+            logWarn(string.format("Support %s silent %ds at the edge of chunk %d,%d -- taken for gone; calling it home",
                 tostring(partner), base.SUPPORT_SILENT_S, cx, cz))
+            -- CALLED HOME, NOT JUST DROPPED (sim w3_side_atc on 8cc17b2, 2026-11-24). node_35 took node_54 for
+            -- gone 5 s before a 300 s blackout ended and went home saying nothing; node_54, alive at the hole's
+            -- foot, waited 315 s for a partner that had stopped talking to it, in node_35's way home. The
+            -- come-home repeats (atc.keepPair), so one sent into the blackout is heard once the radio is back.
+            atc.callSupportHome(partner, nil)
             _self.partnerId = nil
             return false
         end

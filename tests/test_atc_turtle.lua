@@ -235,6 +235,32 @@ return {
         assert_eq(carried, true, "JOB_ABORT with jobId job_0039")
     end,
 
+    -- Sim w3_side_atc on 8cc17b2 (2026-11-24): in the 300 s radio blackout node_35 waited at a chunk's edge for its
+    -- support node_54 and, 5 s before the radio came back, took it for gone and went home -- saying nothing to it.
+    -- node_54, alive at the dispatch hole's foot, waited 315 s for a partner that had stopped talking to it, standing
+    -- in node_35's way home (held 313 s). Taking its support for gone, a delivery calls it home, again and again.
+    ["a delivery that takes its silent support for gone calls it home, repeatedly"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base.setPartnerId("node_54", "job_0049")
+        base.setPosForTest({ x = 128, y = 60, z = -2813 })
+        local savedEpoch, savedReceive = os.epoch, base.receive
+        local clock = 7000000
+        os.epoch = function() return clock end
+        base.receive = function() clock = clock + 1000; return nil end
+        local ok, r = pcall(base.awaitSupportInChunk, "stepping into chunk 7,-176")
+        local gone = #sent
+        for i = 1, 3 do clock = clock + 10000; base.atc.keepPair(clock) end
+        os.epoch, base.receive = savedEpoch, savedReceive
+        local calls = 0
+        for i, b in ipairs(sent) do
+            if i > 0 and b:find("RETURN_TO_DOCK", 1, true) and b:find("node_54", 1, true) then calls = calls + 1 end
+        end
+        assert_eq(ok, true, tostring(r))
+        assert_eq(r, false, "it went on without its support")
+        assert_eq(calls >= 3, true, "and called it home, and again (" .. calls .. " RETURN_TO_DOCK)")
+    end,
+
     ["a turtle not told PARK moves"] = function(assert_eq)
         local base = fresh()
         local proto = require("protocol")
