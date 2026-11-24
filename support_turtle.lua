@@ -195,10 +195,10 @@ local function supportJob(job)
                 print("Delivery moving again -- resuming follow (its DESCENDED did not reach me)")
             end
             if msg.type == proto.MSG.POSITION_UPDATE and not ascending then
-                -- Move to where delivery just was (1 block behind)
-                local prev = msg.payload.prev
-                if prev and type(prev.x) == "number" and type(prev.y) == "number" and type(prev.z) == "number" then
-                    base.move.to(prev.x, prev.y, prev.z)
+                -- To where delivery just was (1 block behind), by its own cells (base.followPartner)
+                local pl = msg.payload
+                if type(pl) == "table" and (type(pl.tail) == "table" or type(pl.prev) == "table") then
+                    base.followPartner(pl)
                 else
                     print("[SUPPORT] Invalid POSITION_UPDATE payload, skipping move")
                 end

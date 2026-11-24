@@ -1158,6 +1158,7 @@ local function initPosition()
         logInfo(string.format("GPS fix: %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z))
         detectFacing()
         checkJournal(claim, why)
+        base.restoreTrail()      -- defined with the trail, below
     else
         logWarn("No GPS fix. Tracking from (0,0,0). Facing assumed north.")
     end
@@ -1250,6 +1251,7 @@ function trail.note(prev)
     if p.y == CFG.FLOOR_Y and base.isInsideBuilding(p) then
         trail.cells = { { x = p.x, y = p.y, z = p.z } }
         trail.at = { [trailKey(p)] = 1 }
+        trail.forget()
         return
     end
     local k = trailKey(p)
@@ -1259,12 +1261,109 @@ function trail.note(prev)
             trail.at[trailKey(trail.cells[j])] = nil
             trail.cells[j] = nil
         end
+        trail.save()
         return
     end
     if #trail.cells >= trail.MAX then return end
     trail.cells[#trail.cells + 1] = { x = p.x, y = p.y, z = p.z }
     trail.at[k] = #trail.cells
+    -- Written at a corner only: a straight step goes the way the last one went,
+    -- and trail.restore walks that line on to where the turtle stands.
+    local n, c = #trail.cells, trail.cells
+    if n == 2 or (n > 2 and (c[n].x - c[n-1].x ~= c[n-1].x - c[n-2].x or c[n].y - c[n-1].y ~= c[n-1].y - c[n-2].y
+            or c[n].z - c[n-1].z ~= c[n-1].z - c[n-2].z)) then
+        trail.save()
+    end
 end
+
+-- KEPT ON DISK BY A TURTLE THAT CANNOT DIG (T2 shakeout-payload-e, 2026-11-23).
+-- node_239 and node_235, rebooted out in the tunnel by the restart burst, were
+-- given holding slots behind rock, logged "no way back is known (trail empty)"
+-- and stood in the lane to the end of the run; 10 supports following their
+-- deliveries out bumped into them for 120 s and gave up. Its corners only --
+-- the cells between are a straight line -- so a support's way out is a few
+-- hundred bytes, written a few times a trip. A turtle that can dig needs none.
+trail.FILE, trail.MAX_CORNERS = "trail.dat", 2000
+function trail.forget()
+    if not trail.onDisk then return end
+    trail.onDisk = false
+    pcall(fs.delete, trail.FILE)
+end
+function trail.save()
+    if _self.canDig then return end
+    local cells, out = trail.cells, {}
+    for i, c in ipairs(cells) do
+        local a, b = cells[i - 1], cells[i + 1]
+        if not a or not b or c.x - a.x ~= b.x - c.x or c.y - a.y ~= b.y - c.y or c.z - a.z ~= b.z - c.z then
+            out[#out + 1] = c.x .. "," .. c.y .. "," .. c.z
+        end
+    end
+    if #out > trail.MAX_CORNERS then trail.onDisk = true; trail.forget(); return end
+    local ok = pcall(function()
+        local tmp = trail.FILE .. ".tmp"
+        local h = fs.open(tmp, "w")
+        h.write(table.concat(out, ";"))
+        h.close()
+        if fs.exists(trail.FILE) then fs.delete(trail.FILE) end
+        fs.move(tmp, trail.FILE)
+    end)
+    trail.onDisk = ok or trail.onDisk
+end
+-- At boot, once GPS has put it somewhere: the way it came, if what is on disk
+-- leads to where it stands -- along its last line (the steps no corner wrote),
+-- or one step off it (a corner the power cut before it wrote). Anything else
+-- (carried off by hand, a broken file) is no way back at all.
+function trail.restore()
+    if not fs.exists(trail.FILE) then return end
+    trail.onDisk = true
+    local p = _self.pos
+    local cells = {}
+    local ok = pcall(function()
+        local h = fs.open(trail.FILE, "r")
+        local s = h.readAll()
+        h.close()
+        for x, y, z in s:gmatch("(-?%d+),(-?%d+),(-?%d+)") do
+            local c = { x = tonumber(x), y = tonumber(y), z = tonumber(z) }
+            local a = cells[#cells]
+            if a then
+                local d = math.abs(c.x - a.x) + math.abs(c.y - a.y) + math.abs(c.z - a.z)
+                local sx, sy, sz = math.floor((c.x - a.x) / d), math.floor((c.y - a.y) / d), math.floor((c.z - a.z) / d)
+                if math.abs(sx) + math.abs(sy) + math.abs(sz) ~= 1 then error("not a straight line", 0) end
+                for k = 1, d do cells[#cells + 1] = { x = a.x + sx * k, y = a.y + sy * k, z = a.z + sz * k } end
+            else
+                cells[1] = c
+            end
+        end
+    end)
+    local n = #cells
+    if not ok or n == 0 or (p.y == CFG.FLOOR_Y and base.isInsideBuilding(p)) then trail.forget(); return end
+    local at
+    for i = n, 1, -1 do
+        if cells[i].x == p.x and cells[i].y == p.y and cells[i].z == p.z then at = i; break end
+    end
+    if at then
+        for j = n, at + 1, -1 do cells[j] = nil end
+    else
+        local l, m = cells[n], cells[n - 1]
+        local dx, dy, dz = p.x - l.x, p.y - l.y, p.z - l.z
+        local d = math.abs(dx) + math.abs(dy) + math.abs(dz)
+        local onLine = m and d > 0 and dx == (l.x - m.x) * d and dy == (l.y - m.y) * d and dz == (l.z - m.z) * d
+        if onLine then
+            for k = 1, d do cells[#cells + 1] = { x = l.x + (l.x - m.x) * k, y = l.y + (l.y - m.y) * k, z = l.z + (l.z - m.z) * k } end
+        elseif d == 1 then
+            cells[#cells + 1] = { x = p.x, y = p.y, z = p.z }
+        else
+            logWarn(string.format("The way I came, kept from before the reboot, does not lead to %d,%d,%d -- not trusted",
+                p.x, p.y, p.z))
+            trail.forget()
+            return
+        end
+    end
+    trail.cells, trail.at = cells, {}
+    for i, c in ipairs(cells) do trail.at[trailKey(c)] = i end
+    logInfo(string.format("The way I came: %d cell(s), kept from before the reboot", #cells))
+end
+base.restoreTrail = trail.restore
 function base.trailForTest() return trail.cells end
 
 -- R3, THE RETURN AS A PAIR (docs/superpowers/specs/2026-11-17-delivery-pair-and-
@@ -1284,7 +1383,7 @@ function base.trailTail(n)
     end
     return out
 end
-function base.walkPartnerTrail()
+function base.walkPartnerTrail(quiet)
     local t = _self.partnerTrail
     _self.partnerTrail = nil
     if type(t) ~= "table" or #t < 2 then return 0 end
@@ -1309,11 +1408,68 @@ function base.walkPartnerTrail()
         if not base.move.to(c.x, c.y, c.z) then break end
         walked = walked + 1
     end
-    if walked > 0 then
+    if walked > 0 and not quiet then
         logInfo(string.format("Walked %d cell(s) of my delivery's path, to the cell behind it at %d,%d,%d",
             walked, _self.pos.x, _self.pos.y, _self.pos.z))
     end
     return walked
+end
+
+-- FOLLOWING, IT STEPS ONTO ITS DELIVERY'S OWN CELLS (T2 shakeout-payload-e,
+-- 2026-11-23). node_217 went up and over node_235, parked in the tunnel at
+-- 196,60,-2794; its support node_237 missed the steps between -- it was still
+-- moving when they came -- and planned a straight line to where its delivery
+-- had got to, into node_235: 120 s blocked, and it gave up. Every step its
+-- delivery sends carries the last FOLLOW_TAIL_N cells it stood in; the support
+-- walks them to the cell behind it, and only with none to walk goes straight
+-- for where its delivery was, as before.
+-- As corners (base.trailCornersTail), so a support far behind -- node_52, eight
+-- seconds behind node_33 in sim w3_pair_server_crash -- is still on them.
+base.FOLLOW_TAIL_N = 200
+function base.trailCornersTail(n)
+    local t, out = base.trailTail(n), {}
+    for i, c in ipairs(t) do
+        local a, b = t[i - 1], t[i + 1]
+        if not a or not b or c.x - a.x ~= b.x - c.x or c.y - a.y ~= b.y - c.y or c.z - a.z ~= b.z - c.z then
+            out[#out + 1] = c
+        end
+    end
+    return out
+end
+function base.followPartner(pl)
+    if type(pl) ~= "table" then return false end
+    local prev, tail, p = pl.prev, nil, _self.pos
+    -- The corners back into cells; anything that is not a straight line between them is no path.
+    if type(pl.tail) == "table" then
+        tail = {}
+        for _, c in ipairs(pl.tail) do
+            local a = tail[#tail]
+            if type(c) ~= "table" or type(c.x) ~= "number" or type(c.y) ~= "number" or type(c.z) ~= "number" then tail = nil; break end
+            if a then
+                local d = math.abs(c.x - a.x) + math.abs(c.y - a.y) + math.abs(c.z - a.z)
+                local sx, sy, sz = math.floor((c.x - a.x) / math.max(d, 1)), math.floor((c.y - a.y) / math.max(d, 1)), math.floor((c.z - a.z) / math.max(d, 1))
+                if d == 0 or math.abs(sx) + math.abs(sy) + math.abs(sz) ~= 1 or #tail + d > 4000 then tail = nil; break end
+                for k = 1, d do tail[#tail + 1] = { x = a.x + sx * k, y = a.y + sy * k, z = a.z + sz * k } end
+            else
+                tail[1] = { x = c.x, y = c.y, z = c.z }
+            end
+        end
+    end
+    -- Only cells that end where it just was: going back down a shaft it climbed, its
+    -- path cuts the loop off, and the cell "behind" it there is the one below it,
+    -- where it goes next (sim w3_job_failed_lost: the support stood in it, "a turtle
+    -- is blocking down" at 196,63,-2761).
+    local b = type(tail) == "table" and #tail >= 2 and tail[#tail - 1]
+    if b and type(prev) == "table" and (b.x ~= prev.x or b.y ~= prev.y or b.z ~= prev.z) then tail = nil end
+    if type(tail) == "table" and #tail >= 2 then
+        _self.partnerTrail = tail
+        if base.walkPartnerTrail(true) > 0 then return true end
+        if p.x == b.x and p.y == b.y and p.z == b.z then return true end
+    end
+    if type(prev) == "table" and type(prev.x) == "number" and type(prev.y) == "number" and type(prev.z) == "number" then
+        return base.move.to(prev.x, prev.y, prev.z) and true or false
+    end
+    return false
 end
 
 local function applyMove(dir)
@@ -1342,14 +1498,15 @@ local function applyMove(dir)
         gpsSync()
     end
 
-    -- Delivery and miner turtles broadcast their previous position so support can follow 1 block behind
+    trail.note({ x = prevX, y = prevY, z = prevZ })
+    -- Delivery and miner turtles broadcast their previous position so support can follow 1 block behind,
+    -- and the last cells they stood in (base.followPartner): a support that missed a step walks those.
     if _self.partnerId and (_self.role == proto.ROLE.DELIVERY or _self.role == proto.ROLE.MINER) and _self.modem then
         local sig = proto.encode(proto.MSG.POSITION_UPDATE, _self.id, _self.partnerId, {
-            prev = { x=prevX, y=prevY, z=prevZ },
+            prev = { x=prevX, y=prevY, z=prevZ }, tail = base.trailCornersTail(base.FOLLOW_TAIL_N),
         })
         proto.send(_self.modem, proto.CH_LOCAL, sig)
     end
-    trail.note({ x = prevX, y = prevY, z = prevZ })
     writeJournal(nil)
 end
 

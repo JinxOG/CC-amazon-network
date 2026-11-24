@@ -55,7 +55,141 @@ local function goOut(r)
     assert(m.to(HOLE.x - 5, 60, HOLE.z))
 end
 
+-- A reboot: turtle_base reloaded over the same stub disk, as support_turtle starts it (canDig off before init).
+local function reboot(r)
+    package.loaded["turtle_base"] = nil
+    package.loaded["geofence"] = nil
+    local proto = require("protocol")
+    local base = require("turtle_base")
+    base.recoverModem()
+    base.setRoleForTest(proto.ROLE.SUPPORT)
+    base.setCanDig(false)
+    base.setDockForTest(r.dock)
+    base.initPositionForTest()
+    r.base = base
+    return base
+end
+
+-- The way out of test 2: rock east of the shaft and under the tunnel's end, so the only way home is back.
+local function shutWorld()
+    local world = {}
+    for x = HOLE.x + 1, 240 do world[x .. ",60," .. HOLE.z] = "minecraft:stone" end
+    for y = 40, 59 do world[(HOLE.x - 5) .. "," .. y .. "," .. HOLE.z] = "minecraft:stone" end
+    return world
+end
+
 return {
+    -- T2 shakeout-payload-e (2026-11-23): node_239 and node_235, rebooted out in the tunnel by the restart burst,
+    -- were given holding slots behind rock, logged "no way back is known (trail empty)" and stood in the lane to
+    -- the end; 10 supports following their deliveries out bumped into them for 120 s and gave up. The way it came
+    -- was in memory only. A turtle that cannot dig keeps it on disk, and finds it again after a reboot.
+    ["rebooted out in the tunnel, a turtle that cannot dig still knows the way it came, and goes home by it"] = function(assert_eq)
+        local r = supportAt(HOLE, shutWorld())
+        goOut(r)
+        local before = #r.base.trailForTest()
+        reboot(r)
+        local after = #r.base.trailForTest()
+        local ok, why = pcall(r.base.returnToDock)
+        local p = r.c.pos
+        assert_eq(before, 13, "the way out, before the reboot (" .. before .. " cells)")
+        assert_eq(after, before, "the same way, after it (" .. after .. " cells)")
+        assert_eq(ok, true, tostring(why))
+        assert_eq(p.x == r.dock.x and p.z == r.dock.z and p.y == 67, true,
+            string.format("it is home on its dock (%d,%d,%d; dock %d,%d)", p.x, p.y, p.z, r.dock.x, r.dock.z))
+        assert_eq(r.dug(), 0, "without digging a block")
+    end,
+
+    ["steps taken after the last corner it wrote are kept too"] = function(assert_eq)
+        local r = supportAt(HOLE, shutWorld())
+        goOut(r)
+        r.base.move.to(HOLE.x - 2, 60, HOLE.z)          -- back three: a loop cut, the trail is 10 cells
+        r.base.move.to(HOLE.x - 4, 60, HOLE.z)          -- and out two again, straight: no corner written
+        local before = #r.base.trailForTest()
+        reboot(r)
+        local last = r.base.trailForTest()[#r.base.trailForTest()]
+        assert_eq(before, 12, "the trail before the reboot (" .. before .. " cells)")
+        assert_eq(#r.base.trailForTest(), before, "and after it")
+        assert_eq(last.x .. "," .. last.y .. "," .. last.z, (HOLE.x - 4) .. ",60," .. HOLE.z, "ending where it stands")
+    end,
+
+    ["a kept way that does not lead to where it stands is not trusted"] = function(assert_eq)
+        local r = supportAt(HOLE, shutWorld())
+        goOut(r)
+        r.c.pos.x, r.c.pos.z = HOLE.x - 5, HOLE.z + 4        -- carried off it, as by a player
+        reboot(r)
+        assert_eq(#r.base.trailForTest(), 0, "no way back is assumed (" .. #r.base.trailForTest() .. " cells)")
+    end,
+
+    -- T2 shakeout-payload-e (2026-11-23): node_217 went up and over node_235, parked in the tunnel at 196,60,-2794;
+    -- its support node_237 missed the steps between (it was still moving) and planned a straight line to where its
+    -- delivery had got to -- into node_235 -- and gave up after 120 s. Each step its delivery sends now carries the
+    -- last cells it stood in, and the support walks those.
+    ["a support that missed its delivery's steps round something in the way walks its delivery's own cells"] = function(assert_eq)
+        local world = {}
+        for y = 59, 62 do for z = -2800, -2788 do world["196," .. y .. "," .. z] = "minecraft:stone" end end
+        local path = { { x = 196, y = 60, z = -2796 }, { x = 196, y = 60, z = -2795 }, { x = 196, y = 61, z = -2795 },
+                       { x = 196, y = 61, z = -2794 }, { x = 196, y = 61, z = -2793 }, { x = 196, y = 60, z = -2793 },
+                       { x = 196, y = 60, z = -2792 }, { x = 196, y = 60, z = -2791 } }
+        for _, c in ipairs(path) do world[c.x .. "," .. c.y .. "," .. c.z] = nil end
+        -- 196,60,-2794 stays solid: what its delivery went round (a parked turtle, live).
+        local r = supportAt({ x = 196, y = 60, z = -2796 }, world)
+        r.base.setPartnerId("node_d")
+        local ok = r.base.followPartner({ prev = { x = 196, y = 60, z = -2792 }, tail = path })
+        local p = r.c.pos
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "196,60,-2792", "it is one cell behind its delivery")
+        assert_eq(ok, true, "and says it got there")
+        assert_eq(r.dug(), 0, "without digging a block")
+    end,
+
+    -- Sim w3_pair_server_crash (2026-11-23): node_52 lagged eight seconds behind node_33, which had gone up and over
+    -- node_51 -- further back than eight cells -- and planned a straight line into node_51 again: 120 s, gave up.
+    -- The cells go as their corners, the last FOLLOW_TAIL_N of them, so a support far behind is still on them.
+    ["a support far behind its delivery still finds its delivery's cells, sent as their corners"] = function(assert_eq)
+        local world = {}
+        for y = 59, 62 do for z = -2800, -2760 do world["196," .. y .. "," .. z] = "minecraft:stone" end end
+        local path = { { x = 196, y = 60, z = -2796 }, { x = 196, y = 60, z = -2795 }, { x = 196, y = 61, z = -2795 },
+                       { x = 196, y = 61, z = -2793 } }
+        for z = -2793, -2770 do path[#path + 1] = { x = 196, y = 60, z = z } end
+        for _, c in ipairs(path) do world[c.x .. "," .. c.y .. "," .. c.z] = nil end
+        world["196,61,-2794"] = nil
+        local r = supportAt({ x = 196, y = 60, z = -2796 }, world)
+        r.base.setPartnerId("node_d")
+        local corners = { path[1], path[2], path[3], { x = 196, y = 61, z = -2793 }, { x = 196, y = 60, z = -2793 },
+                          { x = 196, y = 60, z = -2770 } }
+        r.base.followPartner({ prev = { x = 196, y = 60, z = -2771 }, tail = corners })
+        local p = r.c.pos
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "196,60,-2771", "it is one cell behind its delivery, 25 cells on")
+        assert_eq(r.dug(), 0, "without digging a block")
+    end,
+
+    ["with no cells of its delivery's to walk, a support goes where its delivery was, as before"] = function(assert_eq)
+        local r = supportAt({ x = 130, y = 60, z = -2829 })
+        r.base.followPartner({ prev = { x = 131, y = 60, z = -2829 } })
+        assert_eq(r.c.pos.x .. "," .. r.c.pos.z, "131,-2829", "one step on")
+    end,
+
+    ["a delivery's step says the last cells it stood in"] = function(assert_eq)
+        local r = supportAt(HOLE)
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_s")
+        assert(r.base.move.to(HOLE.x, 60, HOLE.z))
+        local last
+        for _, b in ipairs(r.sent) do if b:find("POSITION_UPDATE", 1, true) then last = b end end
+        local m = textutils.unserialise(last)
+        local tail = m and m.payload and m.payload.tail
+        local t = tail and tail[#tail]
+        assert_eq(type(tail), "table", "a tail is sent")
+        assert_eq(t and (t.x .. "," .. t.y .. "," .. t.z), HOLE.x .. ",60," .. HOLE.z, "ending where the delivery now stands")
+    end,
+
+    ["a turtle that can dig keeps no trail on disk"] = function(assert_eq)
+        local r = supportAt(HOLE, shutWorld())
+        r.base.setCanDig(true)
+        goOut(r)
+        assert_eq(fs.exists("trail.dat"), false, "nothing written")
+    end,
+
     ["the way it came is kept as a simple path from the building's floor"] = function(assert_eq)
         local r = supportAt(HOLE)
         goOut(r)
