@@ -263,6 +263,7 @@ local ok, err = pcall(base.run, function(job)
     end
     local d      = params.destination
     base.setPartnerId(params.partnerId)
+    base.setFollowGate(false)   -- on once its support is out with it (below)
 
     -- ── Step 1: Queue with warehouse, depart immediately ─────────────────────
     -- Send ITEM_REQUEST to get a queue slot. Turtle carries only the entangled
@@ -313,6 +314,9 @@ local ok, err = pcall(base.run, function(job)
     if not ok then
         return base.sendFailed("departure_failed: " .. (err or "?"), true)
     end
+    -- Out with its support: from here it never steps into a chunk its support is
+    -- not in the edge of (base.awaitSupportInChunk; chunky radius 0).
+    base.setFollowGate(true)
 
     -- ── Step 3: Travel underground to destination X,Z ─────────────────────────
 
@@ -326,6 +330,10 @@ local ok, err = pcall(base.run, function(job)
 
     -- ── Step 4: Ascend to delivery Y ─────────────────────────────────────────
 
+    -- Not ASCENDING until its support stands in this chunk: told to hold, it holds
+    -- where it is, and node_234 held 21 blocks back while node_221 climbed out of
+    -- the one chunk it loads (T2 shakeout-payload-e).
+    if base.getPartnerId() then base.awaitSupportInChunk("before ascending") end
     local savedPartnerId = base.getPartnerId()
     base.setPartnerId(nil)
     if savedPartnerId then
@@ -606,6 +614,7 @@ local ok, err = pcall(base.run, function(job)
     -- ── CHECKPOINT 4: ARRIVAL ────────────────────────────────────────────────
     checkEC("ARRIVAL", false)
 
+    base.setFollowGate(false)
     if not base.isRecalled() then
         base.sendComplete({ destination = d })
     end

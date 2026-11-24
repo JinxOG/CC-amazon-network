@@ -162,6 +162,90 @@ return {
         assert_eq(r.dug(), 0, "without digging a block")
     end,
 
+    -- T2 shakeout-payload-e (2026-11-23): node_221 reached its destination 160,67,-2752, in chunk 10,-172, with its
+    -- support node_234 21 blocks back in chunk z -174; the support's chunky upgrade loads only its own chunk
+    -- (chunkyTurtleRadius = 0), and the delivery stopped dead there. A delivery never steps into a new chunk until
+    -- its support stands in the chunk it is leaving: it asks (SUPPORT_WHERE) and goes on its support's answer.
+    ["a delivery does not step into a new chunk until its support is in the chunk it is leaving"] = function(assert_eq)
+        local r = supportAt({ x = 126, y = 60, z = -2829 })
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_s")
+        r.base.setFollowGate(true)
+        local asks, posAtAsk, answers = 0, {}, { { x = 100, y = 60, z = -2829 }, { x = 125, y = 60, z = -2829 } }
+        peripheral.find = function()
+            return { open = function() end, isOpen = function() return true end, close = function() end,
+                     transmit = function(ch, rr, body)
+                         local m = textutils.unserialise(body)
+                         if m and m.type == proto.MSG.SUPPORT_WHERE then
+                             asks = asks + 1
+                             if asks > 20 then error("the delivery asked 20 times", 0) end
+                             posAtAsk[#posAtAsk + 1] = r.c.pos.x
+                             -- answered at once where it stands (behind, chunk 6), then again from its follow loop
+                             -- once it has walked up behind its delivery (chunk 7)
+                             for _, a in ipairs(answers) do
+                                 os.queueEvent("modem_message", "top", proto.CH_LOCAL, 0,
+                                     proto.encode(proto.MSG.SUPPORT_HERE, "node_s", "node_retrace_test", a), 5)
+                             end
+                         end
+                     end }
+        end
+        r.base.recoverModem()
+        r.base.setIdForTest("node_retrace_test")
+        local unreadAtCrossing
+        local fwd = turtle.forward
+        turtle.forward = function(...)
+            if r.c.pos.x == 127 then           -- the step into chunk 8: how many answers are still unread?
+                unreadAtCrossing = 0
+                for _, ev in ipairs(r.c.events) do if ev[1] == "modem_message" then unreadAtCrossing = unreadAtCrossing + 1 end end
+            end
+            return fwd(...)
+        end
+        local ok = r.base.move.to(129, 60, -2829)            -- 127 is chunk 7's last column, 128 is chunk 8
+        assert_eq(ok, true, "it gets there")
+        assert_eq(r.c.pos.x, 129, "to 129")
+        assert_eq(asks, 1, "one ask, gone on the answer from its chunk, not the first (" .. asks .. " asks)")
+        assert_eq(posAtAsk[1], 127, "it asked standing in the last column of chunk 7, not past it")
+        assert_eq(unreadAtCrossing, 0, "it stepped into chunk 8 only after the answer from chunk 7, not on the first")
+    end,
+
+    ["a delivery whose support gives up stops at the chunk's edge, and its move fails"] = function(assert_eq)
+        local r = supportAt({ x = 126, y = 60, z = -2829 })
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_s")
+        r.base.setFollowGate(true)
+        peripheral.find = function()
+            return { open = function() end, isOpen = function() return true end, close = function() end,
+                     transmit = function(ch, rr, body)
+                         local m = textutils.unserialise(body)
+                         if m and m.type == proto.MSG.SUPPORT_WHERE then
+                             os.queueEvent("modem_message", "top", proto.CH_LOCAL, 0,
+                                 proto.encode(proto.MSG.JOB_ABORT, "node_s", "node_retrace_test", { reason = "recalled" }), 5)
+                             -- the wait's 1 s timer, which the stub never fires by itself (the next id it hands out)
+                             os.queueEvent("timer", r.c.timerId + 1)
+                         end
+                     end }
+        end
+        r.base.recoverModem()
+        r.base.setIdForTest("node_retrace_test")
+        local ok = r.base.move.to(129, 60, -2829)
+        assert_eq(ok, false, "the move fails")
+        assert_eq(r.c.pos.x, 127, "at the last column of its chunk")
+        assert_eq(r.base.getPartnerId(), nil, "and it has no support any more")
+    end,
+
+    ["without the gate on, a delivery crosses chunks without asking, as before"] = function(assert_eq)
+        local r = supportAt({ x = 126, y = 60, z = -2829 })
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_s")
+        assert(r.base.move.to(129, 60, -2829))
+        local asked = false
+        for _, b in ipairs(r.sent) do if b:find("SUPPORT_WHERE", 1, true) then asked = true end end
+        assert_eq(asked, false, "no SUPPORT_WHERE")
+    end,
+
     ["with no cells of its delivery's to walk, a support goes where its delivery was, as before"] = function(assert_eq)
         local r = supportAt({ x = 130, y = 60, z = -2829 })
         r.base.followPartner({ prev = { x = 131, y = 60, z = -2829 } })

@@ -396,6 +396,11 @@ local TRANSIENT_TYPES = {
     -- Noted on sight (base.reportFailed's repeat stops); nothing waits for it.
     [proto.MSG.JOB_FAILED_ACK]  = true,
     [proto.MSG.POSITION_UPDATE] = true,
+    -- The chunk gate's question and answer (base.awaitSupportInChunk): asked again until
+    -- answered, so a late copy is worth nothing -- a support acting on a stale one would
+    -- walk back to where its delivery used to be.
+    [proto.MSG.SUPPORT_WHERE]   = true,
+    [proto.MSG.SUPPORT_HERE]    = true,
     -- An ATC answer is for the step waiting on it right now; a late one is noise.
     [proto.MSG.ATC_REPLY]       = true,
     -- A delivery's "I am here" (R4): read live by its following support; never
@@ -537,6 +542,15 @@ local function firstSight(msg)
         -- missed its delivery's PAIR_ALIVE (live-only) and its RETURN_TO_DOCK (sent
         -- once) while the delivery went home without it (sim w3_pair_server_crash).
         _self.partnerHeardAt = os.epoch("utc")
+        -- ITS DELIVERY ASKS WHERE IT IS (base.awaitSupportInChunk): answered on sight,
+        -- whatever it is doing. Answered only by the follow loop, a support still
+        -- coming down the dispatch shaft never answered, and its delivery, standing at
+        -- the shaft's foot -- the cell the support had to come down into -- waited for
+        -- it for good (sim w3_pair_chunk_lag). The follow loop also walks up behind.
+        if msg.type == proto.MSG.SUPPORT_WHERE and _self.role == proto.ROLE.SUPPORT then
+            pcall(base.signalPartnerDirect, proto.MSG.SUPPORT_HERE, msg.from,
+                { x = _self.pos.x, y = _self.pos.y, z = _self.pos.z })
+        end
         if msg.type == proto.MSG.RETURN_TO_DOCK then
             _self.partnerHome = true
             -- R3: tell it this one heard, so it stops repeating it.
@@ -1176,6 +1190,7 @@ end
 function base.detectFacingForTest() return detectFacing() end
 function base.setFacingUnknownForTest() _self.facingKnown = false end   -- test seam
 function base.setPosForTest(p) _self.pos = { x = p.x, y = p.y, z = p.z } end     -- test seam
+function base.setIdForTest(id) _self.id = id end                                   -- test seam
 function base.initPositionForTest() return initPosition() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
@@ -2186,6 +2201,74 @@ function atc.report()
 end
 base.atc = atc
 
+-- A DELIVERY NEVER LEAVES ITS SUPPORT'S CHUNK (T2 shakeout-payload-e, 2026-11-23;
+-- Head Engineer ruling 2026-11-24). The support is the pair's chunk loader, and at
+-- Advanced Peripherals' default chunkyTurtleRadius = 0 it loads only the chunk it
+-- stands in. node_221 reached its destination 160,67,-2752, chunk 10,-172, with
+-- node_234 21 blocks back in chunk z -174, and stopped dead there: nothing else
+-- loads ground south of the base. So before a step into a new chunk -- and before
+-- ASCENDING -- the delivery asks its support where it is (SUPPORT_WHERE, carrying
+-- its own cells, so a support that lagged walks up behind it) and goes on the
+-- answer that puts its support in the chunk it is leaving. The ask is repeated
+-- for a lost message; the wait ends on the answer, or on the support giving up
+-- (JOB_ABORT), or -- the last line, as for a support whose delivery died (R4) --
+-- on SUPPORT_SILENT_S without a word from it. On only from base.setFollowGate:
+-- while its support is actually following it out in the world.
+base.SUPPORT_SILENT_S = 300
+function base.setFollowGate(on) _self.followGate = on and true or nil end
+function base.awaitSupportInChunk(why)
+    local partner = _self.partnerId
+    if not partner or not _self.modem then return true end
+    local cx, cz = math.floor(_self.pos.x / 16), math.floor(_self.pos.z / 16)
+    local nextAsk, heard, report = 0, os.epoch("utc"), nil
+    while _self.partnerId == partner do
+        if base.isRecalled() then return true end
+        local now = os.epoch("utc")
+        if now >= nextAsk then
+            nextAsk = now + 3000
+            local last2 = base.trailTail(2)
+            proto.send(_self.modem, proto.CH_LOCAL, proto.encode(proto.MSG.SUPPORT_WHERE, _self.id, partner,
+                { prev = #last2 == 2 and last2[1] or nil, tail = base.trailCornersTail(base.FOLLOW_TAIL_N) }))
+        end
+        local msg = base.receive(1)
+        if msg and msg.from == partner then
+            heard = os.epoch("utc")
+            local pl = type(msg.payload) == "table" and msg.payload or {}
+            if msg.type == proto.MSG.SUPPORT_HERE and type(pl.x) == "number" and type(pl.z) == "number" then
+                if math.floor(pl.x / 16) == cx and math.floor(pl.z / 16) == cz then return true end
+                nextAsk = os.epoch("utc") + 1000   -- not here yet: asked again as it walks up behind
+            elseif msg.type == proto.MSG.JOB_ABORT and (tonumber(msg.ts) or 0) >= (_self.jobSince or 0) then
+                logWarn(string.format("Support %s gave up (%s) at the edge of chunk %d,%d -- not going on without it",
+                    tostring(partner), tostring(pl.reason), cx, cz))
+                _self.partnerId = nil
+                return false
+            end
+        end
+        if os.epoch("utc") - heard > base.SUPPORT_SILENT_S * 1000 then
+            logWarn(string.format("Support %s silent %ds at the edge of chunk %d,%d -- taken for gone",
+                tostring(partner), base.SUPPORT_SILENT_S, cx, cz))
+            _self.partnerId = nil
+            return false
+        end
+        report = report or waitReporter(function()
+            return string.format("waiting for my support %s to reach chunk %d,%d (%s)", tostring(partner), cx, cz, tostring(why))
+        end, os.clock())
+        report(os.clock())
+    end
+    return _self.partnerId ~= nil
+end
+
+-- The step that crosses into a new chunk waits for the support (above).
+function base.chunkGate(dir)
+    if not (_self.followGate and _self.partnerId and _self.role == proto.ROLE.DELIVERY) then return true end
+    if dir ~= "forward" and dir ~= "back" then return true end
+    local nx, nz = projectStep(dir)
+    if math.floor(nx / 16) == math.floor(_self.pos.x / 16) and math.floor(nz / 16) == math.floor(_self.pos.z / 16) then
+        return true
+    end
+    return base.awaitSupportInChunk(string.format("stepping into chunk %d,%d", math.floor(nx / 16), math.floor(nz / 16)))
+end
+
 local function tryMove(digFn, dir)
     -- NO TURTLE MOVES AFTER BOOT ON A GUESS (recovery layer release 2). Only
     -- miners ever called waitForPositionFix; delivery and support moved on
@@ -2302,6 +2385,7 @@ local function tryMove(digFn, dir)
         atcFrom, atcInto = atc.here(), atc.section(nx, ny, nz)
         if atcInto and atcInto ~= atcFrom then atc.waitEnter(atcInto, atcFrom) end
     end
+    if not base.chunkGate(dir) then return false, "support not with me at a chunk's edge" end
     local inBase = atcFrom ~= nil or atcInto ~= nil
 
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES

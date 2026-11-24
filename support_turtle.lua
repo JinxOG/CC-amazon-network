@@ -190,6 +190,15 @@ local function supportJob(job)
             -- way again. DESCENDED is sent once: lost in a radio loss, the support
             -- held on, its delivery went home alone and out of range, and the support
             -- went home alone 300 s later (sim w3_side_atc, node_55).
+            -- ITS DELIVERY AT A CHUNK'S EDGE (base.awaitSupportInChunk): up behind it by
+            -- its own cells, then where it stands. It only asks while travelling, so this
+            -- is also its DESCENDED, as a position heard while holding is (R4).
+            if msg.type == proto.MSG.SUPPORT_WHERE then
+                ascending = false
+                base.followPartner(msg.payload)
+                local p = base.getPos()
+                base.signalPartnerDirect(proto.MSG.SUPPORT_HERE, partnerId, { x = p.x, y = p.y, z = p.z })
+            end
             if msg.type == proto.MSG.POSITION_UPDATE and ascending then
                 ascending = false
                 print("Delivery moving again -- resuming follow (its DESCENDED did not reach me)")

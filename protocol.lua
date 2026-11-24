@@ -73,6 +73,8 @@ proto.MSG = {
 
     -- Real-time follow signals (CH_LOCAL)
     POSITION_UPDATE = "POSITION_UPDATE", -- delivery → support: here is where I just was
+    SUPPORT_WHERE   = "SUPPORT_WHERE",   -- delivery → support: before a new chunk -- come up behind me (my cells) and say where you are
+    SUPPORT_HERE    = "SUPPORT_HERE",    -- support → delivery: where I stand now (x, y, z)
     ASCENDING       = "ASCENDING",       -- delivery → support: I'm going up, hold position
     DESCENDED       = "DESCENDED",       -- delivery → support: I'm back underground, resume
 
