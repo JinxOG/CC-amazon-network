@@ -17,7 +17,58 @@ local function fresh()
     return base, sent
 end
 
+-- A docked turtle whose facing check the ATC refuses at boot (T2 shakeout-payload-g, 01:44: 9 docked turtles raised
+-- NEEDS HANDS on the first refusal, after the restart, and were granted 3-4 s later). Hands do not help a turtle the
+-- ATC holds: a refusal still standing a minute on says "atc_wait", never stuck_no_fix (Head Engineer, 2026-11-24).
+local function refusedAtBoot(grantAfterNaps)
+    -- bay 4 row A's dock (node_441's): in no section, N4 beside it
+    local c = stub.install({ pos = { x = 197, y = 67, z = -2797, facing = 0 } })
+    gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+    package.loaded["turtle_base"] = nil
+    package.loaded["geofence"] = nil
+    local base = require("turtle_base")
+    local sent = {}
+    peripheral.find = function()
+        return { transmit = function(ch, rr, body) sent[#sent + 1] = tostring(body) end,
+                 open = function() end, isOpen = function() return true end, close = function() end }
+    end
+    base.recoverModem()
+    local atc = base.atc
+    atc.ENABLED = true
+    atc.ensure = function() return true end
+    base.gpsSync()
+    base.setFacingUnknownForTest()
+    local naps, savedSleep, savedAsk = 0, sleep, atc.ask
+    sleep = function() naps = naps + 1 end
+    atc.ask = function(t, payload)
+        if naps < grantAfterNaps then return { ok = false, why = "busy at S1" } end
+        return { ok = true }
+    end
+    base.waitForPositionFix("test")
+    sleep, atc.ask = savedSleep, savedAsk
+    local function count(needle)
+        local n = 0
+        for _, b in ipairs(sent) do if b:find(needle, 1, true) then n = n + 1 end end
+        return n
+    end
+    return count
+end
+
 return {
+    ["a refusal from the ATC at boot that clears in seconds raises nothing"] = function(assert_eq)
+        local count = refusedAtBoot(2)
+        assert_eq(count("stuck_no_fix"), 0, "no stuck_no_fix")
+        assert_eq(count("atc_wait"), 0, "and no atc_wait")
+    end,
+
+    ["a refusal from the ATC still standing a minute on says atc_wait, never stuck_no_fix"] = function(assert_eq)
+        local count = refusedAtBoot(14)
+        assert_eq(count("stuck_no_fix"), 0, "no stuck_no_fix: hands do not help a turtle the ATC holds")
+        assert_eq(count("atc_wait: facing unknown at 197,67,-2797 (waiting for the ATC to grant the cells around it: busy at S1)") >= 1,
+            true, "atc_wait, with where and the ATC's why (" .. count("atc_wait") .. ")")
+        assert_eq(count("measured:"), 1, "and that it measured, once it could")
+    end,
+
     -- 15 docked turtles in the 150-turtle boot rush (sim, 2026-11-03) were marked STUCK while they waited, and
     -- stayed ERROR -- which the server never dispatches -- after they were moving again.
     ["a turtle that reported STUCK goes back to its status once it moves again"] = function(assert_eq)

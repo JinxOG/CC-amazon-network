@@ -168,8 +168,11 @@ function Synth.layout(waypoints, opts)
   end
   for i = 1, n_support do
     local d = take("support")
+    -- A support is its delivery's chunk loader (support_turtle.lua's header): the chunky upgrade, not a pickaxe --
+    -- it never digs (base.setCanDig(false)). Without it nothing loaded a delivery past base_loaded's edge, and every
+    -- one froze at the first block beyond it (W3, sim w3_retrace_head_on, 2026-11-24).
     add{ id = (i <= 49) and (50 + i) or (4000 + i), kind = "turtle", role = "support", pos = { x = d.x, y = d.y, z = d.z, facing = 0 },
-      turtle = { equipped = { left = MODEM, right = PICK }, inv = {
+      turtle = { equipped = { left = MODEM, right = "advancedperipherals:chunk_controller" }, inv = {
         [16] = { name = "enderstorage:ender_chest", count = 1, frequency = "fuel" } } } }
   end
   -- opts.preset_docks: the server starts knowing who sits in which dock, as a real base does (its
