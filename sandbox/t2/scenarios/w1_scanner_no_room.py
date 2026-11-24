@@ -51,7 +51,13 @@ NAME = "w1_scanner_no_room"
 ZONE = {"x1": 1920, "z1": -2624, "x2": 1920, "z2": -2624, "minerCount": 1}
 
 MINE_LUA_FIRST, MINE_LUA_LAST = 5, 13
-FILL_ITEM = "enderstorage:ender_chest"
+# NON-STACKABLE, deliberately. The first attempt used enderstorage:ender_chest:
+# it IS hardware, so the dump keeps it, but ender chests STACK, so nine slots
+# holding one each can collapse into one slot the moment anything transfers
+# them -- a pack that is full at dispatch and not full at the dig. Tools do not
+# stack, and the pickaxe is hardware (equipment.ITEMS.PICKAXE), so nine of them
+# cannot be consolidated into free space.
+FILL_ITEM = "minecraft:diamond_pickaxe"
 
 NEEDS_HANDS = "slot_1_must_hold_the_geo_scanner"
 SCAN_REFUSED = "REFUSING to dig the scanner up"
@@ -72,30 +78,40 @@ def steps(ctx):
     ctx.expect(bool(miners), "found miners to stage (%s)" % miners)
     if not miners:
         return
-    cid = miners[0]
-    node = "node_%d" % cid
-    ctx.note("staging %s; miners present: %s" % (node, miners))
+    # EVERY MINER, not just the first. Run w1-scanner-room-a staged node_179 and
+    # the server dispatched the job to node_183, so the staged pack was never
+    # involved and the run measured nothing about the guard. The anchor "a miner
+    # reached a scan level" passed on an unstaged miner with a normal pack. Which
+    # node the dispatcher picks is its business, so stage all of them.
+    ctx.note("staging every miner: %s" % miners)
 
     # ---- STAGE, AND VERIFY IT TOOK ----
-    staged = 0
-    for lua in range(MINE_LUA_FIRST, MINE_LUA_LAST + 1):
-        try:
-            got = c.set_slot(cid, lua - 1, FILL_ITEM, 1)      # NBT slots are 0-based
-        except Exception as e:  # noqa: BLE001 - a refused write is a finding
-            ctx.note("slot %d (NBT %d) refused: %s" % (lua, lua - 1, e))
-            continue
-        if FILL_ITEM.split(":")[-1] in str(got):
-            staged += 1
-        else:
-            ctx.note("slot %d (NBT %d) read back as %s" % (lua, lua - 1, got))
-    want = MINE_LUA_LAST - MINE_LUA_FIRST + 1
-    ctx.note("payload slots staged: %d of %d" % (staged, want))
+    per = MINE_LUA_LAST - MINE_LUA_FIRST + 1
+    want = per * len(miners)
+    staged, fully = 0, []
+    for cid in miners:
+        got_here = 0
+        for lua in range(MINE_LUA_FIRST, MINE_LUA_LAST + 1):
+            try:
+                got = c.set_slot(cid, lua - 1, FILL_ITEM, 1)   # NBT slots are 0-based
+            except Exception as e:  # noqa: BLE001 - a refused write is a finding
+                ctx.note("node_%d slot %d (NBT %d) refused: %s" % (cid, lua, lua - 1, e))
+                continue
+            if FILL_ITEM.split(":")[-1] in str(got):
+                got_here += 1
+            else:
+                ctx.note("node_%d slot %d (NBT %d) read back as %s" % (cid, lua, lua - 1, got))
+        staged += got_here
+        if got_here == per:
+            fully.append(cid)
+        ctx.note("node_%d: %d of %d payload slots staged" % (cid, got_here, per))
     ctx.expect(staged == want,
-               "every mining slot of %s holds an UNDROPPABLE hardware item before the job "
-               "(%d of %d, read back from the world) -- with the pack not actually full and "
-               "unbankable the guard cannot fire and this run would prove nothing"
-               % (node, staged, want))
-    if staged == 0:
+               "EVERY miner's mining slots hold an UNDROPPABLE, NON-STACKABLE hardware item "
+               "before the job (%d of %d across %d miners, read back from the world; fully "
+               "staged: %s) -- whichever miner the dispatcher picks must be a staged one, or "
+               "the guard cannot fire and this run proves nothing"
+               % (staged, want, len(miners), fully))
+    if not fully:
         return
 
     base = {k: len(ctx.log_lines(k)) for k in
@@ -104,10 +120,20 @@ def steps(ctx):
 
     # ---- ANCHOR: it reached a scan level, so the pickup was reached ----
     scanned = ctx.wait_until(lambda: len(ctx.log_lines(SCANNING)) > base[SCANNING], 2 * 3600)
-    ctx.expect(bool(scanned),
-               "a miner reached a scan level (%d new SCANNING lines) -- the scanner pickup "
-               "happens once per level, so without this nothing below is about this card"
-               % (len(ctx.log_lines(SCANNING)) - base[SCANNING]))
+    rows = ctx.log_lines(SCANNING)[base[SCANNING]:]
+    who = set()
+    for l in rows:
+        for tok in l.split():
+            if tok.startswith("node_") and tok[5:].isdigit():
+                who.add(int(tok[5:]))
+    ctx.note("miners that reached a scan level: %s" % sorted(who))
+    # NAMED, and required to be a STAGED miner. The first run passed this check
+    # on node_183 while node_179 was the one staged, so it proved nothing.
+    ctx.expect(bool(scanned) and bool(who & set(fully)),
+               "a STAGED miner reached a scan level (%d new SCANNING lines, from %s; staged: "
+               "%s) -- the pickup happens once per level, and a scan by an unstaged miner "
+               "says nothing about a guard that only fires on a full pack"
+               % (len(rows), sorted(who), fully))
     if not scanned:
         ctx.note("INCONCLUSIVE: never reached a scan level, so the pickup never ran")
         return
