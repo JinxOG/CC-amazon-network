@@ -67,6 +67,27 @@ return {
         assert_eq(ban, 1, "and the ATC is told, once (" .. ban .. ")")
     end,
 
+    -- T2 shakeout-payload-i: the restart burst at 11:57 left node_215 as THREE turtles, at 191, 207 and 223,67,-2801,
+    -- each with its own seq (at 12:44:08, seq 3960 and 3943 still interleaving). Two streams are not the only case.
+    ["three seq streams from one id, interleaved, are a duplicated turtle"] = function(assert_eq)
+        local T, at, restore = server()
+        local C = { x = 223, y = 67, z = -2801 }
+        local ok, err = pcall(function()
+            for k = 0, 9 do
+                at(k * 600);       T.registry.dupCheck(msg(6 + k, A))
+                at(k * 600 + 200); T.registry.dupCheck(msg(17 + k, B))
+                at(k * 600 + 400); T.registry.dupCheck(msg(40 + k, C))
+            end
+        end)
+        local t = T.state.registry["node_9"]
+        local ban = sent(T, proto.MSG.ATC_BAN, proto.CH_ATC)
+        restore()
+        assert_eq(ok, true, tostring(err))
+        assert_eq(tostring(t.needsHands):find("^duplicate_id: node_9 heard at ") ~= nil, true,
+            "NEEDS HANDS duplicate_id (" .. tostring(t.needsHands) .. ")")
+        assert_eq(ban, 1, "and the ATC is told, once (" .. ban .. ")")
+    end,
+
     ["a reboot starts the seq again, and is not a duplicate"] = function(assert_eq)
         local T, at, restore = server()
         for k = 0, 9 do at(k * 600); T.registry.dupCheck(msg(500 + k, A)) end
