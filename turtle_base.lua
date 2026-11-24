@@ -1197,6 +1197,7 @@ function base.detectFacingForTest() return detectFacing() end
 function base.setFacingUnknownForTest() _self.facingKnown = false end   -- test seam
 function base.setPosForTest(p) _self.pos = { x = p.x, y = p.y, z = p.z } end     -- test seam
 function base.setIdForTest(id) _self.id = id end                                   -- test seam
+function base.setServerDownForTest(v) _self.serverDown = v and true or false end    -- test seam
 function base.initPositionForTest() return initPosition() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
@@ -2476,7 +2477,11 @@ local function tryMove(digFn, dir)
           and not _self.autonomousReturn
           and not _self.homing
           and not (_self.role == proto.ROLE.SUPPORT and _self.partnerId)
-          and not (atc.ENABLED and atc.here()) do
+          and not (atc.ENABLED and atc.here())
+          -- Nor a turtle holding an admitted booking or a path: what it holds, every turtle
+          -- behind it waits for. node_221, admitted with node_225, paused on its dock -- in no
+          -- section -- and held DH J1 N1 W1 10 minutes (T2 shakeout-payload-g, 02:53).
+          and not (atc.ENABLED and (atc.route ~= nil or atc.path ~= nil)) do
         -- Escape hatch for a solo miner holding a placed loader (see
         -- base.setServerDownEscape). nil for every other role, so their loop
         -- body stays exactly `sleep(2)`. pcall'd so a faulty predicate can
