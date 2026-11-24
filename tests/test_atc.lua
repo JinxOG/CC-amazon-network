@@ -906,4 +906,14 @@ return {
         assert_eq(dep.ok, false, "a departure through the cell it stands in is refused (" .. tostring(dep.why) .. ")")
         assert_eq(dep2.ok, false, "and still after it asks again (" .. tostring(dep2.why) .. ")")
     end,
+
+    -- T2 shakeout-payload-h: node_369 and node_377, on bay 2 row A's docks, waited "atc_wait: ... (... busy)" to the end
+    -- of the run; the refusal named neither the section nor who held it (N2, in node_397's stale hold).
+    ["a one-step refusal names the section and who holds it"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "node_397", { op = "enter", sec = "N2" }, t)
+        local r = core.handle(st, "node_369", { op = "enter", sec = "N2" }, t + 100)
+        assert_eq(r.ok, false, "refused")
+        assert_eq(r.why, "busy at N2 (node_397)", "and says where and whose (" .. tostring(r.why) .. ")")
+    end,
 }

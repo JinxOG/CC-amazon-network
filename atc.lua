@@ -591,7 +591,9 @@ function core.handle(st, id, p, now)
                 table.insert(q, 1, arid)
                 return { ok = true }
             end
-            return { ok = false, why = "busy", ahead = #q }
+            -- Named: "busy" alone left two docked turtles waiting to the end of a run with no word
+            -- of which section, or whose (T2 shakeout-payload-h: N2, node_397's stale hold).
+            return { ok = false, why = string.format("busy at %s (%s)", s, tostring(st.res[q[1]] and st.res[q[1]].id or "?")), ahead = #q }
         end
         if headIsTurtle(st, s, id, r.group) then
             r.entered[s] = true
@@ -611,7 +613,7 @@ function core.handle(st, id, p, now)
                 r.entered[s] = true
                 return { ok = true }
             end
-            return { ok = false, why = "busy", ahead = #q }
+            return { ok = false, why = string.format("busy at %s (%s)", s, tostring(st.res[q[1]] and st.res[q[1]].id or "?")), ahead = #q }
         end
         return { ok = false, why = "ahead", ahead = #q }
     end
