@@ -375,6 +375,9 @@ Q_SCAN    = "the placed geo scanner is recorded before it is placed (SOURCE-ONLY
 # intended test, and naming the wrong one is what the harness caught.
 Q_ARRIVE  = "ensureEquipmentAboard sucks it back when the dig dropped it"
 Q_KIND    = "scanner recovery runs at boot and verifies identity (SOURCE-ONLY, weaker)"
+# The world floor is the sector's bottom, not a scan failure (2026-11-24).
+F_FLOOR   = "isWorldFloor recognises bedrock and nothing else"
+F_STRUCT  = "the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"
 J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
 B_REC     = "placeLoader records the label of the loader it put down"
 B_ITEM    = "a non-turtle item with the same label is not proof"
@@ -2205,6 +2208,15 @@ MUTANTS = [
      [('        base.ledger.record("geo_scanner", {', '        local _norecord = ({')], Q_KIND),
     ("clearing the scanner leaves a ledger ghost behind", "ore_turtle.lua",
      [('    pcall(base.ledger.clear, "geo_scanner")\n', '')], Q_KIND),
+
+    # ---- the world floor is the sector's bottom, not a failure -------------
+    ("deepslate counts as the bottom of the world", "mine_flow.lua",
+     [('    return blockName == "minecraft:bedrock"',
+       '    return blockName == "minecraft:bedrock" or blockName == "minecraft:deepslate"')], F_FLOOR),
+    ("nothing is ever the bottom of the world", "mine_flow.lua",
+     [('    return blockName == "minecraft:bedrock"', '    return false')], F_FLOOR),
+    ("hitting the floor abandons the sector again", "ore_turtle.lua",
+     [('            if scanFail == "world_floor" then', '            if false then')], F_STRUCT),
 
     ("the arrival check is stubbed out, so a dropped item reads as aboard", "mine_flow.lua",
      [('    if equipment.findSlot(itemName) then return true, "aboard" end',

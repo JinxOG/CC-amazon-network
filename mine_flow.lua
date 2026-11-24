@@ -1516,6 +1516,28 @@ end
 -- are kept because min/max is the correct general statement of the intent and
 -- the alternative is code that silently depends on censusBand's ordering. The
 -- other six mutants of this function die, the `hi` guard's among them.
+--- Is this block the bottom of the world?
+--
+-- THE FAULT IT EXISTS FOR (every T2 side test; shakeout-side-h 16 occurrences,
+-- and only 1 MINE completed in 3 h with 4 miners). Miners reported
+-- `scan_level_incomplete: place_failed at Y=0` and handed the job straight back.
+-- Measured from side-h's log: every census that ever ran was Y 0..32, 22 of
+-- them, and ZERO scans succeeded below 0 anywhere in the run; a failing miner's
+-- real height was y=2. They never reached Y=0 at all.
+--
+-- The mining sites near the service centre are OLD pre-1.18 chunks whose floor
+-- is bedrock at about y 0-4, so the level below cannot be placed into -- there
+-- is nothing there to place into. The live world has the same old chunks near
+-- the base, so this is a live miner bug, not a test-world artefact.
+--
+-- BEDROCK AND NOTHING ELSE. Deepslate is the 1.18 transition and perfectly
+-- diggable; treating it as the floor would stop every miner at y=0 in a NEW
+-- chunk too, turning a fix for old chunks into a fault everywhere. Hard is not
+-- the same as the end of the world, so obsidian is not the floor either.
+function mine_flow.isWorldFloor(blockName)
+    return blockName == "minecraft:bedrock"
+end
+
 --- Free slots across the WHOLE inventory, hardware slots included.
 --
 -- A dig puts its drop in the selected slot or the first free one anywhere, so

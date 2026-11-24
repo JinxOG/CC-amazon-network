@@ -2551,6 +2551,39 @@ return {
     -- NOTHING CENSUSED IS NIL, NOT A ZERO-WIDTH BAND. An empty band reads as a
     -- fact about the ground; nil reads as "this survey did not say", which is
     -- the only true answer.
+    -- THE WORLD FLOOR IS THE SECTOR'S BOTTOM, NOT A SCAN FAILURE.
+    --
+    -- THE FAULT (every T2 side test; shakeout-side-h 16 occurrences, side-e 10,
+    -- side-d 5; side-h completed only 1 MINE in 3 h with 4 miners). Miners
+    -- reported `scan_level_incomplete: place_failed at Y=0` and handed the job
+    -- back, over and over. Measured from side-h's own log: EVERY census that
+    -- ever ran was Y 0..32 -- 22 of them -- and ZERO scans succeeded below 0
+    -- anywhere in the run. A failing miner's real height was y=2 ("GPS resync:
+    -- 512,2,-2336", 21 s after its three failures), and the y values seen all
+    -- run were 2, 3, 4, 5 plus 67 at the depot and 210 in travel.
+    --
+    -- So the miners never reached Y=0 at all: the mining sites near the service
+    -- centre are OLD pre-1.18 chunks whose floor is bedrock at about y 0-4, and
+    -- the level below cannot be placed into because there is nothing there to
+    -- place into. The live world has the same old chunks near the base, so this
+    -- is a live miner bug and not a test-world artefact.
+    --
+    -- Hitting the bottom of the world is not a failure. It is the sector's
+    -- bottom, and the sector should finish with the levels it managed.
+    ["isWorldFloor recognises bedrock and nothing else"] = function(assert_eq)
+        local flow = loadFlow(E_MINE(), travelInv())
+        assert_eq(flow.isWorldFloor("minecraft:bedrock"), true, "bedrock is the floor")
+        -- Deepslate is the 1.18 transition and is perfectly diggable; calling it
+        -- the floor would stop every miner at y=0 in a NEW chunk too, turning a
+        -- fix for old chunks into a fault everywhere.
+        assert_eq(flow.isWorldFloor("minecraft:deepslate"), false, "deepslate is not")
+        assert_eq(flow.isWorldFloor("minecraft:stone"), false, "stone is not")
+        assert_eq(flow.isWorldFloor("minecraft:obsidian"), false,
+            "nor obsidian -- hard is not the same as the end of the world")
+        assert_eq(flow.isWorldFloor(nil), false, "and nothing is not the floor")
+        assert_eq(flow.isWorldFloor(42), false, "nor nonsense")
+    end,
+
     -- ROOM FOR EQUIPMENT BEFORE DIGGING IT UP.
     --
     -- THE FAULT (shakeout, 2026-11-24). node_453 (payload-h) and node_411

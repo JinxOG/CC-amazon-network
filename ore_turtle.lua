@@ -1456,6 +1456,25 @@ local function scanSector(levelIndex)
         -- A clean failure: turtle.place() only consumes the item on success, so
         -- nothing is out there and the record just written is a false positive.
         scannerClear()
+
+        -- THE BOTTOM OF THE WORLD IS NOT A FAILURE. Near the service centre the
+        -- chunks are old (pre-1.18) and the floor is bedrock at about y 0-4, so
+        -- the square below this level simply does not exist to place into. Every
+        -- T2 side test reported this as place_failed at Y=0 and handed the job
+        -- back: side-h 16 times, and only 1 MINE completed in 3 h with 4 miners.
+        -- Measured: every census that ran was Y 0..32, no scan ever succeeded
+        -- below 0, and a failing miner's real height was y=2.
+        --
+        -- Reported as its own reason so the caller can finish the sector with
+        -- the levels it managed instead of abandoning it.
+        local _, below = turtle.inspectDown()
+        if below and mine_flow.isWorldFloor(below.name) then
+            print(string.format("[SCAN] Reached the bottom of the world at Y=%d "
+                .. "(%s below) — this sector has no levels beneath this one",
+                p0.y, below.name))
+            return {}, "world_floor"
+        end
+
         print("[SCAN] ERROR: failed to place geo scanner below")
         return {}, "place_failed"
     end
@@ -2939,6 +2958,17 @@ local function mineJob(job)
             -- but recoverable, and let the server re-dispatch the sector to
             -- somebody. That is the whole fix: the sector must not come back
             -- marked finished.
+            -- THE FLOOR ENDS THE DESCENT, before any retry: retrying a level
+            -- that is below the bedrock cannot ever succeed, and three retries
+            -- of five seconds each per sector is pure delay. The sector then
+            -- finishes with the levels it managed, and the covered band it
+            -- reports narrows to match (1.9.167), so nothing downstream is told
+            -- the column was surveyed when it was not.
+            if scanFail == "world_floor" then
+                print(string.format("[MINER] Sector %d,%d bottoms out above Y=%d "
+                    .. "— finishing with the %d level(s) that ran", sx, sz, sy, i - 1))
+                break
+            end
             if scanFail then
                 for try = 1, SCAN_RETRIES do
                     print(string.format(
