@@ -1944,7 +1944,32 @@ function atc.ensure()
     if okAsk and answer then atc.heard() end   -- an error is no answer: never cost the move
     return atc.ENABLED
 end
-function atc.here() return atc.section(_self.pos.x, _self.pos.y, _self.pos.z) end
+-- THE DISPATCH TUNNEL, DT (sim w3_pair_server_crash on 8ce3b2f; Head Engineer ruling
+-- 2026-11-24). node_51, a support walking back the way it came, met the job's new pair
+-- coming out along the same one-block tunnel: node_33 dug over it, but node_51 kept
+-- walking and met node_52 head-on -- two turtles that cannot dig, going opposite ways;
+-- both gave up after 120 s. Under the base -- below its floor, within base.nearDepot --
+-- the tunnel is one section with no cells of its own: one party in it at a time. A
+-- departing pair books it with the dispatch hole and holds it until each of them is
+-- out of the zone (a step, never a clock); a turtle walking back books it before the
+-- zone and waits, standing still -- a delivery digs round a turtle that stands still,
+-- and its support follows the detour (base.followPartner). Only a turtle that holds
+-- it or has it booked sees those cells as DT; everyone else's way is as before.
+atc.DT = "DT"
+function atc.wantsDT()
+    for _, s in ipairs(atc.route or {}) do if s == atc.DT then return true end end
+    return false
+end
+-- `entering`: a step about to be taken, which may enter DT when it is booked.
+function atc.sectionFor(x, y, z, entering)
+    local s = atc.section(x, y, z)
+    if s then return s end
+    if (atc.inDT or (entering and atc.wantsDT())) and y < CFG.FLOOR_Y and base.nearDepot({ x = x, y = y, z = z }) then
+        return atc.DT
+    end
+    return nil
+end
+function atc.here() return atc.sectionFor(_self.pos.x, _self.pos.y, _self.pos.z) end
 
 -- The booked sections from `from` on (from included), or {from, nextSec}.
 function atc.remaining(from, nextSec)
@@ -2041,7 +2066,7 @@ end
 -- giveUp (optional): called before every ask; a reason string ends the wait --
 -- the booking is cancelled and book returns false, reason. A support whose
 -- delivery went down without it stops waiting (PARTNER_LEFT, base.depart).
-function atc.book(waypoints, label, giveUp)
+function atc.book(waypoints, label, giveUp, dt)
     -- THE PAIR TAG IS FOR ONE ADMISSION (2026-11-17, T2 w3-pair-dropout-b). Left
     -- set, it made node_96's way home from the hole -- its support gone -- a pair's
     -- request: the ATC waited for the partner's ask, and node_96 held DH for good.
@@ -2050,6 +2075,8 @@ function atc.book(waypoints, label, giveUp)
     atc.owesUntil = nil        -- asking anew: no more "I am out" (atc.keepInBase)
     if not atc.ensure() then return true end
     local list = W.routeSections(base.getPos(), waypoints)
+    -- The dispatch tunnel (atc.DT): after the hole for a way out, first for a way back.
+    if dt == "after" then list[#list + 1] = atc.DT elseif dt == "before" then table.insert(list, 1, atc.DT) end
     atc.route = list
     if #list == 0 then return true end
     local report, last
@@ -2154,10 +2181,13 @@ function atc.giveBackUnentered()
 end
 
 -- Done with the base: give back everything but the section it stands in.
-function atc.finish()
+-- keepDT: a departure done with its way out, at the foot of the dispatch shaft, keeps
+-- the dispatch tunnel it has booked and is about to step into (atc.DT).
+function atc.finish(keepDT)
     if not atc.ENABLED then return end
-    atc.send(proto.MSG.ATC_CANCEL, { cur = atc.here() })
-    atc.route = nil
+    keepDT = keepDT and atc.wantsDT() and not atc.inDT
+    atc.send(proto.MSG.ATC_CANCEL, { cur = atc.here(), keep = keepDT and atc.DT or nil })
+    atc.route = keepDT and { atc.DT } or nil
 end
 
 -- The sections of the four blocks beside (x, y, z), asked for one at a time;
@@ -2301,7 +2331,7 @@ local function tryMove(digFn, dir)
           and not _self.autonomousReturn
           and not _self.homing
           and not (_self.role == proto.ROLE.SUPPORT and _self.partnerId)
-          and not (atc.ENABLED and atc.here()) do
+          and not (atc.ENABLED and atc.section(_self.pos.x, _self.pos.y, _self.pos.z)) do
         -- Escape hatch for a solo miner holding a placed loader (see
         -- base.setServerDownEscape). nil for every other role, so their loop
         -- body stays exactly `sleep(2)`. pcall'd so a faulty predicate can
@@ -2388,11 +2418,12 @@ local function tryMove(digFn, dir)
     if atc.ENABLED then
         local nx, ny, nz = _self.pos.x, _self.pos.y, _self.pos.z
         if dir == "up" then ny = ny + 1 elseif dir == "down" then ny = ny - 1 else nx, nz = projectStep(dir) end
-        atcFrom, atcInto = atc.here(), atc.section(nx, ny, nz)
+        atcFrom, atcInto = atc.here(), atc.sectionFor(nx, ny, nz, true)
         if atcInto and atcInto ~= atcFrom then atc.waitEnter(atcInto, atcFrom) end
     end
     if not base.chunkGate(dir) then return false, "support not with me at a chunk's edge" end
-    local inBase = atcFrom ~= nil or atcInto ~= nil
+    -- Not the dispatch tunnel: out there a delivery digs round a turtle in its way, as before.
+    local inBase = (atcFrom ~= nil and atcFrom ~= atc.DT) or (atcInto ~= nil and atcInto ~= atc.DT)
 
     local maxDig      = (digFn and _self.canDig) and 12 or CFG.MOVE_RETRIES
     local digAttempts = 0
@@ -2407,6 +2438,7 @@ local function tryMove(digFn, dir)
         if jMove(dir) then
             applyMove(dir)
             atc.progressed()
+            if atcInto == atc.DT then atc.inDT = true elseif atcFrom == atc.DT then atc.inDT = nil end
             if atcFrom and atcFrom ~= atcInto then
                 atc.send(proto.MSG.ATC_LEAVE, { sec = atcFrom })
                 if atcInto == nil then atc.steppedOut() end      -- out of the base: it says so a while
@@ -2895,7 +2927,7 @@ function base.prebookDeparture()
         return nil
     end
     local booked, why = atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }),
-        "departure (with my delivery)", giveUp)
+        "departure (with my delivery)", giveUp, "after")
     atc.pair = nil
     return booked, why
 end
@@ -2919,7 +2951,7 @@ function base.depart(noDescend)
     end
     local ok, a, b = pcall(departImpl, noDescend)
     _self.holePendingTo = nil
-    atc.finish()
+    atc.finish(ok and a == true and not noDescend)
     atc.group = nil
     atc.pair = nil
     if not ok then error(a, 0) end
@@ -2987,7 +3019,7 @@ function departImpl(noDescend)
         -- R2: let out only with its support, as one unit (atc.lua); it waits here, on
         -- its dock. A pair the server called off (its support dropped out) ends it.
         atc.pair = _self.partnerId
-        local bookedOut, whyNot = atc.book(route, "departure", atc.pairStillOn)
+        local bookedOut, whyNot = atc.book(route, "departure", atc.pairStillOn, "after")
         if not bookedOut then return false, whyNot end
         local ok, err = move.followRoute(route)
         if not ok then return false, "departure route failed: " .. (err or "?") end
@@ -3086,7 +3118,7 @@ function departImpl(noDescend)
         atc.pair = _self.partnerId
         local function partnerGone() return base.partnerLeft() and "partner_left" end
         local booked, why = atc.book(atc.join(route, { { x = W.DISPATCH_HOLE.x, y = W.DISPATCH_HOLE.y, z = W.DISPATCH_HOLE.z } }),
-            "departure", partnerGone)
+            "departure", partnerGone, "after")
         if not booked then
             logWarn("Delivery " .. tostring(_self.partnerId) .. " stood me down (not going out without me) -- staying docked")
             return false, why
@@ -3415,7 +3447,7 @@ function home.retrace(why)
             booked = true
             atc.book(atc.join({ { x = W.WORLD_EXIT.x, y = W.WORLD_EXIT.y, z = W.WORLD_EXIT.z },
                                 { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.DISPATCH_HOLE.z } },
-                W.internalReturnRouteFrom(_self.dock, W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z)), "back the way I came")
+                W.internalReturnRouteFrom(_self.dock, W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z)), "back the way I came", nil, "before")
         end
         local ok, err = move.to(p.x, p.y, p.z)
         if not ok then

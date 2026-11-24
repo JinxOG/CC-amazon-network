@@ -307,6 +307,18 @@ function core.handle(st, id, p, now)
             note(st, string.format("%s reports from outside the base: its booking is done", id))
             return { ok = true }
         end
+        -- THE DISPATCH TUNNEL, DT (Head Engineer ruling, 2026-11-24): a turtle in there
+        -- says so in every report (cur = "DT"). One that names nowhere -- rebooted out
+        -- there, it has forgotten it is in it -- lets go of it, as of a one-off claim; a
+        -- stale DT would keep every departure in its dock.
+        if #mine > 0 and not p.cur then
+            local inDT = false
+            for _, k in ipairs(mine) do local x = st.res[k]; if x and x.entered.DT then inDT = true end end
+            if inDT then
+                core.handle(st, id, { op = "leave", sec = "DT" }, now)
+                note(st, string.format("%s reports from nowhere it names: let go of DT", id))
+            end
+        end
         if #mine > 0 and p.cur then
             local keep = { [p.cur] = true }
             for _, s in ipairs(p.route or {}) do keep[s] = true end
@@ -539,7 +551,25 @@ function core.handle(st, id, p, now)
     end
 
     if p.op == "cancel" then
-        for k, x in pairs(st.res) do if x.id == id then drop(st, k, p.cur) end end
+        for k, x in pairs(st.res) do
+            if x.id == id then
+                -- p.keep: a departure at the foot of the dispatch shaft keeps the dispatch
+                -- tunnel (DT) it is about to step into (sim w3_retrace_head_on: given back
+                -- there, the pair walked the tunnel without it).
+                local kept = false
+                if p.keep then for _, s in ipairs(x.list) do if s == p.keep then kept = true end end end
+                if kept then
+                    local list = {}
+                    for _, s in ipairs(x.list) do
+                        if s == p.keep or (s == p.cur and x.entered[s]) then list[#list + 1] = s
+                        else removeFrom(queue(st, s), k); x.entered[s] = nil end
+                    end
+                    x.list = list
+                else
+                    drop(st, k, p.cur)
+                end
+            end
+        end
         -- done with the base (home, or out of the hole): no slot of its own any more
         for _, line in pairs(st.slots) do
             for k, sl in pairs(line) do if sl.id == id then line[k] = { freedAt = now, at = 0 } end end

@@ -711,4 +711,63 @@ return {
         assert_eq(blocked, false, "while claimed, nobody else gets N4")
         assert_eq(after.ok, true, "out: N4 is free (" .. tostring(after.why) .. ")")
     end,
+
+    -- DT, the dispatch tunnel near the base (Head Engineer ruling, 2026-11-24): one party in it at a time. A
+    -- departing pair holds it from the dispatch hole until each of them is out of the zone; a turtle walking back
+    -- the departures' tunnel waits for it. Its heals are the one-off claims': a report that does not say DT --
+    -- a rebooted turtle has forgotten it is in there -- lets it go.
+    ["a departure holds the dispatch tunnel; a turtle walking back waits for it"] = function(assert_eq)
+        local core, st, t = live()
+        local d = core.handle(st, "d", { op = "request", route = { "DH", "DT" } }, t)
+        core.handle(st, "d", { op = "enter", sec = "DH" }, t + 100)
+        core.handle(st, "d", { op = "enter", sec = "DT" }, t + 200)
+        core.handle(st, "d", { op = "leave", sec = "DH" }, t + 300)
+        local back = core.handle(st, "r", { op = "request", route = { "DT", "DH" } }, t + 400)
+        core.handle(st, "d", { op = "leave", sec = "DT" }, t + 500)                 -- out of the zone
+        local after = core.handle(st, "r", { op = "request", route = { "DT", "DH" } }, t + 600)
+        assert_eq(d.ok, true, "the departure is let out")
+        assert_eq(back.ok, false, "while it is in the tunnel, the turtle walking back is not let in")
+        assert_eq(after.ok, true, "out of the zone, the tunnel is free (" .. tostring(after.why) .. ")")
+    end,
+
+    -- Sim w3_retrace_head_on: at the foot of the dispatch shaft a departure gives its way out back (atc.finish) one
+    -- step before the tunnel; that took DT with it, and the pair walked the tunnel without it. It keeps DT.
+    ["a departure done with its way out keeps the dispatch tunnel it has not reached yet"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "d", { op = "request", route = { "W1", "DH", "DT" } }, t)
+        core.handle(st, "d", { op = "enter", sec = "W1" }, t + 100)
+        core.handle(st, "d", { op = "enter", sec = "DH" }, t + 200)
+        core.handle(st, "d", { op = "leave", sec = "W1" }, t + 300)
+        core.handle(st, "d", { op = "cancel", cur = "DH", keep = "DT" }, t + 400)   -- at the shaft's foot
+        local back = core.handle(st, "r", { op = "request", route = { "DT" } }, t + 500)   -- DT alone: DH is held anyway
+        local w1 = core.handle(st, "x", { op = "enter", sec = "W1" }, t + 600)
+        local into = core.handle(st, "d", { op = "enter", sec = "DT", cur = "DH" }, t + 700)
+        assert_eq(back.ok, false, "the turtle walking back is not let in (" .. tostring(back.why) .. ")")
+        assert_eq(w1.ok, true, "what it left behind is free")
+        assert_eq(into.ok, true, "and it steps into the tunnel it kept (" .. tostring(into.why) .. ")")
+    end,
+
+    ["a report that does not say DT lets go of the dispatch tunnel"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "d", { op = "request", route = { "DH", "DT" } }, t)
+        core.handle(st, "d", { op = "enter", sec = "DH" }, t + 100)
+        core.handle(st, "d", { op = "enter", sec = "DT" }, t + 200)
+        core.handle(st, "d", { op = "leave", sec = "DH" }, t + 300)
+        local before = core.handle(st, "r", { op = "request", route = { "DT", "DH" } }, t + 400).ok
+        core.handle(st, "d", { op = "report", route = {} }, t + 1000)               -- rebooted out there: it says nothing of DT
+        local after = core.handle(st, "r", { op = "request", route = { "DT", "DH" } }, t + 1100)
+        assert_eq(before, false, "held while it was in there")
+        assert_eq(after.ok, true, "let go on its report (" .. tostring(after.why) .. ")")
+    end,
+
+    ["a report from inside the dispatch tunnel keeps it"] = function(assert_eq)
+        local core, st, t = live()
+        core.handle(st, "d", { op = "request", route = { "DH", "DT" } }, t)
+        core.handle(st, "d", { op = "enter", sec = "DH" }, t + 100)
+        core.handle(st, "d", { op = "enter", sec = "DT" }, t + 200)
+        core.handle(st, "d", { op = "leave", sec = "DH" }, t + 300)
+        core.handle(st, "d", { op = "report", cur = "DT", route = { "DT" } }, t + 1000)
+        local r = core.handle(st, "r", { op = "request", route = { "DT", "DH" } }, t + 1100)
+        assert_eq(r.ok, false, "still held (" .. tostring(r.why) .. ")")
+    end,
 }
