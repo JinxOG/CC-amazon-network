@@ -65,8 +65,11 @@ local function supportJob(job)
     local deadline = os.epoch("utc") / 1000 + holeTimeout
     while os.epoch("utc") / 1000 < deadline do
         if base.isServerDown() then
-            deadline = os.epoch("utc") / 1000 + holeTimeout   -- freeze while server unreachable
-            sleep(2)
+            -- Frozen while the server is unreachable -- and still listening: a sleep(2) here
+            -- ate the one HOLE_READY its delivery sent, admitted with the server down, while
+            -- the control loop slept between registration retries; its 180 s ran out with its
+            -- delivery at the hole (sim w3_admitted_server_down).
+            deadline = os.epoch("utc") / 1000 + holeTimeout
         end
         -- base.receive, not proto.receive: proto.receive returned the first
         -- message of ANY type and the type tests below discarded the rest --

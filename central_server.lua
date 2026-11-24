@@ -4577,6 +4577,16 @@ function jobQueue.ownedByAnother(jobId, from, what)
 end
 
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
+    -- ACKNOWLEDGED, AND TAKEN ONCE (sim w3_side_atc): the turtle repeats its JOB_COMPLETE until
+    -- JOB_COMPLETE_ACK; a repeat of one already recorded completes nothing twice.
+    sendTo(msg.from, proto.MSG.JOB_COMPLETE_ACK, { jobId = msg.payload.jobId })
+    -- A repeat from the same turtle is nothing new; its first is handled as it always was
+    -- (a support's own JOB_COMPLETE still completes its linked job's record: w3_atc_leave_lost).
+    state.completeSeen = state.completeSeen or { set = {}, order = {} }
+    if state.completeSeen.set[tostring(msg.payload.jobId) .. "|" .. tostring(msg.from)] then return end
+    state.completeSeen.set[tostring(msg.payload.jobId) .. "|" .. tostring(msg.from)] = true
+    state.completeSeen.order[#state.completeSeen.order + 1] = tostring(msg.payload.jobId) .. "|" .. tostring(msg.from)
+    if #state.completeSeen.order > 500 then state.completeSeen.set[table.remove(state.completeSeen.order, 1)] = nil end
     if jobQueue.ownedByAnother(msg.payload.jobId, msg.from, "JOB_COMPLETE") then return end
     jobQueue.complete(msg.payload.jobId)
     pcall(dispatcher.tick)

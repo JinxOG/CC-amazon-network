@@ -395,6 +395,7 @@ local TRANSIENT_TYPES = {
     [proto.MSG.LOADER_BEACON]   = true,
     -- Noted on sight (base.reportFailed's repeat stops); nothing waits for it.
     [proto.MSG.JOB_FAILED_ACK]  = true,
+    [proto.MSG.JOB_COMPLETE_ACK] = true,
     [proto.MSG.POSITION_UPDATE] = true,
     -- The chunk gate's question and answer (base.awaitSupportInChunk): asked again until
     -- answered, so a late copy is worth nothing -- a support acting on a stale one would
@@ -590,6 +591,11 @@ local function firstSight(msg)
     if msg.type == proto.MSG.JOB_FAILED_ACK and type(msg.payload) == "table" and msg.payload.failId
        and _self.failsOut then
         _self.failsOut[msg.payload.failId] = nil
+    end
+    -- A JOB_COMPLETE the server has: stop repeating it (base.sendComplete).
+    if msg.type == proto.MSG.JOB_COMPLETE_ACK and type(msg.payload) == "table" and msg.payload.jobId
+       and _self.completesOut then
+        _self.completesOut[msg.payload.jobId] = nil
     end
     -- R2: a pair called off by the server, noted whichever loop reads it, so a
     -- delivery waiting on its dock to be let out stops waiting.
@@ -1197,6 +1203,7 @@ function base.detectFacingForTest() return detectFacing() end
 function base.setFacingUnknownForTest() _self.facingKnown = false end   -- test seam
 function base.setPosForTest(p) _self.pos = { x = p.x, y = p.y, z = p.z } end     -- test seam
 function base.setIdForTest(id) _self.id = id end                                   -- test seam
+function base.setServerDownForTest(v) _self.serverDown = v and true or false end    -- test seam
 function base.initPositionForTest() return initPosition() end
 
 -- Position AND facing: either one wrong sends every move astray (2026-10-05,
@@ -2476,7 +2483,11 @@ local function tryMove(digFn, dir)
           and not _self.autonomousReturn
           and not _self.homing
           and not (_self.role == proto.ROLE.SUPPORT and _self.partnerId)
-          and not (atc.ENABLED and atc.here()) do
+          and not (atc.ENABLED and atc.here())
+          -- Nor a turtle holding an admitted booking or a path: what it holds, every turtle
+          -- behind it waits for. node_221, admitted with node_225, paused on its dock -- in no
+          -- section -- and held DH J1 N1 W1 10 minutes (T2 shakeout-payload-g, 02:53).
+          and not (atc.ENABLED and (atc.route ~= nil or atc.path ~= nil)) do
         -- Escape hatch for a solo miner holding a placed loader (see
         -- base.setServerDownEscape). nil for every other role, so their loop
         -- body stays exactly `sleep(2)`. pcall'd so a faulty predicate can
@@ -5098,7 +5109,16 @@ function base.sendComplete(result)
     -- no "Job complete" on the server, and without this line "never sent" and
     -- "sent and lost" look identical. It rides the log outbox, so it can arrive
     -- after the fact even when the message itself did not.
-    local sent = comms.toServer(proto.MSG.JOB_COMPLETE, proto.payloadJobComplete(_self.jobId, result))
+    -- REPEATED UNTIL THE SERVER HAS IT, as a JOB_FAILED is (sim w3_side_atc: working through a
+    -- server outage, node_35 finished job_0050 with the server down; the one JOB_COMPLETE was
+    -- lost, the job stayed open for good, and two later orders to its destination were never sent).
+    local cp = proto.payloadJobComplete(_self.jobId, result)
+    if _self.jobId then
+        local now = os.epoch("utc")
+        _self.completesOut = _self.completesOut or {}
+        _self.completesOut[_self.jobId] = { p = cp, at = now, untilMs = now + 600000 }
+    end
+    local sent = comms.toServer(proto.MSG.JOB_COMPLETE, cp)
     logInfo(string.format("JOB_COMPLETE sent for %s%s", tostring(_self.jobId),
         sent and "" or " -- the send FAILED (no modem)"))
     _self.status    = proto.STATUS.IDLE
@@ -5124,6 +5144,14 @@ function base.reportFailed(jobId, reason, recoverable)
     return p.failId
 end
 function base.keepFails(now)
+    for id, c in pairs(_self.completesOut or {}) do
+        if now >= c.untilMs then
+            _self.completesOut[id] = nil
+        elseif now - c.at >= FAIL_REPEAT_MS then
+            c.at = now
+            comms.toServer(proto.MSG.JOB_COMPLETE, c.p)
+        end
+    end
     if not _self.failsOut then return end
     for id, f in pairs(_self.failsOut) do
         if now >= f.untilMs then

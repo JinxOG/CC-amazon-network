@@ -55,6 +55,69 @@ local function refusedAtBoot(grantAfterNaps)
 end
 
 return {
+    -- T2 shakeout-payload-g (2026-11-24): the ATC admitted pair node_225 + node_221 at 02:53:05; the server then dropped
+    -- out and node_221 paused on its dock ("Server unreachable -- pausing") -- a dock is in no section, so the
+    -- server-down hold applied -- while its booking held DH J1 N1 W1 and every departure behind it for 10 minutes.
+    -- A turtle holding an admitted booking does not pause for the server: the ATC is the authority in the base
+    -- (ATC card, requirement 7), as it already is for a turtle standing in a section.
+    ["a turtle holding an admitted booking does not pause on its dock while the server is down"] = function(assert_eq)
+        local base = fresh()
+        local atc = base.atc
+        atc.ENABLED = true
+        base.setPosForTest({ x = 153, y = 67, z = -2806 })        -- its dock: in no section
+        base.setServerDownForTest(true)
+        atc.route = { "S1", "J1", "W1", "DH" }                       -- admitted
+        local savedAsk = atc.ask
+        atc.ask = function() return { ok = true } end                -- the ATC lets each step in
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 50 then error("paused for the server", 0) end end
+        local ok, err = pcall(base.move.forward)
+        sleep, atc.ask = savedSleep, savedAsk
+        assert_eq(ok, true, "it moved (" .. tostring(err) .. ")")
+        assert_eq(naps < 5, true, "without pausing (" .. naps .. " naps)")
+    end,
+
+    ["with no booking, a docked turtle still pauses while the server is down"] = function(assert_eq)
+        local base = fresh()
+        local atc = base.atc
+        atc.ENABLED = true
+        base.setPosForTest({ x = 153, y = 67, z = -2806 })
+        base.setServerDownForTest(true)
+        atc.route = nil
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 10 then error("paused for the server", 0) end end
+        local ok, err = pcall(base.move.forward)
+        sleep = savedSleep
+        assert_eq(ok, false, "it holds")
+        assert_eq(tostring(err):find("paused for the server", 1, true) ~= nil, true, "for the server (" .. tostring(err) .. ")")
+    end,
+
+    -- Sim w3_side_atc on 0c1b875: working through a server outage now, node_35 finished job_0050 with the server
+    -- down; its JOB_COMPLETE, sent once, was lost; the server re-linked it to the job, which stayed open for good and
+    -- held its destination: two later orders there were never sent. A JOB_COMPLETE is repeated until acknowledged,
+    -- as a JOB_FAILED is.
+    ["a JOB_COMPLETE is repeated until the server acknowledges it"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base.setStatus(proto.STATUS.WORKING, "job_0050")
+        base.sendComplete({})
+        local function count()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find('type = "JOB_COMPLETE"', 1, true) or b:find('type="JOB_COMPLETE"', 1, true) then n = n + 1 end end
+            return n
+        end
+        local first = count()
+        local t0 = os.epoch("utc")
+        base.keepFails(t0 + 11000)
+        local again = count()
+        base._firstSight(proto.encode(proto.MSG.JOB_COMPLETE_ACK, "server", "x", { jobId = "job_0050" }))
+        base.keepFails(t0 + 22000)
+        local after = count()
+        assert_eq(first, 1, "sent once")
+        assert_eq(again, 2, "sent again 10 s on, unanswered")
+        assert_eq(after, 2, "and no more once acknowledged")
+    end,
+
     ["a refusal from the ATC at boot that clears in seconds raises nothing"] = function(assert_eq)
         local count = refusedAtBoot(2)
         assert_eq(count("stuck_no_fix"), 0, "no stuck_no_fix")
