@@ -550,6 +550,26 @@ class TimerClearedIsAFailure(unittest.TestCase):
 CONTROL = "G:/TurtleOS-Sandbox/run/20261103-181857-w3_atc_base150-1"
 
 
+class LastSeenIsTheBridgesClock(unittest.TestCase):
+    """server.js stamps lastSeen with its own push time for every turtle the server lists (mergeTurtleSnapshot), so it says
+    nothing about the turtle: in payload-g it read 0 s old for every turtle, frozen node_211 included. A sample counts as heard
+    only while the server itself says online (its heartbeat judgment); a turtle the server has offline for over GONE_MS, with no
+    line of its own, is gone."""
+
+    def test_a_fresh_lastseen_on_an_offline_turtle_is_not_heard(self):
+        def ts(t):
+            return {"node_9": {"x": OFF[0], "y": OFF[1], "z": OFF[2], "status": "IDLE", "dockX": 171, "dockZ": -2806,
+                               "lastSeen": T0 + t - 500, "online": False, "role": "DELIVERY"}}
+        run = make_run(hours=2, turtles_at=ts)
+        try:
+            rep = report.build_report(run)
+            v = {a["id"]: a for a in rep["turtles"]}
+            self.assertIn("node_9", v, "an offline turtle silent for 2 h must not be judged ok")
+            self.assertGreater(v["node_9"]["gone"]["silent_ms"] or 0, report.GONE_MS, v["node_9"]["gone"])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
 class ControlRunMustFail(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(os.path.join(CONTROL, "state.json")), "the control run folder is not on this machine")
     def test_control_run_jams_and_sticks(self):

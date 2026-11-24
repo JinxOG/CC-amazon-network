@@ -451,6 +451,9 @@ def analyse(timeline, windows, end_ms=None):
                 hit = touching(a, b)
                 silences.append({"since": a, "until": b, "silent_ms": out, "faults": [w["id"] for w in hit]})
         gone["silent_ms"] = _outside(heard[-1], end, excl)
+    elif samples:
+        # listed by the server but never heard (never online, no line of its own): silent from its first sample
+        gone = {"silent_ms": _outside(samples[0]["t"], end, excl), "since": samples[0]["t"]}
 
     reasons = []
     if any(e["open"] for e in episodes):
@@ -906,7 +909,9 @@ def _on_dock(e):
 def _snap_sample(s, e, t0):
     pos = [e["x"], e["y"], e["z"]] if None not in (e.get("x"), e.get("y"), e.get("z")) else None
     return {"t": s["t"], "pos": pos, "phase": "%s/%s" % (e.get("status") or "", e.get("phase") or ""), "on_dock": _on_dock(e),
-            "seen": (e["lastSeen"] - t0) if isinstance(e.get("lastSeen"), (int, float)) else None,
+            # lastSeen is the bridge's own push time for every turtle the server lists (server.js mergeTurtleSnapshot): it says
+            # nothing about the turtle. A sample is heard only while the server itself says online (its heartbeat judgment).
+            "seen": (e["lastSeen"] - t0) if isinstance(e.get("lastSeen"), (int, float)) and e.get("online") is True else None,
             "needs_hands": e.get("needsHands")}
 
 
