@@ -37,6 +37,14 @@ W.ARRIVALS_HOLE    = { x = 228, y = CFG.FLOOR_Y,      z = -2782 }  -- come UP to
 W.WORLD_EXIT       = { x = W.DISPATCH_HOLE.x, y = CFG.BELOW_HOLE_Y, z = W.DISPATCH_HOLE.z }  -- below dispatch hole
 W.WORLD_ENTRY      = { x = W.ARRIVALS_HOLE.x, y = CFG.BELOW_HOLE_Y, z = W.ARRIVALS_HOLE.z }  -- below arrivals hole
 
+-- The two single-wide shared columns, at any height: the dispatch hole's (the departures' way down, the
+-- miners' climb to the sky) and the arrivals hole's. A turtle stopped in one blocks every turtle behind it.
+function W.inHoleColumn(p)
+    if not p then return false end
+    return (p.x == W.DISPATCH_HOLE.x and p.z == W.DISPATCH_HOLE.z)
+        or (p.x == W.ARRIVALS_HOLE.x and p.z == W.ARRIVALS_HOLE.z)
+end
+
 -- ─── Bay Slot Layout ─────────────────────────────────────────────────────────
 -- Each bay has 2 rows of 8 slots. Pillar sits at center X so slots
 -- are offset ±1 to ±4 from center (skipping 0).

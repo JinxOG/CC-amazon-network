@@ -273,6 +273,45 @@ return {
         assert_eq(ok, true, "it moves (" .. tostring(err) .. ")")
     end,
 
+    -- T2 shakeout-payload-j (f32b0dd, 2026-11-24): 239 "Server unreachable -- pausing" in the climb shaft (143,68-210,
+    -- -2813) by 34 miners; 11 ended stacked at 143,98-108, each blocked by the one above, 53 give-ups. Inside a
+    -- single-wide shared column a turtle never pauses for the server: it finishes the traversal (Head Engineer, from
+    -- the user's rule -- logic, not a timer).
+    ["a turtle in the dispatch hole's column does not pause for the server"] = function(assert_eq)
+        local base = fresh()
+        base.setPosForTest({ x = 143, y = 105, z = -2813 })
+        base.setServerDownForTest(true)
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 10 then error("paused for the server", 0) end end
+        local ok, err = pcall(base.move.up)
+        sleep = savedSleep
+        assert_eq(ok, true, "it moved (" .. tostring(err) .. ")")
+        assert_eq(naps < 3, true, "without pausing (" .. naps .. " naps)")
+    end,
+
+    ["a turtle in the arrivals hole's column does not pause for the server"] = function(assert_eq)
+        local base = fresh()
+        base.setPosForTest({ x = 228, y = 120, z = -2782 })
+        base.setServerDownForTest(true)
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 10 then error("paused for the server", 0) end end
+        local ok, err = pcall(base.move.down)
+        sleep = savedSleep
+        assert_eq(ok, true, "it moved (" .. tostring(err) .. ")")
+    end,
+
+    ["out of the columns, a turtle still pauses for the server"] = function(assert_eq)
+        local base = fresh()
+        base.setPosForTest({ x = 144, y = 105, z = -2813 })
+        base.setServerDownForTest(true)
+        local naps, savedSleep = 0, sleep
+        sleep = function() naps = naps + 1; if naps > 10 then error("paused for the server", 0) end end
+        local ok, err = pcall(base.move.up)
+        sleep = savedSleep
+        assert_eq(ok, false, "it holds")
+        assert_eq(tostring(err), "paused for the server", "for the server (" .. tostring(err) .. ")")
+    end,
+
     ["a turtle not told PARK moves"] = function(assert_eq)
         local base = fresh()
         local proto = require("protocol")

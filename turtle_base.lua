@@ -2563,7 +2563,11 @@ local function tryMove(digFn, dir)
           -- Nor a turtle holding an admitted booking or a path: what it holds, every turtle
           -- behind it waits for. node_221, admitted with node_225, paused on its dock -- in no
           -- section -- and held DH J1 N1 W1 10 minutes (T2 shakeout-payload-g, 02:53).
-          and not (atc.ENABLED and (atc.route ~= nil or atc.path ~= nil)) do
+          and not (atc.ENABLED and (atc.route ~= nil or atc.path ~= nil))
+          -- Nor a turtle inside a single-wide shared column (a hole's, at any height): it finishes the
+          -- traversal. T2 shakeout-payload-j: 239 pauses in the climb shaft by 34 miners, 11 stacked at
+          -- 143,98-108, 53 give-ups (Head Engineer, from the user's rule: logic, not a timer).
+          and not W.inHoleColumn(_self.pos) do
         -- Escape hatch for a solo miner holding a placed loader (see
         -- base.setServerDownEscape). nil for every other role, so their loop
         -- body stays exactly `sleep(2)`. pcall'd so a faulty predicate can
