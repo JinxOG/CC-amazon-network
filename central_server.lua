@@ -4577,6 +4577,10 @@ function jobQueue.ownedByAnother(jobId, from, what)
 end
 
 handlers[proto.MSG.JOB_COMPLETE] = function(msg)
+    -- ACKNOWLEDGED, AND TAKEN ONCE (sim w3_side_atc): the turtle repeats its JOB_COMPLETE until
+    -- JOB_COMPLETE_ACK; a repeat of one already recorded completes nothing twice.
+    sendTo(msg.from, proto.MSG.JOB_COMPLETE_ACK, { jobId = msg.payload.jobId })
+    if state.jobs[msg.payload.jobId] and state.jobs[msg.payload.jobId].status == JOB_STATUS.COMPLETE then return end
     if jobQueue.ownedByAnother(msg.payload.jobId, msg.from, "JOB_COMPLETE") then return end
     jobQueue.complete(msg.payload.jobId)
     pcall(dispatcher.tick)

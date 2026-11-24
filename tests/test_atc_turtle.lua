@@ -92,6 +92,32 @@ return {
         assert_eq(tostring(err):find("paused for the server", 1, true) ~= nil, true, "for the server (" .. tostring(err) .. ")")
     end,
 
+    -- Sim w3_side_atc on 0c1b875: working through a server outage now, node_35 finished job_0050 with the server
+    -- down; its JOB_COMPLETE, sent once, was lost; the server re-linked it to the job, which stayed open for good and
+    -- held its destination: two later orders there were never sent. A JOB_COMPLETE is repeated until acknowledged,
+    -- as a JOB_FAILED is.
+    ["a JOB_COMPLETE is repeated until the server acknowledges it"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base.setStatus(proto.STATUS.WORKING, "job_0050")
+        base.sendComplete({})
+        local function count()
+            local n = 0
+            for _, b in ipairs(sent) do if b:find('type = "JOB_COMPLETE"', 1, true) or b:find('type="JOB_COMPLETE"', 1, true) then n = n + 1 end end
+            return n
+        end
+        local first = count()
+        local t0 = os.epoch("utc")
+        base.keepFails(t0 + 11000)
+        local again = count()
+        base._firstSight(proto.encode(proto.MSG.JOB_COMPLETE_ACK, "server", "x", { jobId = "job_0050" }))
+        base.keepFails(t0 + 22000)
+        local after = count()
+        assert_eq(first, 1, "sent once")
+        assert_eq(again, 2, "sent again 10 s on, unanswered")
+        assert_eq(after, 2, "and no more once acknowledged")
+    end,
+
     ["a refusal from the ATC at boot that clears in seconds raises nothing"] = function(assert_eq)
         local count = refusedAtBoot(2)
         assert_eq(count("stuck_no_fix"), 0, "no stuck_no_fix")
