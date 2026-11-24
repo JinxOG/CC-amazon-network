@@ -304,6 +304,27 @@ return {
         assert_eq(fs.exists("trail.dat"), false, "nothing written")
     end,
 
+    -- T2 shakeout-payload-h: node_235's believed position jumped by (-19,-23,-29) in one step, standing still, and it
+    -- then drove on that belief into the holding line's approach (10 give-ups behind it). A resync that moves a belief
+    -- more than a block is not applied until a second fix agrees (Head Engineer ruling, 2026-11-24).
+    ["one GPS fix far from where it stands is not taken; a second that agrees is"] = function(assert_eq)
+        local r = supportAt({ x = 240, y = 60, z = -2784 })
+        local fixes = { { 221, 37, -2813 }, { 240, 60, -2784 } }   -- a bad fix, then the true one
+        local n = 0
+        gps = { locate = function() n = n + 1; local f = fixes[math.min(n, #fixes)]; return f[1], f[2], f[3] end }
+        r.base.gpsSync()
+        local p = r.base.getPos()
+        assert_eq(p.x .. "," .. p.y .. "," .. p.z, "240,60,-2784", "the bad fix is not taken")
+        local r2 = supportAt({ x = 240, y = 60, z = -2784 })
+        r2.base.setPosForTest({ x = 230, y = 60, z = -2784 })        -- its belief was wrong
+        local m = 0
+        gps = { locate = function() m = m + 1; return 240, 60, -2784 end }
+        r2.base.gpsSync()
+        local p2 = r2.base.getPos()
+        assert_eq(p2.x .. "," .. p2.y .. "," .. p2.z, "240,60,-2784", "a far fix a second one agrees with is taken")
+        assert_eq(m, 2, "after asking twice")
+    end,
+
     ["the way it came is kept as a simple path from the building's floor"] = function(assert_eq)
         local r = supportAt(HOLE)
         goOut(r)

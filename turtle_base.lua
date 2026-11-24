@@ -1054,7 +1054,26 @@ end
 local function gpsSync()
     local x, y, z = gps.locate(CFG.GPS_TIMEOUT)
     if x then
-        _self.pos = { x=math.floor(x), y=math.floor(y), z=math.floor(z) }
+        x, y, z = math.floor(x), math.floor(y), math.floor(z)
+        -- A FIX FAR FROM WHERE IT STANDS WAITS FOR A SECOND (T2 shakeout-payload-h; Head
+        -- Engineer ruling 2026-11-24). node_235, standing still, took a belief 71 blocks off
+        -- in one resync -- 23 of them in y -- and drove on it into the holding line's
+        -- approach: 10 give-ups behind it. More than a block from a measured belief, the fix
+        -- is taken only once a second agrees with it; both are logged. (gps.locate does not
+        -- say how many hosts answered.)
+        local p = _self.pos
+        if _self.posFixed and p and math.abs(x - p.x) + math.abs(y - p.y) + math.abs(z - p.z) > 1 then
+            local x2, y2, z2 = gps.locate(CFG.GPS_TIMEOUT)
+            if x2 then x2, y2, z2 = math.floor(x2), math.floor(y2), math.floor(z2) end
+            if not x2 or math.abs(x2 - x) + math.abs(y2 - y) + math.abs(z2 - z) > 1 then
+                logWarn(string.format("GPS jump not taken: believed %d,%d,%d, a fix said %d,%d,%d, a second said %s",
+                    p.x, p.y, p.z, x, y, z, x2 and string.format("%d,%d,%d", x2, y2, z2) or "nothing"))
+                return false
+            end
+            logWarn(string.format("GPS jump taken: believed %d,%d,%d, two fixes said %d,%d,%d and %d,%d,%d",
+                p.x, p.y, p.z, x, y, z, x2, y2, z2))
+        end
+        _self.pos = { x=x, y=y, z=z }
         _self.posFixed = true
         return true
     else
