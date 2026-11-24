@@ -179,6 +179,62 @@ return {
         assert_eq(n, 0, "no extra reports (" .. n .. ")")
     end,
 
+    -- Sim w3_side_atc on 4d2617c (2026-11-24): node_56's support job was cancelled in a radio blackout it never heard;
+    -- carrying on, it timed out and sent its old partner node_34 a JOB_ABORT. node_34, on another job with another
+    -- support (node_55), took it and ended job_0041 at its destination. A JOB_ABORT from a turtle is taken only from
+    -- its current partner.
+    ["a JOB_ABORT from a turtle that is not its partner is not taken"] = function(assert_eq)
+        local base = fresh()
+        local proto = require("protocol")
+        base.setPartnerId("node_55")
+        base.setStatus(proto.STATUS.WORKING, "job_0041")
+        local stale   = base._firstSight(proto.encode(proto.MSG.JOB_ABORT, "node_56", base.getSelfId(), { reason = "no_hole_ready_from_delivery" }))
+        local partner = base._firstSight(proto.encode(proto.MSG.JOB_ABORT, "node_55", base.getSelfId(), { reason = "x" }))
+        local server  = base._firstSight(proto.encode(proto.MSG.JOB_ABORT, "server", base.getSelfId(), { jobId = "job_0041" }))
+        local wh      = base._firstSight(proto.encode(proto.MSG.JOB_ABORT, "warehouse", base.getSelfId(), { jobId = "job_0041" }))
+        assert_eq(stale, false, "an old partner's abort is dropped")
+        assert_eq(partner, true, "its partner's is taken")
+        assert_eq(server, true, "the server's is taken")
+        assert_eq(wh, true, "the warehouse's is taken")
+    end,
+
+    -- The Head Engineer's ruling: about its CURRENT job. The pair's job id rides a partner's abort.
+    ["a JOB_ABORT about another job is not taken, from anyone"] = function(assert_eq)
+        local base = fresh()
+        local proto = require("protocol")
+        base.setPartnerId("node_55", "job_0041")
+        base.setStatus(proto.STATUS.WORKING, "job_0041")
+        local function take(from, jobId)
+            return base._firstSight(proto.encode(proto.MSG.JOB_ABORT, from, base.getSelfId(), { reason = "x", jobId = jobId }))
+        end
+        assert_eq(take("node_55", "job_0039"), false, "its partner's, about an old pair's job")
+        assert_eq(take("server", "job_0039"), false, "the server's, about another job")
+        assert_eq(take("node_55", "job_0041"), true, "its partner's, about this pair's job")
+        assert_eq(take("server", "job_0041"), true, "the server's, about this job")
+    end,
+
+    ["a support takes its delivery's abort about the pair's job"] = function(assert_eq)
+        local base = fresh()
+        local proto = require("protocol")
+        base.setPartnerId("node_34", "job_0041")            -- its delivery, and the delivery's job
+        base.setStatus(proto.STATUS.WORKING, "job_0045")    -- its own half
+        local ok = base._firstSight(proto.encode(proto.MSG.JOB_ABORT, "node_34", base.getSelfId(), { reason = "x", jobId = "job_0041" }))
+        assert_eq(ok, true, "taken")
+    end,
+
+    ["a failing turtle's abort to its partner carries the pair's job id"] = function(assert_eq)
+        local base, sent = fresh()
+        local proto = require("protocol")
+        base.setPartnerId("node_34", "job_0039")
+        base.setStatus(proto.STATUS.WORKING, "job_0042")
+        pcall(base.sendFailed, "no_hole_ready_from_delivery", true)
+        local carried = false
+        for _, b in ipairs(sent) do
+            if b:find("JOB_ABORT", 1, true) and b:find("job_0039", 1, true) then carried = true end
+        end
+        assert_eq(carried, true, "JOB_ABORT with jobId job_0039")
+    end,
+
     ["a turtle not told PARK moves"] = function(assert_eq)
         local base = fresh()
         local proto = require("protocol")

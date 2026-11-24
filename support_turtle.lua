@@ -30,7 +30,7 @@ local function supportJob(job)
     -- dest is passed from the dispatcher for informational use; navigation is
     -- handled by following the delivery turtle's POSITION_UPDATE broadcasts.
 
-    base.setPartnerId(partnerId)
+    base.setPartnerId(partnerId, masterJobId)
     base.setStatus(proto.STATUS.WORKING, job.id)
 
     -- Mining no longer uses a support turtle: since v1.9.0 the miner carries its

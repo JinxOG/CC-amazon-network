@@ -134,7 +134,10 @@ function base.loadSavedDock()
 end
 function base.getPartnerId()     return _self.partnerId  end
 -- pairMate (R4): the job's partner, kept while partnerId is cleared for the ascent.
-function base.setPartnerId(id)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false
+-- pairJob: the pair's job id -- the delivery's own job -- that a partner's JOB_ABORT carries (firstSight).
+-- Kept when the partner is cleared and restored around a failure (delivery_turtle).
+function base.setPartnerId(id, pairJob)   _self.partnerId = id; _self.partnerSlot = nil; _self.partnerLeft = false
+    if pairJob then _self.pairJobId = pairJob end
                                  _self.partnerHome = false; _self.partnerHeardAt = os.epoch("utc"); _self.pairCancelled = false
                                  if id ~= nil then _self.pairMate = id end end
 -- R4: when its partner was last heard, and whether it said "come home" (firstSight).
@@ -530,6 +533,26 @@ function base.drainCtrl() return inboxDrain(_ctrlInbox) end
 local RECENT_MAX = 16
 local _recentKeys, _recentSet = {}, {}
 local function firstSight(msg)
+    -- AN OLD PARTNER'S ABORT IS NOT TAKEN (sim w3_side_atc on 4d2617c, 2026-11-24). node_56's support
+    -- job was cancelled in a radio blackout it never heard; carrying on, it timed out and sent its old
+    -- partner node_34 a JOB_ABORT. node_34, on another job with another support, took it and ended that
+    -- job at its destination. From a turtle, a JOB_ABORT is its current partner's to send.
+    -- About its CURRENT job only (Head Engineer, 2026-11-24): an abort that names a job must name this
+    -- one or its pair's; one from a turtle that names none must be its current partner's.
+    if msg.type == proto.MSG.JOB_ABORT then
+        local about = type(msg.payload) == "table" and msg.payload.jobId or nil
+        local fromTurtle = type(msg.from) == "string" and msg.from:find("^node_") ~= nil
+        local why
+        if about ~= nil and about ~= _self.jobId and about ~= _self.pairJobId then
+            why = string.format("about %s, not my job (%s)", tostring(about), tostring(_self.jobId))
+        elseif fromTurtle and _self.partnerId and msg.from ~= _self.partnerId then
+            why = string.format("not my partner (%s)", tostring(_self.partnerId))
+        end
+        if why then
+            logWarn(string.format("JOB_ABORT from %s %s -- not taken", tostring(msg.from), why))
+            return false
+        end
+    end
     -- What a support's delivery says about itself is noted HERE, the one place
     -- both loops pass every message through: its holding slot (ASCENDING /
     -- RETURN_TO_DOCK) and that it went down without the support (PARTNER_LEFT).
@@ -5231,7 +5254,7 @@ function base.sendFailed(reason, recoverable)
     -- on without it: the delivery is out working, and this JOB_ABORT ended its job
     -- at the destination (sandbox/scenarios/w3_atc_partner_left.lua, 2026-11-12).
     if _self.partnerId and not tostring(reason):find("partner_left", 1, true) then
-        base.signalPartnerDirect(proto.MSG.JOB_ABORT, _self.partnerId, { reason = reason })
+        base.signalPartnerDirect(proto.MSG.JOB_ABORT, _self.partnerId, { reason = reason, jobId = _self.pairJobId })
     end
     base.reportFailed(_self.jobId, reason, recoverable)
     _self.status    = proto.STATUS.IDLE

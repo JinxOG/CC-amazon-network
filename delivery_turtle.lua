@@ -262,7 +262,7 @@ local ok, err = pcall(base.run, function(job)
         return base.sendFailed("invalid destination params", false)
     end
     local d      = params.destination
-    base.setPartnerId(params.partnerId)
+    base.setPartnerId(params.partnerId, job.id)
     base.setFollowGate(false)   -- on once its support is out with it (below)
 
     -- ── Step 1: Queue with warehouse, depart immediately ─────────────────────
