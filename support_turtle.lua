@@ -178,7 +178,7 @@ local function supportJob(job)
             -- since its own crash (T2 shakeout-side-e, 02:13:29).
             local silent = (os.epoch("utc") - heardAt) / 1000
             if silent > PARTNER_SILENT_S then
-                print(string.format("Partner silent %ds -- taken for gone. Returning to dock.", math.floor(silent)))
+                print(string.format("Partner %s silent %ds -- taken for gone. Returning to dock.", tostring(partnerId), math.floor(silent)))
                 break
             end
 

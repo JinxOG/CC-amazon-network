@@ -59,7 +59,7 @@ return {
     local dispatched = sim:capture_log("Dispatched job_")
     local follow = sim:capture_log("Following node_")
     local holding = sim:capture_log("holding position")
-    local offline = sim:capture_log("Partner silent")
+    local offline = sim:capture_log("-- taken for gone. Returning to dock")
     local retrace = sim:capture_log("retracing the")
     local shut = sim:capture_log("way home is shut")
     local done = sim:capture_log("Job complete: job_")
