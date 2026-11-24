@@ -650,7 +650,12 @@ TIMER_RX = (
     ("blocked_give_up", re.compile(r"Gave up after \d+s blocked")),
     # the line where it fires; "Return home failed ...: no holding slot of mine in 120 s; retracing stopped" later is the same wait
     ("no_holding_slot", re.compile(r"\(no holding slot of mine in \d+ s\) -- retracing")),
+    ("hole_ready_timeout", re.compile(r"No HOLE_READY signal after \d+s")),     # support_turtle.lua at 28e2a29
 )
+# A delivery job failed by a timeout (delivery_turtle.lua failDelivery at 28e2a29). The turtle's line and the server's retry line
+# both name it and either can be lost, so one job's timeout within JOB_TIMEOUT_MERGE_MS counts once.
+JOB_TIMEOUT_RX = re.compile(r"Job (job_\d+) (?:failed \(|retry \d+/\d+: |permanently failed: )(warehouse_chest_timeout|batch_phase_timeout)\b")
+JOB_TIMEOUT_MERGE_MS = 10 * 60 * 1000
 SWEEP_RX = re.compile(r"(node_\d+) silent \d+s: booking dropped")
 # The partner-silence nets (turtle_base.lua SUPPORT_SILENT_S, support_turtle.lua PARTNER_SILENT_S, at 7fa8982), judged like the
 # sweep: a partner heard again after the net fired was alive, so the clock ended a live wait. One the line does not name is counted.
@@ -685,7 +690,7 @@ def atc_waits(lines):
 
 def timer_clears(lines):
     """([{"t", "node", "kind", "line"}], evidence): every wait a last-line timer ended, in run time order."""
-    out, dead, dead_partners, last_heard = [], 0, 0, {}
+    out, dead, dead_partners, last_heard, job_seen = [], 0, 0, {}, {}
     for l in lines:
         m = NODE_RX.match(l["src"])
         if m:
@@ -696,6 +701,14 @@ def timer_clears(lines):
                 out.append({"t": l["rt"], "node": l["src"] if NODE_RX.match(l["src"]) else None, "kind": kind, "line": l["raw"]})
                 break
         else:
+            m = JOB_TIMEOUT_RX.search(l["msg"])
+            if m:
+                key = (m.group(1), m.group(2))
+                if l["rt"] - job_seen.get(key, -JOB_TIMEOUT_MERGE_MS - 1) > JOB_TIMEOUT_MERGE_MS:
+                    out.append({"t": l["rt"], "node": l["src"] if NODE_RX.match(l["src"]) else None, "kind": "job_timeout",
+                                "line": l["raw"]})
+                job_seen[key] = l["rt"]
+                continue
             hit = next(((kind, m) for kind, rx in PARTNER_RX for m in [rx.search(l["msg"])] if m), None)
             if hit:
                 kind, m = hit

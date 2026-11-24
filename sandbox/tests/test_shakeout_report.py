@@ -486,6 +486,28 @@ class TimerClearedIsAFailure(unittest.TestCase):
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    # More last-line timers, found by reading the code at 28e2a29 (payload-g's own lines): the support's HOLE_READY wait, and a
+    # delivery job failed by a timeout. A job's failure is logged by the turtle AND by the server's retry line, and either can be
+    # lost (logs ship every 15 s), so one job's timeout within 10 min counts once whichever line arrived.
+    MORE_LINES = [
+        (10 * MIN, "node_225", "-", "No HOLE_READY signal after 180s — delivery partner timed out. Returning to dock."),
+        (20 * MIN, "node_208", "WARN", "[node_208][WARN] Job job_0251 failed (warehouse_chest_timeout) at 184,67,-2758 -- bringing "
+                                        "support node_226 home first, then reporting it"),
+        (21 * MIN, "server", "WARN", "Job job_0251 retry 1/3: warehouse_chest_timeout"),     # the same failure: once
+        (22 * MIN, "server", "WARN", "Job job_0250 retry 1/3: warehouse_chest_timeout"),     # its turtle line was lost: still counts
+        (23 * MIN, "server", "WARN", "Job job_0260 retry 1/3: batch_phase_timeout"),
+        (24 * MIN, "server", "WARN", "Job job_0261 retry 1/3: blocked"),                     # not a timer: not counted
+    ]
+
+    def test_hole_ready_and_job_timeouts_are_timer_cleared(self):
+        run = make_run(hours=1, extra_lines=self.MORE_LINES)
+        try:
+            rep = report.build_report(run)
+            got = sorted(c["kind"] for c in rep["timer_clears"])
+            self.assertEqual(got, ["hole_ready_timeout", "job_timeout", "job_timeout", "job_timeout"], rep["timer_clears"])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
     def test_none_is_zero_with_its_evidence(self):
         run = make_run(hours=1)
         try:
