@@ -508,6 +508,32 @@ class TimerClearedIsAFailure(unittest.TestCase):
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    # A stale hold (payload-d's N4=node_441, SPEC-OWNER's ruling 2026-11-24): the ATC's minute summary still names a turtle that
+    # /state shows IDLE on its own dock. A dock is in no section, so that hold is held by nobody. Two snapshots running is a FAILURE.
+    @staticmethod
+    def _summary(t, holds):
+        return (t, "atc", "-", "[ATC] %d section(s) held, %d booking(s): %s" % (len(holds), len(holds), " ".join(holds)))
+
+    def test_a_hold_by_a_turtle_idle_on_its_dock_is_stale(self):
+        lines = [self._summary(m * MIN + 30000, ["N4=node_5", "S1=node_7"]) for m in range(9, 22)]
+        run = make_run(hours=1, extra_lines=lines, stuck_node=True)     # node_5 IDLE on its dock; node_7 off its dock
+        try:
+            rep = report.build_report(run)
+            self.assertEqual([(h["node"], h["sections"]) for h in rep["stale_holds"]], [("node_5", ["N4"])], rep["stale_holds"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**1 stale hold(s)**", md)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_a_hold_seen_on_the_dock_once_is_not_stale(self):
+        lines = [self._summary(m * MIN + 30000, ["N4=node_5+1"]) for m in range(9, 12)]     # spans one 5-min snapshot only
+        run = make_run(hours=1, extra_lines=lines)
+        try:
+            self.assertEqual(report.build_report(run)["stale_holds"], [])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
     def test_none_is_zero_with_its_evidence(self):
         run = make_run(hours=1)
         try:

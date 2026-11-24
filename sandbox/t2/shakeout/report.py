@@ -688,6 +688,51 @@ def atc_waits(lines):
     return out
 
 
+# A STALE HOLD (payload-d's N4=node_441; SPEC-OWNER's ruling 2026-11-24): the ATC's minute summary still names a turtle that /state
+# shows IDLE on its own dock. A dock is in no ATC section, so nobody is using that hold, and it blocks everyone who needs it.
+# STALE_SNAPSHOTS snapshots running is a FAILURE. Detection only: the report never clears anything.
+ATC_SUMMARY_RX = re.compile(r"\[ATC\] \d+ section\(s\) held, \d+ booking\(s\):(.*)$")
+ATC_HOLD_RX = re.compile(r"(\w+)=(node_\d+)")
+STALE_SNAPSHOTS = 2
+SUMMARY_FRESH_MS = 2 * 60 * 1000          # the summary a snapshot is judged against: the last one, if no older than this
+
+
+def stale_holds(lines, snapshots):
+    """[{"node", "sections", "t", "until", "line"}]: each run of holds by a turtle IDLE on its own dock, once it lasts
+    STALE_SNAPSHOTS snapshots (until: the last snapshot it was seen in)."""
+    sums = []
+    for l in lines:
+        if l["src"] == "atc":
+            m = ATC_SUMMARY_RX.search(l["msg"])
+            if m:
+                holds = {}
+                for sec, node in ATC_HOLD_RX.findall(m.group(1)):
+                    holds.setdefault(node, []).append(sec)
+                sums.append((l["rt"], holds, l["raw"]))
+    sums.sort(key=lambda x: x[0])
+    out, run_of, i, cur = [], {}, 0, None
+    for snap in sorted(snapshots, key=lambda x: x["t"]):
+        while i < len(sums) and sums[i][0] <= snap["t"]:
+            cur = sums[i]
+            i += 1
+        holds = cur[1] if cur and snap["t"] - cur[0] <= SUMMARY_FRESH_MS else {}
+        seen = set()
+        for node, secs in holds.items():
+            e = (snap.get("turtles") or {}).get(node) or {}
+            if e.get("status") == "IDLE" and e.get("x") is not None and e.get("x") == e.get("dockX") and \
+                    e.get("z") == e.get("dockZ"):
+                seen.add(node)
+                r = run_of.setdefault(node, {"node": node, "sections": sorted(secs), "t": snap["t"], "n": 0, "line": cur[2]})
+                r["n"] += 1
+                r["until"] = snap["t"]
+                if r["n"] == STALE_SNAPSHOTS:
+                    out.append(r)
+        for node in list(run_of):
+            if node not in seen:
+                del run_of[node]
+    return [{k: v for k, v in r.items() if k != "n"} for r in out]
+
+
 def timer_clears(lines):
     """([{"t", "node", "kind", "line"}], evidence): every wait a last-line timer ended, in run time order."""
     out, dead, dead_partners, last_heard, job_seen = [], 0, 0, {}, {}
@@ -1201,6 +1246,14 @@ def build_report(run_dir, expected=None):
                           "lines": [line], "seed": seed, "schedule": R["schedule_path"], "faults_near": [], "at": None})
     tclears, tevidence = timer_clears(R["lines"])
     awaits = atc_waits(R["lines"])
+    stale = stale_holds(R["lines"], R["snapshots"])
+    if stale:
+        cards.append({"title": "Stale ATC hold: %d hold(s) by %d turtle(s) IDLE on their own dock" % (len(stale), len({h["node"] for h in stale})),
+                      "turtles": sorted({h["node"] for h in stale}, key=_node_key),
+                      "why": ["%s held %s from run %s to at least %s" % (h["node"], " ".join(h["sections"]), _hm(h["t"]),
+                                                                            _hm(h["until"])) for h in stale[:5]],
+                      "lines": [h["line"] for h in stale[:3]], "seed": seed, "schedule": R["schedule_path"],
+                      "faults_near": faults_near(stale[0]["t"]), "at": stale[0]["t"]})
     held = [w for w in awaits if w["cleared"] is None]
     if held:
         cards.append({"title": "ATC wait never cleared: %d turtle(s)" % len(held),
@@ -1266,7 +1319,7 @@ def build_report(run_dir, expected=None):
         "long_sites": [dict(s, jobs=sorted(s["jobs"])) for s in long_sites(R)] if R["kind"] == "t2" else None,
         "faults": fstats, "fault_evidence": fevidence, "housekeeping": hk, "hours": hours, "drift": drift,
         "log_gaps": [{"from": a, "to": b} for a, b in log_gaps], "snap_gaps": [{"from": a, "to": b} for a, b in snap_gaps],
-        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence, "atc_waits": awaits,
+        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence, "atc_waits": awaits, "stale_holds": stale,
         "evidence": {"log_lines": len(R["lines"]), "unparsed_lines": R["unparsed"], "snapshots": len(R["snapshots"]),
                      "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "loaders": fd["loaders"], "fault_lines": fevidence,
                      "windows": len(W)},
@@ -1325,6 +1378,9 @@ def _render(rep):
           "- No ATC wait left standing: **%d ATC wait(s) never cleared** (evidence: %d atc_wait(s) raised, %d cleared by the "
           "turtle measuring its facing)" % (sum(1 for w in rep["atc_waits"] if w["cleared"] is None), len(rep["atc_waits"]),
                                              sum(1 for w in rep["atc_waits"] if w["cleared"] is not None)),
+          "- No stale ATC hold: **%d stale hold(s)** (a section held while its turtle sat IDLE on its own dock for %d snapshots "
+          "running; evidence: %d snapshots judged against the ATC's minute summary)" % (
+              len(rep["stale_holds"]), STALE_SNAPSHOTS, ev["snapshots"]),
           "- Verdicts: %s; stuck at least once: %d" % (", ".join("%s %d" % (k, c[k]) for k in VERDICTS), rep["stuck_ever"])]
     if judged == 0:
         o.append("- TRUNCATED: no turtle could be judged, so none of the counts above is evidence")
