@@ -660,6 +660,29 @@ PARTNER_RX = (
 )
 
 
+# atc_wait (turtle_base.lua at 28e2a29): the ATC would not let a turtle measure its facing for a minute. Hands do not help, so it is not
+# NEEDS HANDS; it clears on that turtle's own "Position and facing measured". One never cleared is a jam the ATC held: a FAILURE.
+ATC_WAIT_RX = re.compile(r"atc_wait: facing unknown at (-?\d+,-?\d+,-?\d+) \(waiting for the ATC to grant the cells around it: ([^)]*)\)")
+FACING_MEASURED_RX = re.compile(r"Position and facing measured after \d+ retries")
+
+
+def atc_waits(lines):
+    """[{"t", "node", "at", "why", "cleared": run time or None, "line"}]: each atc_wait once (its repeats are the same wait)."""
+    out, open_by = [], {}
+    for l in lines:
+        node = l["src"] if NODE_RX.match(l["src"]) else None
+        if not node:
+            continue
+        m = ATC_WAIT_RX.search(l["msg"])
+        if m:
+            if node not in open_by:
+                open_by[node] = {"t": l["rt"], "node": node, "at": m.group(1), "why": m.group(2), "cleared": None, "line": l["raw"]}
+                out.append(open_by[node])
+        elif node in open_by and FACING_MEASURED_RX.search(l["msg"]):
+            open_by.pop(node)["cleared"] = l["rt"]
+    return out
+
+
 def timer_clears(lines):
     """([{"t", "node", "kind", "line"}], evidence): every wait a last-line timer ended, in run time order."""
     out, dead, dead_partners, last_heard = [], 0, 0, {}
@@ -1164,6 +1187,14 @@ def build_report(run_dir, expected=None):
             cards.append({"title": "Storage headroom low outside a scheduled storage fault", "turtles": [], "why": [line],
                           "lines": [line], "seed": seed, "schedule": R["schedule_path"], "faults_near": [], "at": None})
     tclears, tevidence = timer_clears(R["lines"])
+    awaits = atc_waits(R["lines"])
+    held = [w for w in awaits if w["cleared"] is None]
+    if held:
+        cards.append({"title": "ATC wait never cleared: %d turtle(s)" % len(held),
+                      "turtles": sorted({w["node"] for w in held}, key=_node_key),
+                      "why": ["the ATC never let it measure its facing (a jam the ATC held, not a hands case)"],
+                      "lines": [w["line"] for w in held[:3]], "seed": seed, "schedule": R["schedule_path"],
+                      "faults_near": faults_near(held[0]["t"]), "at": held[0]["t"]})
     by_kind = {}
     for c in tclears:
         by_kind.setdefault(c["kind"], []).append(c)
@@ -1222,7 +1253,7 @@ def build_report(run_dir, expected=None):
         "long_sites": [dict(s, jobs=sorted(s["jobs"])) for s in long_sites(R)] if R["kind"] == "t2" else None,
         "faults": fstats, "fault_evidence": fevidence, "housekeeping": hk, "hours": hours, "drift": drift,
         "log_gaps": [{"from": a, "to": b} for a, b in log_gaps], "snap_gaps": [{"from": a, "to": b} for a, b in snap_gaps],
-        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence,
+        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence, "atc_waits": awaits,
         "evidence": {"log_lines": len(R["lines"]), "unparsed_lines": R["unparsed"], "snapshots": len(R["snapshots"]),
                      "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "loaders": fd["loaders"], "fault_lines": fevidence,
                      "windows": len(W)},
@@ -1278,6 +1309,9 @@ def _render(rep):
                   {c["kind"]: sum(1 for x in rep["timer_clears"] if x["kind"] == c["kind"]) for c in rep["timer_clears"]}.items())))
               if rep["timer_clears"] else "", rep["timer_evidence"]["lines_scanned"], rep["timer_evidence"]["dead_sweeps"],
               rep["timer_evidence"].get("dead_partners", 0)),
+          "- No ATC wait left standing: **%d ATC wait(s) never cleared** (evidence: %d atc_wait(s) raised, %d cleared by the "
+          "turtle measuring its facing)" % (sum(1 for w in rep["atc_waits"] if w["cleared"] is None), len(rep["atc_waits"]),
+                                             sum(1 for w in rep["atc_waits"] if w["cleared"] is not None)),
           "- Verdicts: %s; stuck at least once: %d" % (", ".join("%s %d" % (k, c[k]) for k in VERDICTS), rep["stuck_ever"])]
     if judged == 0:
         o.append("- TRUNCATED: no turtle could be judged, so none of the counts above is evidence")

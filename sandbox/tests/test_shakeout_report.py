@@ -459,6 +459,33 @@ class TimerClearedIsAFailure(unittest.TestCase):
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    # atc_wait (turtle_base.lua at 28e2a29): a turtle the ATC would not let measure its facing for a minute. Hands do not help, so it is
+    # not NEEDS HANDS; one never followed by that turtle's own "Position and facing measured" is a jam the ATC held: a FAILURE.
+    ATC_WAIT_LINES = [
+        (10 * MIN, "node_441", "WARN", "[node_441][WARN] atc_wait: facing unknown at 197,67,-2797 (waiting for the ATC to grant the "
+                                        "cells around it: busy at N4)"),
+        (11 * MIN, "node_441", "WARN", "[node_441][WARN] atc_wait: facing unknown at 197,67,-2797 (waiting for the ATC to grant the "
+                                        "cells around it: busy at N4)"),     # the same wait repeating: one wait
+        (12 * MIN, "node_441", "INFO", "[node_441][INFO] Position and facing measured after 14 retries: 197,67,-2797 -- boot: "
+                                        "choosing a route home can go ahead"),
+        (13 * MIN, "node_443", "WARN", "[node_443][WARN] atc_wait: facing unknown at 197,67,-2793 (waiting for the ATC to grant the "
+                                        "cells around it: no answer from the ATC)"),     # never measured: still held at the end
+    ]
+
+    def test_an_atc_wait_never_cleared_fails_the_bar(self):
+        run = make_run(hours=1, extra_lines=self.ATC_WAIT_LINES)
+        try:
+            rep = report.build_report(run)
+            got = [(w["node"], w["cleared"] is None) for w in rep["atc_waits"]]
+            self.assertEqual(got, [("node_441", False), ("node_443", True)], rep["atc_waits"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**1 ATC wait(s) never cleared**", md)
+            self.assertTrue(any(c["title"].startswith("ATC wait never cleared") for c in rep["cards"]),
+                            [c["title"] for c in rep["cards"]])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
     def test_none_is_zero_with_its_evidence(self):
         run = make_run(hours=1)
         try:
