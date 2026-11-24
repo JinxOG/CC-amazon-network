@@ -693,7 +693,35 @@ function mine_flow.retrieveLoader()
             .. "%s to make room", droppedName))
     end
 
-    report("RETRIEVING", "comms gap expected")
+    -- ANNOUNCE ONLY IF THERE IS A RADIO TO ANNOUNCE WITH.
+    --
+    -- THE FAULT: "Send failed (modem detached or missing?): No such method
+    -- transmit" while retrieving a loader -- shakeout-side-a node_227, and again
+    -- in payload-h node_453 and payload-i node_295 on 2026-11-24. node_295's
+    -- window is 87 ms wide: "phase RETRIEVING — boot recovery" at 11:58:04.742,
+    -- the send failure at 11:58:04.829.
+    --
+    -- Retrieval deliberately swaps the modem off for the chunk loader, and this
+    -- announced the phase anyway. It reaches that state when chunky is ALREADY
+    -- equipped -- which is what a reboot landing mid-retrieval leaves behind,
+    -- since the swap-in below is then skipped and the modem came off in a
+    -- previous life.
+    --
+    -- Nothing was lost in any of the three, but the warning is actively
+    -- misleading: "modem detached or missing?" describes a hardware fault, and
+    -- this is a modem we removed on purpose. A message that cannot tell its
+    -- causes apart costs somebody an investigation.
+    --
+    -- STILL ANNOUNCED WHENEVER THERE IS A MODEM, and a test pins that: the
+    -- comms-gap detail is how the server knows not to declare this turtle lost,
+    -- so silencing it unconditionally would trade a cosmetic warning for a lost
+    -- turtle.
+    if equipment.sideOf("modem") then
+        report("RETRIEVING", "comms gap expected")
+    else
+        log("retrieving with the modem already stowed — not announcing the phase, "
+            .. "there is no radio to announce it with")
+    end
 
     if not chunkyEquipped then
         -- Sacrifice the modem, not chunk loading: offline is recoverable,

@@ -379,6 +379,9 @@ Q_KIND    = "scanner recovery runs at boot and verifies identity (SOURCE-ONLY, w
 F_FLOOR   = "isWorldFloor recognises bedrock and nothing else"
 # The loader stopped re-measuring an immovable block 12 times a minute.
 B_CACHE   = "the loader caches its position instead of locating every beacon (SOURCE-ONLY, weaker)"
+# No phase announcement with the modem deliberately stowed (2026-11-24).
+M_QUIET   = "retrieveLoader does not announce the phase when the modem is already off"
+M_LOUD    = "retrieveLoader still announces the phase when the modem is on"
 F_STRUCT  = "the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"
 J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
 B_REC     = "placeLoader records the label of the loader it put down"
@@ -2210,6 +2213,14 @@ MUTANTS = [
      [('        base.ledger.record("geo_scanner", {', '        local _norecord = ({')], Q_KIND),
     ("clearing the scanner leaves a ledger ghost behind", "ore_turtle.lua",
      [('    pcall(base.ledger.clear, "geo_scanner")\n', '')], Q_KIND),
+
+    # ---- no phase announcement with the modem stowed (2026-11-24) ----------
+    ("the retrieval announces its phase with no modem again", "mine_flow.lua",
+     [('    if equipment.sideOf("modem") then\n        report("RETRIEVING"',
+       '    if true then\n        report("RETRIEVING"')], M_QUIET),
+    ("the retrieval never announces its phase at all", "mine_flow.lua",
+     [('    if equipment.sideOf("modem") then\n        report("RETRIEVING"',
+       '    if false then\n        report("RETRIEVING"')], M_LOUD),
 
     # ---- the loader's position cache (2026-11-24) --------------------------
     # A gps.locate is ~130 radio wake-ups, not one message: 12 hosts all reply

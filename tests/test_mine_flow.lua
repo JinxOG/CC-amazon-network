@@ -2551,6 +2551,76 @@ return {
     -- NOTHING CENSUSED IS NIL, NOT A ZERO-WIDTH BAND. An empty band reads as a
     -- fact about the ground; nil reads as "this survey did not say", which is
     -- the only true answer.
+    -- DO NOT ANNOUNCE A PHASE WITH THE MODEM ALREADY STOWED.
+    --
+    -- THE FAULT (shakeout-side-a node_227, and again in payload-h node_453 and
+    -- payload-i node_295 on 2026-11-24): "Send failed (modem detached or
+    -- missing?): No such method transmit" while retrieving a loader.
+    --
+    -- Measured: node_295's window is 87 ms wide -- "phase RETRIEVING — boot
+    -- recovery" at 11:58:04.742, the send failure at 11:58:04.829 -- and its
+    -- slot 1 still held the geo scanner, so nothing was actually lost. The
+    -- modem is deliberately swapped off for the chunk loader during retrieval
+    -- ("sacrifice the modem, not chunk loading"), and retrieveLoader then
+    -- announced the phase anyway.
+    --
+    -- It reaches this state when chunky is ALREADY equipped, which is what a
+    -- reboot landing mid-retrieval leaves behind: the swap-in is skipped, so
+    -- the modem was taken off in a previous life and the announcement is made
+    -- with no radio at all.
+    --
+    -- The warning is also MISLEADING, which is the part that costs time: "modem
+    -- detached or missing?" describes a hardware fault, and this is a modem we
+    -- deliberately removed. Same family as every other fault this session -- a
+    -- message that cannot tell its causes apart.
+    ["retrieveLoader does not announce the phase when the modem is already off"] =
+    function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        -- Chunky already equipped and the modem NOT: exactly what a reboot
+        -- mid-retrieval leaves behind.
+        local flow, _, _, ls, c = loadFlow({ left = eqm.ITEMS.CHUNKY, right = eqm.ITEMS.PICKAXE },
+                                           inv, { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE })
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+        local phases = {}
+        flow.setHooks({ reportPhase = function(p, d) phases[#phases + 1] = tostring(p) end })
+
+        flow.retrieveLoader()
+
+        local announced = false
+        for _, p in ipairs(phases) do if p == "RETRIEVING" then announced = true end end
+        assert_eq(announced, false,
+            "with the modem already stowed the phase must NOT be announced -- the "
+            .. "send cannot succeed, and the warning it produces says 'modem "
+            .. "detached or missing?' about a modem we removed on purpose")
+    end,
+
+    ["retrieveLoader still announces the phase when the modem is on"] =
+    function(assert_eq)
+        local eqm = require("equipment")
+        -- E_MINE is modem + pickaxe equipped, so chunky must be CARRIED for
+        -- retrieveLoader to get past its chunky_missing guard and reach the
+        -- announcement at all. travelInv has the loader turtle in slot 2, not
+        -- the chunky upgrade, which is why the first draft of this test never
+        -- reached the line it was testing and failed for the wrong reason.
+        local inv = travelInv()
+        inv[5] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        local flow, _, _, ls, _ = loadFlow(E_MINE(), inv,
+                                           { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE })
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+        local phases = {}
+        flow.setHooks({ reportPhase = function(p) phases[#phases + 1] = tostring(p) end })
+
+        flow.retrieveLoader()
+
+        local announced = false
+        for _, p in ipairs(phases) do if p == "RETRIEVING" then announced = true end end
+        assert_eq(announced, true,
+            "and with a modem it MUST still announce -- the comms gap warning is "
+            .. "how the server knows not to declare this turtle lost, so silencing "
+            .. "it unconditionally would trade a cosmetic warning for a lost turtle")
+    end,
+
     -- THE WORLD FLOOR IS THE SECTOR'S BOTTOM, NOT A SCAN FAILURE.
     --
     -- THE FAULT (every T2 side test; shakeout-side-h 16 occurrences, side-e 10,
