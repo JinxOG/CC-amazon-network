@@ -601,7 +601,12 @@ local ok, err = pcall(base.run, function(job)
         print("Warning: could not fully descend — attempting return anyway")
     end
 
-    if savedPartnerId and not base.isRecalled() then
+    -- RECALLED OR NOT, ITS SUPPORT COMES HOME WITH IT (sim w3_pair_server_crash). Recalled at
+    -- its destination ("RECALL: BATCH_DONE timeout" in a server crash) it went home without a
+    -- word to its support, which cannot dig: told only 2.5 min later ("job_cancelled"), the
+    -- support found the holding line behind rock and walked back the way it came, into the
+    -- job's next pair. Its support is told it has descended, and is brought home (R3).
+    if savedPartnerId then
         base.setPartnerId(savedPartnerId)
         base.signalPartner(proto.MSG.DESCENDED, {})
     end
