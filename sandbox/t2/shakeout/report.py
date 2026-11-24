@@ -652,11 +652,17 @@ TIMER_RX = (
     ("no_holding_slot", re.compile(r"\(no holding slot of mine in \d+ s\) -- retracing")),
 )
 SWEEP_RX = re.compile(r"(node_\d+) silent \d+s: booking dropped")
+# The partner-silence nets (turtle_base.lua SUPPORT_SILENT_S, support_turtle.lua PARTNER_SILENT_S, at 7fa8982), judged like the
+# sweep: a partner heard again after the net fired was alive, so the clock ended a live wait. One the line does not name is counted.
+PARTNER_RX = (
+    ("support_silent", re.compile(r"Support (node_\d+) silent \d+s at the edge of chunk")),
+    ("partner_silent", re.compile(r"Partner (?:(node_\d+) )?silent \d+s -- taken for gone")),
+)
 
 
 def timer_clears(lines):
     """([{"t", "node", "kind", "line"}], evidence): every wait a last-line timer ended, in run time order."""
-    out, dead, last_heard = [], 0, {}
+    out, dead, dead_partners, last_heard = [], 0, 0, {}
     for l in lines:
         m = NODE_RX.match(l["src"])
         if m:
@@ -667,13 +673,23 @@ def timer_clears(lines):
                 out.append({"t": l["rt"], "node": l["src"] if NODE_RX.match(l["src"]) else None, "kind": kind, "line": l["raw"]})
                 break
         else:
+            hit = next(((kind, m) for kind, rx in PARTNER_RX for m in [rx.search(l["msg"])] if m), None)
+            if hit:
+                kind, m = hit
+                partner = m.group(1)
+                if partner is None or last_heard.get(partner, -1) > l["rt"]:
+                    out.append({"t": l["rt"], "node": partner or (l["src"] if NODE_RX.match(l["src"]) else None),
+                                "kind": kind, "line": l["raw"]})
+                else:
+                    dead_partners += 1
+                continue
             m = SWEEP_RX.search(l["msg"])
             if m:
                 if last_heard.get(m.group(1), -1) > l["rt"]:
                     out.append({"t": l["rt"], "node": m.group(1), "kind": "atc_sweep_live", "line": l["raw"]})
                 else:
                     dead += 1
-    return out, {"lines_scanned": len(lines), "dead_sweeps": dead}
+    return out, {"lines_scanned": len(lines), "dead_sweeps": dead, "dead_partners": dead_partners}
 
 
 def _t0_from_faults(fault_lines):
@@ -1257,10 +1273,11 @@ def _render(rep):
           "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, counted apart)" % (c["decommissioned"],
                                                                                                        c["expected_hands"]),
           "- No wait cleared only by a timer (the user, 2026-11-17): **%d wait(s) cleared only by a timer**%s (evidence: %d log "
-          "lines scanned; %d ATC sweep(s) of a turtle never heard again, counted apart as dead)" % (
+          "lines scanned; %d ATC sweep(s) and %d partner-silence net(s) for a turtle never heard again, counted apart as dead)" % (
               len(rep["timer_clears"]), (" -- " + ", ".join("%s %d" % (k, n) for k, n in sorted(
                   {c["kind"]: sum(1 for x in rep["timer_clears"] if x["kind"] == c["kind"]) for c in rep["timer_clears"]}.items())))
-              if rep["timer_clears"] else "", rep["timer_evidence"]["lines_scanned"], rep["timer_evidence"]["dead_sweeps"]),
+              if rep["timer_clears"] else "", rep["timer_evidence"]["lines_scanned"], rep["timer_evidence"]["dead_sweeps"],
+              rep["timer_evidence"].get("dead_partners", 0)),
           "- Verdicts: %s; stuck at least once: %d" % (", ".join("%s %d" % (k, c[k]) for k in VERDICTS), rep["stuck_ever"])]
     if judged == 0:
         o.append("- TRUNCATED: no turtle could be judged, so none of the counts above is evidence")

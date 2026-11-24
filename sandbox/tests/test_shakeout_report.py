@@ -436,6 +436,29 @@ class TimerClearedIsAFailure(unittest.TestCase):
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    # The partner-silence nets (turtle_base.lua SUPPORT_SILENT_S, support_turtle.lua PARTNER_SILENT_S at 7fa8982). Like the ATC
+    # sweep: a partner heard again after the net fired was alive, so the clock ended a live wait (a FAILURE); one never heard
+    # again was really gone, counted apart. A line that names no partner cannot be judged, so it counts (a check must be able to fail).
+    PARTNER_LINES = [
+        (10 * MIN, "node_221", "WARN", "[node_221][WARN] Support node_234 silent 300s at the edge of chunk 10,-172 -- taken for gone"),
+        (12 * MIN, "node_234", "INFO", "[node_234][INFO] loop baseline: healthy"),     # alive after all: a live wait the clock ended
+        (13 * MIN, "node_222", "WARN", "[node_222][WARN] Support node_299 silent 300s at the edge of chunk 10,-173 -- taken for gone"),
+        (14 * MIN, "node_235", "-", "Partner node_209 silent 301s -- taken for gone. Returning to dock."),   # node_209 heard later
+        (15 * MIN, "node_209", "INFO", "[node_209][INFO] loop baseline: healthy"),
+        (16 * MIN, "node_237", "-", "Partner silent 305s -- taken for gone. Returning to dock."),            # names nobody: counts
+    ]
+
+    def test_partner_silence_counts_only_for_a_partner_alive_after_it(self):
+        run = make_run(hours=1, extra_lines=self.PARTNER_LINES)
+        try:
+            rep = report.build_report(run)
+            got = sorted((c["kind"], c["node"]) for c in rep["timer_clears"])
+            self.assertEqual(got, [("partner_silent", "node_209"), ("partner_silent", "node_237"),
+                                   ("support_silent", "node_234")], rep["timer_clears"])
+            self.assertEqual(rep["timer_evidence"]["dead_partners"], 1, "node_299 was never heard again: really gone")
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
     def test_none_is_zero_with_its_evidence(self):
         run = make_run(hours=1)
         try:
