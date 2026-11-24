@@ -646,11 +646,25 @@ function mine_flow.retrieveLoader()
 
     -- ROOM FOR THE LOADER, AT THE INSTANT OF THE DIG.
     --
-    -- turtle.dig() with no free slot breaks the block, returns TRUE, and
-    -- destroys the drop. Here the drop is a turtle, so the fleet loses the
-    -- hardware permanently and the chunk it was holding unloads. Three in the
-    -- field -- node_139 on 1.9.30, node_139 again 2026-10-01 16:13:08, node_119
-    -- 2026-10-03 04:36 -- each after a dump that freed nothing.
+    -- turtle.dig() with no free slot breaks the block, returns TRUE, and the
+    -- drop does NOT reach the pack: it is thrown on the ground beside the
+    -- turtle, where it despawns on the ordinary item timer. Here the drop is a
+    -- turtle, so the fleet loses the hardware and the chunk it was holding
+    -- unloads. Three in the field -- node_139 on 1.9.30, node_139 again
+    -- 2026-10-01 16:13:08, node_119 2026-10-03 04:36 -- each after a dump that
+    -- freed nothing.
+    --
+    -- CORRECTED 2026-11-24: this comment used to say the drop was DESTROYED,
+    -- and several others in the fleet said the same. It is not. Settled with
+    -- javap against the server's own cc-tweaked jar: TurtleTool installs
+    -- TurtleUtil.dropConsumer, whose lambda calls
+    -- InventoryUtil.storeItemsFromOffset and returns the leftover, and
+    -- stopConsuming then calls DropConsumer.clearAndDrop;
+    -- WorldUtil.dropItemStack spawns the stack 0.7 blocks from the block centre
+    -- toward the direction given, which is the turtle's facing REVERSED. The
+    -- difference matters: a dropped item is briefly recoverable with a suck,
+    -- which is what mine_flow.ensureEquipmentAboard does, and a destroyed one
+    -- never was.
     --
     -- The caller in ore_turtle attempts a dump immediately before this and its
     -- comment claims to be "the check that actually protects the loader". It is
@@ -665,12 +679,18 @@ function mine_flow.retrieveLoader()
     -- empty the pack and let the miner collect it. Placed before the equipment
     -- swap deliberately, so a refusal costs no comms gap and has nothing to
     -- undo.
-    local freeSlots = 0
-    for s = 1, 16 do
-        if turtle.getItemCount(s) == 0 then freeSlots = freeSlots + 1 end
-    end
-    if freeSlots == 0 then
+    -- Make room rather than only refuse (2026-11-24). Refusing is still the
+    -- fallback, but a miner that can free a slot by dropping a cobblestone
+    -- should do that instead of handing the sector back: the pack being full is
+    -- the normal state at the end of a level, not an exceptional one.
+    local roomed, roomDetail = mine_flow.makeRoomForEquipment()
+    if not roomed then
         return false, "no_room_for_loader"
+    end
+    local droppedName = roomDetail and roomDetail:match("^dropped:(.+)$")
+    if droppedName then
+        print(string.format("[MINER] No slot free for the chunk loader — dropped "
+            .. "%s to make room", droppedName))
     end
 
     report("RETRIEVING", "comms gap expected")
@@ -1496,6 +1516,116 @@ end
 -- are kept because min/max is the correct general statement of the intent and
 -- the alternative is code that silently depends on censusBand's ordering. The
 -- other six mutants of this function die, the `hi` guard's among them.
+--- Free slots across the WHOLE inventory, hardware slots included.
+--
+-- A dig puts its drop in the selected slot or the first free one anywhere, so
+-- "is there room" is a question about all sixteen, not about the payload range.
+function mine_flow.freeSlots()
+    local n = 0
+    for s = 1, 16 do
+        if turtle.getItemCount(s) == 0 then n = n + 1 end
+    end
+    return n
+end
+
+-- The payload slots, the only ones whose contents may be thrown away.
+local JUNK_FIRST, JUNK_LAST = 5, 13
+
+--- Guarantee somewhere for a piece of equipment to land before digging it up.
+--
+-- Returns true when there is room (nil detail if there already was, or
+-- "dropped:<item>" when a stack was thrown away to make it), and false,
+-- "no_junk_to_drop" when every slot holds something that must not be dropped.
+--
+-- THE FAULT IT EXISTS FOR (shakeout, 2026-11-24). The geo-scanner pickup dug
+-- with no free-slot count at all, unlike retrieveLoader. A dig with no room
+-- still returns TRUE, so scannerClear() wiped the record and the scanner was
+-- gone -- node_453 and node_411 each raised a NEEDS HANDS that could never
+-- clear, in 2 of 2 shakeout runs, both with "only 1 free mining slot(s)" logged.
+--
+-- WHERE THE ITEM ACTUALLY GOES, settled from the CC jar with javap because our
+-- own comments said "destroyed" and were wrong: TurtleTool installs
+-- TurtleUtil.dropConsumer, whose lambda calls InventoryUtil.storeItemsFromOffset
+-- and returns the leftover, and stopConsuming then calls
+-- DropConsumer.clearAndDrop. WorldUtil.dropItemStack spawns the stack 0.7 blocks
+-- from the block centre toward the direction given, and the direction passed is
+-- the turtle's facing REVERSED. So equipment lands just inside the block BEHIND
+-- the turtle and despawns on the ordinary item timer. Still a loss -- an item on
+-- the floor of a chunk nobody is loading is gone -- but briefly recoverable,
+-- which is what mine_flow.recoverDroppedEquipment is for.
+--
+-- NEVER DROPS HARDWARE. Freeing a slot by throwing out the loader would trade
+-- one piece of equipment for another, so only the payload range is eligible and
+-- only items equipment.isHardwareItem rejects. If that leaves nothing, this
+-- refuses and the caller must not dig -- refusing costs a sector, digging costs
+-- a miner.
+function mine_flow.makeRoomForEquipment()
+    if mine_flow.freeSlots() > 0 then return true end
+    for s = JUNK_FIRST, JUNK_LAST do
+        local it = turtle.getItemDetail(s)
+        if it and not equipment.isHardwareItem(it.name) then
+            turtle.select(s)
+            if turtle.drop() then return true, "dropped:" .. it.name end
+        end
+    end
+    return false, "no_junk_to_drop"
+end
+
+--- Last resort: suck a piece of equipment back off the ground.
+--
+-- Only reachable if the guard above was bypassed or the pack filled between the
+-- check and the dig. The drop lands in the block BEHIND the turtle (see above),
+-- so this turns about, sucks into the home slot, and turns back.
+--
+-- Returns true ONLY when the item is actually in its home slot afterwards. A
+-- successful suck of something else is not success: the caller clears a
+-- placement record on the strength of this, and a false yes there is exactly
+-- how the scanner was lost for good.
+--- After a dig that returned true, make sure the equipment is actually aboard.
+--
+-- Returns true, "aboard" when it is; true, "sucked_back" when it had to be
+-- collected off the ground; false, "lost" when it is neither.
+--
+-- WHY THIS IS A SEPARATE STEP AND NOT AN ASSUMPTION. turtle.dig() returning
+-- true proves the block went, never that the item arrived -- with no room it
+-- stores what fits and drops the rest beside the turtle. The caller clears a
+-- placement record on the strength of this answer, so a false yes here is how a
+-- scanner is lost for good rather than merely mislaid.
+--
+-- It lives here rather than in ore_turtle because ore_turtle self-executes at
+-- load, so the only possible test of it there is reading the source back as
+-- text -- and a mutant that replaced the whole check with `true` SURVIVED
+-- exactly that, with nothing red at all. Here it has three real tests.
+function mine_flow.ensureEquipmentAboard(itemName, homeSlot)
+    if type(itemName) ~= "string" then return false, "lost" end
+    if equipment.findSlot(itemName) then return true, "aboard" end
+    if mine_flow.recoverDroppedEquipment(itemName, homeSlot) then
+        return true, "sucked_back"
+    end
+    return false, "lost"
+end
+
+-- TURNS THROUGH THE HOOK, never turtle.turnRight. Every move and turn in a
+-- fleet file has to go through the journal or the recorded facing silently stops
+-- matching the world -- there is a test over the whole manifest that pins it,
+-- and it caught the first draft of this function.
+function mine_flow.recoverDroppedEquipment(itemName, homeSlot)
+    if type(itemName) ~= "string" then return false end
+    local slot = tonumber(homeSlot) or 1
+    local face = _hooks.face
+    local p = _hooks.pos and _hooks.pos()
+    if type(face) ~= "function" or not (p and p.facing) then return false end
+
+    local was = p.facing
+    face((was + 2) % 4)
+    turtle.select(slot)
+    turtle.suck()
+    face(was)
+
+    local it = turtle.getItemDetail(slot)
+    return (it ~= nil and it.name == itemName)
+end
+
 function mine_flow.coveredBand(ran, levels, radius)
     if type(ran) ~= "table" or type(levels) ~= "table" then return nil end
     local lo, hi, n = nil, nil, 0

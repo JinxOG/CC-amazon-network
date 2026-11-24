@@ -144,6 +144,35 @@ local function loadFlow(equipped, inv, world, pumpFactory, startFuel)
     return flow, eq, gf, ls, c
 end
 
+-- A REAL-CC DIG, for both cases below. The stub's turtle.dig() REFUSES when
+-- there is no room, leaving the block standing, so against the stub alone a
+-- "still standing" assertion passes whether or not the guard exists.
+--
+-- Real CC does not refuse and does not destroy either: it stores what fits
+-- and DROPS the rest beside the turtle (TurtleTool installs
+-- TurtleUtil.dropConsumer, stopConsuming calls DropConsumer.clearAndDrop,
+-- and WorldUtil.dropItemStack spawns the stack 0.7 blocks toward the
+-- reversed facing). Settled with javap against the server's own jar on
+-- 2026-11-24; the comment that used to be here said "destroys the drop" and
+-- was wrong, as were several in the fleet files. For these tests what
+-- matters is that the block goes and the item does NOT reach the pack, so
+-- the drop is modelled as leaving the turtle's inventory.
+local function modelRealDig(c, key)
+    turtle.dig = function()
+        if c.world[key] == nil then return false end
+        local slot
+        for s = 1, 16 do if c.inv[s] == nil then slot = s; break end end
+        local name = c.world[key]
+        c.world[key] = nil
+        if slot then
+            c.inv[slot] = { name = name, count = 1 }
+        else
+            c.dropped[#c.dropped + 1] = { name = name, count = 1, onGround = true }
+        end
+        return true
+    end
+end
+
 local function travelInv()
     local eq = require("equipment")
     return {
@@ -1771,44 +1800,76 @@ return {
     -- Refusing LEAVES THE LOADER STANDING, which is strictly better than gone:
     -- the chunk stays loaded, loader_state stays truthful, and a person can
     -- empty the pack and let the miner collect it.
-    ["retrieveLoader refuses the dig with no free slot, and leaves the loader standing"] = function(assert_eq)
+    -- CHANGED 2026-11-24 (spec owner's ruling). This used to assert that a full
+    -- pack REFUSES the retrieval. It now makes room first by dropping a junk
+    -- payload block, because a full pack is the normal state at the end of a
+    -- level and handing the sector back for it is a waste. The refusal survives
+    -- as the fallback and is pinned by the next test.
+    ["retrieveLoader makes room from junk rather than refusing, and collects the loader"] = function(assert_eq)
         local eqm = require("equipment")
         local inv = travelInv()
         inv[2] = { name = "minecraft:cobbled_deepslate", count = 1 }  -- what the rock bug put there
         inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
         for s = 4, 13 do inv[s] = { name = "minecraft:tuff", count = 64 } end
         local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
-        local flow, eq, _, ls, c = loadFlow(E_MINE(), inv, world)
+        local flow, _, _, ls, c = loadFlow(E_MINE(), inv, world)
         ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
-        local freeBefore = 0
-        for s = 1, 16 do if c.inv[s] == nil then freeBefore = freeBefore + 1 end end
-        assert_eq(freeBefore, 0, "precondition: the pack is genuinely full")
-
-        -- NINTH STUB FIDELITY GAP, and it would have hidden this entirely.
-        -- The stub's turtle.dig() REFUSES when there is no room (returns false,
-        -- leaving the block standing). Real CC:Tweaked breaks the block, returns
-        -- TRUE, and destroys the drop -- which is the whole reason a loader is
-        -- lost rather than merely not collected. Against the stub alone the
-        -- "still standing" assertion below passes whether or not the guard
-        -- exists, so model the game here.
-        turtle.dig = function()
-            if c.world["0,80,-1"] == nil then return false end
-            local slot
-            for s = 1, 16 do if c.inv[s] == nil then slot = s; break end end
-            local name = c.world["0,80,-1"]
-            c.world["0,80,-1"] = nil
-            if slot then c.inv[slot] = { name = name, count = 1 } end
-            return true
-        end
+        assert_eq(flow.freeSlots(), 0, "precondition: the pack is genuinely full")
+        modelRealDig(c, "0,80,-1")
 
         local ok, why = flow.retrieveLoader()
 
-        assert_eq(ok, false, "it must refuse rather than destroy the loader")
+        assert_eq(ok, true, "with droppable junk aboard it must make room and "
+            .. "collect the loader, not hand the sector back (" .. tostring(why) .. ")")
+        assert_eq(c.world["0,80,-1"], nil, "the loader was taken from the world")
+        local aboard = false
+        for s = 1, 16 do
+            if c.inv[s] and c.inv[s].name == eqm.ITEMS.LOADER_TURTLE then aboard = true end
+        end
+        assert_eq(aboard, true, "AND IT IS IN THE PACK, not on the ground -- a dig "
+            .. "that returns true proves the block went, never that the item arrived")
+        local junk = 0
+        for _, d in ipairs(c.dropped) do
+            if d.name == "minecraft:tuff" then junk = junk + 1 end
+        end
+        assert_eq(junk, 1, "exactly one junk stack was dropped to make the room")
+    end,
+
+    -- AND THE REFUSAL IS STILL THERE, for the case the ruling did not change:
+    -- nothing in the payload may be dropped, so there is no room to be had.
+    -- Refusing LEAVES THE LOADER STANDING, which is strictly better than losing
+    -- it: the chunk stays loaded, loader_state stays truthful, and a person can
+    -- empty the pack and let the miner collect it.
+    --
+    -- Three were lost in the field before the guard: node_139 on 1.9.30,
+    -- node_139 again 2026-10-01 16:13:08, node_119 2026-10-03 04:36 -- each
+    -- logged "Dumping ore before loader dig - only 0 free mining slot(s)" and
+    -- then dug anyway, because the caller never verified the dump freed
+    -- anything.
+    ["retrieveLoader refuses the dig when nothing can be dropped, and leaves the loader standing"] = function(assert_eq)
+        local eqm = require("equipment")
+        local inv = travelInv()
+        inv[2] = { name = "minecraft:cobbled_deepslate", count = 1 }
+        inv[3] = { name = eqm.ITEMS.CHUNKY, count = 1 }
+        inv[4] = { name = "enderstorage:ender_chest", count = 1 }
+        -- Every payload slot holds hardware, so makeRoomForEquipment has nothing
+        -- it is allowed to throw away.
+        for s = 5, 13 do inv[s] = { name = "enderstorage:ender_chest", count = 1 } end
+        local world = { ["0,80,-1"] = eqm.ITEMS.LOADER_TURTLE }
+        local flow, eq, _, ls, c = loadFlow(E_MINE(), inv, world)
+        ls.record(0, 80, -1, { cx = 0, cz = -1 }, 1)
+        assert_eq(flow.freeSlots(), 0, "precondition: the pack is genuinely full")
+        modelRealDig(c, "0,80,-1")
+
+        local ok, why = flow.retrieveLoader()
+
+        assert_eq(ok, false, "it must refuse rather than dig with nowhere to put it")
         assert_eq(why, "no_room_for_loader", "and name the reason")
         assert_eq(c.world["0,80,-1"], eqm.ITEMS.LOADER_TURTLE,
             "THE LOADER MUST STILL BE STANDING -- that is the whole point")
         assert_eq(ls.hasPlaced(), true,
             "and the record must still say so, or nobody will come back for it")
+        assert_eq(#c.dropped, 0, "and no hardware was thrown out to make room")
         -- Refused as a precondition, before any swap: comms are never given up
         -- for a retrieval that was not going to happen.
         assert_eq(eq.sideOf("modem") ~= nil, true,
@@ -2490,6 +2551,185 @@ return {
     -- NOTHING CENSUSED IS NIL, NOT A ZERO-WIDTH BAND. An empty band reads as a
     -- fact about the ground; nil reads as "this survey did not say", which is
     -- the only true answer.
+    -- ROOM FOR EQUIPMENT BEFORE DIGGING IT UP.
+    --
+    -- THE FAULT (shakeout, 2026-11-24). node_453 (payload-h) and node_411
+    -- (payload-i) each raised NEEDS HANDS "slot_1_must_hold_the_geo_scanner"
+    -- and never cleared, in 2 of 2 runs. Both had "only 1 free mining slot(s)"
+    -- logged, both were killed exactly on a scan level, and neither printed ANY
+    -- [SCAN] line at boot -- so scanner_state.dat was empty and
+    -- recoverPlacedScanner had nothing to find.
+    --
+    -- The scanner pickup dug with no free-slot count, unlike retrieveLoader. A
+    -- dig with no room still returns TRUE, so scannerClear() wiped the record
+    -- and the scanner was gone.
+    --
+    -- AND WHAT "GONE" MEANS, settled from the CC jar with javap rather than from
+    -- our own comments, which said "destroyed" and were wrong: TurtleTool
+    -- installs TurtleUtil.dropConsumer, whose lambda calls
+    -- InventoryUtil.storeItemsFromOffset and returns the leftover, and
+    -- stopConsuming then calls DropConsumer.clearAndDrop. WorldUtil.dropItemStack
+    -- spawns the item 0.7 blocks toward the given direction from the block
+    -- centre, and the direction passed is the turtle's facing REVERSED. So the
+    -- item lands just inside the block BEHIND the turtle and despawns on the
+    -- ordinary item timer. Recoverable, briefly -- which is why the suck-back
+    -- below exists as a second layer.
+    --
+    -- The invariant (spec owner, 2026-11-24): a miner never digs its own
+    -- scanner, loader or any other equipment without a free slot to receive it.
+    -- Make room first by dropping a junk mining-slot block. Never by timing out.
+    ["makeRoomForEquipment leaves a pack that already has room alone"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local ok, detail = flow.makeRoomForEquipment("geo scanner")
+        assert_eq(ok, true, "a pack with free slots needs nothing done")
+        assert_eq(detail, nil, "and must not report having dropped anything")
+        assert_eq(#c.dropped, 0, "nothing may be dropped when room already exists")
+    end,
+
+    ["makeRoomForEquipment drops junk from a MINING slot when nothing is free"] =
+    function(assert_eq)
+        local inv = travelInv()
+        for s = 4, 13 do inv[s] = { name = "minecraft:cobblestone", count = 64 } end
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv)
+        assert_eq(flow.freeSlots(), 0, "the fixture must leave NO slot free, or "
+            .. "this test passes without exercising anything")
+
+        local ok, detail = flow.makeRoomForEquipment("geo scanner")
+        assert_eq(ok, true, "room must be made rather than the dig refused")
+        assert_eq(detail, "dropped:minecraft:cobblestone",
+            "and it must say what it dropped, or a miner loses ore silently")
+        assert_eq(#c.dropped, 1, "exactly one stack dropped")
+        assert_eq(c.dropped[1].name, "minecraft:cobblestone")
+        assert_eq(flow.freeSlots(), 1, "and a slot is now free for the equipment")
+    end,
+
+    -- NEVER A HARDWARE SLOT. Dropping the loader to make room for the scanner
+    -- would trade one piece of equipment for another, which is the fault wearing
+    -- a different hat.
+    ["makeRoomForEquipment refuses rather than drop hardware"] =
+    function(assert_eq)
+        local eq = require("equipment")
+        local inv = {
+            [1]  = { name = "advancedperipherals:geo_scanner", count = 1 },
+            [2]  = { name = eq.ITEMS.LOADER_TURTLE, count = 1 },
+            [3]  = { name = eq.ITEMS.PICKAXE, count = 1 },
+            [4]  = { name = eq.ITEMS.MODEM or "computercraft:wireless_modem", count = 1 },
+            [14] = { name = "minecraft:coal", count = 32 },
+            [15] = { name = "enderstorage:ender_chest", count = 1 },
+            [16] = { name = "enderstorage:ender_chest", count = 1 },
+        }
+        for s = 5, 13 do inv[s] = { name = "enderstorage:ender_chest", count = 1 } end
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv)
+        assert_eq(flow.freeSlots(), 0, "no slot free in the fixture")
+
+        local ok, detail = flow.makeRoomForEquipment("geo scanner")
+        assert_eq(ok, false, "with nothing droppable it must REFUSE, not dig anyway")
+        assert_eq(detail, "no_junk_to_drop", "and name why")
+        assert_eq(#c.dropped, 0, "and it must not have dropped any hardware")
+    end,
+
+    -- THE SECOND LAYER (spec owner, 2026-11-24): if an equipment dig returns
+    -- true but the item is not in the inventory afterwards, suck it back from
+    -- the drop side before clearing any record. Only reachable if the guard is
+    -- bypassed, and cheap.
+    ["recoverDroppedEquipment sucks the item back from behind the turtle"] =
+    function(assert_eq)
+        local inv = travelInv()
+        inv[1] = nil                                  -- the scanner is not aboard
+        local BEHIND = "minecraft:air"
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv, { ["0,80,1"] = BEHIND })
+        -- The stub models loose items as a container on the block; facing 0 is
+        -- north (-z), so the drop side is +z, which is 0,80,1.
+        c.containers = { [BEHIND] = { { name = "advancedperipherals:geo_scanner", count = 1 } } }
+        -- A face hook, because mine_flow must not turn the turtle itself: every
+        -- turn in a fleet file goes through the journal. Turning with raw
+        -- turtle.turnRight is fine HERE -- the manifest guard scans fleet files,
+        -- not tests.
+        flow.setHooks({ face = function(dir)
+            for _ = 1, 4 do
+                if c.pos.facing == dir then break end
+                turtle.turnRight()
+            end
+        end })
+
+        local ok = flow.recoverDroppedEquipment("advancedperipherals:geo_scanner", 1)
+        assert_eq(ok, true, "the item lying behind the turtle must be recovered")
+        assert_eq(c.inv[1] and c.inv[1].name, "advancedperipherals:geo_scanner",
+            "and it must end up in its home slot")
+    end,
+
+    -- LAYER 2: a dig returning true is not proof the item arrived. These three
+    -- exist because a mutant that replaced the whole arrival check with `true`
+    -- SURVIVED when the logic sat in ore_turtle, where only source-reading tests
+    -- could reach it.
+    ["ensureEquipmentAboard is satisfied when the item is already in a slot"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local before = c.pos.facing
+        local ok, how = flow.ensureEquipmentAboard("advancedperipherals:geo_scanner", 1)
+        assert_eq(ok, true, "it is aboard")
+        assert_eq(how, "aboard", "and it must say so WITHOUT having gone to the "
+            .. "ground -- reporting a suck-back it never did would hide the fault")
+        assert_eq(c.pos.facing, before, "and the turtle never turned")
+    end,
+
+    ["ensureEquipmentAboard sucks it back when the dig dropped it"] =
+    function(assert_eq)
+        local inv = travelInv()
+        inv[1] = nil                                  -- dug, but it never arrived
+        local BEHIND = "minecraft:air"
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv, { ["0,80,1"] = BEHIND })
+        c.containers = { [BEHIND] = { { name = "advancedperipherals:geo_scanner", count = 1 } } }
+        flow.setHooks({ face = function(dir)
+            for _ = 1, 4 do
+                if c.pos.facing == dir then break end
+                turtle.turnRight()
+            end
+        end })
+        local ok, how = flow.ensureEquipmentAboard("advancedperipherals:geo_scanner", 1)
+        assert_eq(ok, true, "it was on the ground and must be recovered")
+        assert_eq(how, "sucked_back", "and the caller must be told it came off "
+            .. "the ground, because that is the line worth seeing in a log")
+    end,
+
+    ["ensureEquipmentAboard reports lost when it is neither aboard nor behind"] =
+    function(assert_eq)
+        local inv = travelInv()
+        inv[1] = nil
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv, { ["0,80,1"] = "minecraft:air" })
+        c.containers = nil
+        flow.setHooks({ face = function(dir)
+            for _ = 1, 4 do
+                if c.pos.facing == dir then break end
+                turtle.turnRight()
+            end
+        end })
+        local ok, how = flow.ensureEquipmentAboard("advancedperipherals:geo_scanner", 1)
+        assert_eq(ok, false, "nothing to recover must report failure")
+        assert_eq(how, "lost", "and name it, so the record is KEPT rather than "
+            .. "cleared -- clearing it is what lost two scanners in the shakeout")
+    end,
+
+    ["recoverDroppedEquipment reports failure when nothing comes back"] =
+    function(assert_eq)
+        local inv = travelInv()
+        inv[1] = nil
+        local flow, _, _, _, c = loadFlow(E_MINE(), inv, { ["0,80,1"] = "minecraft:air" })
+        c.containers = nil                            -- nothing on the ground
+        flow.setHooks({ face = function(dir)
+            for _ = 1, 4 do
+                if c.pos.facing == dir then break end
+                turtle.turnRight()
+            end
+        end })
+        local ok = flow.recoverDroppedEquipment("advancedperipherals:geo_scanner", 1)
+        assert_eq(ok, false, "an empty ground must report failure, not success -- "
+            .. "a false success here would clear the record and lose the scanner "
+            .. "for good, which is the whole fault")
+        assert_eq(c.inv[1], nil, "and nothing appears in the home slot")
+    end,
+
     ["coveredBand refuses when no level ran, and on nonsense"] =
     function(assert_eq)
         local flow = loadFlow(E_MINE(), travelInv())

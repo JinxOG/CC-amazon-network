@@ -1243,15 +1243,20 @@ function(assert_eq)
 
     -- The scan must not be able to skip the recovery by throwing.
     --
-    -- The recovery dig is spelled mine_flow.digGuarded("down"), not
-    -- turtle.digDown(): every dig in scanSector goes through the guard as of
-    -- 1.9.84. Pinning the guarded spelling here means reverting to a raw dig
-    -- fails this test as well as the dedicated ones.
+    -- The pickup is spelled reclaimScanner(), never a raw turtle.digDown() and
+    -- (since 2026-11-24) no longer a bare mine_flow.digGuarded either: the dig
+    -- has to be preceded by making room and followed by checking the scanner
+    -- actually arrived, and reclaimScanner is the one place that does all three.
+    -- Pinning the spelling here means a revert to any bare dig fails this test
+    -- as well as the dedicated ones.
     local pcallAt = src:find("pcall%(sc%.scan, SCAN_RADIUS%)", scanAt)
-    assert_eq(pcallAt ~= nil, true, "sc.scan must be pcall'd so the dig still runs")
-    local digAt = src:find('mine_flow%.digGuarded%("down"%)', pcallAt)
+    assert_eq(pcallAt ~= nil, true, "sc.scan must be pcall'd so the pickup still runs")
+    local digAt = src:find("reclaimScanner%(%)", pcallAt)
     assert_eq(digAt ~= nil and digAt > pcallAt, true,
-        "the recovery dig must follow the guarded scan")
+        "the guarded pickup must follow the scan")
+    assert_eq(src:find('mine_flow%.digGuarded%("down"%)', pcallAt), nil,
+        "and the scan-time pickup must NOT dig directly any more -- that is the "
+        .. "spelling that lost two scanners in the shakeout")
 end
 
 -- Never dig a turtle, the mining half -----------------------------------------
@@ -1319,10 +1324,15 @@ function(assert_eq)
     local body = src:sub(defAt, endAt - 1)
 
     local inspectAt = body:find("turtle%.inspectDown%(%)")
-    local bodyDigAt = body:find("turtle%.digDown%(%)")
+    -- reclaimScanner since 2026-11-24, not turtle.digDown: boot is as likely to
+    -- have a full pack as mid-level (node_453 booted with one free slot), so the
+    -- recovery's own dig needs the room guard and the did-it-arrive check too.
+    local bodyDigAt = body:find("reclaimScanner%(%)")
     assert_eq(inspectAt ~= nil, true, "recovery must inspect before digging")
     assert_eq(bodyDigAt ~= nil and inspectAt < bodyDigAt, true,
-        "the identity check must precede the dig")
+        "the identity check must precede the pickup")
+    assert_eq(body:find("turtle%.digDown%(%)"), nil,
+        "and boot recovery must not dig the scanner up unguarded")
     -- Assert the comparison, not the bare identifier: the identifier alone is
     -- satisfied by any incidental mention.
     assert_eq(body:find("block%.name == SCANNER_NAME") ~= nil, true,
