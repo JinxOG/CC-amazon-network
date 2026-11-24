@@ -1323,6 +1323,29 @@ function(assert_eq)
         "could not bound recoverPlacedScanner's body")
     local body = src:sub(defAt, endAt - 1)
 
+    -- THE SCANNER IS A LEDGER KIND (2026-11-24), which is what gives it a
+    -- recovery that refuses on a full pack and KEEPS the record, instead of a
+    -- NEEDS HANDS that can never clear. Source-only, because ore_turtle
+    -- self-executes; the ordering against base.init is pinned separately by
+    -- test_delivery_support, and the ledger's own behaviour by test_ledger.
+    assert_eq(src:find('base%.ledger%.registerKind%("geo_scanner"') ~= nil, true,
+        "the geo scanner must be registered as a ledger kind")
+    -- The registration has to carry both halves or recovery cannot act: the
+    -- block it is looking for, and the slot it belongs in.
+    local regAt = src:find('base%.ledger%.registerKind%("geo_scanner"')
+    local regTail = src:sub(regAt, regAt + 200)
+    assert_eq(regTail:find("blockName = SCANNER_NAME") ~= nil, true,
+        "and say which block it is, so recovery cannot dig the wrong one")
+    assert_eq(regTail:find("homeSlot = S_SCANNER") ~= nil, true,
+        "and which slot it belongs in, or it can never be confirmed home")
+    -- Recorded AND cleared through the ledger as well as the old file. A record
+    -- written to one and cleared from the other would leave a permanent ghost
+    -- that sends every future boot digging at a block nobody placed.
+    assert_eq(src:find('base%.ledger%.record%("geo_scanner"') ~= nil, true,
+        "placing must write a ledger record")
+    assert_eq(src:find('pcall%(base%.ledger%.clear, "geo_scanner"%)') ~= nil, true,
+        "and clearing must clear it, or the ghost outlives the scanner")
+
     local inspectAt = body:find("turtle%.inspectDown%(%)")
     -- reclaimScanner since 2026-11-24, not turtle.digDown: boot is as likely to
     -- have a full pack as mid-level (node_453 booted with one free slot), so the

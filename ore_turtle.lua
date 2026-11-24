@@ -176,6 +176,23 @@ local ORE_CHEST_ITEM = "enderstorage:ender_chest"
 base.ledger.registerKind("ore_chest",
     { blockName = ORE_CHEST_ITEM, homeSlot = S_ORE_EC })
 
+-- THE GEO SCANNER IS A LEDGER KIND TOO (spec owner's ruling, 2026-11-24), so a
+-- scanner left in the world is caught by the ledger's own boot recovery and not
+-- only by a NEEDS HANDS that can never clear -- which is how node_453 and
+-- node_411 were benched for a whole shakeout run each.
+--
+-- What this buys, all of it already written and tested in base.ledger.recover:
+-- it refuses when there is no room and KEEPS the record, raising NEEDS HANDS
+-- with the coordinates rather than digging into a full pack; it checks the
+-- block below really is the scanner before touching it; and it clears only once
+-- the scanner is confirmed in its home slot.
+--
+-- REGISTERED BEFORE base.init, like the ore chest: a kind registered after
+-- init's first recovery pass is refused as unknown_kind. There is a test over
+-- every role that pins the ordering.
+base.ledger.registerKind("geo_scanner",
+    { blockName = SCANNER_NAME, homeSlot = S_SCANNER })
+
 local oreChestLedger = {
     record = function(face, x, y, z)
         local p = base.getPos()
@@ -1242,7 +1259,23 @@ end
 
 local SCANNER_STATE_FILE = "scanner_state.dat"
 
+-- Written to BOTH the ledger and scanner_state.dat, deliberately and only for
+-- now. The bespoke file is the older mechanism and the one recoverPlacedScanner
+-- reads; the ledger entry is the safety net added on 2026-11-24. Keeping both
+-- means a turtle already in flight with the old file is still recovered, and
+-- neither path has to be trusted alone. They are written and cleared at the same
+-- two moments, so they can only disagree if a crash lands between them, and
+-- either record alone leads to the same place: dig the block below. The file
+-- should retire once a release has passed with the ledger entry in place.
 local function scannerRecord(x, y, z)
+    pcall(function()
+        base.ledger.record("geo_scanner", {
+            x = x, y = y, z = z, face = "down",
+            facing    = base.getFacing(),
+            blockName = SCANNER_NAME,
+            turtleAt  = { x = x, y = y + 1, z = z },
+        })
+    end)
     local ok = pcall(function()
         local f = fs.open(SCANNER_STATE_FILE, "w")
         if not f then error("open failed", 0) end
@@ -1253,6 +1286,7 @@ local function scannerRecord(x, y, z)
 end
 
 local function scannerClear()
+    pcall(base.ledger.clear, "geo_scanner")
     pcall(function()
         if fs.exists(SCANNER_STATE_FILE) then fs.delete(SCANNER_STATE_FILE) end
     end)

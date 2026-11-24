@@ -374,6 +374,7 @@ Q_SCAN    = "the placed geo scanner is recorded before it is placed (SOURCE-ONLY
 # which it reports as "aboard" instead of "sucked_back" -- so that is the
 # intended test, and naming the wrong one is what the harness caught.
 Q_ARRIVE  = "ensureEquipmentAboard sucks it back when the dig dropped it"
+Q_KIND    = "scanner recovery runs at boot and verifies identity (SOURCE-ONLY, weaker)"
 J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
 B_REC     = "placeLoader records the label of the loader it put down"
 B_ITEM    = "a non-turtle item with the same label is not proof"
@@ -2193,6 +2194,18 @@ MUTANTS = [
     # in ore_turtle, because ore_turtle self-executes and only source-reading
     # tests could reach it. Nothing went red at all, which is the whole argument
     # for putting testable logic in mine_flow.
+    # The scanner's ledger registration, which is what gives it a recovery that
+    # refuses on a full pack instead of a NEEDS HANDS that can never clear.
+    # Removes the whole statement. Mutating only its first line left Lua that
+    # does not compile, which the harness reports as MALFORMED rather than
+    # scoring -- a mutant has to be valid code or it tests nothing.
+    ("the scanner is no longer a ledger kind", "ore_turtle.lua",
+     [('base.ledger.registerKind("geo_scanner",\n    { blockName = SCANNER_NAME, homeSlot = S_SCANNER })', '')], Q_KIND),
+    ("placing the scanner writes no ledger record", "ore_turtle.lua",
+     [('        base.ledger.record("geo_scanner", {', '        local _norecord = ({')], Q_KIND),
+    ("clearing the scanner leaves a ledger ghost behind", "ore_turtle.lua",
+     [('    pcall(base.ledger.clear, "geo_scanner")\n', '')], Q_KIND),
+
     ("the arrival check is stubbed out, so a dropped item reads as aboard", "mine_flow.lua",
      [('    if equipment.findSlot(itemName) then return true, "aboard" end',
        '    if true then return true, "aboard" end')], Q_ARRIVE),
