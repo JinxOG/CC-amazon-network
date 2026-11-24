@@ -295,6 +295,9 @@ def _window_ms(e):
     return int(a.get("dur_ms") or a.get("down_ms") or 0) if isinstance(a, dict) else 0
 
 
+BURST_FAULTS = ("restart_burst5",)
+
+
 def windows_from(schedule, fault_lines=None, end_ms=None):
     """Fault windows {id, fault, begin, end, targets (None: everyone, or a set of node ids), area, planned}. `schedule` is either
     windows already (each with "begin") or schedule.json entries. Without fault_lines the windows are the PLANNED ones (t_ms to
@@ -309,6 +312,8 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
     by_id = {}
     for r in fault_lines or []:
         by_id.setdefault(r.get("id"), []).append(r)
+    # the clock from "start" lines only: a burst's begin line has a later time over the same wall_ms, and would skew it
+    t0_local = _t0_from_faults([r for r in fault_lines if r.get("phase") == "start"]) if fault_lines else None
     for e in schedule or []:
         f = e.get("fault")
         if fault_lines is None:
@@ -340,8 +345,20 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
                 area = list(detail["area"])
         # quiet_ms counts from the fault's start and already holds its duration (schedule.py): the window is the later of the end
         # line and start + quiet_ms, never the end line PLUS quiet_ms (that counted the duration twice: 40-45% of a day excused)
+        quiet_end = int(start["wall_ms"]) + _quiet(e)
+        # A BURST EXCUSES ONLY AFTER ITS LAST RESTART (T2 payload-i, 2026-11-24): its quiet is count x one restart's quiet from
+        # its start, 50 min for five, but the five were done 8 min in, and node_451, frozen in the shaft from the burst to the
+        # end, was judged ok. Its begin line is written when the last restart is done: its `time` says when (its wall_ms repeats
+        # the start's), so the window ends one restart's quiet after that.
+        if f in BURST_FAULTS and t0_local is not None and begin.get("time"):
+            try:
+                done = int(time.mktime(time.strptime(begin["time"], "%Y-%m-%dT%H:%M:%S")) * 1000 - t0_local)
+                count = int((e.get("args") or {}).get("count") or 1)
+                quiet_end = max(int(start["wall_ms"]), done) + _quiet(e) // max(count, 1)
+            except (ValueError, TypeError):
+                pass
         out.append({"id": e.get("id"), "fault": f, "begin": int(start["wall_ms"]),
-                    "end": max(stop, int(start["wall_ms"]) + _quiet(e)), "targets": targets,
+                    "end": max(stop, quiet_end), "targets": targets,
                     "area": area, "planned": False})
     return sorted(out, key=lambda w: w["begin"])
 
@@ -832,7 +849,7 @@ def load_run(run_dir):
                 R["hk"] = [l.rstrip("\n") for l in f if l.strip()]
         snaps = _read_jsonl(os.path.join(run_dir, "shakeout", "state.jsonl"))
         header = next((s["header"] for s in (snaps or []) if "header" in s), {})
-        t0 = header.get("t0_epoch_ms") or _t0_from_faults(R["fault_lines"])
+        t0 = header.get("t0_epoch_ms") or _t0_from_faults([r for r in R["fault_lines"] or [] if r.get("phase") == "start"])
         if t0 is None:
             t0 = lines[0]["t"] if lines else 0
             R["notes"].append("the schedule's start is not recorded: the first log line is used as the start")

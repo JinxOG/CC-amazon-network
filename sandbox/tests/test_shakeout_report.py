@@ -594,6 +594,34 @@ class LastSeenIsTheBridgesClock(unittest.TestCase):
             shutil.rmtree(run, ignore_errors=True)
 
 
+class RestartBurstExcusesOnlyAfterItsLastRestart(unittest.TestCase):
+    """A restart burst's quiet is count x one restart's quiet from its START (schedule.quiet_of): 50 min for five. Its five
+    restarts finished 8 min in (T2 payload-i, f001), so 42 min were excused for nothing, and node_451, frozen in the shaft from
+    the burst to the end, was judged ok. Measured: the window ends one restart's quiet after the burst's begin line, which is
+    written when the last restart is done (its `time`; its wall_ms repeats the start's)."""
+
+    def test_a_turtle_silent_after_the_burst_is_gone(self):
+        def ts(t):
+            return {"node_9": {"x": OFF[0], "y": OFF[1], "z": OFF[2], "status": "IDLE", "dockX": 171, "dockZ": -2806,
+                               "lastSeen": T0 + t, "online": t < 15 * MIN, "role": "MINER"}}
+        entries = [{"id": "f001", "fault": "restart_burst5", "t_ms": 10 * MIN, "args": {"count": 5}, "quiet_ms": 100 * MIN}]
+        run = make_run(hours=2, turtles_at=ts, entries=entries)
+        try:
+            def at(ms):
+                return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime((T0 + ms) / 1000))
+            with open(os.path.join(run, "shakeout", "faults.jsonl"), "w") as f:
+                f.write(json.dumps({"wall_ms": 10 * MIN, "time": at(10 * MIN), "id": "f001", "fault": "restart_burst5",
+                                    "phase": "start"}) + "\n")
+                f.write(json.dumps({"wall_ms": 10 * MIN, "time": at(18 * MIN), "id": "f001", "fault": "restart_burst5",
+                                    "phase": "begin", "detail": {"restarts": 5}}) + "\n")
+            rep = report.build_report(run)
+            w = [x for x in rep["windows"] if x["id"] == "f001"][0]
+            self.assertLessEqual(abs(w["end"] - 38 * MIN), 2000, w)      # 18 min + one restart's quiet (100 / 5 = 20 min)
+            self.assertNotEqual(rep["verdicts"]["node_9"], "ok", "silent from 15 min to the end, the burst done at 18")
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
 class DuplicateIdIsCountedApart(unittest.TestCase):
     """A hard kill can leave a moving turtle in both chunks it was crossing (payload-h's node_397). The server parks both copies and
     asks for hands with duplicate_id (W3, w3-payload-i). The world made it, not the code: counted apart from decommissioned, and
