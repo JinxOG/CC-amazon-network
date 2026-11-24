@@ -296,6 +296,7 @@ def _window_ms(e):
 
 
 BURST_FAULTS = ("restart_burst5",)
+PLAYER_FAULT = "player_dup_fix"
 
 
 def windows_from(schedule, fault_lines=None, end_ms=None):
@@ -360,6 +361,21 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
         out.append({"id": e.get("id"), "fault": f, "begin": int(start["wall_ms"]),
                     "end": max(stop, quiet_end), "targets": targets,
                     "area": area, "planned": False})
+    # THE STAND-IN PLAYER (shakeout/player.py; the user, 2026-11-24): unscheduled "player_dup_fix" ids, the wait from a duplicate_id
+    # alarm to the copy's removal. Everyone is excused for that wait and never after it: from the removal the fleet must recover.
+    # A fix with no end line (the run ended first) is excused to the run's end.
+    sched_ids = {e.get("id") for e in schedule or []}
+    for fid, ls in by_id.items():
+        if fid in sched_ids or not ls or ls[0].get("fault") != PLAYER_FAULT:
+            continue
+        ls = sorted(ls, key=lambda r: r.get("wall_ms", 0))
+        start = next((r for r in ls if r.get("phase") == "start"), None)
+        if start is None:
+            continue
+        end = next((r for r in ls if r.get("phase") == "end"), None)
+        stop = int(end["wall_ms"]) if end is not None else int(end_ms if end_ms is not None else start["wall_ms"])
+        out.append({"id": fid, "fault": PLAYER_FAULT, "begin": int(start["wall_ms"]), "end": stop, "targets": None,
+                    "area": None, "planned": False})
     return sorted(out, key=lambda w: w["begin"])
 
 

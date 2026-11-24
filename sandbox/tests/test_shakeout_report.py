@@ -622,6 +622,27 @@ class RestartBurstExcusesOnlyAfterItsLastRestart(unittest.TestCase):
             shutil.rmtree(run, ignore_errors=True)
 
 
+class PlayerFixExcusesOnlyTheWait(unittest.TestCase):
+    """The stand-in player's fix (shakeout/player.py) is unscheduled: faults.jsonl's "player_dup_fix" start (the alarm) and end
+    (the copy removed). Everyone is excused between them -- the wait for a player -- and from the end on the fleet must recover."""
+
+    def test_the_window_is_alarm_to_removal(self):
+        run = make_run(hours=1)
+        try:
+            def at(ms):
+                return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime((T0 + ms) / 1000))
+            with open(os.path.join(run, "shakeout", "faults.jsonl"), "w") as f:
+                for ms, ph in ((30 * MIN, "start"), (40 * MIN, "end")):
+                    f.write(json.dumps({"wall_ms": ms, "time": at(ms), "id": "p001", "fault": "player_dup_fix", "phase": ph,
+                                        "node": "node_215"}) + "\n")
+            rep = report.build_report(run)
+            w = [x for x in rep["windows"] if x["id"] == "p001"]
+            self.assertEqual(len(w), 1, rep["windows"])
+            self.assertEqual((w[0]["begin"], w[0]["end"], w[0]["targets"]), (30 * MIN, 40 * MIN, None))
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
 class DuplicateIdIsCountedApart(unittest.TestCase):
     """A hard kill can leave a moving turtle in both chunks it was crossing (payload-h's node_397). The server parks both copies and
     asks for hands with duplicate_id (W3, w3-payload-i). The world made it, not the code: counted apart from decommissioned, and

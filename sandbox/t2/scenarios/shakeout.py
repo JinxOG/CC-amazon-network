@@ -274,6 +274,10 @@ def run_loop(ctx, sched, seconds, poll=None, feeder=None):
     ctx.shakeout_entries = sched          # housekeeping tags a storage reading taken inside a scheduled storage fault as expected
     t0 = time.time()
     err = _Errors(ctx, sched)
+    try:      # the stand-in player (the user, 2026-11-24): removes a copy a crash duplicated, PLAYER_DELAY_S after its alarm
+        player = importlib.import_module("shakeout.player").Player(ctx, t0)
+    except ImportError:
+        player = None
     try:
         while True:
             wall = int((time.time() - t0) * 1000)
@@ -284,7 +288,8 @@ def run_loop(ctx, sched, seconds, poll=None, feeder=None):
             except Exception as ex:  # noqa: BLE001 - run_due catches every fault's errors; this is anything else
                 err("scheduler", wall, ex)
             for source, fn in ([("feeder", feed.tick)] if feed else []) + (
-                    [("housekeeping", lambda now: housekeep(ctx, now))] if housekeep else []):
+                    [("housekeeping", lambda now: housekeep(ctx, now))] if housekeep else []) + (
+                    [("player", player.tick)] if player else []):
                 try:
                     fn(time.time())
                 except Exception as ex:  # noqa: BLE001 - a feeder error is a note, not the end of a 24-hour run
