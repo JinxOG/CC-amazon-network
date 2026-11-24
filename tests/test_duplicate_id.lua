@@ -88,6 +88,22 @@ return {
         assert_eq(ban, 1, "and the ATC is told, once (" .. ban .. ")")
     end,
 
+    -- What the server hears of copies waiting in boot recovery: each one's recovery_wait report every 20 s, its seq
+    -- moved on by the ATC asks in between (node_215's copies: about 30 per 20 s), each copy at its own moment.
+    ["copies heard only every 20 s each are found within three minutes"] = function(assert_eq)
+        local T, at, restore = server()
+        local C = { x = 223, y = 67, z = -2801 }
+        local found
+        for k = 0, 8 do
+            for i, c in ipairs({ { 6, A, 0 }, { 17, B, 6700 }, { 40, C, 13300 } }) do
+                at(k * 20000 + c[3]); T.registry.dupCheck(msg(c[1] + 30 * k, c[2]))
+                if not found and T.state.registry["node_9"].needsHands then found = k * 20000 + c[3] end
+            end
+        end
+        restore()
+        assert_eq(found ~= nil and found <= 180000, true, "found at " .. tostring(found and found / 1000) .. " s")
+    end,
+
     ["a reboot starts the seq again, and is not a duplicate"] = function(assert_eq)
         local T, at, restore = server()
         for k = 0, 9 do at(k * 600); T.registry.dupCheck(msg(500 + k, A)) end

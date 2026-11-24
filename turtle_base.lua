@@ -1228,6 +1228,7 @@ end
 function base.detectFacingForTest() return detectFacing() end
 function base.setFacingUnknownForTest() _self.facingKnown = false end   -- test seam
 function base.setPosForTest(p) _self.pos = { x = p.x, y = p.y, z = p.z } end     -- test seam
+function base.setRunningForTest(v) _self.running = v and true or nil end                  -- test seam
 function base.setIdForTest(id) _self.id = id end                                   -- test seam
 function base.setServerDownForTest(v) _self.serverDown = v and true or false end    -- test seam
 function base.initPositionForTest() return initPosition() end
@@ -1907,6 +1908,21 @@ local function waitReporter(what, now)
     local started = now
     local nextAt  = started + WAIT_REPORT_AFTER
     return function(now)
+        -- BEFORE THE CONTROL LOOP RUNS, A WAIT TELLS THE SERVER (T2 shakeout-payload-i, 2026-11-24).
+        -- Three copies of node_215 waited 46 min in boot recovery's ATC booking loop and sent the
+        -- server nothing: heartbeats and the log outbox start with base.run. The server pruned
+        -- node_215 as offline and its duplicate check (seq streams) never heard the copies. A
+        -- STATUS_UPDATE, not a heartbeat: the first heartbeat releases the job re-send the server
+        -- holds for a rebooted turtle. Every 20 s of wall clock, with the log lines.
+        if not _self.running then
+            local wall = os.epoch("utc")
+            if not _self.waitToldAt or wall - _self.waitToldAt >= 20000 then
+                _self.waitToldAt = wall
+                pcall(base.sendProgress, string.format("recovery_wait: Still waiting %ds — %s",
+                    math.floor(now - started), what()))
+                pcall(flushLogQueue)
+            end
+        end
         if now < nextAt then return end
         nextAt = now + WAIT_REPORT_REPEAT
         logWarn(string.format("Still waiting %ds — %s",
@@ -5508,6 +5524,7 @@ function base.recoverLedger()
 end
 
 function base.run(jobHandler)
+    _self.running = true    -- heartbeats and the log outbox from here on (waitReporter)
     -- Before the loop, so before any job can reach this turtle. pcall'd: a
     -- recovery that throws must not stop the turtle running at all.
     local lok, lerr = pcall(base.recoverLedger)

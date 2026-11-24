@@ -54,6 +54,34 @@ local function refusedAtBoot(grantAfterNaps)
     return count
 end
 
+-- A turtle on the return row (R3, 191,67,-2801) asks the ATC for its way home, refused every time, for 120 s of
+-- wall clock (sleep moves it 3 s). Returns how many recovery_wait reports reached the server, and whether the
+-- refusal's "Still waiting" log line was shipped.
+local function waitInRecovery(running)
+    local base, sent = fresh()
+    local atc = base.atc
+    atc.ENABLED = true
+    atc.ensure = function() return true end
+    base.setPosForTest({ x = 191, y = 67, z = -2801 })
+    base.setRunningForTest(running)
+    local savedAsk, savedSleep, savedEpoch, savedClock = atc.ask, sleep, os.epoch, os.clock
+    local clock, calls = 5000000, 0
+    os.epoch = function() return clock end
+    os.clock = function() return clock / 1000 end
+    atc.ask = function() return { ok = false, why = "busy at R3 (node_451)" } end
+    sleep = function(s) clock = clock + 3000 end
+    local ok, err = pcall(atc.book, { { x = 150, y = 67, z = -2801 } }, "route home",
+        function() calls = calls + 1; return calls > 40 and "test over" or nil end)
+    atc.ask, sleep, os.epoch, os.clock = savedAsk, savedSleep, savedEpoch, savedClock
+    assert(ok, tostring(err))
+    local n, shipped = 0, false
+    for _, b in ipairs(sent) do
+        if b:find("recovery_wait: ", 1, true) and b:find("STATUS_UPDATE", 1, true) then n = n + 1 end
+        if b:find("Still waiting", 1, true) and b:find("LOG", 1, true) then shipped = true end
+    end
+    return n, shipped
+end
+
 return {
     -- T2 shakeout-payload-g (2026-11-24): the ATC admitted pair node_225 + node_221 at 02:53:05; the server then dropped
     -- out and node_221 paused on its dock ("Server unreachable -- pausing") -- a dock is in no section, so the
@@ -135,6 +163,20 @@ return {
         assert_eq(ok, false, "it did not move")
         assert_eq(tostring(err), "still parked", "it waits, parked (" .. tostring(err) .. ")")
         assert_eq(warned >= 1, true, "and says so (" .. warned .. ")")
+    end,
+
+    -- T2 shakeout-payload-i: three copies of node_215 waited 46 min in boot recovery's ATC booking loop, before base.run,
+    -- and sent the server nothing -- no report, no log line: the server pruned node_215 as offline and its duplicate
+    -- check never saw the copies. A wait before the control loop runs tells the server, every 20 s, and ships its log.
+    ["a wait before the control loop runs reports to the server"] = function(assert_eq)
+        local n, quiet = waitInRecovery(false)
+        assert_eq(n >= 4, true, "it says so every 20 s (" .. n .. " reports in 120 s)")
+        assert_eq(quiet, true, "and its log lines are shipped")
+    end,
+
+    ["a wait with the control loop running leaves reporting to the heartbeat"] = function(assert_eq)
+        local n = waitInRecovery(true)
+        assert_eq(n, 0, "no extra reports (" .. n .. ")")
     end,
 
     ["a turtle not told PARK moves"] = function(assert_eq)
