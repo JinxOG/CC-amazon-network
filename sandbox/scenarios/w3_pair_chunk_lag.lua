@@ -9,7 +9,7 @@
 -- delivery's steps. The rule is lifted once the delivery is back underground after delivering.
 -- CHECKS: the drops happened (evidence); on the way out, while both travel underground, the delivery is never more than one chunk
 -- from its support, and never in a chunk its support has not reached the edge of -- measured every scheduler step;
--- the support is in its delivery's chunk when it is told to hold for the ascent; the order completed; both end
+-- the support is in its delivery's chunk, or right behind it, when told to hold for the ascent; the order completed; both end
 -- on a dock.
 -- Before the gate: the support stands at the dispatch exit and its delivery travels on alone.
 local function atDock(p)
@@ -73,7 +73,8 @@ return {
       if not atAscent and #hold.lines >= 1 and dp and sp then
         local dx, dz = chunk(dp)
         local sx, sz = chunk(sp)
-        atAscent = { same = dx == sx and dz == sz,
+        local behind = math.abs(dp.x - sp.x) + math.abs(dp.y - sp.y) + math.abs(dp.z - sp.z) == 1
+        atAscent = { same = (dx == sx and dz == sz) or behind,
                      text = string.format("delivery chunk %d,%d, support chunk %d,%d", dx, dz, sx, sz) }
       end
       return false     -- never fires: it only measures
@@ -92,7 +93,7 @@ return {
     sim:expect(samples > 100, "the pair was measured travelling underground (" .. samples .. " samples)")
     sim:expect(worst <= 1, "the delivery was never more than one chunk from its support (worst " .. worst .. ")")
     sim:expect(crossedAhead == 0, "it never stepped into a new chunk with its support outside the one it left (" .. crossedAhead .. " times)")
-    sim:expect(atAscent ~= nil and atAscent.same, "its support was in its chunk when told to hold for the ascent ("
+    sim:expect(atAscent ~= nil and atAscent.same, "its support was in its chunk, or right behind it, when told to hold for the ascent ("
       .. tostring(atAscent and atAscent.text or "never told") .. ")")
     sim:expect(serverDone(), "the order completed (" .. job .. ")")
     sim:expect(atDock(comps[d].pos) and atDock(comps[s].pos), "both end on a dock")

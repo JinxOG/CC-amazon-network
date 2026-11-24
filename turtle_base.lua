@@ -2236,6 +2236,12 @@ function base.awaitSupportInChunk(why)
             local pl = type(msg.payload) == "table" and msg.payload or {}
             if msg.type == proto.MSG.SUPPORT_HERE and type(pl.x) == "number" and type(pl.z) == "number" then
                 if math.floor(pl.x / 16) == cx and math.floor(pl.z / 16) == cz then return true end
+                -- Or in the cell right behind: as close as a one-block tunnel lets it come.
+                -- node_221's destination 160,67,-2752 is a chunk's first block; the cell
+                -- behind it is in the chunk before, and waiting for its support in its own
+                -- chunk there waited for good.
+                local b = base.trailTail(2)[1]
+                if b and #base.trailTail(2) == 2 and pl.x == b.x and pl.y == b.y and pl.z == b.z then return true end
                 nextAsk = os.epoch("utc") + 1000   -- not here yet: asked again as it walks up behind
             elseif msg.type == proto.MSG.JOB_ABORT and (tonumber(msg.ts) or 0) >= (_self.jobSince or 0) then
                 logWarn(string.format("Support %s gave up (%s) at the edge of chunk %d,%d -- not going on without it",

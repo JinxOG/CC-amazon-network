@@ -209,6 +209,36 @@ return {
         assert_eq(unreadAtCrossing, 0, "it stepped into chunk 8 only after the answer from chunk 7, not on the first")
     end,
 
+    -- payload-e's node_221 case: its destination 160,67,-2752 is the first block of chunk 10,-172, so the cell behind
+    -- it -- as close as its support can come in a one-block tunnel -- is in chunk 10,-173. Waiting for its support in
+    -- its own chunk there waited for good. Its support in the cell behind it is as close as there is.
+    ["a support in the cell right behind is close enough, in whatever chunk that cell is"] = function(assert_eq)
+        local r = supportAt({ x = 126, y = 60, z = -2829 })
+        local proto = require("protocol")
+        r.base.setRoleForTest(proto.ROLE.DELIVERY)
+        r.base.setPartnerId("node_s")
+        assert(r.base.move.to(128, 60, -2829))             -- now in chunk 8's first column; 127, behind it, is chunk 7
+        r.base.setFollowGate(true)
+        local asks = 0
+        peripheral.find = function()
+            return { open = function() end, isOpen = function() return true end, close = function() end,
+                     transmit = function(ch, rr, body)
+                         local m = textutils.unserialise(body)
+                         if m and m.type == proto.MSG.SUPPORT_WHERE then
+                             asks = asks + 1
+                             if asks > 20 then error("the delivery asked 20 times", 0) end
+                             os.queueEvent("modem_message", "top", proto.CH_LOCAL, 0,
+                                 proto.encode(proto.MSG.SUPPORT_HERE, "node_s", "node_retrace_test", { x = 127, y = 60, z = -2829 }), 5)
+                         end
+                     end }
+        end
+        r.base.recoverModem()
+        r.base.setIdForTest("node_retrace_test")
+        local ok = r.base.awaitSupportInChunk("before ascending")
+        assert_eq(ok, true, "it goes on")
+        assert_eq(asks, 1, "on the first answer (" .. asks .. " asks)")
+    end,
+
     ["a delivery whose support gives up stops at the chunk's edge, and its move fails"] = function(assert_eq)
         local r = supportAt({ x = 126, y = 60, z = -2829 })
         local proto = require("protocol")
