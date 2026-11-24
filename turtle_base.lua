@@ -1088,8 +1088,10 @@ local function detectFacing()
     -- In the base the measuring step is a step into a section like any other,
     -- and which one is not known (that is what is being measured): every
     -- neighbouring section is asked for first, and given back afterwards.
+    _self.facingWhy = nil
     local claimed = base.atc.claimAround and base.atc.claimAround(x1, y1, z1)
     if claimed == false then
+        _self.facingWhy = "atc"           -- held by the ATC, not boxed in (base.waitForPositionFix)
         -- From a dock this is waiting in a safe place, as for a booking: not a
         -- stall. Only a turtle refused while standing IN a section counts.
         if base.atc.here() then base.atc.stalled("cannot measure facing: the ATC has not let it step") end
@@ -1217,7 +1219,20 @@ function base.waitForPositionFix(why, positionOnly)
         -- them as offline and only a screenshot showed why. Once a minute (the
         -- first try, then every sixth) it reports where it is and ships its log
         -- lines; the server raises NEEDS HANDS on the report.
-        if tries % 6 == 1 then
+        -- HELD BY THE ATC IS NOT STUCK (T2 shakeout-payload-g, 01:44: 9 docked turtles
+        -- raised NEEDS HANDS on the first refusal after a restart, granted 3-4 s later;
+        -- Head Engineer, 2026-11-24). A player's hands do not help a turtle the ATC holds.
+        -- A refusal still standing a minute on says so with its own code, atc_wait.
+        if tries % 6 == 1 and _self.posFixed and _self.facingWhy == "atc" then
+            if tries > 1 then
+                local line = string.format("atc_wait: facing unknown at %d,%d,%d (waiting for the ATC to grant the cells around it: %s)",
+                    _self.pos.x, _self.pos.y, _self.pos.z, tostring(base.atc.lastRefusal))
+                logWarn(line)
+                pcall(base.sendProgress, line)
+                pcall(flushLogQueue)
+                _self.saidAtcWait = true
+            end
+        elseif tries % 6 == 1 then
             local where = _self.posFixed
                 and string.format("facing unknown at %d,%d,%d", _self.pos.x, _self.pos.y, _self.pos.z)
                 or "no GPS fix, position unknown"
@@ -1237,7 +1252,7 @@ function base.waitForPositionFix(why, positionOnly)
     -- said that: node_227 kept NEEDS HANDS 75 minutes (T2 shakeout-side-a).
     -- saidStuckNoFix stays set: a turtle that is on its dock still says "docked",
     -- which also ends the server's recovery hold.
-    if tries > 0 and _self.saidStuckNoFix then
+    if tries > 0 and (_self.saidStuckNoFix or _self.saidAtcWait) then
         pcall(base.sendProgress, string.format("measured: %d,%d,%d -- %s",
             _self.pos.x, _self.pos.y, _self.pos.z, tostring(why)))
     end
@@ -2177,6 +2192,7 @@ function atc.claimAround(x, y, z)
     for _, s in ipairs(want) do
         local r = atc.ask(proto.MSG.ATC_ENTER, { sec = s, cur = cur, route = { cur, s } })
         if not (r and r.ok) then
+            atc.lastRefusal = r and tostring(r.why) or "no answer from the ATC"
             atc.releaseAround(got)
             return false
         end
