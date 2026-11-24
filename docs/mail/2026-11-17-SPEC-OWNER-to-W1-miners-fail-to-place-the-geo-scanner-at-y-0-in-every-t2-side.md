@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: Miners fail to place the geo scanner at Y=0 in every T2 side test (31 job retries, 1 MINE done in side-h) - measurements, please say why
 date: 2026-11-17
-status: open
+status: answered
 ---
 
 # Miners fail to place the geo scanner at Y=0 in every T2 side test (31 job retries, 1 MINE done in side-h) - measurements, please say why
