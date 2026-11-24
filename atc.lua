@@ -188,10 +188,14 @@ local function expandPath(corners)
     return { list = list, set = set, done = 0 }
 end
 -- The id of another party whose path, still to be walked, shares a cell with `path`; nil if none.
+-- Only a way out and a way back hold each other (path.kind "out" / "back"): turtles going the same way
+-- cannot meet head-on (sim w3_retrace_head_on: a pair going east waited behind one going west). A path
+-- of no kind holds every other.
 local function pathClash(st, path, id, group)
     if not path then return nil end
     for k, x in pairs(st.res) do
-        if x.path and x.id ~= id and not sameParty(st, k, id, group) then
+        if x.path and x.id ~= id and not sameParty(st, k, id, group)
+           and not (path.kind and x.path.kind and path.kind == x.path.kind) then
             for i = x.path.done + 1, #x.path.list do
                 if path.set[x.path.list[i]] then return x.id end
             end
@@ -399,7 +403,7 @@ function core.handle(st, id, p, now)
 
     if p.op == "request" then
         local list = p.route or {}
-        if #list == 0 then return { ok = true } end
+        if #list == 0 and not p.path then return { ok = true } end
         local r = rid and st.res[rid]
         if r and r.list[1] == list[1] and #r.list == #list then return { ok = true, rid = rid } end
         -- A NEW ROUTE IS THE END OF THE OLD ONE (2026-11-15). A turtle can be in one
@@ -424,14 +428,16 @@ function core.handle(st, id, p, now)
         if p.pair and p.cur == nil and not (st.byTurtle[p.pair] and st.res[st.byTurtle[p.pair]]) then
             local pw = st.waiting[p.pair]
             local w0 = st.waiting[id]
-            if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair, path = p.path }
-            else w0.at, w0.list, w0.group, w0.cur, w0.pair, w0.path = now, list, p.group, p.cur, p.pair, p.path end
+            if not w0 then st.waiting[id] = { since = now, at = now, list = list, group = p.group, cur = p.cur, pair = p.pair, path = p.path, pathKind = p.pathKind }
+            else w0.at, w0.list, w0.group, w0.cur, w0.pair, w0.path, w0.pathKind = now, list, p.group, p.cur, p.pair, p.path, p.pathKind end
             if not (pw and pw.pair == id and pw.list and now - (pw.at or 0) <= CFG.PAIR_FRESH_MS) then
                 return withPlace(st, id, now, { ok = false, why = "waiting for partner" })
             end
             local free1, b1 = routeFree(st, list, id, p.group, p.cur)
             local free2, b2 = routeFree(st, pw.list, p.pair, pw.group, pw.cur)
             local path1, path2 = expandPath(p.path), expandPath(pw.path)
+            if path1 then path1.kind = p.pathKind end
+            if path2 then path2.kind = pw.pathKind end
             local c1 = free1 and pathClash(st, path1, id, p.group)
             if c1 then free1, b1 = false, "path of " .. tostring(c1) end
             local c2 = free2 and pathClash(st, path2, p.pair, pw.group)
@@ -453,6 +459,7 @@ function core.handle(st, id, p, now)
         end
         local free, busyAt = routeFree(st, list, id, p.group, p.cur)
         local path = expandPath(p.path)
+        if path then path.kind = p.pathKind end
         local clash = free and pathClash(st, path, id, p.group)
         if clash then free, busyAt = false, "path of " .. tostring(clash) end
         -- A turtle standing in a section (p.cur) is in the way of others whatever it
@@ -626,7 +633,7 @@ function core.handle(st, id, p, now)
         local own
         for _, x in pairs(st.res) do if x.id == id and x.path then own = x end end
         if not own then return { ok = false, why = "no path" } end
-        local extra = { list = {}, set = {}, done = 0 }
+        local extra = { list = {}, set = {}, done = 0, kind = own.path.kind }
         for _, c in ipairs(type(p.cells) == "table" and p.cells or {}) do
             local one = expandPath({ c })
             if not one then return { ok = false, why = "bad cell" } end

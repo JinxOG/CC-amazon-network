@@ -24,7 +24,8 @@ local function atDock(p)
   return false
 end
 
-local DEST = { x = 196, y = 67, z = -2761 }   -- inside the sim's loaded box (it ends at z -2760)
+local DEST = { x = 196, y = 67, z = -2761 }
+local WEST = { x = 124, y = 67, z = -2824 }   -- its way out (west from the shaft's foot) shares no cell with node_51's way back   -- inside the sim's loaded box (it ends at z -2760)
 
 return {
   world = "synthetic",
@@ -38,6 +39,9 @@ return {
     local gaveUp = sim:capture_log("Gave up after 120s blocked by a turtle")
     local done = sim:capture_log("Job complete: job_")
     local summary = sim:capture_log("section(s) held")
+    local admitted = sim:capture_log("[ATC] admitted")
+    local heldForPath = sim:capture_log("path of ")
+    local backIn = sim:capture_log("Back in the building at")
     sim:storage_set("minecraft:cobblestone", 100000)
     sim:storage_set("minecraft:chest", 10000)
     sim:run_for(180000)
@@ -76,9 +80,21 @@ return {
     sim:expect(back, s .. " walked back the way it came (" .. tostring((mine(retracing, s) or "it did not"):sub(-90)) .. ")")
     if not back then return end
     sim:run_until(function() return #dispatched.lines >= 2 end, 10 * 60000)
+    -- THE THROUGHPUT CASE: once it is let in to walk back, with its path booked, a pair is sent another way.
+    local westSent
+    sim:watch(function()
+      for _, l in ipairs(admitted.lines) do if l:find("admitted " .. s .. ":", 1, true) and l:find("(path", 1, true) then return true end end
+      return false
+    end, function() westSent = true; order(WEST) end)
+    sim:run_until(function() return westSent and #dispatched.lines >= 3 end, 30 * 60000)
     local job2, d2, s2 = (dispatched.lines[2] or ""):match("Dispatched (job_%d+) %[DELIVER%] %-> (node_%d+)%s+support job_%d+ %-> (node_%d+)")
     sim:expect(job2 ~= nil, "a second pair went out while it walked back")
-    local all = { d, s, d2, s2 }
+    local d3, s3
+    for _, l in ipairs(dispatched.lines) do
+      local j, dd, ss = l:match("Dispatched (job_%d+) %[DELIVER%] %-> (node_%d+)%s+support job_%d+ %-> (node_%d+)")
+      if j and j ~= job and j ~= job2 then d3, s3 = dd, ss end
+    end
+    local all = { d, s, d2, s2, d3, s3 }
     local function home()
       for _, n in ipairs(all) do if n and not atDock(comps[n] and comps[n].pos) then return false end end
       return true
@@ -90,6 +106,27 @@ return {
     sim:run_for(5 * 60000)
     sim:run_until(function() return home() and (not job2 or serverDone(job2)) end, 3 * 3600000)
     sim:run_for(3 * 60000)
+    -- THROUGHPUT (Head Engineer, 2026-11-24): a departure whose way out shares no cell with the turtle walking back
+    -- is not held while it walks.
+    local function tOf(l) return l and l:match("^(%S+)") end
+    local walkAt, homeAt, westAt
+    for _, l in ipairs(admitted.lines) do
+      if l:find("admitted " .. s .. ":", 1, true) and l:find("(path", 1, true) then walkAt = walkAt or tOf(l) end
+      if d3 and l:find(d3, 1, true) then westAt = westAt or tOf(l) end
+    end
+    homeAt = tOf(mine(backIn, s))
+    local westHeld = 0
+    for _, l in ipairs(heldForPath.lines) do if d3 and (l:find(d3 .. "#", 1, true) or l:find("[" .. d3 .. "]", 1, true)) then westHeld = westHeld + 1 end end
+    -- Its way back booked at the zone's edge holds no section: no shaft, no way home inside -- so a departure going
+    -- another way is not held while it walks (the shaft and the way home are asked for at the shaft's foot).
+    local walkLine
+    for _, l in ipairs(admitted.lines) do
+      if l:find("admitted " .. s .. ":", 1, true) and l:find("(path", 1, true) then walkLine = walkLine or l end
+    end
+    local held = walkLine and walkLine:match("admitted " .. s .. ":%s*(.-)%s*%(path") or nil
+    sim:expect(walkLine ~= nil and held == "", s .. " walked back on its path holding no section (" ..
+      tostring(walkLine and walkLine:sub(-70) or "no path booking") .. ")")
+    sim:expect(d3 ~= nil and westHeld == 0, "a pair going another way was never held for a path (" .. westHeld .. ")")
     sim:expect(#gaveUp.lines == 0, "nobody gave up blocked by a turtle (" .. #gaveUp.lines .. ": " .. tostring((gaveUp.lines[1] or ""):sub(-100)) .. ")")
     sim:expect(job2 ~= nil and serverDone(job2), "the second order completed (" .. tostring(job2) .. ")")
     for _, n in ipairs(all) do

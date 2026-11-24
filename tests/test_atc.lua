@@ -826,4 +826,16 @@ return {
         assert_eq(kept, false, "on its path: kept")
         assert_eq(gone.ok, true, "a report that does not say so lets it go (" .. tostring(gone.why) .. ")")
     end,
+
+    -- Sim w3_retrace_head_on on (D)'s first cut: an east-bound pair waited "busy at path of node_33" behind a pair
+    -- going west. Turtles going the same way cannot meet head-on: only a way out and a way back hold each other.
+    ["two ways out share cells without holding each other; a way out and a way back do"] = function(assert_eq)
+        local core, st, t = live()
+        local row = { { x = 150, y = 60, z = -2813 }, { x = 190, y = 60, z = -2813 } }
+        core.handle(st, "a", { op = "request", route = { "S1" }, path = row, pathKind = "out" }, t)
+        local b = core.handle(st, "b", { op = "request", route = { "S2" }, path = row, pathKind = "out" }, t + 100)
+        local r = core.handle(st, "r", { op = "request", route = { "S3" }, path = { row[2], row[1] }, pathKind = "back" }, t + 200)
+        assert_eq(b.ok, true, "a second way out along the same row goes (" .. tostring(b.why) .. ")")
+        assert_eq(r.ok, false, "a way back along it waits (" .. tostring(r.why) .. ")")
+    end,
 }

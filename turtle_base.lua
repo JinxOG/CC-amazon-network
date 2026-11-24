@@ -2075,7 +2075,7 @@ function atc.book(waypoints, label, giveUp, path)
     -- of this one's that came before its own answer said nothing of a path -- which let
     -- the path go (sim w3_retrace_head_on: "node_34 reports without its path", 14 s in).
     if path then atc.takePath(path) else atc.path = nil end
-    if #list == 0 then return true end
+    if #list == 0 and not path then return true end
     local report, last
     local place, after = nil, nil
     while true do
@@ -2086,7 +2086,7 @@ function atc.book(waypoints, label, giveUp, path)
             logWarn(string.format("ATC: %s no longer wanted (%s) -- not waiting to be let in", label or "route", tostring(stop)))
             return false, stop
         end
-        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = pair, path = path })
+        local r = atc.ask(proto.MSG.ATC_REQUEST, { route = list, cur = atc.here(), group = atc.group, pair = pair, path = path, pathKind = path and path.kind })
         last = r
         if r and r.ok then
             atc.progressed()
@@ -2317,7 +2317,8 @@ end
 -- gone PATH_MARGIN cells beyond its path. A step into a zone cell off its path asks for it first.
 atc.PATH_MARGIN = 32
 local function cellKeyOf(c) return string.format("%d,%d,%d", c.x, c.y, c.z) end
-function atc.inZone(c) return c.y < CFG.FLOOR_Y and base.nearDepot(c) end
+-- A cell of a section (the dispatch shaft, DH) is the section's: never a path cell.
+function atc.inZone(c) return c.y < CFG.FLOOR_Y and base.nearDepot(c) and atc.section(c.x, c.y, c.z) == nil end
 function atc.corners(cells)
     local out = {}
     for i, c in ipairs(cells) do
@@ -2349,13 +2350,19 @@ function atc.departurePath()
     if not (d and type(d.x) == "number" and type(d.z) == "number") then return nil end
     local a = { x = W.WORLD_EXIT.x, y = W.WORLD_EXIT.y, z = W.WORLD_EXIT.z }
     local leg = atc.zoneLeg(atc.lCells(a, { x = d.x, y = a.y, z = d.z }))
-    return #leg > 0 and atc.corners(leg) or nil
+    if #leg == 0 then return nil end
+    local corners = atc.corners(leg)
+    corners.kind = "out"
+    return corners
 end
 function atc.retracePath()
     local rev = {}
     for i = #trail.cells, 1, -1 do rev[#rev + 1] = trail.cells[i] end
     local leg = atc.zoneLeg(rev)
-    return #leg > 0 and atc.corners(leg) or nil
+    if #leg == 0 then return nil end
+    local corners = atc.corners(leg)
+    corners.kind = "back"
+    return corners
 end
 function atc.takePath(corners)
     local p = { list = {}, set = {}, idx = {}, walked = 0, at = 0, beyond = 0 }
@@ -2385,8 +2392,9 @@ function atc.pathStep()
     -- Off it counts only once it has been on it: the way from its dock to the shaft is not "beyond".
     if i then p.at, p.beyond = math.max(p.at, i), 0 elseif p.at > 0 then p.beyond = p.beyond + 1 end
     local margin = (_self.partnerId and _self.followGate) and atc.PATH_MARGIN or 0
-    local walked = math.max(0, p.at - margin)
-    if p.beyond >= atc.PATH_MARGIN or (margin == 0 and p.at >= #p.list) then walked = #p.list end
+    -- the cell it stands in stays its own: at the shaft's foot it still holds it until its climb is booked
+    local walked = math.max(0, p.at - math.max(margin, 1))
+    if p.beyond >= atc.PATH_MARGIN then walked = #p.list end
     if walked > p.walked and (walked >= #p.list or walked - p.walked >= 8) then
         p.walked = walked
         atc.send(proto.MSG.ATC_PATH, { walked = walked })
@@ -3546,16 +3554,27 @@ function home.retrace(why)
     -- the end of the run (sim w3_side_atc). So the shaft and the way home inside
     -- are asked for out in the open tunnel, where a delivery coming the other way
     -- digs round a turtle in its path; once they are its, nobody comes down.
-    local booked = not atc.ENABLED
+    -- (D): ITS WAY BACK IS BOOKED AT THE ZONE'S EDGE, THE CLIMB AT THE SHAFT. Booked at the
+    -- edge, the shaft and the way home inside held every departure, whichever way it went,
+    -- for the whole walk back (sim w3_retrace_head_on). Its path keeps a departure the other
+    -- way off its cells; at the shaft's foot -- still holding the cell it stands in -- it asks
+    -- for the shaft and the way home, and that ends its path.
+    local booked, climbed = not atc.ENABLED, not atc.ENABLED
+    local path = atc.ENABLED and atc.retracePath() or nil
+    if not path then booked = climbed end
     while #trail.cells > 1 and not (_self.pos.y == CFG.FLOOR_Y and base.isInsideBuilding(_self.pos)) do
         local n = #trail.cells
         local p = trail.cells[n - 1]
-        if not booked and (base.nearDepot(p) or base.nearDepot(_self.pos)) then
+        local atShaft = atc.section(p.x, p.y, p.z) ~= nil
+        if not booked and path and (base.nearDepot(p) or base.nearDepot(_self.pos)) then
             booked = true
+            atc.book({}, "back the way I came (its path)", nil, path)
+        end
+        if not climbed and (atShaft or (not path and (base.nearDepot(p) or base.nearDepot(_self.pos)))) then
+            climbed, booked = true, true
             atc.book(atc.join({ { x = W.WORLD_EXIT.x, y = W.WORLD_EXIT.y, z = W.WORLD_EXIT.z },
                                 { x = W.DISPATCH_HOLE.x, y = CFG.FLOOR_Y, z = W.DISPATCH_HOLE.z } },
-                W.internalReturnRouteFrom(_self.dock, W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z)), "back the way I came", nil,
-                atc.retracePath())
+                W.internalReturnRouteFrom(_self.dock, W.DISPATCH_HOLE.x, W.DISPATCH_HOLE.z)), "back the way I came")
         end
         local ok, err = move.to(p.x, p.y, p.z)
         if not ok then
