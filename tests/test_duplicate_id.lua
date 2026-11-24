@@ -85,6 +85,15 @@ return {
         assert_eq(ok, true, tostring(err))
         assert_eq(tostring(t.needsHands):find("^duplicate_id: node_9 heard at ") ~= nil, true,
             "NEEDS HANDS duplicate_id (" .. tostring(t.needsHands) .. ")")
+        -- Every copy named (Head Engineer, 2026-11-24): a player removing all but the first named, then releasing,
+        -- must not unpark two live copies. The newest stream's (highest seq) first.
+        local named = {}
+        for x, y, z in tostring(t.needsHands):gmatch("(-?%d+),(-?%d+),(-?%d+)") do named[#named + 1] = x .. "," .. y .. "," .. z end
+        assert_eq(#named, 3, "all three copies named (" .. tostring(t.needsHands) .. ")")
+        assert_eq(named[1], "223,67,-2801", "the newest stream's first (" .. tostring(named[1]) .. ")")
+        local seen = {}
+        for _, p in ipairs(named) do seen[p] = true end
+        assert_eq(seen["238,200,-2780"] and seen["239,200,-2780"] and true or false, true, "and the other two")
         assert_eq(ban, 1, "and the ATC is told, once (" .. ban .. ")")
     end,
 

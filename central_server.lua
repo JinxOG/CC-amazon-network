@@ -3125,9 +3125,20 @@ function registry.dupCheck(msg)
     local d, now = state.dupTrack[id], os.epoch("utc")
     local pos = type(msg.payload) == "table" and type(msg.payload.position) == "table" and msg.payload.position or nil
     if not d or now - d.hiAt > 60000 then
-        state.dupTrack[id] = { hi = seq, hiAt = now, hiPos = pos, swaps = 0, last = "hi" }
+        state.dupTrack[id] = { hi = seq, hiAt = now, hiPos = pos, swaps = 0, last = "hi",
+                               streams = { { seq = seq, at = now, pos = pos } } }
         return
     end
+    -- EVERY COPY'S PLACE (Head Engineer, 2026-11-24: a player removes all but one named copy, then
+    -- releases). A message joins the stream whose last seq is nearest below it; a stream silent 60 s is
+    -- forgotten. Only for naming the copies: the swaps below decide.
+    local best
+    for _, st in ipairs(d.streams) do
+        if st.seq < seq and seq - st.seq <= 1000 and (not best or st.seq > best.seq) then best = st end
+    end
+    if best then best.seq, best.at, best.pos = seq, now, pos or best.pos
+    elseif #d.streams < 8 then d.streams[#d.streams + 1] = { seq = seq, at = now, pos = pos } end
+    for i = #d.streams, 1, -1 do if now - d.streams[i].at > 60000 then table.remove(d.streams, i) end end
     -- a swap: this message is from the other stream than the last one, and that other stream is live
     if seq > d.hi then
         if d.last == "lo" and now - d.loAt < registry.DUP_WINDOW_MS then d.swaps = d.swaps + 1 end
@@ -3140,6 +3151,13 @@ function registry.dupCheck(msg)
     d.flagged = true
     local function at(p) return p and string.format("%s,%s,%s", tostring(p.x), tostring(p.y), tostring(p.z)) or "?" end
     local detail = string.format("duplicate_id: %s heard at %s and %s", id, at(d.hiPos), at(d.loPos))
+    -- More copies after the first two, newest stream first.
+    local named = { [at(d.hiPos)] = true, [at(d.loPos)] = true }
+    table.sort(d.streams, function(a, b) return a.seq > b.seq end)
+    for _, st in ipairs(d.streams) do
+        local p = at(st.pos)
+        if st.pos and not named[p] then named[p] = true; detail = detail .. " and " .. p end
+    end
     logError(string.format("NEEDS HANDS: %s — %s. Two turtles share this id: a player has to remove one. "
         .. "Both are told to stay where they are, and the ATC drops the id.", id, detail))
     t.needsHands = detail
