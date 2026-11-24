@@ -604,7 +604,7 @@ function core.handle(st, id, p, now)
                     for _, y in ipairs(x.list) do
                         for _, z in ipairs(queue(st, y)) do if z == k then any = true end end
                     end
-                    if not any then
+                    if not any and not x.path then
                         st.res[k] = nil
                         if st.byTurtle[id] == k then st.byTurtle[id] = nil end
                     end
@@ -649,6 +649,9 @@ function core.handle(st, id, p, now)
                 -- there, the pair walked the tunnel without it).
                 local kept = false
                 if p.keep then for _, s in ipairs(x.list) do if s == p.keep then kept = true end end end
+                -- p.keepPath: a departure at the foot of the dispatch shaft keeps the cells
+                -- it is about to walk ((D)); its sections go.
+                if p.keepPath and x.path then kept = true end
                 if kept then
                     local list = {}
                     for _, s in ipairs(x.list) do
@@ -765,6 +768,7 @@ end
 local OPS = {
     [proto.MSG.ATC_REQUEST] = "request", [proto.MSG.ATC_ENTER] = "enter", [proto.MSG.ATC_LEAVE] = "leave",
     [proto.MSG.ATC_CANCEL] = "cancel", [proto.MSG.ATC_REPORT] = "report",
+    [proto.MSG.ATC_PATH] = "path", [proto.MSG.ATC_PATHADD] = "pathadd",
 }
 
 local function main()
@@ -797,7 +801,7 @@ local function main()
                         out = { ok = false, why = "atc error" }
                     end
                     out.nonce, out.epoch = pl.nonce, st.epoch
-                    if op ~= "leave" and op ~= "report" then reply(msg.from, pl.ch, out) end
+                    if op ~= "leave" and op ~= "report" and op ~= "path" then reply(msg.from, pl.ch, out) end
                 elseif msg.type == proto.MSG.UPDATE_ALL then
                     log("UPDATE_ALL -- updating")
                     proto.stageUpdateRef(msg.payload and msg.payload.ref)

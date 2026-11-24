@@ -310,7 +310,9 @@ local ok, err = pcall(base.run, function(job)
 
     -- ── Step 2: Depart depot via dispatch hole ────────────────────────────────
 
+    base.setDepartDest(d)           -- its path near the base is booked with its way out ((D))
     local ok, err = base.depart()
+    base.setDepartDest(nil)
     if not ok then
         return base.sendFailed("departure_failed: " .. (err or "?"), true)
     end

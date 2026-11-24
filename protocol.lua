@@ -159,6 +159,8 @@ proto.MSG = {
     ATC_REPLY   = "ATC_REPLY",
     ATC_HELLO   = "ATC_HELLO",
     ATC_REPORT  = "ATC_REPORT",
+    ATC_PATH    = "ATC_PATH",      -- turtle → ATC: walked this many cells of its booked path (atc.lua (D))
+    ATC_PATHADD = "ATC_PATHADD",   -- turtle → ATC: add these detour cells to my path (answered)
 }
 
 -- ─── Turtle Roles ────────────────────────────────────────────────────────────
