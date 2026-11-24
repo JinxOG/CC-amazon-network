@@ -3463,6 +3463,26 @@ function jobQueue.noteWorking(jobId, turtleId)
         .. "that evidence rather than recalling it", jobId, turtleId))
 end
 
+-- A LOST CANCEL HEALS AT THE NEXT HEARTBEAT (sim w3_side_atc on 4d2617c, 2026-11-24; Head Engineer
+-- ruling). In a radio blackout the server timed out node_56 and cancelled its support job job_0042 with
+-- a RECALL it never heard; after the blackout node_56 carried on with job_0042, held DH J1 N1 W1 for 3
+-- minutes waiting for an old partner, and only its own 180 s timer ended it. Every heartbeat names the
+-- turtle's job: one naming a job this server cancelled gets the cancel again, at most every 30 s.
+function jobQueue.recallCancelled(jobId, turtleId)
+    if not jobId or not turtleId then return end
+    local job = state.jobs[jobId]
+    if not job or job.status ~= JOB_STATUS.CANCELLED then return end
+    state.cancelResent = state.cancelResent or {}
+    local key, now = jobId .. "|" .. turtleId, os.epoch("utc")
+    local last = state.cancelResent[key]
+    if last and now - last < 30000 then return end
+    state.cancelResent[key] = now
+    sendTo(turtleId, proto.MSG.RECALL, proto.payloadRecall("job_cancelled"))
+    if not last then
+        logWarn(string.format("%s still reports %s, which was cancelled -- its cancel sent again", turtleId, jobId))
+    end
+end
+
 function jobQueue.checkAckTimeouts()
     local now = os.epoch("utc")
     for _, job in pairs(state.jobs) do
@@ -4304,6 +4324,7 @@ handlers[proto.MSG.HEARTBEAT] = function(msg)
         -- Every heartbeat carries the turtle's current jobId. That is the
         -- evidence that makes a lost JOB_ACK survivable.
         jobQueue.noteWorking(p.jobId, msg.from)
+        jobQueue.recallCancelled(p.jobId, msg.from)
         -- ACK only known turtles so their missed counter resets and they never re-register spuriously
         sendTo(msg.from, proto.MSG.HEARTBEAT_ACK, { ts = os.epoch("utc") })
         registry.reSendOnHeartbeat(msg.from, p.status)

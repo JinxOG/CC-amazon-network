@@ -43,6 +43,7 @@ local files = {
     "tests.test_gps_tick",
     "tests.test_retrace",
     "tests.test_duplicate_id",
+    "tests.test_lost_cancel",
     "tests.test_silent_waits",
     "tests.test_zone_phase",
     "tests.test_zone_ore",
