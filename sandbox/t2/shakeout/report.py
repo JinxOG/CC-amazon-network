@@ -91,7 +91,11 @@ ONE_TURTLE_FAULTS = ("turtle_reboot", "remove_item", "put_back_turned", "low_fue
 # so faults.jsonl never has an end line: the window is start + dur_ms. Until 2026-11-14 such a window ran to the run's end, and
 # in shakeout-side-a the first radio burst (minute 40 of 180) excused every turtle's stuck time for the rest of the run.
 SELF_ENDING = ("radio_loss", "radio_latency", "rs_stall", "rs_offline", "chunk_unload")
-VERDICTS = ("ok", "stuck_recovered", "decommissioned", "lost", "expected_hands")
+VERDICTS = ("ok", "stuck_recovered", "decommissioned", "lost", "expected_hands", "duplicate_id")
+# A hard kill can leave a moving turtle in both chunks it was crossing (T2 payload-h's node_397, 2026-11-24): two computers, one id.
+# The server parks both and asks for hands (W3's duplicate_id). The world made it, not the code: counted apart, and listed.
+DUPLICATE_RX = re.compile(r"^duplicate_id\b")
+GPS_JUMP_RX = re.compile(r"GPS jump (taken|not taken):")
 SECTIONS = ["Pass bar", "Stuck or failed turtles", "Jams", "Jobs completed by type", "Faults fired by type",
             "Decommissioned turtles and why", "Expected hands", "First 6 h against last 6 h", "Housekeeping",
             "EXPECTED (board cards open at run time)", "Draft board cards", "Evidence and gaps"]
@@ -471,6 +475,8 @@ def analyse(timeline, windows, end_ms=None):
         verdict = "lost"
     elif decom and removals and asked:
         verdict = "expected_hands"
+    elif decom and nh and DUPLICATE_RX.match(str(nh)):
+        verdict = "duplicate_id"
     elif decom:
         verdict = "decommissioned"
         if removals and not asked:
@@ -1289,7 +1295,12 @@ def build_report(run_dir, expected=None):
 
     stuck_end = sum(1 for a in fd["all"].values() if any(e["open"] for e in a["episodes"]))
     gone_end = sum(1 for a in fd["all"].values() if (a["gone"]["silent_ms"] or 0) > GONE_MS)
-    hands_end = sum(1 for a in fd["all"].values() if a["needs_hands"] and a["verdict"] != "expected_hands")
+    hands_end = sum(1 for a in fd["all"].values() if a["needs_hands"] and a["verdict"] not in ("expected_hands", "duplicate_id"))
+    gps_jumps = {"taken": 0, "not_taken": 0}
+    for l in R["lines"]:
+        m = GPS_JUMP_RX.search(l["msg"])
+        if m:
+            gps_jumps["taken" if m.group(1) == "taken" else "not_taken"] += 1
     not_recovered = sorted((a["id"] for a in fd["all"].values() if a["verdict"] in ("decommissioned", "lost")), key=_node_key)
     unknown_where = sum(1 for a in fd["all"].values() if a["verdict"] == "decommissioned" and a.get("present") is None)
     removals = [w for w in W if w["fault"] == "remove_item"]
@@ -1369,7 +1380,7 @@ def build_report(run_dir, expected=None):
         "long_sites": [dict(s, jobs=sorted(s["jobs"])) for s in long_sites(R)] if R["kind"] == "t2" else None,
         "faults": fstats, "fault_evidence": fevidence, "housekeeping": hk, "hours": hours, "drift": drift,
         "log_gaps": [{"from": a, "to": b} for a, b in log_gaps], "snap_gaps": [{"from": a, "to": b} for a, b in snap_gaps],
-        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence, "atc_waits": awaits, "stale_holds": stale,
+        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence, "atc_waits": awaits, "stale_holds": stale, "gps_jumps": gps_jumps,
         "evidence": {"log_lines": len(R["lines"]), "unparsed_lines": R["unparsed"], "snapshots": len(R["snapshots"]),
                      "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "loaders": fd["loaders"], "fault_lines": fevidence,
                      "windows": len(W)},
@@ -1419,8 +1430,8 @@ def _render(rep):
               sum(1 for v in rep["failed_job"].values() if v["how"].startswith("too late")),
               rep["failed_job_lines"], len(rep["failed_job"]),
               "" if rep["failed_job"] else " -- TRUNCATED: no failed job traced to a turtle, so this item has no evidence"),
-          "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, counted apart)" % (c["decommissioned"],
-                                                                                                       c["expected_hands"]),
+          "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, %d duplicate id(s) from a crash, counted "
+          "apart)" % (c["decommissioned"], c["expected_hands"], c.get("duplicate_id", 0)),
           "- No wait cleared only by a timer (the user, 2026-11-17): **%d wait(s) cleared only by a timer**%s (evidence: %d log "
           "lines scanned; %d ATC sweep(s) and %d partner-silence net(s) for a turtle never heard again, counted apart as dead)" % (
               len(rep["timer_clears"]), (" -- " + ", ".join("%s %d" % (k, n) for k, n in sorted(
@@ -1510,6 +1521,14 @@ def _render(rep):
              "Evidence: %d remove_item fault window(s), %d turtles judged." % (len(eh), rep["remove_item_windows"], judged))
     for a in eh:
         o.append("- %s: %s (faults %s)" % (a["id"], a["needs_hands"], ",".join(a["touching"])))
+
+    o += ["", "## Duplicated by a crash", ""]
+    dup = [a for a in rep["turtles"] if a["verdict"] == "duplicate_id"]
+    o.append("%d turtle id(s) the server heard from two places at once and parked for hands (a hard kill left one turtle in both "
+             "chunks it was crossing; counted apart from decommissioned, but any jam it caused still counts). GPS jumps: %d taken "
+             "(two fixes agreed), %d not taken." % (len(dup), rep["gps_jumps"]["taken"], rep["gps_jumps"]["not_taken"]))
+    for a in dup:
+        o.append("- %s: %s" % (a["id"], a["needs_hands"]))
 
     o += ["", "## First 6 h against last 6 h", ""]
     hrs = rep["hours"]

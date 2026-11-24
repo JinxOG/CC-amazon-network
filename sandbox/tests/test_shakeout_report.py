@@ -594,6 +594,43 @@ class LastSeenIsTheBridgesClock(unittest.TestCase):
             shutil.rmtree(run, ignore_errors=True)
 
 
+class DuplicateIdIsCountedApart(unittest.TestCase):
+    """A hard kill can leave a moving turtle in both chunks it was crossing (payload-h's node_397). The server parks both copies and
+    asks for hands with duplicate_id (W3, w3-payload-i). The world made it, not the code: counted apart from decommissioned, and
+    listed. GPS jumps (taken and not taken) are evidence, not a verdict."""
+
+    LINES = [
+        (30 * MIN, "server", "ERROR", "NEEDS HANDS: node_5 — duplicate_id: node_5 heard at 238,200,-2780 and 239,200,-2780. Two "
+                                      "turtles share this id: a player has to remove one. Both are told to stay where they are, "
+                                      "and the ATC drops the id."),
+        (31 * MIN, "node_7", "WARN", "[node_7][WARN] GPS jump not taken: believed 222,60,-2755, a fix said 199,37,-2784, a second "
+                                     "said none"),
+        (32 * MIN, "node_7", "WARN", "[node_7][WARN] GPS jump taken: believed 222,60,-2755, two fixes said 224,60,-2755 and "
+                                     "224,60,-2755"),
+    ]
+
+    def test_duplicate_id_is_its_own_verdict_and_gps_jumps_are_counted(self):
+        def ts(t):     # the server keeps the hold in /state, as it does for every NEEDS HANDS until a person clears it
+            e = {"x": DOCK[0], "y": DOCK[1], "z": DOCK[2], "status": "IDLE", "dockX": DOCK[0], "dockZ": DOCK[2],
+                 "lastSeen": T0 + t - 2000, "online": True, "role": "DELIVERY"}
+            if t >= 30 * MIN:
+                e["needsHands"] = "duplicate_id: node_5 heard at 238,200,-2780 and 239,200,-2780"
+            return {"node_5": e}
+        run = make_run(hours=1, extra_lines=self.LINES, turtles_at=ts)
+        try:
+            rep = report.build_report(run)
+            self.assertEqual(rep["verdicts"]["node_5"], "duplicate_id")
+            self.assertEqual(rep["counts"]["decommissioned"], 0)
+            self.assertNotIn("node_5", rep["not_recovered"])
+            self.assertEqual(rep["gps_jumps"], {"taken": 1, "not_taken": 1})
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("1 duplicate id(s)", md)
+            self.assertIn("## Duplicated by a crash", md)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
 class ControlRunMustFail(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(os.path.join(CONTROL, "state.json")), "the control run folder is not on this machine")
     def test_control_run_jams_and_sticks(self):
