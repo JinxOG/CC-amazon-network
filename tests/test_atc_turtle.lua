@@ -334,6 +334,22 @@ return {
         assert_eq(c.world["0,70,-1"], "computercraft:computer_advanced", "the computer is still there")
     end,
 
+    -- W1's point (2026-11-24): a guard is only as good as the digs that go through it. The vertical bypass's advance
+    -- called turtle.dig() itself after checking only for a turtle, so it would have dug a computer. No navigation dig in
+    -- turtle_base calls turtle.dig/digUp/digDown directly: every one goes through digGuarded (or tryMove's guarded branch).
+    ["no direct turtle.dig() call in turtle_base: every dig is guarded"] = function(assert_eq)
+        local f = io.open("turtle_base.lua", "r")
+        local src = f:read("a"); f:close()
+        local raw = {}
+        local n = 0
+        for line in (src .. "\n"):gmatch("([^\n]*)\n") do
+            n = n + 1
+            local code = line:gsub("%-%-.*$", "")
+            if code:find("turtle%.dig%a*%s*%(") then raw[#raw + 1] = n end
+        end
+        assert_eq(#raw, 0, "direct dig calls at line(s) " .. table.concat(raw, ", "))
+    end,
+
     ["a turtle still digs stone in its way"] = function(assert_eq)
         local c = stub.install({ pos = { x = 0, y = 70, z = 0, facing = 0 },
             world = { ["0,70,-1"] = "minecraft:stone" },

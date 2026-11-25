@@ -1845,9 +1845,9 @@ local function bypassForward()
             base.makeRoomBeforeDig()
             local dug, why = digGuarded(applyDir)
             if not dug then
-                if why == "would_dig_turtle" then
-                    logWarn("Vertical bypass: a turtle is " .. applyDir
-                        .. " — refusing to dig it, will wait instead")
+                if why == "would_dig_turtle" or why == "would_dig_computer" then
+                    logWarn("Vertical bypass: a " .. (why == "would_dig_turtle" and "turtle" or "computer") .. " is "
+                        .. applyDir .. " — refusing to dig it, will wait instead")
                 end
                 return false
             end
@@ -1865,7 +1865,8 @@ local function bypassForward()
             if not jMove("forward") then
                 if isTurtleBlock("forward") then break end  -- another turtle, stop
                 base.makeRoomBeforeDig()
-                turtle.dig()                                -- terrain — dig it
+                -- terrain -- dig it; never a computer (digGuarded refuses it: stop here too, W1's point)
+                if not digGuarded("forward") and isComputerBlock("forward") then break end
                 sleep(0.2)
                 if fenceBlocksStep("forward") then break end
                 if not jMove("forward") then break end
