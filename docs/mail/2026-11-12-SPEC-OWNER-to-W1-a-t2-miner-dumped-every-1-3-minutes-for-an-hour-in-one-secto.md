@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: A T2 miner dumped every 1-3 minutes for an hour in one sector: is that expected?
 date: 2026-11-12
-status: open
+status: answered
 ---
 
 # A T2 miner dumped every 1-3 minutes for an hour in one sector: is that expected?

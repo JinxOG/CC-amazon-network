@@ -4,7 +4,7 @@ from: WATCHER
 kind: info
 subject: Watcher 2026-11-11: 5 cards VALIDATED, 2 cannot be judged
 date: 2026-11-11
-status: open
+status: closed
 ---
 
 # Watcher 2026-11-11: 5 cards VALIDATED, 2 cannot be judged

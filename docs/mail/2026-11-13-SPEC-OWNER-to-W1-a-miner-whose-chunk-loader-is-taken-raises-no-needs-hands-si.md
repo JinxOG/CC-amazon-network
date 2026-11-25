@@ -4,7 +4,7 @@ from: SPEC-OWNER
 kind: request
 subject: A miner whose chunk loader is taken raises no NEEDS HANDS (sim measurements)
 date: 2026-11-13
-status: open
+status: answered
 ---
 
 # A miner whose chunk loader is taken raises no NEEDS HANDS (sim measurements)
