@@ -312,6 +312,44 @@ return {
         assert_eq(tostring(err), "paused for the server", "for the server (" .. tostring(err) .. ")")
     end,
 
+    -- T2 w3-duplicate-id-a (2026-11-24): a homing delivery went through the cell where the ATC computer stood, and the
+    -- ATC went silent from that moment; the dig guard refused only turtles. A turtle never digs a ComputerCraft block
+    -- (a computer, a monitor, a modem, a disk drive): the ATC, a GPS host, the server (Head Engineer ruling).
+    ["a turtle never digs a computer in its way"] = function(assert_eq)
+        local c = stub.install({ pos = { x = 0, y = 70, z = 0, facing = 0 },
+            world = { ["0,70,-1"] = "computercraft:computer_advanced" },
+            equipped = { left = "minecraft:diamond_pickaxe" } })
+        gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"] = nil
+        local base = require("turtle_base")
+        base.setCanDig(true)
+        local savedSleep = sleep
+        sleep = function() end
+        local ok, moved, why = pcall(base.move.forward)
+        sleep = savedSleep
+        assert_eq(ok, true, tostring(moved))
+        assert_eq(moved, false, "it did not go through")
+        assert_eq(tostring(why):find("would_dig_computer", 1, true) ~= nil, true, "and says why (" .. tostring(why) .. ")")
+        assert_eq(c.world["0,70,-1"], "computercraft:computer_advanced", "the computer is still there")
+    end,
+
+    ["a turtle still digs stone in its way"] = function(assert_eq)
+        local c = stub.install({ pos = { x = 0, y = 70, z = 0, facing = 0 },
+            world = { ["0,70,-1"] = "minecraft:stone" },
+            equipped = { left = "minecraft:diamond_pickaxe" } })
+        gps = { locate = function() return c.pos.x, c.pos.y, c.pos.z end }
+        package.loaded["turtle_base"] = nil
+        package.loaded["geofence"] = nil
+        local base = require("turtle_base")
+        base.setCanDig(true)
+        local savedSleep = sleep
+        sleep = function() end
+        local ok, moved = pcall(base.move.forward)
+        sleep = savedSleep
+        assert_eq(ok and moved, true, "it dug through and moved (" .. tostring(moved) .. ")")
+    end,
+
     ["a turtle not told PARK moves"] = function(assert_eq)
         local base = fresh()
         local proto = require("protocol")

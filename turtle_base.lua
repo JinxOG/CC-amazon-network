@@ -1702,10 +1702,23 @@ end
 -- Refusal is reported distinctly from failure so callers can tell "I must not"
 -- from "I could not". A turtle in the way is a reason to WAIT: any column of
 -- turtles is transient by definition, because everyone in it is trying to leave.
+-- NOR A COMPUTER (T2 w3-duplicate-id-a, 2026-11-24): a homing delivery went through the cell where the ATC
+-- computer stood, and the ATC went silent from that moment. Any ComputerCraft block that is not a turtle --
+-- a computer, monitor, modem, disk drive: the ATC, a GPS host, the server -- is never dug. A miner's
+-- loader retrieval digs a turtle with turtle.dig on purpose and does not come through here.
+local function isComputerBlock(dir)
+    local fn = INSPECT[dir]
+    if not fn then return false end
+    local ok, data = fn()
+    return ok and type(data) == "table" and type(data.name) == "string"
+           and data.name:find("^computercraft:") ~= nil and not data.name:find("turtle")
+end
+
 local function digGuarded(dir)
     local fn = DIG[dir]
     if not fn then return false, "no_dig_for_dir" end
     if isTurtleBlock(dir) then return false, "would_dig_turtle" end
+    if isComputerBlock(dir) then return false, "would_dig_computer" end
     return fn()
 end
 
@@ -2770,6 +2783,10 @@ local function tryMove(digFn, dir)
             end
             -- Back off progressively: 0.5s → 1s → 1.5s → 2s (cap)
             sleep(math.min(2.0, 0.5 * turtleWaits))
+        elseif isComputerBlock(dir) then
+            -- A computer is in the way: never dug, and it will not move -- the caller routes another way.
+            logWarn(string.format("A computer blocks %s at %d,%d,%d -- not digging it", dir, _self.pos.x, _self.pos.y, _self.pos.z))
+            return false, "would_dig_computer (" .. dir .. ")"
         else
             -- Static block (terrain, gravel, etc.) — dig it
             digAttempts = digAttempts + 1
