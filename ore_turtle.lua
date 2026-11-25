@@ -1596,14 +1596,24 @@ local function scanSector(levelIndex)
         print("[SCAN] Census skipped: no owned Y band for this level")
     end
 
+    -- SAY WHICH LEVEL. "at this level" named no level, and that one omission
+    -- cost the spec owner an investigation on 2026-11-12: four consecutive
+    -- "Found N ore blocks at this level" lines from node_179 read as the same
+    -- level being scanned over and over, and the question reached me as "do the
+    -- repeated Y=16 scans mean ore is being mined, or the level redone?".
+    --
+    -- They were the four DIFFERENT levels of the survey pass -- Y=16, 0, -32
+    -- and -52, with 2018, 1827, 1175 and 686 ore. The phase line above names
+    -- the level correctly; this one did not, and it is the one carrying the
+    -- number a reader compares.
     local reachable, dropped = mine_flow.filterToLease(ores)
     if dropped > 0 then
-        print(string.format("[SCAN] Found %d ore blocks at this level before "
+        print(string.format("[SCAN] Found %d ore blocks at Y=%d before "
             .. "cross-level dedup (%d outside the lease, left for the "
-            .. "neighbouring sector)", #reachable, dropped))
+            .. "neighbouring sector)", #reachable, SCAN_LEVELS[levelIndex], dropped))
     else
-        print("[SCAN] Found " .. #reachable
-            .. " ore blocks at this level before cross-level dedup")
+        print(string.format("[SCAN] Found %d ore blocks at Y=%d before "
+            .. "cross-level dedup", #reachable, SCAN_LEVELS[levelIndex]))
     end
     -- The dropped count comes back as well as being printed. A survey that
     -- cannot report its own blind spots is the ore-index card's condition 6,

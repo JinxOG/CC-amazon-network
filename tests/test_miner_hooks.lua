@@ -1039,8 +1039,24 @@ function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))
     local src = f:read("*a"); f:close()
 
-    assert_eq(src:find("at this level before cross-level dedup", 1, true) ~= nil, true,
-        "the per-level line must say it is before dedup, or it reads as a total")
+    -- "at Y=%d before cross-level dedup" since 2026-11-24. It used to read "at
+    -- this level", naming no level, and four consecutive such lines from one
+    -- miner read as the same level scanned over and over -- which is exactly how
+    -- the question reached W1 ("do the repeated Y=16 scans mean the level is
+    -- being redone?"). They were four DIFFERENT levels. The line carries the
+    -- number a reader compares, so it has to carry the level too.
+    assert_eq(src:find("ore blocks at Y=%%d before ") ~= nil, true,
+        "the per-level line must name its LEVEL, or consecutive lines read as "
+        .. "rescans of one level")
+    assert_eq(src:find("cross%-level dedup") ~= nil, true,
+        "and must say it is before dedup, or it reads as a sector total")
+    -- Derived from the index it was given: scanSector takes levelIndex and has
+    -- no sy of its own. The first draft of this line used a bare `sy`, which
+    -- would have been nil and raised inside string.format at runtime -- it
+    -- compiled fine, so only reading the scope caught it.
+    assert_eq(src:find("SCAN_LEVELS[levelIndex]", 1, true) ~= nil, true,
+        "the level must come from SCAN_LEVELS[levelIndex], the only source in "
+        .. "scanSector's scope")
     -- Anchored on the COMPUTATION, not on the sentence. The message is built by
     -- concatenation, so "for the sector so far" never appears contiguously in
     -- the source -- which is the trap this project keeps relearning: assert on
