@@ -206,6 +206,10 @@ G_BOOT    = "boot recovery waits for a real position before anything else (SOURC
 K_FACE    = "a facing that could not be measured is unknown, and the wait measures it before moving"
 K_BOX     = "a turtle boxed in on all sides that cannot dig does not claim a facing"
 K_HOME    = "a miner rebooted outside the base with nothing to recover flies home (SOURCE-ONLY, weaker)"
+# NOT K_HOME, which is shared with another mutant and correct for that one.
+# Nulling the flight's RESULT is caught by the handed-back-as-idle test, because
+# the idle hand-back is what reads `docked`; the flies-home test stays green.
+K_DOCKED  = "a miner home with nothing to recover is handed back as idle (SOURCE-ONLY, weaker)"
 U_OLD     = "a turtle reporting an older version is queued for the current release"
 U_SAME    = "a turtle on the current version, or a newer one, is left alone"
 U_REF     = "the deploy's commit survives a restart"
@@ -514,7 +518,11 @@ MUTANTS = [
      [('    return picked, bestDist', '    return picked, 0')], N_MIN),
 
     ("an empty list is indexed instead of refused", "mine_flow.lua",
-     [('    if n == 0 then return nil end', '')], N_EMPTY),
+     # Anchored on takeNearest's own `local n = #list`: mine_flow.coveredBand
+     # added a second "if n == 0 then return nil end" in 1.9.167, which made
+     # this anchor ambiguous and the mutant MALFORMED on every full run.
+     [('    local n = #list\n    if n == 0 then return nil end',
+       '    local n = #list\n')], N_EMPTY),
 
     ("the miner goes back to taking ores in list order", "ore_turtle.lua",
      [('        local ore = mine_flow.takeNearest(remaining, p)',
@@ -552,8 +560,11 @@ MUTANTS = [
      [('        return {}, "place_failed"', '        return {}, "scan_threw"')], S_LEVEL),
 
     ("the caller takes the ore list and drops the reason", "ore_turtle.lua",
-     [('            local rawOres, scanFail = scanSector()',
-       '            local rawOres = scanSector()\n            local scanFail = nil')], S_LEVEL),
+     # RETARGETED 2026-11-24: scanSector's returns grew from 2 to 5 in 1.9.164,
+     # so this anchor had matched nothing since and the mutant reported
+     # MALFORMED on every full run. Found by auditing all 571 anchors.
+     [('local rawOres, scanFail, outsideLease, levelCensus, levelWatched = scanSector(i)',
+       'local rawOres, outsideLease, levelCensus, levelWatched = scanSector(i)\n            local scanFail = nil')], S_LEVEL),
 
     ("a level that never ran no longer abandons the sector", "ore_turtle.lua",
      [('            if scanFail then\n                abort = string.format("scan_level_incomplete: %s at Y=%d after %d retries",\n                    scanFail, sy, SCAN_RETRIES)\n                break\n            end', '')], S_LEVEL),
@@ -624,17 +635,26 @@ MUTANTS = [
        '    if not seen then return nil end')], A_SAFE),
 
     ("a fleet member beside the ore is walked into instead of refused", "ore_turtle.lua",
-     [('    if why == "would_dig_turtle" then return false, why end', '')], A_SAFE),
+     # RETARGETED 2026-11-24: this branch grew a second reason the same day
+     # (would_dig_computer, 1.9.172), so the old single-reason anchor matched
+     # nothing. Removing the whole branch is still the mutation: it makes the
+     # adjacent dig fall through to walking into the cell it declined to dig.
+     [('    if why == "would_dig_turtle" or why == "would_dig_computer" then\n        return false, why\n    end', '')], A_SAFE),
 
     ("the caller treats a refusal as not-applicable", "ore_turtle.lua",
      [('    if near ~= nil then return near, nearWhy, "beside" end', '    if near then return near, nearWhy, "beside" end')], A_SAFE),
 
     # ── The miner's crash line is shipped before the reboot (§5.2 card 5) ──
     ("the miner's fatal line is queued and never sent", "ore_turtle.lua",
-     [('    pcall(base.flushLogs)\n', '')], M_CRASH),
+     # Anchored on the comment above the FATAL handler's flush: 1.9.165 added a
+     # second pcall(base.flushLogs) to the degraded-boot path, which made both
+     # of these anchors ambiguous and the mutants MALFORMED on every full run.
+     [('    -- than a crash nobody read.\n    pcall(base.flushLogs)\n',
+       '    -- than a crash nobody read.\n')], M_CRASH),
 
     ("the flush is named but never called", "ore_turtle.lua",
-     [('    pcall(base.flushLogs)', '    local _ = base.flushLogs')], M_CRASH),
+     [('    -- than a crash nobody read.\n    pcall(base.flushLogs)',
+       '    -- than a crash nobody read.\n    local _ = base.flushLogs')], M_CRASH),
 
     # ── Slot 14 is exempt from banking only while it holds fuel (node_119) ──
     ("the whole coal slot is exempt from banking again", "ore_turtle.lua",
@@ -1527,7 +1547,10 @@ MUTANTS = [
      [('    if docked == false then\n        print("[MINER] Flying home after an out-of-base reboot did NOT reach', '    if false then\n        print("[MINER] Flying home after an out-of-base reboot did NOT reach')], RB_IDLE),
 
     ('its flight home waits on a server that is down', 'ore_turtle.lua',
-     [('    base.setAutonomousReturn(true)\n    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n', '    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n')], RB_IDLE),
+     # Anchored on the comment above the rebooted-outside-base flight: 1.9.161's
+     # three-minute hold-expiry path added a SECOND identical sequence, which
+     # made this anchor ambiguous and the mutant MALFORMED on every full run.
+     [('    -- for a second reboot must not hold it mid-air waiting for permission.\n    base.setAutonomousReturn(true)\n    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n', '    -- for a second reboot must not hold it mid-air waiting for permission.\n    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n')], RB_IDLE),
 
     ('refreshCraftable polls with the warehouse alive', 'central_server.lua',
      [('        -- stalls, 588 ms. Same guard and window as refreshStorage\'s.\n        if os.epoch("utc") - (state.storageSenderSeenAt or 0) < 180000 then return end\n', "        -- stalls, 588 ms. Same guard and window as refreshStorage's.\n")], CRAFT_WH),
@@ -1955,8 +1978,10 @@ MUTANTS = [
      [('function base.hasPositionFix() return _self.posFixed == true and _self.facingKnown == true end\n', 'function base.hasPositionFix() return _self.posFixed == true end\n')], K_FACE),
 
     ('a stranded miner never goes home', 'ore_turtle.lua',
-     [('    local docked, dockErr = base.returnToDockFromSky()\n    base.setAutonomousReturn(false)\n',
-       '    local docked, dockErr = nil, nil\n    base.setAutonomousReturn(false)\n')], K_HOME),
+     # Same ambiguity as above, same cause: 1.9.161's hold-expiry path added a
+     # second identical sequence. Anchored on the rebooted-outside-base comment.
+     [('    -- for a second reboot must not hold it mid-air waiting for permission.\n    base.setAutonomousReturn(true)\n    local docked, dockErr = base.returnToDockFromSky()\n',
+       '    -- for a second reboot must not hold it mid-air waiting for permission.\n    base.setAutonomousReturn(true)\n    local docked, dockErr = nil, nil\n')], K_DOCKED),
 
     ('a stranded miner flies home over a standing loader', 'ore_turtle.lua',
      [('    if loader_state.hasPlaced() then return end\n    if base.isInsideBuilding(base.getPos()) then return end\n    base.waitForPositionFix("rebooted outside', '    if base.isInsideBuilding(base.getPos()) then return end\n    base.waitForPositionFix("rebooted outside')], K_HOME),
@@ -2163,7 +2188,10 @@ MUTANTS = [
      [('    local byLabel = mine_flow.carriedLoaderSlotByLabel(s.label)', '    local byLabel = nil')], B_ORDER),
 
     ("the position correction rebuilds the record from scratch", "loader_state.lua",
-     [('    local updated = {}\n    for k, v in pairs(rec) do updated[k] = v end\n', '    local updated = { sector = rec.sector, radius = rec.radius }\n')], C_KEEP),
+     # Anchored inside correctPosition: loader_state.setOrder (1.9.161) added a
+     # second "local updated = {}" with the same copy loop, making this anchor
+     # ambiguous and the mutant MALFORMED on every full run.
+     [('function loader_state.correctPosition(x, y, z)\n    local rec = load()\n    if not rec then return false, "no_loader_recorded" end\n    local updated = {}\n    for k, v in pairs(rec) do updated[k] = v end\n', 'function loader_state.correctPosition(x, y, z)\n    local rec = load()\n    if not rec then return false, "no_loader_recorded" end\n    local updated = { sector = rec.sector, radius = rec.radius }\n')], C_KEEP),
 
     ("the beacon correction re-records instead of correcting", "ore_turtle.lua",
      [('loader_state.correctPosition(beaconPos.x, beaconPos.y, beaconPos.z)', 'loader_state.record(beaconPos.x, beaconPos.y, beaconPos.z, rec.sector, rec.radius)')], C_CALL),
