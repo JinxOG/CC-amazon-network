@@ -756,6 +756,75 @@ return {
     -- takes its computer ID, its files and its loader_state with it, and its
     -- placed loader is orphaned permanently with nothing left that knows to
     -- reclaim it. It is also silent -- the registry just stops hearing from it.
+    -- A COMPUTER IS A FLEET MEMBER TOO (W3, 2026-11-24).
+    --
+    -- Measured in w3-duplicate-id-a: a cloned delivery homed straight through
+    -- the cell holding the base ATC computer, and the ATC went silent from that
+    -- moment. The guard matched only names containing "turtle", so
+    -- computercraft:computer_advanced was dug like stone.
+    --
+    -- Digging the ATC is worse than digging a turtle: a turtle is one worker,
+    -- the ATC is how every turtle in the base knows its place in line. The base
+    -- computers are the most expensive blocks in the world to lose and were the
+    -- least protected.
+    ["digGuarded refuses to dig a fleet COMPUTER, not just a turtle"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        for _, name in ipairs({ "computercraft:computer_advanced",
+                                "computercraft:computer_normal",
+                                "computercraft:disk_drive",
+                                "computercraft:wireless_modem_advanced" }) do
+            c.world[below] = name
+            local dug, why = flow.digGuarded("down")
+            assert_eq(dug, false, name .. " must never be dug")
+            -- ITS OWN REASON, matching turtle_base's half of the ruling, so the
+            -- two read identically in a log: a turtle moves on, a computer never
+            -- will, and a reader needs to tell them apart.
+            --
+            -- The reason the callers had to be updated in the same change: one
+            -- of them (digAdjacentOre) treats any UNRECOGNISED reason as "this
+            -- path does not apply" and falls back to walking into the cell, so a
+            -- new reason left unhandled would have turned the guard into exactly
+            -- the collision it prevents.
+            assert_eq(why, "would_dig_computer", name .. " refusal must be nameable")
+            assert_eq(c.world[below], name, name .. " is still standing there")
+        end
+    end,
+
+    -- AND VANILLA BLOCKS ARE STILL DIGGABLE. The whole minecraft: namespace is
+    -- excluded on purpose: a bare name:find("turtle") also matches
+    -- minecraft:turtle_egg, a real block that never moves, and refusing an egg
+    -- costs a scan level for nothing.
+    -- AND THE GEO SCANNER MUST STAY DIGGABLE. It is an advancedperipherals
+    -- block the miner places and picks back up once per scan level, THROUGH
+    -- THIS GUARD. Broadening the namespace rule to "any mod block with a
+    -- peripheral in it" would refuse every scanner pickup and stop all mining
+    -- -- a fix for the ATC that breaks the thing the miner does most.
+    ["digGuarded still digs the geo scanner it placed itself"] =
+    function(assert_eq)
+        local eqm = require("equipment")
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        c.world[below] = eqm.ITEMS.SCANNER
+        local dug, why = flow.digGuarded("down")
+        assert_eq(dug, true, "the miner's own scanner must still be recoverable ("
+            .. tostring(why) .. ") -- it is dug once per scan level through this "
+            .. "very guard")
+    end,
+
+    ["digGuarded still digs vanilla blocks, turtle_egg included"] =
+    function(assert_eq)
+        local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())
+        local below = wkey(c.pos.x, c.pos.y - 1, c.pos.z)
+        for _, name in ipairs({ "minecraft:stone", "minecraft:turtle_egg",
+                                "minecraft:deepslate" }) do
+            c.world[below] = name
+            local dug = flow.digGuarded("down")
+            assert_eq(dug, true, name .. " must still be diggable")
+        end
+    end,
+
     ["digGuarded refuses to dig a fleet turtle"] =
     function(assert_eq)
         local flow, _, _, _, c = loadFlow(E_MINE(), travelInv())

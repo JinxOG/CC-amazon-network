@@ -816,6 +816,50 @@ end
 -- loop cannot be driven from here. What it pins is the structure that makes the
 -- difference: the floor is recognised BEFORE the retries, and it leaves the loop
 -- WITHOUT setting abort, because `abort` is what abandons the sector.
+-- EVERY REFUSAL REASON IS HANDLED AT EVERY CALL SITE (ruling, 2026-11-24).
+--
+-- digGuarded now names two refusals apart: would_dig_turtle and
+-- would_dig_computer. That is right for a reader -- a turtle moves on, a
+-- computer never will -- but it made every branch that tested only the old
+-- string into a hole, and one of those holes is dangerous.
+--
+-- digAdjacentOre treats an UNRECOGNISED reason as "this path does not apply"
+-- and falls back to walking into the cell. So a computer refusal left unhandled
+-- there would turn the guard that protects the ATC into exactly the collision it
+-- prevents. A mutant that drops the computer case from that branch survived
+-- until this test existed.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+suite["every digGuarded caller handles a computer refusal, not just a turtle (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+
+    -- The dangerous one: the adjacent dig must REFUSE on a computer, never fall
+    -- through to the move-in path.
+    assert_eq(src:find('if why == "would_dig_turtle" or why == "would_dig_computer" then',
+                       1, true) ~= nil, true,
+        "digAdjacentOre must treat a computer refusal as a real refusal -- "
+        .. "falling through makes it walk into the block it just declined to dig")
+
+    -- And no call site may test the old reason ALONE. Counting is the check:
+    -- every occurrence of would_dig_turtle in a condition must sit beside a
+    -- would_dig_computer.
+    local alone = 0
+    for line in src:gmatch("[^\n]+") do
+        if line:find("would_dig_turtle", 1, true)
+           and (line:find("if ", 1, true) or line:find("and why", 1, true))
+           and not line:find("would_dig_computer", 1, true) then
+            alone = alone + 1
+        end
+    end
+    assert_eq(alone, 0,
+        "no branch may test would_dig_turtle without also testing "
+        .. "would_dig_computer (" .. alone .. " such lines) -- the fleet ruling "
+        .. "is that a turtle never digs a ComputerCraft block, so a branch that "
+        .. "covers only turtles leaves the computers it was written to protect")
+end
+
 suite["the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))

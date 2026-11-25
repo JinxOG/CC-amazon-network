@@ -742,11 +742,15 @@ local function refuelFromEC(jobId)
         -- reported; mining a neighbour is neither.
         if turtle.detectDown() then
             local dug, why = mine_flow.digGuarded("down")
-            if not dug and why == "would_dig_turtle" then
-                print("[FUEL] A turtle is directly below — refusing to dig it, "
+            -- EITHER REASON. A computer below is the same decision as a turtle
+            -- below -- do not dig it -- and since 1.9.172 the guard names them
+            -- apart, so a branch testing only one would dig the other.
+            if not dug and (why == "would_dig_turtle" or why == "would_dig_computer") then
+                print("[FUEL] A fleet " .. (why == "would_dig_computer" and "computer" or "turtle")
+                    .. " is directly below — refusing to dig it, "
                     .. "so the fuel chest cannot go here")
-                base.sendProgress("refuel_blocked_by_turtle, fuel="
-                    .. turtle.getFuelLevel())
+                base.sendProgress("refuel_blocked_by_" .. (why == "would_dig_computer"
+                    and "computer" or "turtle") .. ", fuel=" .. turtle.getFuelLevel())
                 return
             end
         end
@@ -1433,12 +1437,13 @@ local function scanSector(levelIndex)
     -- say so. Losing a scan level costs some ore. Mining a miner costs a miner.
     if turtle.detectDown() then
         local dug, why = mine_flow.digGuarded("down")
-        if not dug and why == "would_dig_turtle" then
+        if not dug and (why == "would_dig_turtle" or why == "would_dig_computer") then
             local pb = base.getPos()
-            print("[SCAN] A turtle is directly below — refusing to dig it, "
-                .. "skipping this scan level")
+            local what = (why == "would_dig_computer") and "computer" or "turtle"
+            print("[SCAN] A fleet " .. what .. " is directly below — refusing to "
+                .. "dig it, skipping this scan level")
             base.sendProgress(string.format(
-                "scan_blocked_by_turtle at %d,%d,%d", pb.x, pb.y, pb.z))
+                "scan_blocked_by_%s at %d,%d,%d", what, pb.x, pb.y, pb.z))
             return {}, "blocked_by_turtle"
         end
     end
@@ -1674,7 +1679,12 @@ local function digAdjacentOre(ore)
     if dug then return true end
     -- A fleet member in that cell is a real refusal and must be reported as
     -- one, not retried by walking into it.
-    if why == "would_dig_turtle" then return false, why end
+    -- EITHER REASON IS A REAL REFUSAL. Returning nil for a computer would read
+    -- as "this path does not apply" and fall back to walking into the cell --
+    -- turning a guard that protects the ATC into the collision it prevents.
+    if why == "would_dig_turtle" or why == "would_dig_computer" then
+        return false, why
+    end
     return nil
 end
 

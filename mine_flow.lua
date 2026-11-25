@@ -169,6 +169,34 @@ local function isFleetTurtle(name)
     return name:find("turtle") ~= nil
 end
 
+-- A COMPUTER IS FLEET INFRASTRUCTURE TOO (spec owner's ruling, 2026-11-24:
+-- turtles never dig a ComputerCraft block other than their own planned digs, in
+-- every role). Measured by W3 in w3-duplicate-id-a: a cloned delivery homed
+-- straight through the cell holding the base ATC computer, and the ATC went
+-- silent from that moment. This guard matched only names containing "turtle",
+-- so computercraft:computer_advanced was dug like stone.
+--
+-- Losing the ATC is worse than losing a turtle. A turtle is one worker; the ATC
+-- is how every turtle in the base knows its place in line. The base computers
+-- were the most expensive blocks in the world to lose and the least protected.
+--
+-- THE WHOLE computercraft: NAMESPACE MINUS TURTLES: computers, disk drives,
+-- modems and monitors are all infrastructure, and a list of names would be one
+-- release behind the next block somebody places. Turtles are excluded here only
+-- because isFleetTurtle already covers them and keeps its own reason string.
+--
+-- advancedperipherals: is NOT included, deliberately: the geo scanner is an
+-- advancedperipherals block the miner places and digs up once per scan level
+-- through this very guard, so including it would stop all mining. A test pins
+-- that the scanner stays diggable.
+--
+-- Same shape and the same reason string as turtle_base's isComputerBlock, so
+-- the two halves of the ruling read identically in a log.
+local function isComputerBlock(name)
+    if type(name) ~= "string" then return false end
+    return name:sub(1, 14) == "computercraft:" and name:find("turtle") == nil
+end
+
 -- Proof of possession, by label.
 --
 -- The same physical turtle cannot be carried and standing at once, so a loader
@@ -206,6 +234,11 @@ function mine_flow.digGuarded(dir)
     local seen, block = inspect()
     if seen and type(block) == "table" and isFleetTurtle(block.name) then
         return false, "would_dig_turtle"
+    end
+    -- Its own reason, matching turtle_base: the two are different problems for a
+    -- reader (a turtle moves on, a computer never will) even though both refuse.
+    if seen and type(block) == "table" and isComputerBlock(block.name) then
+        return false, "would_dig_computer"
     end
     return dig()
 end
@@ -1134,8 +1167,14 @@ function mine_flow.bankPayload(opts)
             -- at chest_not_placed with the payload still aboard. A miner flying
             -- home loaded is a bad trip. A mined turtle is gone.
             local dug, why = mine_flow.digGuarded(f.name)
-            if not dug and why == "would_dig_turtle" then
-                log("Bank: a turtle is " .. f.name .. " — refusing to dig it")
+            -- Log only: the loop moves to the next face either way, because the
+            -- place below is gated on f.detect(). But a miner that cannot bank
+            -- because a COMPUTER is in the way must still say so, or the refusal
+            -- is silent and someone reads it as "the face was simply occupied".
+            if not dug and (why == "would_dig_turtle" or why == "would_dig_computer") then
+                log("Bank: a fleet "
+                    .. ((why == "would_dig_computer") and "computer" or "turtle")
+                    .. " is " .. f.name .. " — refusing to dig it")
             end
             if opts.afterDig then opts.afterDig() end
             turtle.select(chestSlot)

@@ -380,6 +380,12 @@ F_FLOOR   = "isWorldFloor recognises bedrock and nothing else"
 # The loader stopped re-measuring an immovable block 12 times a minute.
 B_CACHE   = "the loader caches its position instead of locating every beacon (SOURCE-ONLY, weaker)"
 # No phase announcement with the modem deliberately stowed (2026-11-24).
+C_COMP    = "digGuarded refuses to dig a fleet COMPUTER, not just a turtle"
+C_SCAN    = "digGuarded still digs the geo scanner it placed itself"
+# The existing adjacent-dig test covers only the TURTLE case, so dropping the
+# computer branch leaves it green. The intended killer is the caller-coverage
+# test written for this ruling.
+C_ADJ     = "every digGuarded caller handles a computer refusal, not just a turtle (SOURCE-ONLY, weaker)"
 M_QUIET   = "retrieveLoader does not announce the phase when the modem is already off"
 M_LOUD    = "retrieveLoader still announces the phase when the modem is on"
 F_STRUCT  = "the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"
@@ -2213,6 +2219,19 @@ MUTANTS = [
      [('        base.ledger.record("geo_scanner", {', '        local _norecord = ({')], Q_KIND),
     ("clearing the scanner leaves a ledger ghost behind", "ore_turtle.lua",
      [('    pcall(base.ledger.clear, "geo_scanner")\n', '')], Q_KIND),
+
+    # ---- turtles never dig a ComputerCraft block (ruling, 2026-11-24) ------
+    # A cloned delivery homed through the base ATC computer in w3-duplicate-id-a
+    # and the ATC went silent from that moment.
+    ("the computer guard is removed", "mine_flow.lua",
+     [('    return name:sub(1, 14) == "computercraft:" and name:find("turtle") == nil',
+       '    return false')], C_COMP),
+    ("the computer guard swallows the geo scanner too", "mine_flow.lua",
+     [('    return name:sub(1, 14) == "computercraft:" and name:find("turtle") == nil',
+       '    return name:find(":") ~= nil')], C_SCAN),
+    ("the adjacent dig walks into a computer instead of refusing", "ore_turtle.lua",
+     [('    if why == "would_dig_turtle" or why == "would_dig_computer" then',
+       '    if why == "would_dig_turtle" then')], C_ADJ),
 
     # ---- no phase announcement with the modem stowed (2026-11-24) ----------
     ("the retrieval announces its phase with no modem again", "mine_flow.lua",
