@@ -50,9 +50,11 @@ class _PlayerCtx:
 
 
 def far_spot(c, y=67):
-    """A free 2-high spot searched from the far corner of control.free_spot's area (x 160-199, z -2790..-2751)."""
+    """A free 2-high spot searched from the far corner of control.free_spot's area, INSIDE the box the test world keeps
+    loaded with no turtle there (x 112-207, z -2848..-2769, chunk_watch's BOX): w3-duplicate-id-b first placed the ATC at
+    199,67,-2751, outside it, and the computer never appeared ("never appeared in the computer list")."""
     for x in range(199, 159, -3):
-        for z in range(-2751, -2791, -3):
+        for z in range(-2770, -2791, -3):
             if all("Test passed" in c.command("execute if block %d %d %d air" % (x, y + k, z)) for k in range(2)):
                 return (x, y, z)
     raise RuntimeError("no free far spot")
