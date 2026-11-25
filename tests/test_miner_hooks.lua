@@ -830,6 +830,56 @@ end
 -- until this test existed.
 --
 -- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+-- NO DIRECT DIG IN THE MINING FILES (2026-11-24), the same pin W3 put on
+-- turtle_base after my warning found a real hole there: its vertical bypass
+-- called turtle.dig() itself, having checked only for a turtle, so it would
+-- have dug a computer. Their counting test failed on exactly that line.
+--
+-- Running the same check on my own files found them clean, but "clean today"
+-- is not a guarantee: a raw dig added later bypasses BOTH guards at once --
+-- the turtle one and the computer one -- and nothing else would notice. This
+-- is the test that notices.
+--
+-- TWO EXCEPTIONS, both deliberate and both named here so a third cannot arrive
+-- quietly:
+--   * mine_flow's DIG dispatch table IS digGuarded's implementation;
+--   * mine_flow's loader retrieval digs the loader TURTLE on purpose, which is
+--     the one dig in the codebase that must not go through a guard that
+--     refuses turtles. Its own position-and-identity check is stricter.
+suite["no raw turtle.dig outside digGuarded and the one loader exception (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local ALLOWED = {
+        ["mine_flow.lua"] = {
+            ["forward = function() return turtle.dig()     end,"] = true,
+            ["up      = function() return turtle.digUp()   end,"] = true,
+            ["down    = function() return turtle.digDown() end,"] = true,
+            ["local dug = turtle.dig()"] = true,
+        },
+    }
+    local offenders = {}
+    for _, file in ipairs({ "ore_turtle.lua", "mine_flow.lua", "loader_turtle.lua" }) do
+        local n = 0
+        for line in io.lines(file) do
+            n = n + 1
+            local trimmed = line:match("^%s*(.-)%s*$")
+            local isComment = trimmed:sub(1, 2) == "--"
+            if not isComment and trimmed:find("turtle%.dig") then
+                local ok = ALLOWED[file] and ALLOWED[file][trimmed]
+                if not ok then
+                    offenders[#offenders + 1] = file .. ":" .. n .. ": " .. trimmed
+                end
+            end
+        end
+    end
+    -- Self-test: the allowlist must be exact, so a changed line shows up rather
+    -- than being waved through by a loose pattern.
+    assert_eq(table.concat(offenders, " | "), "",
+        "every dig in the mining files must go through mine_flow.digGuarded -- a "
+        .. "raw dig bypasses the turtle guard AND the computer guard at once, and "
+        .. "the only two exceptions are digGuarded's own dispatch table and the "
+        .. "loader retrieval, which are allowlisted by their exact text")
+end
+
 suite["every digGuarded caller handles a computer refusal, not just a turtle (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))

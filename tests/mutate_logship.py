@@ -380,6 +380,7 @@ F_FLOOR   = "isWorldFloor recognises bedrock and nothing else"
 # The loader stopped re-measuring an immovable block 12 times a minute.
 B_CACHE   = "the loader caches its position instead of locating every beacon (SOURCE-ONLY, weaker)"
 # No phase announcement with the modem deliberately stowed (2026-11-24).
+C_RAW     = "no raw turtle.dig outside digGuarded and the one loader exception (SOURCE-ONLY, weaker)"
 C_COMP    = "digGuarded refuses to dig a fleet COMPUTER, not just a turtle"
 C_SCAN    = "digGuarded still digs the geo scanner it placed itself"
 # The existing adjacent-dig test covers only the TURTLE case, so dropping the
@@ -2223,6 +2224,11 @@ MUTANTS = [
     # ---- turtles never dig a ComputerCraft block (ruling, 2026-11-24) ------
     # A cloned delivery homed through the base ATC computer in w3-duplicate-id-a
     # and the ATC went silent from that moment.
+    # A raw dig bypasses the turtle guard AND the computer guard at once. W3's
+    # equivalent pin on turtle_base failed on exactly the line that had one.
+    ("a mining dig goes back to a raw turtle.digDown", "ore_turtle.lua",
+     [('            mine_flow.digGuarded("down")\n', '            turtle.digDown()\n')], C_RAW),
+
     ("the computer guard is removed", "mine_flow.lua",
      [('    return name:sub(1, 14) == "computercraft:" and name:find("turtle") == nil',
        '    return false')], C_COMP),
