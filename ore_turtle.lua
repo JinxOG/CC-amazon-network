@@ -166,7 +166,7 @@ local SCAN_LEVELS = { 16, 0, -32, -52 }
 -- every guard this needed -- it checks the turtle is where it placed it, turns
 -- to the recorded facing for a forward placement, verifies the block IS the
 -- chest before digging, makes room and refuses with no_room rather than
--- destroying the drop, digs through digGuarded, and raises NEEDS HANDS with the
+-- losing the drop, digs through digGuarded, and raises NEEDS HANDS with the
 -- coordinates instead of guessing. base.run calls recoverLedger at boot for
 -- every role, so a miner picks this up without a line of its own.
 --
@@ -175,6 +175,23 @@ local SCAN_LEVELS = { 16, 0, -32, -52 }
 local ORE_CHEST_ITEM = "enderstorage:ender_chest"
 base.ledger.registerKind("ore_chest",
     { blockName = ORE_CHEST_ITEM, homeSlot = S_ORE_EC })
+
+-- THE GEO SCANNER IS A LEDGER KIND TOO (spec owner's ruling, 2026-11-24), so a
+-- scanner left in the world is caught by the ledger's own boot recovery and not
+-- only by a NEEDS HANDS that can never clear -- which is how node_453 and
+-- node_411 were benched for a whole shakeout run each.
+--
+-- What this buys, all of it already written and tested in base.ledger.recover:
+-- it refuses when there is no room and KEEPS the record, raising NEEDS HANDS
+-- with the coordinates rather than digging into a full pack; it checks the
+-- block below really is the scanner before touching it; and it clears only once
+-- the scanner is confirmed in its home slot.
+--
+-- REGISTERED BEFORE base.init, like the ore chest: a kind registered after
+-- init's first recovery pass is refused as unknown_kind. There is a test over
+-- every role that pins the ordering.
+base.ledger.registerKind("geo_scanner",
+    { blockName = SCANNER_NAME, homeSlot = S_SCANNER })
 
 local oreChestLedger = {
     record = function(face, x, y, z)
@@ -390,6 +407,11 @@ mine_flow.setHooks({
         return p
     end,
     pump        = pump,
+    -- Turning goes through the journal, never turtle.turnRight: a raw turn
+    -- leaves the recorded facing silently disagreeing with the world, and
+    -- mine_flow needs to turn for one thing only -- sucking a dropped piece of
+    -- equipment back off the ground behind the turtle.
+    face        = function(dir) base.move.face(dir) end,
 })
 
 -- No longer feeds mine_flow.noteBeacon, and that is safe for two independent
@@ -1237,7 +1259,23 @@ end
 
 local SCANNER_STATE_FILE = "scanner_state.dat"
 
+-- Written to BOTH the ledger and scanner_state.dat, deliberately and only for
+-- now. The bespoke file is the older mechanism and the one recoverPlacedScanner
+-- reads; the ledger entry is the safety net added on 2026-11-24. Keeping both
+-- means a turtle already in flight with the old file is still recovered, and
+-- neither path has to be trusted alone. They are written and cleared at the same
+-- two moments, so they can only disagree if a crash lands between them, and
+-- either record alone leads to the same place: dig the block below. The file
+-- should retire once a release has passed with the ledger entry in place.
 local function scannerRecord(x, y, z)
+    pcall(function()
+        base.ledger.record("geo_scanner", {
+            x = x, y = y, z = z, face = "down",
+            facing    = base.getFacing(),
+            blockName = SCANNER_NAME,
+            turtleAt  = { x = x, y = y + 1, z = z },
+        })
+    end)
     local ok = pcall(function()
         local f = fs.open(SCANNER_STATE_FILE, "w")
         if not f then error("open failed", 0) end
@@ -1248,6 +1286,7 @@ local function scannerRecord(x, y, z)
 end
 
 local function scannerClear()
+    pcall(base.ledger.clear, "geo_scanner")
     pcall(function()
         if fs.exists(SCANNER_STATE_FILE) then fs.delete(SCANNER_STATE_FILE) end
     end)
@@ -1267,6 +1306,10 @@ local function scannerRecorded()
     return nil
 end
 
+-- Forward-declared: recoverPlacedScanner runs at boot, before reclaimScanner is
+-- defined further down, and both must pick the scanner up the same guarded way.
+local reclaimScanner
+
 -- Called at boot, before any job is accepted. The scanner is placed directly
 -- below the turtle and picked straight back up, so the turtle has not moved
 -- between the two: recovery is verify-and-dig, with no navigation at all.
@@ -1282,11 +1325,17 @@ local function recoverPlacedScanner()
     local seen, block = turtle.inspectDown()
     if seen and block and block.name == SCANNER_NAME then
         turtle.select(S_SCANNER)
-        if turtle.digDown() then
+        -- THE SAME GUARD AS MID-LEVEL. A miner reboots with whatever it was
+        -- carrying, so the pack is often full here too -- node_453 booted with
+        -- one free slot. Digging the scanner up with nowhere to put it drops it
+        -- on the ground and clears the record, which is the fault this whole
+        -- recovery exists to undo.
+        if reclaimScanner() then
             print("[SCAN] Scanner recovered to slot 1.")
             scannerClear()
         else
-            print("[SCAN] WARNING: scanner is below but could not be dug up.")
+            print("[SCAN] WARNING: scanner is below but could not be taken up — "
+                .. "record kept.")
         end
         return
     end
@@ -1305,6 +1354,57 @@ local function recoverPlacedScanner()
             .. "elsewhere — collect it by hand or clear %s",
             rec.x, rec.y, rec.z, SCANNER_STATE_FILE))
     end
+end
+
+--- Pick the placed scanner back up, safely. Returns true ONLY when it is aboard.
+--
+-- THE FAULT (shakeout, 2026-11-24, 2 of 2 runs). Every scanner pickup here used
+-- to be a bare `if mine_flow.digGuarded("down") then scannerClear() end`, with
+-- no check that there was anywhere for the scanner to land. A dig with no room
+-- still returns TRUE, so the record was cleared and the scanner was gone --
+-- node_453 and node_411 each raised "slot_1_must_hold_the_geo_scanner" and were
+-- benched for the rest of the run. retrieveLoader had counted free slots since
+-- 1.9.126; this path never did.
+--
+-- THREE LAYERS, in the order they fire:
+--   1. make room first, dropping a junk payload block if need be (never
+--      hardware), and REFUSE the dig if no room can be had -- a placed scanner
+--      is recoverable, a dropped one despawns;
+--   2. after the dig, check the scanner is actually ABOARD, because a dig
+--      returning true proves the block went, never that the item arrived;
+--   3. if it is not, suck it back off the ground behind -- the drop lands 0.7
+--      blocks toward the reversed facing (measured from the CC jar) -- and only
+--      then clear the record.
+-- The record is KEPT on every failure, so boot recovery still has somewhere to
+-- look.
+function reclaimScanner()
+    local roomed, detail = mine_flow.makeRoomForEquipment()
+    if not roomed then
+        print("[SCAN] REFUSING to dig the scanner up: no free slot and nothing "
+            .. "droppable in the mining slots — leaving it placed and recorded")
+        return false
+    end
+    local dropped = detail and detail:match("^dropped:(.+)$")
+    if dropped then
+        print(string.format("[SCAN] No slot free for the scanner — dropped %s "
+            .. "to make room", dropped))
+    end
+
+    if not mine_flow.digGuarded("down") then return false end
+
+    -- Layers 2 and 3 live in mine_flow.ensureEquipmentAboard, where they can be
+    -- tested: a mutant that stubbed the arrival check out here survived with
+    -- nothing red, because ore_turtle self-executes and only source-reading
+    -- tests can reach it.
+    local aboard, how = mine_flow.ensureEquipmentAboard(SCANNER_NAME, S_SCANNER)
+    if how == "sucked_back" then
+        print("[SCAN] The scanner did not reach the inventory after the dig — "
+            .. "recovered it off the ground behind us")
+    elseif not aboard then
+        print("[SCAN] WARNING: the scanner is neither aboard nor behind us — "
+            .. "keeping the placement record so boot recovery can look for it")
+    end
+    return aboard
 end
 
 -- Returns ores, failReason. failReason is nil ONLY when the scanner was placed,
@@ -1356,6 +1456,25 @@ local function scanSector(levelIndex)
         -- A clean failure: turtle.place() only consumes the item on success, so
         -- nothing is out there and the record just written is a false positive.
         scannerClear()
+
+        -- THE BOTTOM OF THE WORLD IS NOT A FAILURE. Near the service centre the
+        -- chunks are old (pre-1.18) and the floor is bedrock at about y 0-4, so
+        -- the square below this level simply does not exist to place into. Every
+        -- T2 side test reported this as place_failed at Y=0 and handed the job
+        -- back: side-h 16 times, and only 1 MINE completed in 3 h with 4 miners.
+        -- Measured: every census that ran was Y 0..32, no scan ever succeeded
+        -- below 0, and a failing miner's real height was y=2.
+        --
+        -- Reported as its own reason so the caller can finish the sector with
+        -- the levels it managed instead of abandoning it.
+        local _, below = turtle.inspectDown()
+        if below and mine_flow.isWorldFloor(below.name) then
+            print(string.format("[SCAN] Reached the bottom of the world at Y=%d "
+                .. "(%s below) — this sector has no levels beneath this one",
+                p0.y, below.name))
+            return {}, "world_floor"
+        end
+
         print("[SCAN] ERROR: failed to place geo scanner below")
         return {}, "place_failed"
     end
@@ -1367,7 +1486,7 @@ local function scanSector(levelIndex)
         print("[SCAN] ERROR: peripheral.wrap('bottom') returned nil")
         turtle.select(S_SCANNER)
         -- A refusal keeps the record, which is what boot recovery needs.
-        if mine_flow.digGuarded("down") then scannerClear() end
+        if reclaimScanner() then scannerClear() end
         return {}, "peripheral_wrap_failed"
     end
     print("[SCAN] Scanning radius " .. SCAN_RADIUS .. "...")
@@ -1377,7 +1496,7 @@ local function scanSector(levelIndex)
     -- throw for reasons outside this program.
     local scanOk, raw = pcall(sc.scan, SCAN_RADIUS)
     turtle.select(S_SCANNER)
-    if mine_flow.digGuarded("down") then
+    if reclaimScanner() then
         scannerClear()
     else
         print("[SCAN] WARNING: scanner left placed — record kept for boot recovery")
@@ -1863,8 +1982,11 @@ local function retrievePlacedLoader(stand)
         --
         -- Observed in-world: node_139 lost a loader to loader_lost_after_dig on
         -- 1.9.30, which already carried the pre-approach dump. turtle.dig() with
-        -- no room returns TRUE and destroys the drop, so the loader turtle was
-        -- gone -- not standing, not recoverable.
+        -- no room returns TRUE and the drop never reaches the pack -- it lands
+        -- on the ground behind the turtle and despawns -- so the loader turtle
+        -- was gone: not standing, and not recoverable once the item timer ran
+        -- out. (This said "destroys the drop" until 2026-11-24; measured from
+        -- the cc-tweaked jar, it is dropped, not destroyed.)
         --
         -- Room has to be guaranteed at the instant of the dig, not before the
         -- journey to it. This is the check that actually protects the loader;
@@ -2836,6 +2958,17 @@ local function mineJob(job)
             -- but recoverable, and let the server re-dispatch the sector to
             -- somebody. That is the whole fix: the sector must not come back
             -- marked finished.
+            -- THE FLOOR ENDS THE DESCENT, before any retry: retrying a level
+            -- that is below the bedrock cannot ever succeed, and three retries
+            -- of five seconds each per sector is pure delay. The sector then
+            -- finishes with the levels it managed, and the covered band it
+            -- reports narrows to match (1.9.167), so nothing downstream is told
+            -- the column was surveyed when it was not.
+            if scanFail == "world_floor" then
+                print(string.format("[MINER] Sector %d,%d bottoms out above Y=%d "
+                    .. "— finishing with the %d level(s) that ran", sx, sz, sy, i - 1))
+                break
+            end
             if scanFail then
                 for try = 1, SCAN_RETRIES do
                     print(string.format(

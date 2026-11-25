@@ -805,6 +805,50 @@ end
 -- is "a number whose pass state and no-data state look identical".
 --
 -- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load.
+-- THE WORLD FLOOR MUST NOT REQUEUE THE JOB (2026-11-24).
+--
+-- Old pre-1.18 chunks near the service centre have their floor at about y 0-4,
+-- so the square below the Y=0 scan level does not exist. Every T2 side test
+-- reported that as `scan_level_incomplete: place_failed at Y=0` and handed the
+-- job back -- side-h 16 times, with only 1 MINE finished in 3 h on 4 miners.
+--
+-- SOURCE-ONLY, weaker, and labelled: ore_turtle self-executes at load, so the
+-- loop cannot be driven from here. What it pins is the structure that makes the
+-- difference: the floor is recognised BEFORE the retries, and it leaves the loop
+-- WITHOUT setting abort, because `abort` is what abandons the sector.
+suite["the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"] =
+function(assert_eq)
+    local f = assert(io.open("ore_turtle.lua", "r"))
+    local src = f:read("*a"); f:close()
+
+    local floorAt = src:find('if scanFail == "world_floor" then', 1, true)
+    assert_eq(floorAt ~= nil, true, "the floor must be recognised as its own case")
+
+    -- BEFORE the retries. Retrying a level beneath the bedrock cannot ever
+    -- succeed, and three five-second retries per sector is pure delay.
+    local retryAt = src:find("for try = 1, SCAN_RETRIES do", 1, true)
+    assert_eq(retryAt ~= nil and floorAt < retryAt, true,
+        "and recognised BEFORE the retry loop, or every sector pays 15s to learn "
+        .. "what the block below already said")
+
+    -- AND IT MUST NOT SET abort. That one assignment is the difference between
+    -- "this sector is finished, shallower than most" and "give this sector to
+    -- somebody else", which is the whole fault.
+    local branch = src:sub(floorAt, retryAt - 1)
+    assert_eq(branch:find("abort", 1, true), nil,
+        "the floor branch must NOT set abort -- abort is what hands the job back, "
+        .. "and handing it back is the fault this fixes")
+    assert_eq(branch:find("break", 1, true) ~= nil, true,
+        "it must leave the level loop, so the sector finishes with what it got")
+
+    -- And the scan itself must distinguish the floor from a real placement
+    -- failure, by looking at the block rather than guessing from the level.
+    assert_eq(src:find("mine_flow.isWorldFloor(below.name)", 1, true) ~= nil, true,
+        "the floor is identified from the BLOCK below, not from the Y it expected "
+        .. "-- the phase line prints the intended level, which is what made this "
+        .. "look like a Y=0 problem in the first place")
+end
+
 suite["a finished sector reports what it could not see, and its band (SOURCE-ONLY, weaker)"] =
 function(assert_eq)
     local f = assert(io.open("ore_turtle.lua", "r"))

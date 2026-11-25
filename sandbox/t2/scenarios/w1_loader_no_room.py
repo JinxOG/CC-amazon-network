@@ -44,6 +44,16 @@ MINE_LUA_FIRST, MINE_LUA_LAST = 5, 13
 FILL_ITEM = "enderstorage:ender_chest"
 
 REFUSED = "no_room_for_loader"
+# 1.9.168 guards the SCANNER pickup the same way, and with an all-hardware pack
+# that guard fires first -- during scanning, before the loader is retrieved. Its
+# lines are captured as notes rather than assertions: this card is about the
+# loader, and the scanner's own card carries its expectations. Seeing them here
+# is a bonus observation of the shared guard, not this run's verdict.
+SCAN_REFUSED = "REFUSING to dig the scanner up"
+SCAN_DROPPED = "No slot free for the scanner"
+SCAN_SUCKED = "recovered it off the ground behind us"
+SCAN_LOST = "neither aboard nor behind us"
+LOADER_DROPPED = "No slot free for the chunk loader"
 LOST = "loader_lost_after_dig"
 PLACED = "phase: PLACING_LOADER"
 RETRIEVING = "RETRIEVING"
@@ -116,6 +126,12 @@ def steps(ctx):
         ctx.note("LOSS: %s" % l.strip()[-140:])
 
     # ---- THE CARD: no loader destroyed. This holds whether or not the guard fired. ----
+    for name, needle in (("scanner refused", SCAN_REFUSED), ("scanner made room", SCAN_DROPPED),
+                         ("scanner sucked back", SCAN_SUCKED), ("scanner lost", SCAN_LOST),
+                         ("loader made room", LOADER_DROPPED)):
+        hits = [l for l in ctx.log_lines(needle)]
+        ctx.note("%s: %d line(s)%s" % (name, len(hits), (" | " + hits[0].strip()[-110:]) if hits else ""))
+
     ctx.expect(not losses,
                "no loader was destroyed by the dig (%d '%s' lines) -- this is the fault the card is about, and the live "
                "record already shows it absent across about 132 retrievals" % (len(losses), LOST))

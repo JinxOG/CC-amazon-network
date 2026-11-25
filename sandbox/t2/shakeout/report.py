@@ -91,7 +91,11 @@ ONE_TURTLE_FAULTS = ("turtle_reboot", "remove_item", "put_back_turned", "low_fue
 # so faults.jsonl never has an end line: the window is start + dur_ms. Until 2026-11-14 such a window ran to the run's end, and
 # in shakeout-side-a the first radio burst (minute 40 of 180) excused every turtle's stuck time for the rest of the run.
 SELF_ENDING = ("radio_loss", "radio_latency", "rs_stall", "rs_offline", "chunk_unload")
-VERDICTS = ("ok", "stuck_recovered", "decommissioned", "lost", "expected_hands")
+VERDICTS = ("ok", "stuck_recovered", "decommissioned", "lost", "expected_hands", "duplicate_id")
+# A hard kill can leave a moving turtle in both chunks it was crossing (T2 payload-h's node_397, 2026-11-24): two computers, one id.
+# The server parks both and asks for hands (W3's duplicate_id). The world made it, not the code: counted apart, and listed.
+DUPLICATE_RX = re.compile(r"^duplicate_id\b")
+GPS_JUMP_RX = re.compile(r"GPS jump (taken|not taken):")
 SECTIONS = ["Pass bar", "Stuck or failed turtles", "Jams", "Jobs completed by type", "Faults fired by type",
             "Decommissioned turtles and why", "Expected hands", "First 6 h against last 6 h", "Housekeeping",
             "EXPECTED (board cards open at run time)", "Draft board cards", "Evidence and gaps"]
@@ -164,7 +168,9 @@ def _read_jsonl(path):
 # /state snapshots: written during the run, read by the report
 # ---------------------------------------------------------------------------------------------------------------------------
 
-TURTLE_KEYS = ("x", "y", "z", "status", "phase", "dockX", "dockZ", "lastSeen", "online", "needsHands", "role")
+TURTLE_KEYS = ("x", "y", "z", "status", "phase", "dockX", "dockZ", "lastSeen", "online", "needsHands", "role",
+               # getIdle's filters (W3, 2026-11-24), each absent when not set: why a docked turtle is not offered work
+               "blockReason", "blockedUntil", "held", "dockedSinceJob")
 SERVER_HEALTH_KEYS = ("pushBuildMs", "pushSliceWorstMs", "pushSlices", "rsKeptEvents", "rsPollMs", "rsPollWorstMs", "gps")
 
 
@@ -291,6 +297,10 @@ def _window_ms(e):
     return int(a.get("dur_ms") or a.get("down_ms") or 0) if isinstance(a, dict) else 0
 
 
+BURST_FAULTS = ("restart_burst5",)
+PLAYER_FAULT = "player_dup_fix"
+
+
 def windows_from(schedule, fault_lines=None, end_ms=None):
     """Fault windows {id, fault, begin, end, targets (None: everyone, or a set of node ids), area, planned}. `schedule` is either
     windows already (each with "begin") or schedule.json entries. Without fault_lines the windows are the PLANNED ones (t_ms to
@@ -305,6 +315,8 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
     by_id = {}
     for r in fault_lines or []:
         by_id.setdefault(r.get("id"), []).append(r)
+    # the clock from "start" lines only: a burst's begin line has a later time over the same wall_ms, and would skew it
+    t0_local = _t0_from_faults([r for r in fault_lines if r.get("phase") == "start"]) if fault_lines else None
     for e in schedule or []:
         f = e.get("fault")
         if fault_lines is None:
@@ -336,9 +348,36 @@ def windows_from(schedule, fault_lines=None, end_ms=None):
                 area = list(detail["area"])
         # quiet_ms counts from the fault's start and already holds its duration (schedule.py): the window is the later of the end
         # line and start + quiet_ms, never the end line PLUS quiet_ms (that counted the duration twice: 40-45% of a day excused)
+        quiet_end = int(start["wall_ms"]) + _quiet(e)
+        # A BURST EXCUSES ONLY AFTER ITS LAST RESTART (T2 payload-i, 2026-11-24): its quiet is count x one restart's quiet from
+        # its start, 50 min for five, but the five were done 8 min in, and node_451, frozen in the shaft from the burst to the
+        # end, was judged ok. Its begin line is written when the last restart is done: its `time` says when (its wall_ms repeats
+        # the start's), so the window ends one restart's quiet after that.
+        if f in BURST_FAULTS and t0_local is not None and begin.get("time"):
+            try:
+                done = int(time.mktime(time.strptime(begin["time"], "%Y-%m-%dT%H:%M:%S")) * 1000 - t0_local)
+                count = int((e.get("args") or {}).get("count") or 1)
+                quiet_end = max(int(start["wall_ms"]), done) + _quiet(e) // max(count, 1)
+            except (ValueError, TypeError):
+                pass
         out.append({"id": e.get("id"), "fault": f, "begin": int(start["wall_ms"]),
-                    "end": max(stop, int(start["wall_ms"]) + _quiet(e)), "targets": targets,
+                    "end": max(stop, quiet_end), "targets": targets,
                     "area": area, "planned": False})
+    # THE STAND-IN PLAYER (shakeout/player.py; the user, 2026-11-24): unscheduled "player_dup_fix" ids, the wait from a duplicate_id
+    # alarm to the copy's removal. Everyone is excused for that wait and never after it: from the removal the fleet must recover.
+    # A fix with no end line (the run ended first) is excused to the run's end.
+    sched_ids = {e.get("id") for e in schedule or []}
+    for fid, ls in by_id.items():
+        if fid in sched_ids or not ls or ls[0].get("fault") != PLAYER_FAULT:
+            continue
+        ls = sorted(ls, key=lambda r: r.get("wall_ms", 0))
+        start = next((r for r in ls if r.get("phase") == "start"), None)
+        if start is None:
+            continue
+        end = next((r for r in ls if r.get("phase") == "end"), None)
+        stop = int(end["wall_ms"]) if end is not None else int(end_ms if end_ms is not None else start["wall_ms"])
+        out.append({"id": fid, "fault": PLAYER_FAULT, "begin": int(start["wall_ms"]), "end": stop, "targets": None,
+                    "area": None, "planned": False})
     return sorted(out, key=lambda w: w["begin"])
 
 
@@ -451,6 +490,9 @@ def analyse(timeline, windows, end_ms=None):
                 hit = touching(a, b)
                 silences.append({"since": a, "until": b, "silent_ms": out, "faults": [w["id"] for w in hit]})
         gone["silent_ms"] = _outside(heard[-1], end, excl)
+    elif samples:
+        # listed by the server but never heard (never online, no line of its own): silent from its first sample
+        gone = {"silent_ms": _outside(samples[0]["t"], end, excl), "since": samples[0]["t"]}
 
     reasons = []
     if any(e["open"] for e in episodes):
@@ -468,6 +510,8 @@ def analyse(timeline, windows, end_ms=None):
         verdict = "lost"
     elif decom and removals and asked:
         verdict = "expected_hands"
+    elif decom and nh and DUPLICATE_RX.match(str(nh)):
+        verdict = "duplicate_id"
     elif decom:
         verdict = "decommissioned"
         if removals and not asked:
@@ -631,6 +675,12 @@ DOCK_RX = re.compile(r"Assigned dock: bay \d+ row \w+ \((-?\d+),(-?\d+),(-?\d+)\
 PHASE_RX = re.compile(r"^(node_\d+) phase: (.+)$")
 ACCEPT_RX = re.compile(r"^Job (job_\d+) accepted by (node_\d+)")
 DISPATCH_RX = re.compile(r"^Dispatched (job_\d+) \[\w+\] -> (node_\d+)")
+DISPATCH_ANY_RX = re.compile(r"(job_\d+)(?: \[\w+\])? -> (node_\d+)")     # the job and its support half, both on one line
+PASSED_OVER_MISS = 3
+# other server lines that hand a turtle a job (payload-g's node_215 went back out on a re-send after a reboot): (job, node) groups
+GIVEN_RXS = (re.compile(r"^Re-send of (job_\d+) to (node_\d+)"),
+             re.compile(r"^\[ROUTE\] WAREHOUSE_QUEUED job=(job_\d+) \S+ (node_\d+)"))
+RELINK_RX = re.compile(r"^Re-linked (node_\d+) to job (job_\d+)")
 HANDS_RX = re.compile(r"NEEDS HANDS: (node_\d+) \S+ (.*)$")
 HANDS_CLEAR_RX = re.compile(r"^(node_\d+) passed its own hardware check")
 JOB_TYPE_RX = re.compile(r"\b(job_\d+) \[([A-Z_]+)\]")
@@ -650,13 +700,92 @@ TIMER_RX = (
     ("blocked_give_up", re.compile(r"Gave up after \d+s blocked")),
     # the line where it fires; "Return home failed ...: no holding slot of mine in 120 s; retracing stopped" later is the same wait
     ("no_holding_slot", re.compile(r"\(no holding slot of mine in \d+ s\) -- retracing")),
+    ("hole_ready_timeout", re.compile(r"No HOLE_READY signal after \d+s")),     # support_turtle.lua at 28e2a29
 )
+# A delivery job failed by a timeout (delivery_turtle.lua failDelivery at 28e2a29). The turtle's line and the server's retry line
+# both name it and either can be lost, so one job's timeout within JOB_TIMEOUT_MERGE_MS counts once.
+JOB_TIMEOUT_RX = re.compile(r"Job (job_\d+) (?:failed \(|retry \d+/\d+: |permanently failed: )(warehouse_chest_timeout|batch_phase_timeout)\b")
+JOB_TIMEOUT_MERGE_MS = 10 * 60 * 1000
 SWEEP_RX = re.compile(r"(node_\d+) silent \d+s: booking dropped")
+# The partner-silence nets (turtle_base.lua SUPPORT_SILENT_S, support_turtle.lua PARTNER_SILENT_S, at 7fa8982), judged like the
+# sweep: a partner heard again after the net fired was alive, so the clock ended a live wait. One the line does not name is counted.
+PARTNER_RX = (
+    ("support_silent", re.compile(r"Support (node_\d+) silent \d+s at the edge of chunk")),
+    ("partner_silent", re.compile(r"Partner (?:(node_\d+) )?silent \d+s -- taken for gone")),
+)
+
+
+# atc_wait (turtle_base.lua at 28e2a29): the ATC would not let a turtle measure its facing for a minute. Hands do not help, so it is not
+# NEEDS HANDS; it clears on that turtle's own "Position and facing measured". One never cleared is a jam the ATC held: a FAILURE.
+ATC_WAIT_RX = re.compile(r"atc_wait: facing unknown at (-?\d+,-?\d+,-?\d+) \(waiting for the ATC to grant the cells around it: ([^)]*)\)")
+FACING_MEASURED_RX = re.compile(r"Position and facing measured after \d+ retries")
+
+
+def atc_waits(lines):
+    """[{"t", "node", "at", "why", "cleared": run time or None, "line"}]: each atc_wait once (its repeats are the same wait)."""
+    out, open_by = [], {}
+    for l in lines:
+        node = l["src"] if NODE_RX.match(l["src"]) else None
+        if not node:
+            continue
+        m = ATC_WAIT_RX.search(l["msg"])
+        if m:
+            if node not in open_by:
+                open_by[node] = {"t": l["rt"], "node": node, "at": m.group(1), "why": m.group(2), "cleared": None, "line": l["raw"]}
+                out.append(open_by[node])
+        elif node in open_by and FACING_MEASURED_RX.search(l["msg"]):
+            open_by.pop(node)["cleared"] = l["rt"]
+    return out
+
+
+# A STALE HOLD (payload-d's N4=node_441; SPEC-OWNER's ruling 2026-11-24): the ATC's minute summary still names a turtle that /state
+# shows IDLE on its own dock. A dock is in no ATC section, so nobody is using that hold, and it blocks everyone who needs it.
+# STALE_SNAPSHOTS snapshots running is a FAILURE. Detection only: the report never clears anything.
+ATC_SUMMARY_RX = re.compile(r"\[ATC\] \d+ section\(s\) held, \d+ booking\(s\):(.*)$")
+ATC_HOLD_RX = re.compile(r"(\w+)=(node_\d+)")
+STALE_SNAPSHOTS = 2
+SUMMARY_FRESH_MS = 2 * 60 * 1000          # the summary a snapshot is judged against: the last one, if no older than this
+
+
+def stale_holds(lines, snapshots):
+    """[{"node", "sections", "t", "until", "line"}]: each run of holds by a turtle IDLE on its own dock, once it lasts
+    STALE_SNAPSHOTS snapshots (until: the last snapshot it was seen in)."""
+    sums = []
+    for l in lines:
+        if l["src"] == "atc":
+            m = ATC_SUMMARY_RX.search(l["msg"])
+            if m:
+                holds = {}
+                for sec, node in ATC_HOLD_RX.findall(m.group(1)):
+                    holds.setdefault(node, []).append(sec)
+                sums.append((l["rt"], holds, l["raw"]))
+    sums.sort(key=lambda x: x[0])
+    out, run_of, i, cur = [], {}, 0, None
+    for snap in sorted(snapshots, key=lambda x: x["t"]):
+        while i < len(sums) and sums[i][0] <= snap["t"]:
+            cur = sums[i]
+            i += 1
+        holds = cur[1] if cur and snap["t"] - cur[0] <= SUMMARY_FRESH_MS else {}
+        seen = set()
+        for node, secs in holds.items():
+            e = (snap.get("turtles") or {}).get(node) or {}
+            if e.get("status") == "IDLE" and e.get("x") is not None and e.get("x") == e.get("dockX") and \
+                    e.get("z") == e.get("dockZ"):
+                seen.add(node)
+                r = run_of.setdefault(node, {"node": node, "sections": sorted(secs), "t": snap["t"], "n": 0, "line": cur[2]})
+                r["n"] += 1
+                r["until"] = snap["t"]
+                if r["n"] == STALE_SNAPSHOTS:
+                    out.append(r)
+        for node in list(run_of):
+            if node not in seen:
+                del run_of[node]
+    return [{k: v for k, v in r.items() if k != "n"} for r in out]
 
 
 def timer_clears(lines):
     """([{"t", "node", "kind", "line"}], evidence): every wait a last-line timer ended, in run time order."""
-    out, dead, last_heard = [], 0, {}
+    out, dead, dead_partners, last_heard, job_seen = [], 0, 0, {}, {}
     for l in lines:
         m = NODE_RX.match(l["src"])
         if m:
@@ -667,13 +796,31 @@ def timer_clears(lines):
                 out.append({"t": l["rt"], "node": l["src"] if NODE_RX.match(l["src"]) else None, "kind": kind, "line": l["raw"]})
                 break
         else:
+            m = JOB_TIMEOUT_RX.search(l["msg"])
+            if m:
+                key = (m.group(1), m.group(2))
+                if l["rt"] - job_seen.get(key, -JOB_TIMEOUT_MERGE_MS - 1) > JOB_TIMEOUT_MERGE_MS:
+                    out.append({"t": l["rt"], "node": l["src"] if NODE_RX.match(l["src"]) else None, "kind": "job_timeout",
+                                "line": l["raw"]})
+                job_seen[key] = l["rt"]
+                continue
+            hit = next(((kind, m) for kind, rx in PARTNER_RX for m in [rx.search(l["msg"])] if m), None)
+            if hit:
+                kind, m = hit
+                partner = m.group(1)
+                if partner is None or last_heard.get(partner, -1) > l["rt"]:
+                    out.append({"t": l["rt"], "node": partner or (l["src"] if NODE_RX.match(l["src"]) else None),
+                                "kind": kind, "line": l["raw"]})
+                else:
+                    dead_partners += 1
+                continue
             m = SWEEP_RX.search(l["msg"])
             if m:
                 if last_heard.get(m.group(1), -1) > l["rt"]:
                     out.append({"t": l["rt"], "node": m.group(1), "kind": "atc_sweep_live", "line": l["raw"]})
                 else:
                     dead += 1
-    return out, {"lines_scanned": len(lines), "dead_sweeps": dead}
+    return out, {"lines_scanned": len(lines), "dead_sweeps": dead, "dead_partners": dead_partners}
 
 
 def _t0_from_faults(fault_lines):
@@ -720,7 +867,7 @@ def load_run(run_dir):
                 R["hk"] = [l.rstrip("\n") for l in f if l.strip()]
         snaps = _read_jsonl(os.path.join(run_dir, "shakeout", "state.jsonl"))
         header = next((s["header"] for s in (snaps or []) if "header" in s), {})
-        t0 = header.get("t0_epoch_ms") or _t0_from_faults(R["fault_lines"])
+        t0 = header.get("t0_epoch_ms") or _t0_from_faults([r for r in R["fault_lines"] or [] if r.get("phase") == "start"])
         if t0 is None:
             t0 = lines[0]["t"] if lines else 0
             R["notes"].append("the schedule's start is not recorded: the first log line is used as the start")
@@ -809,8 +956,11 @@ def _on_dock(e):
 def _snap_sample(s, e, t0):
     pos = [e["x"], e["y"], e["z"]] if None not in (e.get("x"), e.get("y"), e.get("z")) else None
     return {"t": s["t"], "pos": pos, "phase": "%s/%s" % (e.get("status") or "", e.get("phase") or ""), "on_dock": _on_dock(e),
-            "seen": (e["lastSeen"] - t0) if isinstance(e.get("lastSeen"), (int, float)) else None,
-            "needs_hands": e.get("needsHands")}
+            # lastSeen is the bridge's own push time for every turtle the server lists (server.js mergeTurtleSnapshot): it says
+            # nothing about the turtle. A sample is heard only while the server itself says online (its heartbeat judgment).
+            "seen": (e["lastSeen"] - t0) if isinstance(e.get("lastSeen"), (int, float)) and e.get("online") is True else None,
+            "needs_hands": e.get("needsHands"), "block": e.get("blockReason"), "held": e.get("held"),
+            "dsj": e.get("dockedSinceJob"), "online": e.get("online")}
 
 
 def timelines(R):
@@ -1148,6 +1298,22 @@ def build_report(run_dir, expected=None):
             cards.append({"title": "Storage headroom low outside a scheduled storage fault", "turtles": [], "why": [line],
                           "lines": [line], "seed": seed, "schedule": R["schedule_path"], "faults_near": [], "at": None})
     tclears, tevidence = timer_clears(R["lines"])
+    awaits = atc_waits(R["lines"])
+    stale = stale_holds(R["lines"], R["snapshots"])
+    if stale:
+        cards.append({"title": "Stale ATC hold: %d hold(s) by %d turtle(s) IDLE on their own dock" % (len(stale), len({h["node"] for h in stale})),
+                      "turtles": sorted({h["node"] for h in stale}, key=_node_key),
+                      "why": ["%s held %s from run %s to at least %s" % (h["node"], " ".join(h["sections"]), _hm(h["t"]),
+                                                                            _hm(h["until"])) for h in stale[:5]],
+                      "lines": [h["line"] for h in stale[:3]], "seed": seed, "schedule": R["schedule_path"],
+                      "faults_near": faults_near(stale[0]["t"]), "at": stale[0]["t"]})
+    held = [w for w in awaits if w["cleared"] is None]
+    if held:
+        cards.append({"title": "ATC wait never cleared: %d turtle(s)" % len(held),
+                      "turtles": sorted({w["node"] for w in held}, key=_node_key),
+                      "why": ["the ATC never let it measure its facing (a jam the ATC held, not a hands case)"],
+                      "lines": [w["line"] for w in held[:3]], "seed": seed, "schedule": R["schedule_path"],
+                      "faults_near": faults_near(held[0]["t"]), "at": held[0]["t"]})
     by_kind = {}
     for c in tclears:
         by_kind.setdefault(c["kind"], []).append(c)
@@ -1165,7 +1331,12 @@ def build_report(run_dir, expected=None):
 
     stuck_end = sum(1 for a in fd["all"].values() if any(e["open"] for e in a["episodes"]))
     gone_end = sum(1 for a in fd["all"].values() if (a["gone"]["silent_ms"] or 0) > GONE_MS)
-    hands_end = sum(1 for a in fd["all"].values() if a["needs_hands"] and a["verdict"] != "expected_hands")
+    hands_end = sum(1 for a in fd["all"].values() if a["needs_hands"] and a["verdict"] not in ("expected_hands", "duplicate_id"))
+    gps_jumps = {"taken": 0, "not_taken": 0}
+    for l in R["lines"]:
+        m = GPS_JUMP_RX.search(l["msg"])
+        if m:
+            gps_jumps["taken" if m.group(1) == "taken" else "not_taken"] += 1
     not_recovered = sorted((a["id"] for a in fd["all"].values() if a["verdict"] in ("decommissioned", "lost")), key=_node_key)
     unknown_where = sum(1 for a in fd["all"].values() if a["verdict"] == "decommissioned" and a.get("present") is None)
     removals = [w for w in W if w["fault"] == "remove_item"]
@@ -1175,10 +1346,16 @@ def build_report(run_dir, expected=None):
     for l in R["lines"]:
         if l["src"] != "server":
             continue
-        m = ACCEPT_RX.match(l["msg"]) or DISPATCH_RX.match(l["msg"])
+        m = ACCEPT_RX.match(l["msg"]) or DISPATCH_RX.match(l["msg"]) or next((g for g in (rx.match(l["msg"]) for rx in GIVEN_RXS)
+                                                                             if g), None)
         if m:
             holder[m.group(1)] = m.group(2)
             given.setdefault(m.group(2), []).append(l["rt"])
+            continue
+        m = RELINK_RX.match(l["msg"])
+        if m:
+            holder[m.group(2)] = m.group(1)
+            given.setdefault(m.group(1), []).append(l["rt"])
             continue
         m = JOB_FAIL_RX.match(l["msg"])
         if m:
@@ -1186,16 +1363,66 @@ def build_report(run_dir, expected=None):
             tid = holder.get(m.group(1) or m.group(2))
             if tid in fd["all"]:
                 last_fail[tid] = l["rt"]
+    # A turtle home with no later job is a miss only if it was PASSED OVER: PASSED_OVER_MISS or more jobs went to turtles of its role
+    # that had been home for less time than it (W3 and SPEC-OWNER, 2026-11-24). A big idle pool with work handed out one a minute
+    # (MINE_STAGGER) leaves most of it idle, and that is not a turtle failing to get back to work.
+    role_of = {}
+    for snap in R["snapshots"]:
+        for rid, e in (snap.get("turtles") or {}).items():
+            if e.get("role"):
+                role_of[rid] = e["role"]
+    dispatched = [(l["rt"], m.group(2)) for l in R["lines"] if l["src"] == "server" for m in DISPATCH_ANY_RX.finditer(l["msg"])]
+
+    def home_since(rid, t):
+        """When rid's current run of IDLE-on-its-dock samples began, as of run time t (None: not home and idle at t)."""
+        since = None
+        for smp in (tls[rid]["samples"] if rid in tls else []):
+            if smp["t"] > t:
+                break
+            idle = smp.get("on_dock") and str(smp.get("phase") or "").startswith("IDLE/")
+            since = (since if since is not None else smp["t"]) if idle else None
+        return since
+
+    def idle_filters(rid):
+        """The getIdle filters rid last showed in /state (W3, 2026-11-24): why the dispatcher passed it over. Empty: none
+        set, so getIdle would have offered it -- look at the job side (role, zone, stagger)."""
+        smp = (tls[rid]["samples"] if rid in tls else [])[-1:] or [{}]
+        smp = smp[0]
+        out = []
+        if smp.get("block"):
+            out.append("blocked: %s" % smp["block"])
+        if smp.get("held"):
+            out.append("held: %s" % smp["held"])
+        if smp.get("online") is False:
+            out.append("offline")
+        if role_of.get(rid) in ("DELIVERY", "SUPPORT") and not smp.get("dsj"):
+            out.append("not dockedSinceJob")
+        return out
+
     for tid, tf in last_fail.items():
         home = any(s.get("on_dock") and s["t"] > tf for s in tls[tid]["samples"]) if tid in tls else False
         again = any(t > tf for t in given.get(tid, []))
+        passed = 0
+        if home and not again:
+            for t, other in dispatched:
+                mine = home_since(tid, t) if t > tf else None
+                if mine is None or other == tid or role_of.get(other) != role_of.get(tid):
+                    continue
+                theirs = home_since(other, t)
+                if theirs is None or theirs > mine:
+                    passed += 1
         if home and again:
             how = "home and back to work"
         elif end - tf < 30 * MIN:
             how = "too late to judge (failed %d min before the end)" % ((end - tf) // MIN)
+        elif not home:
+            how = "never home"
+        elif passed >= PASSED_OVER_MISS:
+            how = "home, but passed over %d time(s) for turtles home less long" % passed
         else:
-            how = "never home" if not home else "home, but no later job"
-        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how}
+            how = "home and available (passed over %d times)" % passed
+        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how, "passed_over": passed,
+                           "filters": idle_filters(tid) if passed else []}
     return {
         "run": run_dir, "kind": R["kind"], "t0_epoch_ms": R["t0"], "end_ms": end, "seed": seed, "schedule": R["schedule_path"],
         "notes": R["notes"], "windows": [dict(w, targets=sorted(w["targets"]) if w["targets"] is not None else None) for w in W],
@@ -1206,7 +1433,7 @@ def build_report(run_dir, expected=None):
         "long_sites": [dict(s, jobs=sorted(s["jobs"])) for s in long_sites(R)] if R["kind"] == "t2" else None,
         "faults": fstats, "fault_evidence": fevidence, "housekeeping": hk, "hours": hours, "drift": drift,
         "log_gaps": [{"from": a, "to": b} for a, b in log_gaps], "snap_gaps": [{"from": a, "to": b} for a, b in snap_gaps],
-        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence,
+        "cards": cards, "expected": exp, "timer_clears": tclears, "timer_evidence": tevidence, "atc_waits": awaits, "stale_holds": stale, "gps_jumps": gps_jumps,
         "evidence": {"log_lines": len(R["lines"]), "unparsed_lines": R["unparsed"], "snapshots": len(R["snapshots"]),
                      "stale_snapshots": R["stale"], "turtles": len(fd["all"]), "loaders": fd["loaders"], "fault_lines": fevidence,
                      "windows": len(W)},
@@ -1248,22 +1475,37 @@ def _render(rep):
           % (len(rep["not_recovered"]), rep["stuck_at_end"], rep["gone_at_end"], rep["hands_at_end"],
              sum(1 for j in rep["jams"] if j["clear"] is None)),
           "- A turtle that fails a job gets itself home and back to work: **%d of %d** judged did NOT (on its dock after the "
-          "failure AND given a later job); %d too late to judge (evidence: %d failed/retried job lines, traced to %d turtles)%s" % (
-              sum(1 for v in rep["failed_job"].values() if not v["how"].startswith(("home and back", "too late"))),
+          "failure AND given a later job, or home and not passed over %d+ times for a turtle of its role home less long); %d "
+          "too late to judge (evidence: %d failed/retried job lines, traced to %d turtles)%s" % (
+              sum(1 for v in rep["failed_job"].values() if not v["how"].startswith(("home and back", "home and available", "too late"))),
               sum(1 for v in rep["failed_job"].values() if not v["how"].startswith("too late")),
+              PASSED_OVER_MISS,
               sum(1 for v in rep["failed_job"].values() if v["how"].startswith("too late")),
               rep["failed_job_lines"], len(rep["failed_job"]),
               "" if rep["failed_job"] else " -- TRUNCATED: no failed job traced to a turtle, so this item has no evidence"),
-          "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, counted apart)" % (c["decommissioned"],
-                                                                                                       c["expected_hands"]),
+          "- No turtle decommissioned: **%d decommissioned** (and %d expected hands, %d duplicate id(s) from a crash, counted "
+          "apart)" % (c["decommissioned"], c["expected_hands"], c.get("duplicate_id", 0)),
           "- No wait cleared only by a timer (the user, 2026-11-17): **%d wait(s) cleared only by a timer**%s (evidence: %d log "
-          "lines scanned; %d ATC sweep(s) of a turtle never heard again, counted apart as dead)" % (
+          "lines scanned; %d ATC sweep(s) and %d partner-silence net(s) for a turtle never heard again, counted apart as dead)" % (
               len(rep["timer_clears"]), (" -- " + ", ".join("%s %d" % (k, n) for k, n in sorted(
                   {c["kind"]: sum(1 for x in rep["timer_clears"] if x["kind"] == c["kind"]) for c in rep["timer_clears"]}.items())))
-              if rep["timer_clears"] else "", rep["timer_evidence"]["lines_scanned"], rep["timer_evidence"]["dead_sweeps"]),
+              if rep["timer_clears"] else "", rep["timer_evidence"]["lines_scanned"], rep["timer_evidence"]["dead_sweeps"],
+              rep["timer_evidence"].get("dead_partners", 0)),
+          "- No ATC wait left standing: **%d ATC wait(s) never cleared** (evidence: %d atc_wait(s) raised, %d cleared by the "
+          "turtle measuring its facing)" % (sum(1 for w in rep["atc_waits"] if w["cleared"] is None), len(rep["atc_waits"]),
+                                             sum(1 for w in rep["atc_waits"] if w["cleared"] is not None)),
+          "- No stale ATC hold: **%d stale hold(s)** (a section held while its turtle sat IDLE on its own dock for %d snapshots "
+          "running; evidence: %d snapshots judged against the ATC's minute summary)" % (
+              len(rep["stale_holds"]), STALE_SNAPSHOTS, ev["snapshots"]),
           "- Verdicts: %s; stuck at least once: %d" % (", ".join("%s %d" % (k, c[k]) for k in VERDICTS), rep["stuck_ever"])]
     if judged == 0:
         o.append("- TRUNCATED: no turtle could be judged, so none of the counts above is evidence")
+    misses = [(t, v) for t, v in sorted(rep["failed_job"].items(), key=lambda kv: _node_key(kv[0]))
+              if not v["how"].startswith(("home and back", "home and available", "too late"))]
+    if misses:
+        o += ["", "Not back to work after a failed job (the getIdle filter each last showed; none set: look at the job side):", ""]
+        o += ["- %s: %s, failed run %s -- %s" % (t, v["how"], _hm(v["failed_at"]),
+                                                  ", ".join(v.get("filters") or []) or "no filter set") for t, v in misses]
 
     o += ["", "## Stuck or failed turtles", "",
           "%d turtle(s) not ok, of %d judged (rule: off its dock with no progress for over %d real min outside its faults)."
@@ -1338,6 +1580,14 @@ def _render(rep):
              "Evidence: %d remove_item fault window(s), %d turtles judged." % (len(eh), rep["remove_item_windows"], judged))
     for a in eh:
         o.append("- %s: %s (faults %s)" % (a["id"], a["needs_hands"], ",".join(a["touching"])))
+
+    o += ["", "## Duplicated by a crash", ""]
+    dup = [a for a in rep["turtles"] if a["verdict"] == "duplicate_id"]
+    o.append("%d turtle id(s) the server heard from two places at once and parked for hands (a hard kill left one turtle in both "
+             "chunks it was crossing; counted apart from decommissioned, but any jam it caused still counts). GPS jumps: %d taken "
+             "(two fixes agreed), %d not taken." % (len(dup), rep["gps_jumps"]["taken"], rep["gps_jumps"]["not_taken"]))
+    for a in dup:
+        o.append("- %s: %s" % (a["id"], a["needs_hands"]))
 
     o += ["", "## First 6 h against last 6 h", ""]
     hrs = rep["hours"]
