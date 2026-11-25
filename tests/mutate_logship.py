@@ -361,7 +361,23 @@ E_HELD    = "a sector being mined right now still counts toward the estimate"
 E_FALL    = "the estimate falls as the ore comes out of the sector in hand"
 E_LONG    = "a job cannot finish sooner than the longest sector one miner holds"
 R_FLIGHT  = "a recall is checked before departing and before the loader goes down (SOURCE-ONLY, weaker)"
-L_ROOM    = "retrieveLoader refuses the dig with no free slot, and leaves the loader standing"
+L_ROOM    = "retrieveLoader refuses the dig when nothing can be dropped, and leaves the loader standing"
+# Equipment is never dug up without somewhere to put it (shakeout, 2026-11-24).
+Q_MAKE    = "makeRoomForEquipment drops junk from a MINING slot when nothing is free"
+Q_IDLE    = "makeRoomForEquipment leaves a pack that already has room alone"
+Q_HARD    = "makeRoomForEquipment refuses rather than drop hardware"
+Q_SUCK    = "recoverDroppedEquipment reports failure when nothing comes back"
+Q_LOADER  = "retrieveLoader makes room from junk rather than refusing, and collects the loader"
+Q_SCAN    = "the placed geo scanner is recorded before it is placed (SOURCE-ONLY, weaker)"
+# The ALREADY-ABOARD case stays green under the stub-out mutant, correctly: the
+# item really is aboard there. The case the mutant breaks is the dropped one,
+# which it reports as "aboard" instead of "sucked_back" -- so that is the
+# intended test, and naming the wrong one is what the harness caught.
+Q_ARRIVE  = "ensureEquipmentAboard sucks it back when the dig dropped it"
+Q_KIND    = "scanner recovery runs at boot and verifies identity (SOURCE-ONLY, weaker)"
+# The world floor is the sector's bottom, not a scan failure (2026-11-24).
+F_FLOOR   = "isWorldFloor recognises bedrock and nothing else"
+F_STRUCT  = "the world floor ends the descent instead of failing the sector (SOURCE-ONLY, weaker)"
 J_FIX     = "a job waits for a real position before deciding it rebooted mid-job (SOURCE-ONLY, weaker)"
 B_REC     = "placeLoader records the label of the loader it put down"
 B_ITEM    = "a non-turtle item with the same label is not proof"
@@ -2143,12 +2159,68 @@ MUTANTS = [
     ("the job runner decides where it is without waiting for a fix", "ore_turtle.lua",
      [('    base.waitForPositionFix("deciding whether this job rebooted mid-flight")\n', '')], J_FIX),
 
+    # RETARGETED 2026-11-24: the loader no longer merely refuses on a full pack,
+    # it makes room first (spec owner's ruling), so the `if freeSlots == 0` that
+    # these two mutated is gone. The refusal survives as the fallback.
     ("the loader-dig room guard is removed", "mine_flow.lua",
-     [('    if freeSlots == 0 then\n        return false, "no_room_for_loader"\n',
-       '    if false then\n        return false, "no_room_for_loader"\n')], L_ROOM),
+     [('    if not roomed then\n        return false, "no_room_for_loader"\n    end',
+       '    if false then\n        return false, "no_room_for_loader"\n    end')], L_ROOM),
 
-    ("the loader-dig room guard refuses one free slot too", "mine_flow.lua",
-     [('    if freeSlots == 0 then', '    if freeSlots <= 1 then')], L_ONE),
+    ("the loader never tries to make room, it just fails", "mine_flow.lua",
+     [('    local roomed, roomDetail = mine_flow.makeRoomForEquipment()',
+       '    local roomed, roomDetail = false, nil')], Q_LOADER),
+
+    # ---- equipment is never dug up with nowhere to put it (2026-11-24) -----
+    # Two scanners were lost in 2 of 2 shakeout runs because this path dug with
+    # no free slot, unlike retrieveLoader. A dig with no room returns TRUE and
+    # the item lands on the ground behind the turtle, where it despawns.
+    ("making room claims success without freeing anything", "mine_flow.lua",
+     [('    if mine_flow.freeSlots() > 0 then return true end',
+       '    if true then return true end')], Q_MAKE),
+
+    ("making room drops a junk block even when a slot is already free", "mine_flow.lua",
+     [('    if mine_flow.freeSlots() > 0 then return true end',
+       '    if false then return true end')], Q_IDLE),
+
+    ("making room is willing to throw out hardware", "mine_flow.lua",
+     [('        if it and not equipment.isHardwareItem(it.name) then',
+       '        if it then')], Q_HARD),
+
+    ("the suck-back reports success without checking the item came back", "mine_flow.lua",
+     [('    return (it ~= nil and it.name == itemName)', '    return true')], Q_SUCK),
+
+    ("the scan-time scanner pickup digs directly again", "ore_turtle.lua",
+     [('    if reclaimScanner() then\n        scannerClear()',
+       '    if mine_flow.digGuarded("down") then\n        scannerClear()')], Q_SCAN),
+
+    # MOVED to mine_flow 2026-11-24: this mutant SURVIVED while the check lived
+    # in ore_turtle, because ore_turtle self-executes and only source-reading
+    # tests could reach it. Nothing went red at all, which is the whole argument
+    # for putting testable logic in mine_flow.
+    # The scanner's ledger registration, which is what gives it a recovery that
+    # refuses on a full pack instead of a NEEDS HANDS that can never clear.
+    # Removes the whole statement. Mutating only its first line left Lua that
+    # does not compile, which the harness reports as MALFORMED rather than
+    # scoring -- a mutant has to be valid code or it tests nothing.
+    ("the scanner is no longer a ledger kind", "ore_turtle.lua",
+     [('base.ledger.registerKind("geo_scanner",\n    { blockName = SCANNER_NAME, homeSlot = S_SCANNER })', '')], Q_KIND),
+    ("placing the scanner writes no ledger record", "ore_turtle.lua",
+     [('        base.ledger.record("geo_scanner", {', '        local _norecord = ({')], Q_KIND),
+    ("clearing the scanner leaves a ledger ghost behind", "ore_turtle.lua",
+     [('    pcall(base.ledger.clear, "geo_scanner")\n', '')], Q_KIND),
+
+    # ---- the world floor is the sector's bottom, not a failure -------------
+    ("deepslate counts as the bottom of the world", "mine_flow.lua",
+     [('    return blockName == "minecraft:bedrock"',
+       '    return blockName == "minecraft:bedrock" or blockName == "minecraft:deepslate"')], F_FLOOR),
+    ("nothing is ever the bottom of the world", "mine_flow.lua",
+     [('    return blockName == "minecraft:bedrock"', '    return false')], F_FLOOR),
+    ("hitting the floor abandons the sector again", "ore_turtle.lua",
+     [('            if scanFail == "world_floor" then', '            if false then')], F_STRUCT),
+
+    ("the arrival check is stubbed out, so a dropped item reads as aboard", "mine_flow.lua",
+     [('    if equipment.findSlot(itemName) then return true, "aboard" end',
+       '    if true then return true, "aboard" end')], Q_ARRIVE),
 
     # ---- the ore index's covered band (1.9.167) ----------------------------
     # A resumed sector censuses only the levels it did NOT already finish, so the

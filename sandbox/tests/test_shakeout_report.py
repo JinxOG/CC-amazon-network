@@ -236,11 +236,25 @@ class FixRound1(unittest.TestCase):
                 # node_10: failed at 20, wanders (never stuck), never home
                 "node_10": {"x": 300 + t // MIN, "y": 70, "z": -2600, "status": "BUSY", "dockX": 199, "dockZ": -2806,
                             "lastSeen": T0 + t, "online": True},
-                # node_12: failed at 20, home from 25, never given work again -> not "back to work"
+                # node_12: failed at 20, home from 25, never given work, and no MINER job went to anyone: available, not a miss
                 "node_12": {"x": 227, "y": 67, "z": -2806, "status": "IDLE", "dockX": 227, "dockZ": -2806, "lastSeen": T0 + t,
-                            "online": True} if t >= 25 * MIN else
+                            "online": True, "role": "MINER"} if t >= 25 * MIN else
                            {"x": 400 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 227, "dockZ": -2806,
-                            "lastSeen": T0 + t, "online": True},
+                            "lastSeen": T0 + t, "online": True, "role": "MINER"},
+                # node_13: failed at 20, home from 25, then 3 DELIVER jobs go to node_14, home only since 50: passed over
+                "node_13": {"x": 241, "y": 67, "z": -2806, "status": "IDLE", "dockX": 241, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True, "role": "DELIVERY"} if t >= 25 * MIN else
+                           {"x": 500 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 241, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
+                # node_16: failed at 20, home from 25, back out on a re-send after a reboot (payload-g's node_215): back to work
+                "node_16": {"x": 269, "y": 67, "z": -2806, "status": "IDLE", "dockX": 269, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True, "role": "DELIVERY"} if t >= 25 * MIN else
+                           {"x": 600 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 269, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
+                "node_14": {"x": 255, "y": 67, "z": -2806, "status": "IDLE", "dockX": 255, "dockZ": -2806, "lastSeen": T0 + t,
+                            "online": True, "role": "DELIVERY"} if t >= 50 * MIN else
+                           {"x": 255, "y": 67, "z": -2700 - t // MIN, "status": "BUSY", "dockX": 255, "dockZ": -2806,
+                            "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
                 # node_11: stuck, silent AND needs hands at the end: one turtle, counted once
                 "node_11": {"x": 900, "y": 20, "z": -2900, "status": "ERROR", "dockX": 213, "dockZ": -2806, "lastSeen": T0,
                             "online": False, "needsHands": "stuck_no_fix"},
@@ -251,19 +265,29 @@ class FixRound1(unittest.TestCase):
                  (20 * MIN, "server", "WARN", "Job permanently failed: job_0103 (departure_failed)"),
                  (11 * MIN, "server", "INFO", "Dispatched job_0104 [DELIVER] -> node_12"),
                  (20 * MIN, "server", "WARN", "Job permanently failed: job_0104 (departure_failed)"),
-                 (40 * MIN, "server", "INFO", "Job job_0102 accepted by node_9")]
+                 (40 * MIN, "server", "INFO", "Job job_0102 accepted by node_9"),
+                 (12 * MIN, "server", "INFO", "Dispatched job_0105 [DELIVER] -> node_13"),
+                 (20 * MIN, "server", "WARN", "Job permanently failed: job_0105 (departure_failed)"),
+                 (13 * MIN, "server", "INFO", "Dispatched job_0109 [DELIVER] -> node_16"),
+                 (20 * MIN, "server", "WARN", "Job job_0109 retry 1/3: warehouse_chest_timeout"),
+                 (45 * MIN, "server", "WARN", "Re-send of job_0110 to node_16 held for its first heartbeat"),
+                 (56 * MIN, "server", "INFO", "Dispatched job_0106 [DELIVER] -> node_14  support job_0206 -> node_99"),
+                 (61 * MIN, "server", "INFO", "Dispatched job_0107 [DELIVER] -> node_14  support job_0207 -> node_99"),
+                 (66 * MIN, "server", "INFO", "Dispatched job_0108 [DELIVER] -> node_14  support job_0208 -> node_99")]
         run = make_run(hours=2, extra_lines=extra, turtles_at=ts)
         try:
             rep = report.build_report(run)
             self.assertEqual(rep["failed_job"]["node_9"]["how"], "home and back to work")
             self.assertEqual(rep["failed_job"]["node_10"]["how"], "never home")
-            self.assertEqual(rep["failed_job"]["node_12"]["how"], "home, but no later job")
+            self.assertEqual(rep["failed_job"]["node_12"]["how"], "home and available (passed over 0 times)")
+            self.assertEqual(rep["failed_job"]["node_13"]["how"], "home, but passed over 3 time(s) for turtles home less long")
+            self.assertEqual(rep["failed_job"]["node_16"]["how"], "home and back to work")
             self.assertEqual(rep["not_recovered"], ["node_11"])
             with open(report.write_report(run), encoding="utf8") as f:
                 md = f.read()
             self.assertIn("**1 turtle(s) not recovered**", md)
             self.assertIn("**0 jam(s) never cleared**", md)
-            self.assertIn("**2 of 3** judged did NOT", md)
+            self.assertIn("**2 of 5** judged did NOT", md)
             self.assertIn("Evidence: 0 remove_item fault window(s)", md)
         finally:
             shutil.rmtree(run, ignore_errors=True)
@@ -436,6 +460,104 @@ class TimerClearedIsAFailure(unittest.TestCase):
         finally:
             shutil.rmtree(run, ignore_errors=True)
 
+    # The partner-silence nets (turtle_base.lua SUPPORT_SILENT_S, support_turtle.lua PARTNER_SILENT_S at 7fa8982). Like the ATC
+    # sweep: a partner heard again after the net fired was alive, so the clock ended a live wait (a FAILURE); one never heard
+    # again was really gone, counted apart. A line that names no partner cannot be judged, so it counts (a check must be able to fail).
+    PARTNER_LINES = [
+        (10 * MIN, "node_221", "WARN", "[node_221][WARN] Support node_234 silent 300s at the edge of chunk 10,-172 -- taken for gone"),
+        (12 * MIN, "node_234", "INFO", "[node_234][INFO] loop baseline: healthy"),     # alive after all: a live wait the clock ended
+        (13 * MIN, "node_222", "WARN", "[node_222][WARN] Support node_299 silent 300s at the edge of chunk 10,-173 -- taken for gone"),
+        (14 * MIN, "node_235", "-", "Partner node_209 silent 301s -- taken for gone. Returning to dock."),   # node_209 heard later
+        (15 * MIN, "node_209", "INFO", "[node_209][INFO] loop baseline: healthy"),
+        (16 * MIN, "node_237", "-", "Partner silent 305s -- taken for gone. Returning to dock."),            # names nobody: counts
+    ]
+
+    def test_partner_silence_counts_only_for_a_partner_alive_after_it(self):
+        run = make_run(hours=1, extra_lines=self.PARTNER_LINES)
+        try:
+            rep = report.build_report(run)
+            got = sorted((c["kind"], c["node"]) for c in rep["timer_clears"])
+            self.assertEqual(got, [("partner_silent", "node_209"), ("partner_silent", "node_237"),
+                                   ("support_silent", "node_234")], rep["timer_clears"])
+            self.assertEqual(rep["timer_evidence"]["dead_partners"], 1, "node_299 was never heard again: really gone")
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    # atc_wait (turtle_base.lua at 28e2a29): a turtle the ATC would not let measure its facing for a minute. Hands do not help, so it is
+    # not NEEDS HANDS; one never followed by that turtle's own "Position and facing measured" is a jam the ATC held: a FAILURE.
+    ATC_WAIT_LINES = [
+        (10 * MIN, "node_441", "WARN", "[node_441][WARN] atc_wait: facing unknown at 197,67,-2797 (waiting for the ATC to grant the "
+                                        "cells around it: busy at N4)"),
+        (11 * MIN, "node_441", "WARN", "[node_441][WARN] atc_wait: facing unknown at 197,67,-2797 (waiting for the ATC to grant the "
+                                        "cells around it: busy at N4)"),     # the same wait repeating: one wait
+        (12 * MIN, "node_441", "INFO", "[node_441][INFO] Position and facing measured after 14 retries: 197,67,-2797 -- boot: "
+                                        "choosing a route home can go ahead"),
+        (13 * MIN, "node_443", "WARN", "[node_443][WARN] atc_wait: facing unknown at 197,67,-2793 (waiting for the ATC to grant the "
+                                        "cells around it: no answer from the ATC)"),     # never measured: still held at the end
+    ]
+
+    def test_an_atc_wait_never_cleared_fails_the_bar(self):
+        run = make_run(hours=1, extra_lines=self.ATC_WAIT_LINES)
+        try:
+            rep = report.build_report(run)
+            got = [(w["node"], w["cleared"] is None) for w in rep["atc_waits"]]
+            self.assertEqual(got, [("node_441", False), ("node_443", True)], rep["atc_waits"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**1 ATC wait(s) never cleared**", md)
+            self.assertTrue(any(c["title"].startswith("ATC wait never cleared") for c in rep["cards"]),
+                            [c["title"] for c in rep["cards"]])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    # More last-line timers, found by reading the code at 28e2a29 (payload-g's own lines): the support's HOLE_READY wait, and a
+    # delivery job failed by a timeout. A job's failure is logged by the turtle AND by the server's retry line, and either can be
+    # lost (logs ship every 15 s), so one job's timeout within 10 min counts once whichever line arrived.
+    MORE_LINES = [
+        (10 * MIN, "node_225", "-", "No HOLE_READY signal after 180s — delivery partner timed out. Returning to dock."),
+        (20 * MIN, "node_208", "WARN", "[node_208][WARN] Job job_0251 failed (warehouse_chest_timeout) at 184,67,-2758 -- bringing "
+                                        "support node_226 home first, then reporting it"),
+        (21 * MIN, "server", "WARN", "Job job_0251 retry 1/3: warehouse_chest_timeout"),     # the same failure: once
+        (22 * MIN, "server", "WARN", "Job job_0250 retry 1/3: warehouse_chest_timeout"),     # its turtle line was lost: still counts
+        (23 * MIN, "server", "WARN", "Job job_0260 retry 1/3: batch_phase_timeout"),
+        (24 * MIN, "server", "WARN", "Job job_0261 retry 1/3: blocked"),                     # not a timer: not counted
+    ]
+
+    def test_hole_ready_and_job_timeouts_are_timer_cleared(self):
+        run = make_run(hours=1, extra_lines=self.MORE_LINES)
+        try:
+            rep = report.build_report(run)
+            got = sorted(c["kind"] for c in rep["timer_clears"])
+            self.assertEqual(got, ["hole_ready_timeout", "job_timeout", "job_timeout", "job_timeout"], rep["timer_clears"])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    # A stale hold (payload-d's N4=node_441, SPEC-OWNER's ruling 2026-11-24): the ATC's minute summary still names a turtle that
+    # /state shows IDLE on its own dock. A dock is in no section, so that hold is held by nobody. Two snapshots running is a FAILURE.
+    @staticmethod
+    def _summary(t, holds):
+        return (t, "atc", "-", "[ATC] %d section(s) held, %d booking(s): %s" % (len(holds), len(holds), " ".join(holds)))
+
+    def test_a_hold_by_a_turtle_idle_on_its_dock_is_stale(self):
+        lines = [self._summary(m * MIN + 30000, ["N4=node_5", "S1=node_7"]) for m in range(9, 22)]
+        run = make_run(hours=1, extra_lines=lines, stuck_node=True)     # node_5 IDLE on its dock; node_7 off its dock
+        try:
+            rep = report.build_report(run)
+            self.assertEqual([(h["node"], h["sections"]) for h in rep["stale_holds"]], [("node_5", ["N4"])], rep["stale_holds"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("**1 stale hold(s)**", md)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+    def test_a_hold_seen_on_the_dock_once_is_not_stale(self):
+        lines = [self._summary(m * MIN + 30000, ["N4=node_5+1"]) for m in range(9, 12)]     # spans one 5-min snapshot only
+        run = make_run(hours=1, extra_lines=lines)
+        try:
+            self.assertEqual(report.build_report(run)["stale_holds"], [])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
     def test_none_is_zero_with_its_evidence(self):
         run = make_run(hours=1)
         try:
@@ -450,6 +572,91 @@ class TimerClearedIsAFailure(unittest.TestCase):
 
 
 CONTROL = "G:/TurtleOS-Sandbox/run/20261103-181857-w3_atc_base150-1"
+
+
+class LastSeenIsTheBridgesClock(unittest.TestCase):
+    """server.js stamps lastSeen with its own push time for every turtle the server lists (mergeTurtleSnapshot), so it says
+    nothing about the turtle: in payload-g it read 0 s old for every turtle, frozen node_211 included. A sample counts as heard
+    only while the server itself says online (its heartbeat judgment); a turtle the server has offline for over GONE_MS, with no
+    line of its own, is gone."""
+
+    def test_a_fresh_lastseen_on_an_offline_turtle_is_not_heard(self):
+        def ts(t):
+            return {"node_9": {"x": OFF[0], "y": OFF[1], "z": OFF[2], "status": "IDLE", "dockX": 171, "dockZ": -2806,
+                               "lastSeen": T0 + t - 500, "online": False, "role": "DELIVERY"}}
+        run = make_run(hours=2, turtles_at=ts)
+        try:
+            rep = report.build_report(run)
+            v = {a["id"]: a for a in rep["turtles"]}
+            self.assertIn("node_9", v, "an offline turtle silent for 2 h must not be judged ok")
+            self.assertGreater(v["node_9"]["gone"]["silent_ms"] or 0, report.GONE_MS, v["node_9"]["gone"])
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
+class RestartBurstExcusesOnlyAfterItsLastRestart(unittest.TestCase):
+    """A restart burst's quiet is count x one restart's quiet from its START (schedule.quiet_of): 50 min for five. Its five
+    restarts finished 8 min in (T2 payload-i, f001), so 42 min were excused for nothing, and node_451, frozen in the shaft from
+    the burst to the end, was judged ok. Measured: the window ends one restart's quiet after the burst's begin line, which is
+    written when the last restart is done (its `time`; its wall_ms repeats the start's)."""
+
+    def test_a_turtle_silent_after_the_burst_is_gone(self):
+        def ts(t):
+            return {"node_9": {"x": OFF[0], "y": OFF[1], "z": OFF[2], "status": "IDLE", "dockX": 171, "dockZ": -2806,
+                               "lastSeen": T0 + t, "online": t < 15 * MIN, "role": "MINER"}}
+        entries = [{"id": "f001", "fault": "restart_burst5", "t_ms": 10 * MIN, "args": {"count": 5}, "quiet_ms": 100 * MIN}]
+        run = make_run(hours=2, turtles_at=ts, entries=entries)
+        try:
+            def at(ms):
+                return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime((T0 + ms) / 1000))
+            with open(os.path.join(run, "shakeout", "faults.jsonl"), "w") as f:
+                f.write(json.dumps({"wall_ms": 10 * MIN, "time": at(10 * MIN), "id": "f001", "fault": "restart_burst5",
+                                    "phase": "start"}) + "\n")
+                f.write(json.dumps({"wall_ms": 10 * MIN, "time": at(18 * MIN), "id": "f001", "fault": "restart_burst5",
+                                    "phase": "begin", "detail": {"restarts": 5}}) + "\n")
+            rep = report.build_report(run)
+            w = [x for x in rep["windows"] if x["id"] == "f001"][0]
+            self.assertLessEqual(abs(w["end"] - 38 * MIN), 2000, w)      # 18 min + one restart's quiet (100 / 5 = 20 min)
+            self.assertNotEqual(rep["verdicts"]["node_9"], "ok", "silent from 15 min to the end, the burst done at 18")
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
+
+
+class DuplicateIdIsCountedApart(unittest.TestCase):
+    """A hard kill can leave a moving turtle in both chunks it was crossing (payload-h's node_397). The server parks both copies and
+    asks for hands with duplicate_id (W3, w3-payload-i). The world made it, not the code: counted apart from decommissioned, and
+    listed. GPS jumps (taken and not taken) are evidence, not a verdict."""
+
+    LINES = [
+        (30 * MIN, "server", "ERROR", "NEEDS HANDS: node_5 — duplicate_id: node_5 heard at 238,200,-2780 and 239,200,-2780. Two "
+                                      "turtles share this id: a player has to remove one. Both are told to stay where they are, "
+                                      "and the ATC drops the id."),
+        (31 * MIN, "node_7", "WARN", "[node_7][WARN] GPS jump not taken: believed 222,60,-2755, a fix said 199,37,-2784, a second "
+                                     "said none"),
+        (32 * MIN, "node_7", "WARN", "[node_7][WARN] GPS jump taken: believed 222,60,-2755, two fixes said 224,60,-2755 and "
+                                     "224,60,-2755"),
+    ]
+
+    def test_duplicate_id_is_its_own_verdict_and_gps_jumps_are_counted(self):
+        def ts(t):     # the server keeps the hold in /state, as it does for every NEEDS HANDS until a person clears it
+            e = {"x": DOCK[0], "y": DOCK[1], "z": DOCK[2], "status": "IDLE", "dockX": DOCK[0], "dockZ": DOCK[2],
+                 "lastSeen": T0 + t - 2000, "online": True, "role": "DELIVERY"}
+            if t >= 30 * MIN:
+                e["needsHands"] = "duplicate_id: node_5 heard at 238,200,-2780 and 239,200,-2780"
+            return {"node_5": e}
+        run = make_run(hours=1, extra_lines=self.LINES, turtles_at=ts)
+        try:
+            rep = report.build_report(run)
+            self.assertEqual(rep["verdicts"]["node_5"], "duplicate_id")
+            self.assertEqual(rep["counts"]["decommissioned"], 0)
+            self.assertNotIn("node_5", rep["not_recovered"])
+            self.assertEqual(rep["gps_jumps"], {"taken": 1, "not_taken": 1})
+            with open(report.write_report(run), encoding="utf8") as f:
+                md = f.read()
+            self.assertIn("1 duplicate id(s)", md)
+            self.assertIn("## Duplicated by a crash", md)
+        finally:
+            shutil.rmtree(run, ignore_errors=True)
 
 
 class ControlRunMustFail(unittest.TestCase):

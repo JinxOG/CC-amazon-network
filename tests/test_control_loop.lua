@@ -1243,15 +1243,20 @@ function(assert_eq)
 
     -- The scan must not be able to skip the recovery by throwing.
     --
-    -- The recovery dig is spelled mine_flow.digGuarded("down"), not
-    -- turtle.digDown(): every dig in scanSector goes through the guard as of
-    -- 1.9.84. Pinning the guarded spelling here means reverting to a raw dig
-    -- fails this test as well as the dedicated ones.
+    -- The pickup is spelled reclaimScanner(), never a raw turtle.digDown() and
+    -- (since 2026-11-24) no longer a bare mine_flow.digGuarded either: the dig
+    -- has to be preceded by making room and followed by checking the scanner
+    -- actually arrived, and reclaimScanner is the one place that does all three.
+    -- Pinning the spelling here means a revert to any bare dig fails this test
+    -- as well as the dedicated ones.
     local pcallAt = src:find("pcall%(sc%.scan, SCAN_RADIUS%)", scanAt)
-    assert_eq(pcallAt ~= nil, true, "sc.scan must be pcall'd so the dig still runs")
-    local digAt = src:find('mine_flow%.digGuarded%("down"%)', pcallAt)
+    assert_eq(pcallAt ~= nil, true, "sc.scan must be pcall'd so the pickup still runs")
+    local digAt = src:find("reclaimScanner%(%)", pcallAt)
     assert_eq(digAt ~= nil and digAt > pcallAt, true,
-        "the recovery dig must follow the guarded scan")
+        "the guarded pickup must follow the scan")
+    assert_eq(src:find('mine_flow%.digGuarded%("down"%)', pcallAt), nil,
+        "and the scan-time pickup must NOT dig directly any more -- that is the "
+        .. "spelling that lost two scanners in the shakeout")
 end
 
 -- Never dig a turtle, the mining half -----------------------------------------
@@ -1318,11 +1323,39 @@ function(assert_eq)
         "could not bound recoverPlacedScanner's body")
     local body = src:sub(defAt, endAt - 1)
 
+    -- THE SCANNER IS A LEDGER KIND (2026-11-24), which is what gives it a
+    -- recovery that refuses on a full pack and KEEPS the record, instead of a
+    -- NEEDS HANDS that can never clear. Source-only, because ore_turtle
+    -- self-executes; the ordering against base.init is pinned separately by
+    -- test_delivery_support, and the ledger's own behaviour by test_ledger.
+    assert_eq(src:find('base%.ledger%.registerKind%("geo_scanner"') ~= nil, true,
+        "the geo scanner must be registered as a ledger kind")
+    -- The registration has to carry both halves or recovery cannot act: the
+    -- block it is looking for, and the slot it belongs in.
+    local regAt = src:find('base%.ledger%.registerKind%("geo_scanner"')
+    local regTail = src:sub(regAt, regAt + 200)
+    assert_eq(regTail:find("blockName = SCANNER_NAME") ~= nil, true,
+        "and say which block it is, so recovery cannot dig the wrong one")
+    assert_eq(regTail:find("homeSlot = S_SCANNER") ~= nil, true,
+        "and which slot it belongs in, or it can never be confirmed home")
+    -- Recorded AND cleared through the ledger as well as the old file. A record
+    -- written to one and cleared from the other would leave a permanent ghost
+    -- that sends every future boot digging at a block nobody placed.
+    assert_eq(src:find('base%.ledger%.record%("geo_scanner"') ~= nil, true,
+        "placing must write a ledger record")
+    assert_eq(src:find('pcall%(base%.ledger%.clear, "geo_scanner"%)') ~= nil, true,
+        "and clearing must clear it, or the ghost outlives the scanner")
+
     local inspectAt = body:find("turtle%.inspectDown%(%)")
-    local bodyDigAt = body:find("turtle%.digDown%(%)")
+    -- reclaimScanner since 2026-11-24, not turtle.digDown: boot is as likely to
+    -- have a full pack as mid-level (node_453 booted with one free slot), so the
+    -- recovery's own dig needs the room guard and the did-it-arrive check too.
+    local bodyDigAt = body:find("reclaimScanner%(%)")
     assert_eq(inspectAt ~= nil, true, "recovery must inspect before digging")
     assert_eq(bodyDigAt ~= nil and inspectAt < bodyDigAt, true,
-        "the identity check must precede the dig")
+        "the identity check must precede the pickup")
+    assert_eq(body:find("turtle%.digDown%(%)"), nil,
+        "and boot recovery must not dig the scanner up unguarded")
     -- Assert the comparison, not the bare identifier: the identifier alone is
     -- satisfied by any incidental mention.
     assert_eq(body:find("block%.name == SCANNER_NAME") ~= nil, true,
