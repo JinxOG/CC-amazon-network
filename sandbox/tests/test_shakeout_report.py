@@ -243,7 +243,8 @@ class FixRound1(unittest.TestCase):
                             "lastSeen": T0 + t, "online": True, "role": "MINER"},
                 # node_13: failed at 20, home from 25, then 3 DELIVER jobs go to node_14, home only since 50: passed over
                 "node_13": {"x": 241, "y": 67, "z": -2806, "status": "IDLE", "dockX": 241, "dockZ": -2806, "lastSeen": T0 + t,
-                            "online": True, "role": "DELIVERY"} if t >= 25 * MIN else
+                            "online": True, "role": "DELIVERY", "blockReason": "sector_setup_failed",
+                            "blockedUntil": T0 + 3 * HOUR} if t >= 25 * MIN else
                            {"x": 500 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 241, "dockZ": -2806,
                             "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
                 # node_16: failed at 20, home from 25, back out on a re-send after a reboot (payload-g's node_215): back to work
@@ -252,7 +253,7 @@ class FixRound1(unittest.TestCase):
                            {"x": 600 + t // MIN, "y": 67, "z": -2700, "status": "BUSY", "dockX": 269, "dockZ": -2806,
                             "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
                 "node_14": {"x": 255, "y": 67, "z": -2806, "status": "IDLE", "dockX": 255, "dockZ": -2806, "lastSeen": T0 + t,
-                            "online": True, "role": "DELIVERY"} if t >= 50 * MIN else
+                            "online": True, "role": "DELIVERY", "dockedSinceJob": True} if t >= 50 * MIN else
                            {"x": 255, "y": 67, "z": -2700 - t // MIN, "status": "BUSY", "dockX": 255, "dockZ": -2806,
                             "lastSeen": T0 + t, "online": True, "role": "DELIVERY"},
                 # node_11: stuck, silent AND needs hands at the end: one turtle, counted once
@@ -281,6 +282,10 @@ class FixRound1(unittest.TestCase):
             self.assertEqual(rep["failed_job"]["node_10"]["how"], "never home")
             self.assertEqual(rep["failed_job"]["node_12"]["how"], "home and available (passed over 0 times)")
             self.assertEqual(rep["failed_job"]["node_13"]["how"], "home, but passed over 3 time(s) for turtles home less long")
+            # the getIdle filter it last showed (W3, 2026-11-24), so a passed-over turtle says why
+            self.assertEqual(rep["failed_job"]["node_13"]["filters"], ["blocked: sector_setup_failed", "not dockedSinceJob"])
+            with open(report.write_report(run), encoding="utf8") as f:
+                self.assertIn("blocked: sector_setup_failed, not dockedSinceJob", f.read())
             self.assertEqual(rep["failed_job"]["node_16"]["how"], "home and back to work")
             self.assertEqual(rep["not_recovered"], ["node_11"])
             with open(report.write_report(run), encoding="utf8") as f:

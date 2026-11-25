@@ -168,7 +168,9 @@ def _read_jsonl(path):
 # /state snapshots: written during the run, read by the report
 # ---------------------------------------------------------------------------------------------------------------------------
 
-TURTLE_KEYS = ("x", "y", "z", "status", "phase", "dockX", "dockZ", "lastSeen", "online", "needsHands", "role")
+TURTLE_KEYS = ("x", "y", "z", "status", "phase", "dockX", "dockZ", "lastSeen", "online", "needsHands", "role",
+               # getIdle's filters (W3, 2026-11-24), each absent when not set: why a docked turtle is not offered work
+               "blockReason", "blockedUntil", "held", "dockedSinceJob")
 SERVER_HEALTH_KEYS = ("pushBuildMs", "pushSliceWorstMs", "pushSlices", "rsKeptEvents", "rsPollMs", "rsPollWorstMs", "gps")
 
 
@@ -957,7 +959,8 @@ def _snap_sample(s, e, t0):
             # lastSeen is the bridge's own push time for every turtle the server lists (server.js mergeTurtleSnapshot): it says
             # nothing about the turtle. A sample is heard only while the server itself says online (its heartbeat judgment).
             "seen": (e["lastSeen"] - t0) if isinstance(e.get("lastSeen"), (int, float)) and e.get("online") is True else None,
-            "needs_hands": e.get("needsHands")}
+            "needs_hands": e.get("needsHands"), "block": e.get("blockReason"), "held": e.get("held"),
+            "dsj": e.get("dockedSinceJob"), "online": e.get("online")}
 
 
 def timelines(R):
@@ -1380,6 +1383,22 @@ def build_report(run_dir, expected=None):
             since = (since if since is not None else smp["t"]) if idle else None
         return since
 
+    def idle_filters(rid):
+        """The getIdle filters rid last showed in /state (W3, 2026-11-24): why the dispatcher passed it over. Empty: none
+        set, so getIdle would have offered it -- look at the job side (role, zone, stagger)."""
+        smp = (tls[rid]["samples"] if rid in tls else [])[-1:] or [{}]
+        smp = smp[0]
+        out = []
+        if smp.get("block"):
+            out.append("blocked: %s" % smp["block"])
+        if smp.get("held"):
+            out.append("held: %s" % smp["held"])
+        if smp.get("online") is False:
+            out.append("offline")
+        if role_of.get(rid) in ("DELIVERY", "SUPPORT") and not smp.get("dsj"):
+            out.append("not dockedSinceJob")
+        return out
+
     for tid, tf in last_fail.items():
         home = any(s.get("on_dock") and s["t"] > tf for s in tls[tid]["samples"]) if tid in tls else False
         again = any(t > tf for t in given.get(tid, []))
@@ -1402,7 +1421,8 @@ def build_report(run_dir, expected=None):
             how = "home, but passed over %d time(s) for turtles home less long" % passed
         else:
             how = "home and available (passed over %d times)" % passed
-        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how, "passed_over": passed}
+        failed_job[tid] = {"verdict": fd["all"][tid]["verdict"], "failed_at": tf, "how": how, "passed_over": passed,
+                           "filters": idle_filters(tid) if passed else []}
     return {
         "run": run_dir, "kind": R["kind"], "t0_epoch_ms": R["t0"], "end_ms": end, "seed": seed, "schedule": R["schedule_path"],
         "notes": R["notes"], "windows": [dict(w, targets=sorted(w["targets"]) if w["targets"] is not None else None) for w in W],
@@ -1480,6 +1500,12 @@ def _render(rep):
           "- Verdicts: %s; stuck at least once: %d" % (", ".join("%s %d" % (k, c[k]) for k in VERDICTS), rep["stuck_ever"])]
     if judged == 0:
         o.append("- TRUNCATED: no turtle could be judged, so none of the counts above is evidence")
+    misses = [(t, v) for t, v in sorted(rep["failed_job"].items(), key=lambda kv: _node_key(kv[0]))
+              if not v["how"].startswith(("home and back", "home and available", "too late"))]
+    if misses:
+        o += ["", "Not back to work after a failed job (the getIdle filter each last showed; none set: look at the job side):", ""]
+        o += ["- %s: %s, failed run %s -- %s" % (t, v["how"], _hm(v["failed_at"]),
+                                                  ", ".join(v.get("filters") or []) or "no filter set") for t, v in misses]
 
     o += ["", "## Stuck or failed turtles", "",
           "%d turtle(s) not ok, of %d judged (rule: off its dock with no progress for over %d real min outside its faults)."
